@@ -32,13 +32,58 @@ If same error repeats → force drill
 
 ---
 
-# Logging Requirement
+# File Integration
 
-Every detected mistake MUST:
+All errors MUST be persisted in:
 
-1. be written into logs/error_log.md
-2. update summary counters
-3. include a "Fix rule"
+logs/error_log.md
+
+---
+
+# Logging Format (STRICT)
+
+Use this exact structure:
+
+### [YYYY-MM-DD] [Topic] - [Method]
+
+Problem:
+<short description>
+
+Error Type:
+- ...
+
+What I did wrong:
+<1–2 lines>
+
+Correct reasoning:
+<1–2 lines>
+
+Fix rule:
+<actionable rule>
+
+---
+
+# Summary Update
+
+At top of file, maintain counters:
+
+- classification errors: X
+- method errors: X
+- BC/IC errors: X
+- algebra errors: X
+- logic errors: X
+- verification missed: X
+
+---
+
+# Weak Area Detection
 
 If same error appears twice:
-→ trigger targeted drill
+
+Add/update section:
+
+## Weak Areas
+
+- <topic>: weak
+
+AND notify orchestrator to assign drills
