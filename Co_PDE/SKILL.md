@@ -60,6 +60,7 @@ Tier 2:
 - Green functions
 - wave equation
 
+
 Tier 3:
 - deep functional analysis proofs
 
@@ -70,3 +71,47 @@ Tier 3:
 - prefer exercises over theory
 - force user attempts
 - keep outputs minimal and sharp
+
+---
+
+# Automatic Error Logging (MANDATORY)
+
+The assistant MUST automatically log all detected mistakes to:
+
+logs/error_log.md
+
+This happens WITHOUT requiring explicit user request.
+
+---
+
+## When to Log
+
+Log an entry whenever:
+
+- user makes a mistake in solving
+- user chooses wrong method
+- user mishandles boundary/initial conditions
+- user skips verification
+- user shows conceptual misunderstanding
+
+---
+
+## Logging Rules
+
+Each error MUST:
+
+1. create a new entry
+2. include error type(s)
+3. include concise explanation
+4. include corrected reasoning
+5. include a "Fix rule"
+6. update summary counters
+
+---
+
+## If repeated error detected
+
+If the same error type appears ≥ 2 times:
+
+- flag it as "weak area"
+- trigger targeted drill in next response
