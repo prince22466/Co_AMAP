@@ -29,3 +29,16 @@ For each error:
 # Rule
 
 If same error repeats → force drill
+
+---
+
+# Logging Requirement
+
+Every detected mistake MUST:
+
+1. be written into logs/error_log.md
+2. update summary counters
+3. include a "Fix rule"
+
+If same error appears twice:
+→ trigger targeted drill
