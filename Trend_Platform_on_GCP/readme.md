@@ -35,3 +35,41 @@ API container deployed to GKE
 Worker container deployed as a Kubernetes Job
 Worker reads public data and writes one curated table
 API reads curated table and serves 2–3 endpoints
+
+
+trend-platform/
+  README.md
+
+  infra/
+    main.tf
+    variables.tf
+    outputs.tf
+    terraform.tfvars.example
+    providers.tf
+
+  app/
+    api/
+      main.py
+      requirements.txt
+      Dockerfile
+    worker/
+      worker.py
+      requirements.txt
+      Dockerfile
+
+  k8s/
+    namespace.yaml
+    api-deployment.yaml
+    api-service.yaml
+    worker-job.yaml
+    worker-cronjob.yaml
+
+  sql/
+    curated_schema.sql
+    sample_queries.sql
+
+  scripts/
+    deploy.py
+    build_and_push.py
+    run_job.py
+    smoke_test.py
