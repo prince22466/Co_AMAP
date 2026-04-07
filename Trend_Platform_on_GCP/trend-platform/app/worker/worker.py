@@ -9,6 +9,10 @@ def run_partitioned_load() -> None:
     FROM `bigquery-public-data.google_trends.top_rising_terms`
     LIMIT 100
     """
+
+    # `.result()` blocks until the query finishes.
+    # In this scaffold, results are only executed/read by the job and are NOT yet
+    # written to a curated BigQuery destination table (that write step is a TODO).
     _ = client.query(query).result()
 
 
