@@ -3,12 +3,13 @@
 ## Overview
 This project builds a **cloud-native analytics platform** on Google Cloud with two core workloads running on GKE:
 
-1. **API service (GKE Deployment)**
-   - Serves curated trend summaries as a JSON API.
-   - Reads from curated tables in your own BigQuery dataset.
-2. **Worker jobs (GKE Job/CronJob)**
+1. **Worker jobs (GKE Job/CronJob)**
    - Process partitions of `bigquery-public-data.google_trends.top_rising_terms`.
    - Write curated trend outputs into your BigQuery dataset.
+2. **API service (GKE Deployment)**
+   - Serves curated trend summaries as a JSON API.
+   - Reads from curated tables in your own BigQuery dataset.
+
 
 ---
 
