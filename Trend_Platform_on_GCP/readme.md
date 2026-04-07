@@ -26,3 +26,12 @@ BigQuery public dataset
                 ▼
             JSON API
 
+Tech used:
+
+Terraform creates:
+
+GKE Autopilot cluster,BigQuery dataset,Artifact Registry repo,service account + IAM
+API container deployed to GKE
+Worker container deployed as a Kubernetes Job
+Worker reads public data and writes one curated table
+API reads curated table and serves 2–3 endpoints
