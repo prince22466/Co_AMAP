@@ -1,20 +1,25 @@
-What we are building
+# Trend Platform on GCP
 
-A small cloud-native analytics platform with two workloads:
+## Overview
+This project builds a **cloud-native analytics platform** on Google Cloud with two core workloads running on GKE:
 
-API service on GKE
-serves curated trend summaries
-reads from your own BigQuery dataset
-Worker jobs on GKE
-process partitions of bigquery-public-data.google_trends.top_rising_terms
-write curated results into your BigQuery dataset
+1. **API service (GKE Deployment)**
+   - Serves curated trend summaries as a JSON API.
+   - Reads from curated tables in your own BigQuery dataset.
+2. **Worker jobs (GKE Job/CronJob)**
+   - Process partitions of `bigquery-public-data.google_trends.top_rising_terms`.
+   - Write curated trend outputs into your BigQuery dataset.
 
-Architecture
+---
+
+## Architecture
+
+```text
 BigQuery public dataset
-  `bigquery-public-data.google_trends.top_rising_terms`
+  bigquery-public-data.google_trends.top_rising_terms
                 │
                 ▼
-        GKE worker Jobs
+        GKE Worker Jobs
      (parallel by date range)
                 │
                 ▼
@@ -25,18 +30,29 @@ BigQuery public dataset
                 │
                 ▼
             JSON API
+```
 
-Tech used:
+---
 
-Terraform creates:
+## Tech Stack and Infrastructure
 
-GKE Autopilot cluster,BigQuery dataset,Artifact Registry repo,service account + IAM
-API container deployed to GKE
-Worker container deployed as a Kubernetes Job
-Worker reads public data and writes one curated table
-API reads curated table and serves 2–3 endpoints
+### Terraform provisions
+- GKE Autopilot cluster
+- BigQuery dataset
+- Artifact Registry repository
+- Service account and IAM bindings
 
+### Application deployment
+- API container deployed to GKE
+- Worker container deployed as a Kubernetes Job/CronJob
+- Worker reads public trend data and writes curated tables
+- API reads curated data and exposes endpoints
 
+---
+
+## Repository Structure
+
+```text
 trend-platform/
   README.md
 
@@ -73,3 +89,4 @@ trend-platform/
     build_and_push.py
     run_job.py
     smoke_test.py
+```
