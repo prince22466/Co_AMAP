@@ -43,9 +43,9 @@ BigQuery public dataset
 - Service account and IAM bindings
 
 ### Application deployment
-- API container deployed to GKE
 - Worker container deployed as a Kubernetes Job/CronJob
 - Worker reads public trend data and writes curated tables
+- API container deployed to GKE
 - API reads curated data and exposes endpoints
 
 ---
