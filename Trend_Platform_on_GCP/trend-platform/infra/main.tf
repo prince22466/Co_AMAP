@@ -48,13 +48,13 @@ resource "kubernetes_service_account_v1" "workload_sa" {
     name      = "trend-sa"
     namespace = "trend-platform"
     annotations = {
-      # This tells GKE which Google Service Account to "impersonate"
+      # This tells GKE which Google Service Account to use
       "iam.gke.io/gcp-service-account" = google_service_account.workload_sa.email
     }
   }
 }
 
-# Allow the KSA to use the GSA via Workload Identity
+# Allow the KSA to use the GSA(google service account) via Workload Identity
 resource "google_service_account_iam_member" "workload_identity_binding" {
   service_account_id = google_service_account.workload_sa.name
   role               = "roles/iam.workloadIdentityUser"
