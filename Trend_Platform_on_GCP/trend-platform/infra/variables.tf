@@ -1,6 +1,7 @@
 variable "project_id" {
   description = "GCP project ID"
   type        = string
+  default     = "tests101-483015"
 }
 
 variable "region" {
@@ -10,7 +11,7 @@ variable "region" {
 }
 
 variable "dataset_id" {
-  description = "BigQuery curated dataset ID"
+  description = "Bigquery dateset ID"
   type        = string
   default     = "trend_curated"
 }
