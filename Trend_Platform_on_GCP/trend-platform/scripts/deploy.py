@@ -43,20 +43,20 @@ def main():
         namespace = "default"
         
         if namespace_file.exists():
-            print("Applying namespace first...")
-            run_command(["kubectl", "apply", "-f", str(namespace_file)])
-            
             # Extract namespace name from the yaml file
             with open(namespace_file, "r") as f:
                 for line in f:
                     if line.strip().startswith("name:"):
                         namespace = line.split(":", 1)[1].strip()
                         break
-
+        print("Deleting running jobs in namespace...")
         cmd = ["kubectl", "delete", "jobs", "--all", "-n", namespace, "--ignore-not-found"]
         subprocess.run(cmd, check=True)
         print("ALL running Jobs deleted successfully.")
 
+        print("Applying namespace first...")
+        run_command(["kubectl", "apply", "-f", str(namespace_file)])
+        print("Applying deployments...")
         run_command(["kubectl", "apply", "-f", str(k8s_dir)])
     else:
         print(f"Warning: Kubernetes directory not found at {k8s_dir}. Make sure you have your YAML manifests there.")
