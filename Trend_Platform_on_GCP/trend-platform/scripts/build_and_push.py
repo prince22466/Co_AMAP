@@ -17,7 +17,7 @@ def run_command(cmd, cwd=None):
 
 def main():
     parser = argparse.ArgumentParser(description="Build and push Docker images to Google Cloud Artifact Registry.")
-    parser.add_argument("--project-id", default="tests101-483015")
+    parser.add_argument("--project-id", default="ur_project_ID")
     parser.add_argument("--region", default="us-central1")
     parser.add_argument("--repo", default="trend-platform", help="")
     parser.add_argument("--tag", default="latest", help="Image tag")
