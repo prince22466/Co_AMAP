@@ -1,7 +1,7 @@
 variable "project_id" {
   description = "GCP project ID"
   type        = string
-  default     = "tests101-483015"
+  default     = "ur_project_ID"
 }
 
 variable "region" {
@@ -26,4 +26,10 @@ variable "cluster_name" {
   description = "GKE Autopilot cluster name"
   type        = string
   default     = "trend-platform-autopilot"
+}
+
+variable "public_dataset_region" {
+  description = "the region of the publice bigquery dataset to use"
+  type        = string
+  default     = "US"
 }
