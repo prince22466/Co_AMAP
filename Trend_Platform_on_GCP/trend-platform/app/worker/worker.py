@@ -1,14 +1,24 @@
+import json
+from pathlib import Path
+
 from google.cloud import bigquery
 
-src_dtable = 'bigquery-public-data.google_trends.international_top_terms'
-target_table = 'tests101-483015.trend_curated.top_rising_terms'
+SETTINGS_PATH = Path(__file__).resolve().with_name("settings.json")
+
+with SETTINGS_PATH.open("r", encoding="utf-8") as f:
+    settings = json.load(f)
+
+project_id = settings["gcp"]["project_id"]
+src_dtable = settings["bigquery"]["source_table"]
+target_table = settings["bigquery"]["target_table"]
+
 
 def run_partitioned_load() -> None:
-    client = bigquery.Client(project="tests101-483015")
-    
+    client = bigquery.Client(project=project_id)
+
     job_config = bigquery.QueryJobConfig(
         destination=target_table,
-        write_disposition="WRITE_TRUNCATE", # Overwrites the table. Use WRITE_APPEND to add rows instead.
+        write_disposition="WRITE_TRUNCATE",  # Overwrites the table. Use WRITE_APPEND to add rows instead.
     )
 
     query = f"""
