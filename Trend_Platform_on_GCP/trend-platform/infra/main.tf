@@ -14,7 +14,7 @@ resource "google_project_service" "enabled_apis" {
 
 resource "google_bigquery_dataset" "curated" {
   dataset_id                 = var.dataset_id
-  location                   = "US"# CRITICAL: Must match the public data location
+  location                   = var.public_dataset_region # CRITICAL: bigquery can only work on the dataset in the same region, so this dataset must match the public data location
   delete_contents_on_destroy = true
 }
 
