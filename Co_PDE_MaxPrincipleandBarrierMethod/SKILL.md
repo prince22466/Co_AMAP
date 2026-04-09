@@ -458,14 +458,4 @@ Sketch:
 }
 ]
 
----
 
-# 🚀 NEXT STEP
-
-Once comfortable:
-
-* move to **2D Laplacian**
-* then **mixed derivatives (Heston PDE)**
-* then **numerical stability (CN / ADI)**
-
----
