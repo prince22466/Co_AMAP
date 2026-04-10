@@ -1,4 +1,17 @@
-# 🎯 Heat Equation & Kernel Methods — SKILL
+---
+name: pde-training
+description: Use this skill to teach PDE concepts step-by-step when the user asks to learn, study, or train PDE.
+---
+
+# 🎯 When to use this skill
+
+Use this skill if the user says:
+- "start training"
+- "learn PDE"
+- "teach me PDE"
+- or shows confusion about PDE concepts
+
+---
 
 ## Objective
 Master:
