@@ -8,7 +8,6 @@ LPPUB_StatFile_Production.R.
 from __future__ import annotations
 
 import argparse
-import re
 from pathlib import Path
 
 import numpy as np
@@ -128,11 +127,12 @@ def month_number(series: pd.Series) -> pd.Series:
 
 
 def acquisition_date_from_filename(filename: str | Path) -> str:
-    match = re.search(r"(\d{4})Q([1-4])", Path(filename).name)
-    if not match:
+    name = Path(filename).name
+    year = name[:4]
+    quarter_token = name[4:7]
+    if not year.isdigit():
         raise ValueError(f"Cannot derive acquisition quarter from filename: {filename}")
-    year, quarter = match.groups()
-    month = {"1": "03", "2": "06", "3": "09", "4": "12"}[quarter]
+    month = {"Q1": "03", "Q2": "06", "Q3": "09"}.get(quarter_token, "12")
     return f"{year}-{month}-01"
 
 
@@ -367,9 +367,9 @@ def build_stat_file(input_file: str | Path, nrows: int | None = None) -> pd.Data
     ).merge(non_int, on="LOAN_ID", how="left")
 
     fcc_source = performance_file[
-        performance_file["lpi_dte"].notna()
-        & performance_file["fcc_dte"].notna()
-        & performance_file["disp_dte"].notna()
+        performance_file["lpi_dte"].fillna("").ne("")
+        & performance_file["fcc_dte"].fillna("").ne("")
+        & performance_file["disp_dte"].fillna("").ne("")
     ]
     fcc = fcc_source.groupby("LOAN_ID", as_index=False).agg(
         LPI_DTE=("lpi_dte", "max"), FCC_DTE=("fcc_dte", "max"), DISP_DTE=("disp_dte", "max")
@@ -438,7 +438,7 @@ def build_stat_file(input_file: str | Path, nrows: int | None = None) -> pd.Data
         num120["z_num_periods_120"] = month_number(num120["F120_DTE"]) - month_number(num120["FRST_DTE"]) + 1
         num120 = num120[["LOAN_ID", "z_num_periods_120"]]
 
-    maturity_source = slim[slim["maturity_date"].notna()]
+    maturity_source = slim[slim["maturity_date"].fillna("").ne("")]
     if maturity_source.empty:
         orig_maturity = pd.DataFrame(columns=["LOAN_ID", "orig_maturity_date"])
     else:
@@ -502,7 +502,7 @@ def build_stat_file(input_file: str | Path, nrows: int | None = None) -> pd.Data
 
     base5 = base4.copy()
     base5["LAST_DTE"] = np.where(base5["disp_dte"].fillna("") != "", base5["disp_dte"], base5["LAST_ACTIVITY_DATE"])
-    base5["repch_flag"] = np.where(base5["repch_flag"].eq("Y"), 1, 0)
+    base5["repch_flag"] = pd.to_numeric(base5["repch_flag"], errors="coerce").fillna(0).astype(int)
     base5["PFG_COST"] = base5["prin_forg_upb"]
     base5["MOD_FLAG"] = np.where(base5["FMOD_DTE"].notna(), 1, 0)
     base5["MODFG_COST"] = np.where(base5["mod_ind"].eq("Y") & (base5["PFG_COST"] > 0), base5["PFG_COST"], 0)
@@ -514,7 +514,7 @@ def build_stat_file(input_file: str | Path, nrows: int | None = None) -> pd.Data
         base5["CSCORE_B"],
     )
     base5["CSCORE_MN"] = pd.Series(base5["CSCORE_MN"], index=base5.index).fillna(base5["CSCORE_B"]).fillna(base5["CSCORE_C"])
-    base5["ORIG_VAL"] = (base5["orig_amt"] / (base5["oltv"] / 100)).round(2)
+    base5["ORIG_VAL"] = (base5["orig_amt"] / (base5["oltv"] / 100)).round(1)
     last_dlq = base5["dlq_status"].replace({"X": "999", "XX": "999"})
     base5["z_last_status"] = pd.to_numeric(last_dlq, errors="coerce")
 
@@ -614,7 +614,7 @@ def format_number(value: object) -> str | float:
     numeric = float(value)
     if numeric.is_integer():
         return str(int(numeric))
-    return f"{numeric:.10f}".rstrip("0").rstrip(".")
+    return np.format_float_positional(numeric, trim="-")
 
 
 def default_output_path(input_path: str | Path) -> Path:
