@@ -20,10 +20,6 @@ Notebook:
 
 model_training/train_nb/m_001.ipynb
 
-Python file:
-
-model_training/train_nb/m_001.py
-
 Model file:
 
 (not saved in repo; removed to satisfy PR restrictions)
