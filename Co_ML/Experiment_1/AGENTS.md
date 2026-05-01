@@ -320,3 +320,15 @@ Experiment is complete only when:
 4. validation score computed
 5. model saved if eligible
 6. training_log.md updated
+
+## PR hygiene and artifact policy (added after review)
+
+To keep PRs reviewable and mergeable:
+
+* Notebook is required per experiment (`train_nb/m_XXX.ipynb`) and must be the orchestration entrypoint for training + validation.
+* Paired Python file (`train_nb/m_XXX.py`) should contain heavy logic; notebook calls into it.
+* Do **not** commit binary model artifacts (`.pkl`, `.joblib`, etc.) unless explicitly requested.
+* Do **not** commit generated validation prediction CSV files unless explicitly requested.
+* Validation should run in-memory using `help_stuff/validation_score.py`; persisted prediction files are optional and default is off.
+* Before commit, run `git status --short` and remove accidental artifacts (e.g., `__pycache__/`, temp files).
+* If experiment docs mention a notebook or artifact, confirm it actually exists (or explicitly mark as intentionally omitted).
