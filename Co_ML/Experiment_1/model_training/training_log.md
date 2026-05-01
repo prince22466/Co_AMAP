@@ -2,9 +2,9 @@
 
 ## Experiment Summary
 
-| ModelID | Date       | Runner | Machine | Scope | Model Type          | Key Idea | Validation Score | Model Saved | Status  |
-| ------- | ---------- | ------ | ------- | ----- | ------------------- | -------- | ---------------- | ----------- | ------- |
-| 001     | YYYY-MM-DD | codex  | cpu     | full  | Logistic Regression | baseline | TBD              | TBD         | planned |
+| ModelID | Date       | Runner | Machine | data | Model Type          | Key Idea | Validation Score | Model Saved |
+| ------- | ---------- | ------ | ------- | ----- | ------------------- | -------- | ---------------- | ----------- |
+| 001     | YYYY-MM-DD | codex  | cpu     | data on git repo  | TBD                 | set up baseline | TBD              | TBD         |
 
 ---
 
