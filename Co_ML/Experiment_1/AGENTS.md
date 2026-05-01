@@ -332,3 +332,19 @@ To keep PRs reviewable and mergeable:
 * Validation should run in-memory using `help_stuff/validation_score.py`; persisted prediction files are optional and default is off.
 * Before commit, run `git status --short` and remove accidental artifacts (e.g., `__pycache__/`, temp files).
 * If experiment docs mention a notebook or artifact, confirm it actually exists (or explicitly mark as intentionally omitted).
+
+
+---
+
+## Notebook structure preference (user-specific)
+
+For this project, prefer a **self-contained notebook** implementation for each experiment.
+
+Required for experiment notebooks:
+
+* At the beginning of each major section, write a short "Content" description of what the section does.
+* Immediately after each section description, place the section's code.
+* Organize logic into clear functions allocated by section (for example: data loading, preprocessing, training, threshold tuning, reporting).
+* Keep training code in the notebook itself by default (do not require a paired `.py` file unless explicitly requested).
+
+This preference overrides the earlier "heavy logic in paired .py" suggestion unless the user asks otherwise.
