@@ -4,7 +4,7 @@
 
 | ModelID | Date       | Runner | Machine | data | Model Type          | Key Idea | Validation Score | Model Saved |
 | ------- | ---------- | ------ | ------- | ----- | ------------------- | -------- | ---------------- | ----------- |
-| 001     | YYYY-MM-DD | codex  | cpu     | data on git repo  | TBD                 | set up baseline | TBD              | TBD         |
+| 001     | 2026-05-01 | codex  | cpu     | full              | LogisticRegression  | baseline with preprocessing + threshold tuning | 0.9858326650628174 | no |
 
 ---
 
