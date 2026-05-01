@@ -2,9 +2,9 @@
 
 ## Experiment Summary
 
-| ModelID | Date       | Runner | Machine | Scope | Model Type          | Key Idea | Validation Score | Model Saved | Status  |
-| ------- | ---------- | ------ | ------- | ----- | ------------------- | -------- | ---------------- | ----------- | ------- |
-| 001     | YYYY-MM-DD | codex  | cpu     | full  | Logistic Regression | baseline | TBD              | TBD         | planned |
+| ModelID | Date       | Runner | Machine | data | Model Type          | Key Idea | Validation Score | Model Saved |
+| ------- | ---------- | ------ | ------- | ----- | ------------------- | -------- | ---------------- | ----------- |
+| 001     | YYYY-MM-DD | codex  | cpu     | data on git repo  | TBD                 | set up baseline | TBD              | TBD         |
 
 ---
 
@@ -34,23 +34,20 @@ cpu
 
 Data Scope:
 
-full
+git repo
 
 Model Type:
 
-Logistic Regression
+TBD
 
 Model Structure:
 
-linear classifier with probability output
+TBD
 
 Key Parameters:
 
 ```yaml
-C: 1.0
-penalty: l2
-class_weight: balanced
-max_iter: 1000
+TBD
 ```
 
 Features Used:
@@ -65,44 +62,7 @@ Model Size:
 
 Notes:
 
-Next Recommendation:
-
 ---
-
-### ModelID: 002
-
-Notebook:
-
-model_training/train_nb/m_002.ipynb
-
-Python file:
-
-model_training/train_nb/m_002.py
-
-Model file:
-
-model_training/trained_models/m_002_model.pkl
-
-Runner:
-
-Machine:
-
-Data Scope:
-
-Model Type:
-
-Model Structure:
-
-Key Parameters:
-
-```yaml
-param1:
-param2:
-param3:
-```
-
-Features Used:
-
 Preprocessing:
 
 Validation Score:
