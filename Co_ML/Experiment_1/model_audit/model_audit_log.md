@@ -52,3 +52,17 @@ Related files reviewed: `model_training/help_stuff/validation_score.py`, `model_
 
 - Training notebook was **not modified** in this audit task.
 - Findings were documented only in `model_audit/` artifacts.
+
+---
+
+## Follow-up (2026-05-02)
+
+Status of findings for `model_training/train_nb/m_001.ipynb` at follow-up check:
+
+- **Critical finding (validation contamination via threshold tuning): RESOLVED** based on notebook logic review (threshold tuning is performed with training-only cross-validation, not validation-set selection).
+- **Medium finding (metric blind spot under imbalance): REMAINS OPEN**.
+- **Medium finding (ordering/alignment risk): REMAINS OPEN**.
+
+Follow-up note:
+- This section records current status (solved/improved/open) for each prior finding.
+- If a newer notebook revision addresses any finding, add a dated follow-up entry with concrete code/run evidence and update only the status lines above (keep original audit narrative unchanged).
