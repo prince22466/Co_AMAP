@@ -66,3 +66,6 @@ Status of findings for `model_training/train_nb/m_001.ipynb` at follow-up check:
 Follow-up note:
 - This section records current status (solved/improved/open) for each prior finding.
 - If a newer notebook revision addresses any finding, add a dated follow-up entry with concrete code/run evidence and update only the status lines above (keep original audit narrative unchanged).
+- **Validation subset class-imbalance issue: RESOLVED** for the uploaded subset (previously reported as ~1000+ class-0 vs ~5 class-1, now near-balanced).
+- Data-provider update: validation target class imbalance is materially improved versus the prior heavily skewed upload (previously reported as ~1000+ class-0 vs ~5 class-1, now near-balanced in the uploaded subset).
+- Constraint acknowledged: only a small validation subset could be uploaded to GitHub in this cycle; treat validation metrics as lower-confidence due to limited sample size and reduced comparability to earlier larger-validation runs.
