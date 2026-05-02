@@ -44,8 +44,15 @@ Contains:
 * helper materials
 * glossary:
   SFLoanPerformanceDatasetGlossary.xlsx
+* canonical notebook template:
+  notebook_template.ipynb
 * official scoring script:
   validation_score.py
+
+When building a new model experiment notebook, use
+help_stuff/notebook_template.ipynb as the starting reference for structure,
+section order, required checks, scoring, artifact handling, and training-log
+entry format.
 
 The scoring script is the official validation method and must be used for model evaluation.
 
@@ -98,16 +105,13 @@ m_001.py
 m_002.py
 m_003.py
 
-Notebook should be orchestration.
+Notebook should follow the structure of:
 
-Heavy logic should live in paired .py file when useful.
+help_stuff/notebook_template.ipynb
 
-Example:
-
-Notebook:
-
-from m_001 import run
-run()
+For this project, prefer a self-contained notebook implementation by default.
+Create a paired .py file only when explicitly requested or when the notebook
+would otherwise become difficult to run and review.
 
 ---
 
@@ -213,6 +217,13 @@ Never overwrite old experiment notebook.
 
 ## Notebook required workflow
 
+Every new experiment notebook must use:
+
+model_training/help_stuff/notebook_template.ipynb
+
+as the canonical reference. Preserve the template's major sections unless there
+is a clear experiment-specific reason to add or remove a section.
+
 Every notebook must:
 
 1. define ModelID metadata
@@ -235,6 +246,9 @@ Every notebook must:
 Notebook must run top-to-bottom.
 
 No hidden state.
+
+Each major notebook section should include a short "Content" description followed
+immediately by the code for that section, matching the template style.
 
 ---
 
@@ -338,13 +352,13 @@ To keep PRs reviewable and mergeable:
 
 ## Notebook structure preference (user-specific)
 
-For this project, prefer a **self-contained notebook** implementation for each experiment.
+The notebook template is the source of truth for experiment notebook structure.
 
 Required for experiment notebooks:
 
+* Use model_training/help_stuff/notebook_template.ipynb as the reference before creating or editing a model notebook.
 * At the beginning of each major section, write a short "Content" description of what the section does.
 * Immediately after each section description, place the section's code.
 * Organize logic into clear functions allocated by section (for example: data loading, preprocessing, training, threshold tuning, reporting).
-* Keep training code in the notebook itself by default (do not require a paired `.py` file unless explicitly requested).
-
-This preference overrides the earlier "heavy logic in paired .py" suggestion unless the user asks otherwise.
+* Keep training code in the notebook itself by default.
+* Do not require a paired `.py` file unless explicitly requested or clearly justified.

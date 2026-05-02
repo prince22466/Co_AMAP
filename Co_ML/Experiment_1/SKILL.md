@@ -72,6 +72,32 @@ Never silently change scoring logic.
 
 ---
 
+## Notebook template discipline
+
+When creating or updating model training notebooks, use:
+
+model_training/help_stuff/notebook_template.ipynb
+
+as the canonical reference for:
+
+* section order
+* ModelID metadata
+* data loading
+* required data checks
+* preprocessing and feature structure
+* training flow
+* official validation scoring
+* optional artifact handling
+* training log entry format
+
+Prefer self-contained notebooks for experiments unless the user explicitly asks
+for a paired Python file or the experiment becomes too large to keep readable in
+the notebook.
+
+Do not invent a different notebook structure without a clear reason.
+
+---
+
 ## Experiment discipline
 
 Change meaningful things deliberately.
