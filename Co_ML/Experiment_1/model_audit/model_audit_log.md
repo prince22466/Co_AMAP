@@ -223,3 +223,112 @@ Recommended next action:
 2. In the next experiment or an audit-fix rerun, explicitly drop or constant-fill all-null columns before imputation.
 3. Clean reporting labels so fixed-threshold output is not labeled as CV threshold output.
 4. Align the notebook sections more closely with `help_stuff/notebook_template.ipynb`.
+
+---
+
+## Follow-up (2026-05-03, m_003 audit)
+
+Reason for audit:
+
+- `m_003` was created as a `DecisionTreeClassifier` experiment with fixed threshold `0.6`.
+- The notebook was checked for validation correctness, leakage risk, row/ID integrity, scorer usage, and experiment hygiene.
+
+Files/data reviewed:
+
+- `model_training/train_nb/m_003.ipynb`
+- `model_training/help_stuff/validation_score.py`
+- `model_training/training_log.md`
+- `model_training/training_data/train_df_factor.csv`
+- `model_training/training_data/train_df_target.csv`
+- `model_training/val_data/val_df_factor.csv`
+- `model_training/val_data/val_df_target.csv`
+
+Executive summary:
+
+- **No critical validation contamination was found in `m_003`.**
+- `m_003` fits preprocessing and the decision tree on training data only.
+- Validation is used once for evaluation with a predeclared fixed threshold of `0.6`.
+- The official score is reproducible and matches direct accuracy: `0.6634615384615384`.
+- Main open issue: the notebook includes `Unnamed: 0` as a predictor, and the trained tree gives it non-trivial feature importance (`0.0647`). This is likely a persisted CSV index and should be removed or explicitly justified before trusting model behavior.
+
+Checklist results:
+
+| Check | Status | Notes |
+|---|---|---|
+| Validation used for selecting model/threshold | PASS | Threshold is fixed at `0.6`; no validation threshold search was found. |
+| Validation data used for model fit | PASS | `model.fit(X_train, y_train)` only. |
+| Validation labels used during training | PASS | No `y_val` passed into model fitting, preprocessing fitting, or threshold selection. |
+| Preprocessing fit on train+validation | PASS | Preprocessor is inside sklearn pipeline fitted on training data only. |
+| Official scorer usage | PASS | Uses `help_stuff.validation_score.prediction_score`; scorer target matches loaded `y_val`. |
+| Target directly included in features | PASS | No `Prepaied_3m`, target, or label column found in factor data. |
+| Post-outcome zero-balance/removal fields | PASS | Previously flagged zero-balance/removal columns are not present. |
+| Row/ID overlap checks | WARNING | Factor files contain no obvious loan ID column, so train/validation ID overlap cannot be verified from current inputs. |
+| Factor/target row alignment | WARNING | Notebook checks shapes but has no factor-target key assertion; scoring remains positional. |
+| CSV index feature handling | WARNING | `Unnamed: 0` is used as a numeric predictor and appears in the tree's top features. |
+| All-null feature handling | WARNING | Many all-null numeric columns are passed to `SimpleImputer`, causing repeated sklearn warnings. |
+| Artifact policy | PASS | No committed `m_003` model, validation prediction CSV, or feature-importance CSV was found. |
+| Notebook run evidence | WARNING | Existing notebook outputs show a completed run, but local re-execution via nbconvert could not be performed because `jupyter-nbconvert` is not installed in this environment. |
+
+Reproduction evidence:
+
+```text
+train shape: (45062, 74)
+validation shape: (104, 74)
+train target counts: {0: 44876, 1: 186}
+validation target counts: {0: 52, 1: 52}
+schema match: true
+duplicate columns: 0
+missing train / validation: 1674885 / 3879
+all-null columns in train / validation: 34 / 35
+train-not-val all-null column: Repurchase Make Whole Proceeds Flag
+fixed threshold: 0.6
+official score: 0.6634615384615384
+direct accuracy: 0.6634615384615384
+scoring target match: true
+validation prediction counts: {0: 57, 1: 47}
+confusion matrix rows=true [0,1], cols=pred [0,1]: [[37, 15], [20, 32]]
+top feature importance for persisted index: num__Unnamed: 0 = 0.06471847461215792
+```
+
+Severity-ranked findings:
+
+## Medium
+
+1. **Persisted CSV index is being used as a model feature**
+
+   `Unnamed: 0` is included in `numeric_cols`, passed through preprocessing, and used by the decision tree. Reproduced feature importances show `num__Unnamed: 0` as the fifth-largest feature (`0.0647`). This can encode row order or upstream data-preparation artifacts rather than loan characteristics. It does not prove target leakage by itself, but it weakens the validity of model interpretation and may inflate or destabilize validation behavior.
+
+2. **Row/ID integrity cannot be fully audited from current factor files**
+
+   The factor data contains no obvious loan identifier column. The notebook checks row counts and schema, but cannot verify train/validation ID overlap or factor-target alignment by key. Since the official scorer compares predictions to labels by position, silent upstream row-order mistakes would not be caught.
+
+## Low
+
+1. **All-null feature handling remains noisy and implicit**
+
+   `SimpleImputer(strategy="median")` skips many all-null numeric features, producing repeated warnings. This is not a validation principle violation, but the pipeline should explicitly drop or constant-fill all-null columns for cleaner reproducibility.
+
+2. **Notebook copy/paste labels are stale**
+
+   Section 4 says "Fit logistic regression" even though `m_003` uses `DecisionTreeClassifier`, and the result field is still named `top_cv_thresholds` even though no CV threshold tuning is performed.
+
+3. **CSV load emits mixed-type warning**
+
+   `Repurchase Make Whole Proceeds Flag` triggers a mixed-type warning under default `pd.read_csv`. Use `low_memory=False` or explicit dtype handling.
+
+4. **Notebook structure is thinner than the canonical template**
+
+   The notebook has the required core flow, but it omits explicit artifact-policy and training-log-entry sections from the template style.
+
+Recommended remediation:
+
+1. Remove `Unnamed: 0` from model factors in data preparation or drop it explicitly in the notebook before preprocessing, then rerun as either an audit-fix rerun or a new experiment if the modeling behavior changes materially.
+2. Add explicit all-null column handling before `SimpleImputer`.
+3. If a stable loan identifier exists upstream, preserve it for audit checks but exclude it from model features; use it to verify train/validation overlap and factor-target alignment.
+4. Rename fixed-threshold reporting fields and text so the notebook does not imply CV threshold tuning or logistic regression.
+5. Re-execute `m_003.ipynb` top-to-bottom in an environment with `jupyter-nbconvert` installed, or document the direct-code reproduction as the audit evidence.
+
+Notebook modification statement:
+
+- Training notebook code was **not modified** in this audit task.
+- This audit appended documentation only to `model_audit/model_audit_log.md`.
