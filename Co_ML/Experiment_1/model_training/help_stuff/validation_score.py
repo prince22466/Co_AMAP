@@ -1,5 +1,6 @@
 """
 here is a py script to give validation score for prepayment prediction
+prediction_score gives a number of percentage of correct predition
 """
 
 import pandas as pd
