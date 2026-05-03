@@ -91,3 +91,77 @@ Recommended next action:
 1. Update `data_prepare/dataprepare_training.ipynb` to exclude the zero-balance/removal columns from both train and validation factor outputs.
 2. Regenerate `model_training/training_data/train_df_factor.csv` and `model_training/val_data/val_df_factor.csv` with matching schemas.
 3. Rerun `model_training/train_nb/m_001.ipynb` and record the refreshed score, explicitly noting that leakage-prone zero-balance/removal fields were removed.
+
+---
+
+## Follow-up (2026-05-03, scoring audit)
+
+Reason for audit:
+
+- `m_001` was retrained on updated train/validation data after leakage-prone zero-balance/removal columns were removed.
+- Reported validation score remained `0.5`, which looked suspicious and required checking the official score calculation.
+
+Files/data reviewed:
+
+- `model_training/help_stuff/validation_score.py`
+- `model_training/train_nb/m_001.ipynb`
+- `model_training/training_data/train_df_factor.csv`
+- `model_training/training_data/train_df_target.csv`
+- `model_training/val_data/val_df_factor.csv`
+- `model_training/val_data/val_df_target.csv`
+
+Scoring conclusion:
+
+- **No current principle mistake was found in the retrained `m_001` workflow.**
+- Previously open principle findings are now considered resolved: validation is not used for fitting, preprocessing fitting, threshold selection, or model selection; the official scoring script is being used correctly.
+- **Validation score calculation is correct for the current notebook output.**
+- `validation_score.py` computes positional accuracy by loading `model_training/val_data/val_df_target.csv`, resetting both indices, checking equal length, and returning `1 - incorrect_count / total_count`.
+- Recomputed official score and direct accuracy both equal `0.5`.
+- The scorer's target file matches the loaded `y_val`; no stale-target path issue was found.
+
+Reproduction evidence:
+
+```text
+train shape: (45062, 74)
+validation shape: (104, 74)
+train target counts: {0: 44876, 1: 186}
+validation target counts: {0: 52, 1: 52}
+schema match: true
+zero-balance/removal columns present: false
+
+selected threshold: 0.95
+official score: 0.5
+direct accuracy: 0.5
+validation prediction counts: {0: 102, 1: 2}
+confusion matrix rows=true [0,1], cols=pred [0,1]: [[51, 1], [51, 1]]
+```
+
+Root cause of the surprising `0.5`:
+
+- The score is not a scorer bug.
+- The model's train-only threshold tuning optimizes ordinary accuracy on a heavily imbalanced training distribution (`186` positives out of `45062` rows).
+- That objective chooses the very high threshold `0.95`, which behaves almost like an all-negative classifier.
+- The validation subset is exactly balanced (`52` negatives and `52` positives), so an almost-all-negative classifier naturally scores about `0.5`.
+- Threshold diagnostics from the same validation probabilities show that other thresholds would score differently, for example:
+  - threshold `0.50`: accuracy `0.6730769230769231`
+  - threshold `0.20`: accuracy `0.6153846153846154`
+  - threshold `0.95`: accuracy `0.5`
+- These alternative threshold scores are diagnostic only. Selecting a threshold from validation results would reintroduce validation-set model-selection leakage.
+
+Additional audit findings:
+
+- The remaining notes below are engineering/modeling follow-ups, not principle violations.
+- Current `m_001.ipynb` file output appears stale relative to regenerated CSVs: notebook output still records `(45062, 81)` / `(104, 81)`, while current CSVs are `(45062, 74)` / `(104, 74)`. The training log records the refreshed 74-column run, but the notebook artifact itself should be rerun/saved if it is intended to document the latest experiment state.
+- There are many all-null factor columns after the data refresh:
+  - all-null in train: `34` columns
+  - all-null in validation: `35` columns
+  - non-null in train but all-null in validation: `Repurchase Make Whole Proceeds Flag`
+- These all-null columns are part of the observed data condition and are not a data-preparation principle mistake. They are skipped by `SimpleImputer`, create repeated warnings, and are not the direct cause of the exact `0.5` score. Future model pipelines should handle them explicitly as normal model-building hygiene.
+
+Recommended next action:
+
+1. Keep `validation_score.py` unchanged as the official accuracy scorer.
+2. In the next model experiment, do not tune threshold with plain accuracy on the naturally imbalanced training folds if the validation/evaluation subset is balanced. Use a documented training-only threshold policy, such as balanced internal folds, class-balanced accuracy, or a fixed threshold chosen before validation.
+3. Add secondary diagnostics to the notebook: confusion matrix, prediction class counts, ROC-AUC, PR-AUC, precision, recall, and F1.
+4. Add explicit all-null column handling before model fitting.
+5. Rerun and save `m_001.ipynb` if it is meant to represent the latest 74-column data run.
