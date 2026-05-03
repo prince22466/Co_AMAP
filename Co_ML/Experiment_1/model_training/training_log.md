@@ -12,6 +12,8 @@
 
 | 003     | 2026-05-03 | codex  | cpu     | full              | DecisionTreeClassifier | fixed threshold at 0.6 (prob > 0.6 => 1) | 0.6634615384615384 | no |
 
+| 003     | 2026-05-03 | codex  | cpu     | full              | DecisionTreeClassifier | append-only notebook-output capture (fixed threshold 0.6) | 0.6538461538461539 | no |
+
 ---
 
 ## Detailed Records
@@ -576,3 +578,67 @@ Notes:
 * Executed `model_training/train_nb/m_002.ipynb` successfully via `jupyter nbconvert --execute --inplace`.
 * Added secondary diagnostics: confusion matrix, precision/recall/F1, ROC-AUC, PR-AUC, and prediction counts.
 * Scoring target match check: true.
+
+
+### ModelID: 003 (append-only rerun request log)
+
+Date:
+
+2026-05-03
+
+Notebook:
+
+model_training/train_nb/m_003.ipynb
+
+Model file:
+
+(not saved in repo; artifact policy)
+
+Validation prediction file:
+
+(not generated; validation scored in-memory via official script)
+
+Runner:
+
+codex
+
+Machine:
+
+cpu
+
+Data Scope:
+
+full
+
+Model Type:
+
+DecisionTreeClassifier with median/mode imputation and one-hot encoding
+
+Key Parameters:
+
+```yaml
+max_depth: 6
+min_samples_leaf: 20
+class_weight: balanced
+fixed_threshold: 0.6
+decision_rule: prob > 0.6 => 1 else 0
+```
+
+Validation Score:
+
+0.6538461538461539
+
+Model Saved:
+
+no
+
+Model Size:
+
+N/A
+
+Notes:
+
+* Append-only update per request; no prior training-log records were modified.
+* Notebook rerun command attempted: `jupyter nbconvert --execute --inplace model_training/train_nb/m_003.ipynb` and `python -m jupyter ...`; both failed because Jupyter is unavailable in this environment.
+* Captured the latest stored notebook output values: fixed threshold = 0.6, validation score = 0.653846, direct accuracy check = 0.653846, scoring target match = true.
+* Model implementation in notebook pipeline is `DecisionTreeClassifier(max_depth=6, min_samples_leaf=20, class_weight="balanced", random_state=42)`.
