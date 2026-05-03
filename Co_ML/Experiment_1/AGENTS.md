@@ -23,7 +23,9 @@ Primary working directory:
 
 model_training/
 
-Unless explicitly instructed, work only inside this directory.
+model_audit/
+
+Unless explicitly instructed, work only inside these directories.
 
 ---
 
@@ -36,6 +38,12 @@ model_training/
 ├── training_data/
 ├── val_data/
 └── training_log.md
+└── SKILL.md
+
+
+model_audit/
+└── model_audit_log.md
+└── SKILL.md
 
 ### help_stuff/
 
