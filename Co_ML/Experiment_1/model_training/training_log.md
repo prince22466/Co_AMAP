@@ -5,6 +5,7 @@
 | ModelID | Date       | Runner | Machine | data | Model Type          | Key Idea | Validation Score | Model Saved |
 | ------- | ---------- | ------ | ------- | ----- | ------------------- | -------- | ---------------- | ----------- |
 | 001     | 2026-05-01 | codex  | cpu     | full              | LogisticRegression  | baseline with preprocessing + threshold tuning | 0.9858326650628174 | no |
+| 001     | 2026-05-02 | codex  | cpu     | full              | LogisticRegression  | retrain on updated train/val data + same preprocessing + CV threshold tuning | 0.5 | no |
 
 ---
 
@@ -224,3 +225,78 @@ Notes:
 * Missing (train/val): 661150 / 165166
 * Leakage flagged columns: []
 
+
+
+---
+
+### ModelID: 001 (data-refresh rerun)
+
+Date:
+
+2026-05-02
+
+Notebook:
+
+model_training/train_nb/m_001.ipynb
+
+Model file:
+
+(not saved in repo; removed to satisfy PR restrictions)
+
+Validation prediction file:
+
+(not generated; validation scored in-memory via official scoring script)
+
+Runner:
+
+codex
+
+Machine:
+
+cpu
+
+Data Scope:
+
+full
+
+Model Type:
+
+LogisticRegression (class_weight=balanced) with median/mode imputation and one-hot encoding
+
+Key Parameters:
+
+```yaml
+solver: liblinear
+max_iter: 1000
+class_weight: balanced
+threshold_selection: 5-fold StratifiedKFold on training split only
+threshold_candidates: [0.05, 0.10, ..., 0.95]
+best_threshold: 0.95
+```
+
+Validation Score:
+
+0.5
+
+Model Saved:
+
+no
+
+Model Size:
+
+N/A (artifact intentionally not committed)
+
+Notes:
+
+* Retrained `m_001` after training/validation data refresh.
+* Train shape: (45062, 81)
+* Validation shape: (104, 81)
+* Train positive rate: 0.004127646353912388
+* Validation positive rate: 0.5
+* Schema match: true
+* Duplicate columns: 0
+* Scoring target match check: true
+
+Next Recommendation:
+
+Create `m_002` with robust handling for all-null columns and evaluate whether the refreshed validation split is representative before model comparison.
