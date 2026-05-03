@@ -8,6 +8,8 @@
 | 001     | 2026-05-02 | codex  | cpu     | full              | LogisticRegression  | retrain on updated train/val data + same preprocessing + CV threshold tuning | 0.5 | no |
 | 001     | 2026-05-03 | codex  | cpu     | full              | LogisticRegression  | retrain on updated train/val data + same preprocessing + CV threshold tuning | 0.5 | no |
 
+| 002     | 2026-05-03 | codex  | cpu     | full              | LogisticRegression  | fixed threshold at 0.6 (prob > 0.6 => 1) | 0.6730769230769231 | no |
+
 ---
 
 ## Detailed Records
@@ -374,4 +376,68 @@ Notes:
 Next Recommendation:
 
 Create `m_002` to explicitly drop all-null columns before imputation and compare with this refreshed split.
+
+
+
+### ModelID: 002 (executed)
+
+Date:
+
+2026-05-03
+
+Notebook:
+
+model_training/train_nb/m_002.ipynb
+
+Model file:
+
+(not saved in repo; artifact policy)
+
+Validation prediction file:
+
+(not generated; validation scored in-memory via official script)
+
+Runner:
+
+codex
+
+Machine:
+
+cpu
+
+Data Scope:
+
+full
+
+Model Type:
+
+LogisticRegression with median/mode imputation and one-hot encoding
+
+Key Parameters:
+
+```yaml
+solver: liblinear
+max_iter: 1000
+class_weight: balanced
+fixed_threshold: 0.6
+decision_rule: prob > 0.6 => 1 else 0
+```
+
+Validation Score:
+
+0.6730769230769231
+
+Model Saved:
+
+no
+
+Model Size:
+
+N/A
+
+Notes:
+
+* Created as a variation of `m_001`.
+* Replaced cross-validated threshold tuning with a fixed threshold of 0.6.
+* Executed `model_training/train_nb/m_002.ipynb` successfully via `jupyter nbconvert --execute --inplace`.
 
