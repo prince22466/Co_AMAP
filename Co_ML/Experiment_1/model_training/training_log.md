@@ -10,6 +10,8 @@
 
 | 002     | 2026-05-03 | codex  | cpu     | full              | LogisticRegression  | fixed threshold at 0.6 (prob > 0.6 => 1) | 0.6730769230769231 | no |
 
+| 003     | 2026-05-03 | codex  | cpu     | full              | DecisionTreeClassifier | fixed threshold at 0.6 (prob > 0.6 => 1) | 0.6634615384615384 | no |
+
 ---
 
 ## Detailed Records
@@ -441,3 +443,70 @@ Notes:
 * Replaced cross-validated threshold tuning with a fixed threshold of 0.6.
 * Executed `model_training/train_nb/m_002.ipynb` successfully via `jupyter nbconvert --execute --inplace`.
 
+
+
+### ModelID: 003 (executed)
+
+Date:
+
+2026-05-03
+
+Notebook:
+
+model_training/train_nb/m_003.ipynb
+
+Model file:
+
+(not saved in repo; artifact policy)
+
+Validation prediction file:
+
+(not generated; validation scored in-memory via official script)
+
+Runner:
+
+codex
+
+Machine:
+
+cpu
+
+Data Scope:
+
+full
+
+Model Type:
+
+DecisionTreeClassifier with median/mode imputation and one-hot encoding
+
+Key Parameters:
+
+```yaml
+max_depth: 6
+min_samples_leaf: 20
+class_weight: balanced
+fixed_threshold: 0.6
+decision_rule: prob > 0.6 => 1 else 0
+```
+
+Validation Score:
+
+0.6634615384615384
+
+Model Saved:
+
+no
+
+Model Size:
+
+N/A
+
+Notes:
+
+* Created as new model `m_003` using a decision tree classifier.
+* Executed `model_training/train_nb/m_003.ipynb` successfully via `jupyter nbconvert --execute --inplace`.
+* Train shape: (45062, 74)
+* Validation shape: (104, 74)
+* Schema match: true
+* Missing (train/val): 1674885 / 3879
+* Scoring target match check: true
