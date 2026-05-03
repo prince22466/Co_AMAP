@@ -69,3 +69,25 @@ Follow-up note:
 - **Validation subset class-imbalance issue: RESOLVED** for the uploaded subset (previously reported as ~1000+ class-0 vs ~5 class-1, now near-balanced).
 - Data-provider update: validation target class imbalance is materially improved versus the prior heavily skewed upload (previously reported as ~1000+ class-0 vs ~5 class-1, now near-balanced in the uploaded subset).
 - Constraint acknowledged: only a small validation subset could be uploaded to GitHub in this cycle; treat validation metrics as lower-confidence due to limited sample size and reduced comparability to earlier larger-validation runs.
+
+---
+
+## Follow-up (2026-05-03)
+
+Current review of `model_training/train_nb/m_001.ipynb` after the refreshed training data:
+
+- **Validation contamination via threshold tuning: RESOLVED**. Current notebook logic tunes the threshold with 5-fold `StratifiedKFold` on training data only, then fits the final model on `X_train, y_train` and scores validation once.
+- **Validation data used in model fitting/selection: PASS**. No direct evidence found that validation factors or validation labels are used in model fitting, preprocessing fitting, or threshold selection.
+- **Feature leakage risk: PARTIALLY OPEN**. The notebook currently auto-includes all columns from the factor CSVs. A subset of columns appears to represent post-outcome or removal state and should be removed from prepared training/validation factor data before rerunning the model.
+
+Feature-leakage clarification:
+
+- User confirmed these columns are acceptable and should not be treated as leakage by this audit unless future data-timing evidence says otherwise: `Scheduled Principal Current`, `Total Principal Current`, `Loan Payment History`, `Modification Flag`, `Servicing Activity Indicator`, `Borrower Credit Score Current`, `Co-Borrower Credit Score Current`.
+- Columns still flagged for removal from model factors: `Zero Balance Code`, `Zero Balance Effective Date`, `Zero Balance Code Change Date`, `UPB at the Time of Removal`.
+- `Repurchase Date` remains a review item because it may represent post-acquisition/removal information; exclude it unless confirmed available at acquisition time.
+
+Recommended next action:
+
+1. Update `data_prepare/dataprepare_training.ipynb` to exclude the zero-balance/removal columns from both train and validation factor outputs.
+2. Regenerate `model_training/training_data/train_df_factor.csv` and `model_training/val_data/val_df_factor.csv` with matching schemas.
+3. Rerun `model_training/train_nb/m_001.ipynb` and record the refreshed score, explicitly noting that leakage-prone zero-balance/removal fields were removed.
