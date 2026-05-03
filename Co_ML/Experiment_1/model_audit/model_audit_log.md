@@ -332,3 +332,74 @@ Notebook modification statement:
 
 - Training notebook code was **not modified** in this audit task.
 - This audit appended documentation only to `model_audit/model_audit_log.md`.
+
+---
+
+## Follow-up (2026-05-03, m_002/m_003 update check)
+
+Reason for audit:
+
+- User reported that `m_002` and `m_003` notebooks were updated and asked whether the updates resolve the findings above.
+
+Files reviewed:
+
+- `model_training/train_nb/m_002.ipynb`
+- `model_training/train_nb/m_003.ipynb`
+- `model_training/training_log.md`
+- `model_audit/model_audit_log.md`
+
+Execution check:
+
+- `jupyter nbconvert` could not be used in this local environment because the `jupyter` command is unavailable.
+- As a fallback, the code cells were replayed sequentially from each notebook JSON in the `model_training/` working directory.
+- Fallback replay completed successfully for both notebooks.
+
+Fallback replay evidence:
+
+```text
+m_002:
+score: 0.6730769230769231
+direct accuracy: 0.6730769230769231
+fixed threshold: 0.6
+scoring target match: true
+prediction counts: {0: 66, 1: 38}
+precision / recall / f1: 0.7368421052631579 / 0.5384615384615384 / 0.6222222222222222
+ROC-AUC / PR-AUC: 0.7359467455621302 / 0.6980695672268391
+
+m_003:
+score: 0.6538461538461539
+direct accuracy: 0.6538461538461539
+fixed threshold: 0.6
+scoring target match: true
+```
+
+Status against prior `m_002` findings:
+
+- **Explicit all-null handling: RESOLVED**. The notebook now drops all-null training columns before fitting and records `dropped_all_null_columns`.
+- **Mixed-type CSV warning: RESOLVED**. Factor and target CSV loads now use `low_memory=False`.
+- **Misleading `top_cv_thresholds` reporting label: RESOLVED**. The result summary now uses `fixed_threshold_diagnostics`.
+- **Secondary diagnostics: IMPROVED/RESOLVED**. The notebook now reports confusion matrix, prediction counts, precision, recall, F1, ROC-AUC, and PR-AUC.
+- **Artifact policy: STILL MOSTLY DOCUMENTATION-OPEN**. No forbidden generated artifacts were found, but the notebook still does not have a dedicated artifact-policy section in the template style.
+- **Notebook output consistency: OPEN**. Current code-cell replay gives `0.6730769230769231`, matching the training log entry for the original `m_002` run, but the stored notebook output also contains `0.6634615384615384` from a later audit-fix rerun. Rerun and save the notebook in one environment if the notebook itself is intended to be the authoritative run artifact.
+
+Status against prior `m_003` findings:
+
+- **Persisted CSV index used as feature: RESOLVED**. The notebook now drops `Unnamed: 0` before preprocessing and records it in `dropped_index_like_columns`.
+- **All-null feature handling: RESOLVED**. The notebook drops the union of train/validation all-null columns before building the model.
+- **Mixed-type CSV warning: RESOLVED**. Factor and target CSV loads now use `low_memory=False`.
+- **Misleading fixed-threshold result field: RESOLVED**. The result summary now uses `fixed_threshold_scores`, not `top_cv_thresholds`.
+- **Stale logistic-regression text: PARTIALLY OPEN**. Section 4 still says "Fit logistic regression" even though the pipeline uses `DecisionTreeClassifier`.
+- **Secondary diagnostics: OPEN**. Unlike `m_002`, `m_003` still reports only official score, direct accuracy, fixed threshold, and scorer target match; it does not report confusion matrix, prediction counts, precision, recall, F1, ROC-AUC, or PR-AUC.
+- **Row/ID integrity: OPEN BY DATA LIMITATION**. No stable loan identifier is available in the factor files, so train/validation overlap and factor-target key alignment still cannot be fully audited. Positional row alignment remains the scoring assumption.
+- **Artifact policy/template sections: STILL MOSTLY DOCUMENTATION-OPEN**. No forbidden generated artifacts were found, but the notebook still lacks dedicated artifact-policy and training-log-entry sections in the template style.
+
+Audit conclusion:
+
+- The substantive modeling-risk findings are mostly resolved for both notebooks.
+- `m_002` now resolves the prior all-null, CSV warning, stale threshold-label, and missing-diagnostics findings, with only notebook-output consistency and template documentation hygiene still open.
+- `m_003` now resolves the important `Unnamed: 0` feature issue and all-null handling issue. Remaining issues are lower-severity reporting/documentation gaps plus the unresolved data limitation around ID-based alignment checks.
+
+Notebook modification statement:
+
+- Training notebook code was **not modified** in this audit task.
+- This audit appended documentation only to `model_audit/model_audit_log.md`.
