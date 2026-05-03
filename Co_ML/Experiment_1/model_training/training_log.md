@@ -14,6 +14,8 @@
 
 | 003     | 2026-05-03 | codex  | cpu     | full              | DecisionTreeClassifier | append-only notebook-output capture (fixed threshold 0.6) | 0.6538461538461539 | no |
 
+| 004     | 2026-05-03 | codex  | cpu     | full              | RandomForestClassifier | fixed threshold at 0.6 (prob > 0.6 => 1) | 0.5288461538461539 | no |
+
 ---
 
 ## Detailed Records
@@ -642,3 +644,76 @@ Notes:
 * Notebook rerun command attempted: `jupyter nbconvert --execute --inplace model_training/train_nb/m_003.ipynb` and `python -m jupyter ...`; both failed because Jupyter is unavailable in this environment.
 * Captured the latest stored notebook output values: fixed threshold = 0.6, validation score = 0.653846, direct accuracy check = 0.653846, scoring target match = true.
 * Model implementation in notebook pipeline is `DecisionTreeClassifier(max_depth=6, min_samples_leaf=20, class_weight="balanced", random_state=42)`.
+
+### ModelID: 004 (executed)
+
+Date:
+
+2026-05-03
+
+Notebook:
+
+model_training/train_nb/m_004.ipynb
+
+Model file:
+
+(not saved in repo; artifact intentionally omitted)
+
+Validation prediction file:
+
+(not generated; validation scored in-memory via official scoring script)
+
+Runner:
+
+codex
+
+Machine:
+
+cpu
+
+Data Scope:
+
+full
+
+Model Type:
+
+RandomForestClassifier with median/mode imputation + one-hot encoding
+
+Key Parameters:
+
+```yaml
+n_estimators: 300
+max_depth: 10
+min_samples_leaf: 10
+class_weight: balanced_subsample
+random_state: 42
+threshold: 0.6
+```
+
+Validation Score:
+
+0.5288461538461539
+
+Model Saved:
+
+no
+
+Model Size:
+
+N/A (artifact intentionally not committed)
+
+Notes:
+
+* Train shape: (45062, 38)
+* Validation shape: (104, 38)
+* Train positive rate: 0.004127646353912388
+* Validation positive rate: 0.5
+* Schema match: true
+* Missing (train/val): 97716 / 239
+* Duplicate columns: 0
+* Scoring target match check: true
+
+Next Recommendation:
+
+Evaluate threshold sweep and class-weight/grid search for RandomForest, then compare against boosted-tree models on the same full data scope.
+
