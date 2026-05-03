@@ -510,3 +510,69 @@ Notes:
 * Schema match: true
 * Missing (train/val): 1674885 / 3879
 * Scoring target match check: true
+
+
+### ModelID: 002 (audit-fix rerun)
+
+Date:
+
+2026-05-03
+
+Notebook:
+
+model_training/train_nb/m_002.ipynb
+
+Model file:
+
+(not saved in repo; artifact policy)
+
+Validation prediction file:
+
+(not generated; validation scored in-memory via official script)
+
+Runner:
+
+codex
+
+Machine:
+
+cpu
+
+Data Scope:
+
+full
+
+Model Type:
+
+LogisticRegression with explicit all-null-column drop, median/mode imputation, and one-hot encoding
+
+Key Parameters:
+
+```yaml
+solver: liblinear
+max_iter: 1000
+class_weight: balanced
+fixed_threshold: 0.6
+decision_rule: prob > 0.6 => 1 else 0
+all_null_column_policy: drop_train_all_null_and_apply_same_schema_to_validation
+index_column_policy: drop_Unnamed_0_when_present
+```
+
+Validation Score:
+
+0.6634615384615384
+
+Model Saved:
+
+no
+
+Model Size:
+
+N/A
+
+Notes:
+
+* Audit-fix rerun of `m_002` after notebook robustness updates.
+* Executed `model_training/train_nb/m_002.ipynb` successfully via `jupyter nbconvert --execute --inplace`.
+* Added secondary diagnostics: confusion matrix, precision/recall/F1, ROC-AUC, PR-AUC, and prediction counts.
+* Scoring target match check: true.
