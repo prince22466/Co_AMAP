@@ -165,3 +165,61 @@ Recommended next action:
 3. Add secondary diagnostics to the notebook: confusion matrix, prediction class counts, ROC-AUC, PR-AUC, precision, recall, and F1.
 4. Add explicit all-null column handling before model fitting.
 5. Rerun and save `m_001.ipynb` if it is meant to represent the latest 74-column data run.
+
+---
+
+## Follow-up (2026-05-03, m_002 audit)
+
+Reason for audit:
+
+- `m_002` was created as a LogisticRegression variation with a fixed threshold of `0.6`.
+- Prior recommendations for `m_002` mentioned explicit all-null column handling, so the notebook was checked for validation correctness and experiment hygiene.
+
+Files/data reviewed:
+
+- `model_training/train_nb/m_002.ipynb`
+- `model_training/help_stuff/validation_score.py`
+- `model_training/training_log.md`
+- `model_training/training_data/train_df_factor.csv`
+- `model_training/training_data/train_df_target.csv`
+- `model_training/val_data/val_df_factor.csv`
+- `model_training/val_data/val_df_target.csv`
+
+Audit conclusion:
+
+- **No principle validation or leakage mistake was found in `m_002`.**
+- `m_002` trains on training data only.
+- Validation scoring uses the official `help_stuff/validation_score.py` script.
+- The scorer's validation target matches the loaded `y_val`.
+- The reported validation score is reproducible: `0.6730769230769231`.
+- No forbidden `m_002` model or validation prediction artifacts were found.
+
+Reproduction evidence:
+
+```text
+train shape: (45062, 74)
+validation shape: (104, 74)
+schema match: true
+train positive rate: 0.004127646353912388
+validation positive rate: 0.5
+fixed threshold: 0.6
+official score: 0.6730769230769231
+direct accuracy: 0.6730769230769231
+validation prediction counts: {0: 66, 1: 38}
+scoring target match: true
+```
+
+Improvement findings:
+
+- `m_002` was expected/recommended to handle all-null columns, but the notebook still passes all numeric columns directly into `SimpleImputer(strategy="median")`.
+- The executed notebook still emits `SimpleImputer` warnings for all-null numeric features.
+- Notebook structure is thinner than `help_stuff/notebook_template.ipynb`; it omits explicit artifact-policy and training-log-entry sections.
+- Result reporting uses the misleading field name `top_cv_thresholds` even though `m_002` uses a fixed threshold and does not perform CV threshold tuning.
+- CSV loading emits a mixed-type `DtypeWarning`; use `low_memory=False` or explicit dtype handling for cleaner reproducibility.
+
+Recommended next action:
+
+1. Treat the current `m_002` score as valid for its fixed-threshold experiment.
+2. In the next experiment or an audit-fix rerun, explicitly drop or constant-fill all-null columns before imputation.
+3. Clean reporting labels so fixed-threshold output is not labeled as CV threshold output.
+4. Align the notebook sections more closely with `help_stuff/notebook_template.ipynb`.
