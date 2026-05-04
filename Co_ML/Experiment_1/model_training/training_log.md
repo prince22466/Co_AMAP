@@ -16,6 +16,8 @@
 
 | 004     | 2026-05-03 | codex  | cpu     | full              | RandomForestClassifier | fixed threshold at 0.6 (prob > 0.6 => 1) | 0.5288461538461539 | no |
 
+| 005     | 2026-05-03 | codex  | cpu     | full              | RandomForestClassifier | GridSearchCV over multiple RF parameter sets; select best CV model | 0.5 | no |
+
 ---
 
 ## Detailed Records
@@ -717,3 +719,61 @@ Next Recommendation:
 
 Evaluate threshold sweep and class-weight/grid search for RandomForest, then compare against boosted-tree models on the same full data scope.
 
+
+
+### ModelID: 005 (prepared)
+
+Date:
+
+2026-05-03
+
+Notebook:
+
+model_training/train_nb/m_005.ipynb
+
+Runner:
+
+codex
+
+Machine:
+
+cpu
+
+Data Scope:
+
+full
+
+Model Type:
+
+RandomForestClassifier with preprocessing pipeline + GridSearchCV
+
+Key Parameters (grid):
+
+```yaml
+rf__n_estimators: [100, 200]
+rf__max_depth: [None, 8, 16]
+rf__min_samples_split: [2, 10]
+rf__min_samples_leaf: [1, 4]
+rf__class_weight: [None, balanced]
+cv: StratifiedKFold(n_splits=3, shuffle=True, random_state=42)
+scoring: accuracy
+```
+
+Validation Score:
+
+0.5
+
+Model Saved:
+
+no
+
+Notes:
+
+* Notebook includes required checks and official scoring-script integration.
+* Best CV params: rf__class_weight=None, rf__max_depth=8, rf__min_samples_leaf=1, rf__n_estimators=100.
+* Best CV score: 0.9958723536460876.
+* Added all-null column drop before training and keep_empty_features imputers to avoid execution warnings/errors.
+
+Next Recommendation:
+
+After executing `m_005`, compare best RF setting against `m_001` logistic baseline and consider class-imbalance-focused scoring/tuning.
