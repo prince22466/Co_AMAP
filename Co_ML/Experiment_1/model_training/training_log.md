@@ -15,6 +15,7 @@
 | 006     | 2026-05-04 | codex  | cpu     | full              | RandomForestClassifier | GridSearchCV with scoring="balanced_accuracy" selection for class imbalance | 0.5673076923076923 | no |
 | 007     | 2026-05-04 | codex  | cpu     | full              | RandomForestClassifier | GridSearchCV with scoring="average_precision" over RF hyperparameters | 0.5 | no |
 | 008     | 2026-05-04 | codex  | cpu     | full              | RandomForestClassifier | GridSearchCV with scoring="f1" over RF hyperparameters | 0.5576923076923077 | no |
+| 009     | 2026-05-04 | codex  | cpu     | full              | RandomForestClassifier + LogisticRegression | classifier-agnostic grid with balanced_accuracy (3-fold CV) | 0.7019230769230769 | no |
 
 ---
 
@@ -968,3 +969,73 @@ Notes:
 Next Recommendation:
 
 Try class-imbalance-focused alternatives (e.g., balanced subsampling, threshold tuning after probability calibration) and compare against this `m_008` baseline using the same official score.
+
+---
+
+---
+
+### ModelID: 009 (new experiment)
+
+Date:
+
+2026-05-04
+
+Notebook:
+
+model_training/train_nb/m_009.ipynb
+
+Model file:
+
+(not saved in repo; artifact intentionally omitted)
+
+Validation prediction file:
+
+(not generated; validation scored in-memory via official scoring script)
+
+Runner:
+
+codex
+
+Machine:
+
+cpu
+
+Data Scope:
+
+full
+
+Model Type:
+
+Classifier-agnostic pipeline (RandomForestClassifier + LogisticRegression) with GridSearchCV
+
+Key Parameters:
+
+```yaml
+cv: StratifiedKFold(n_splits=3, shuffle=True, random_state=42)
+scoring: balanced_accuracy
+param_grid:
+  - clf: RandomForestClassifier
+    clf__n_estimators: [120]
+    clf__max_depth: [3, 5]
+    clf__min_samples_leaf: [2]
+    clf__class_weight: [balanced]
+  - clf: LogisticRegression
+    clf__C: [1.0]
+    clf__class_weight: [balanced]
+```
+
+Validation Score:
+
+0.7019230769230769
+
+Model Saved:
+
+no
+
+Notes:
+
+* Uses official validation scorer at `model_training/help_stuff/validation_score.py`.
+
+Next Recommendation:
+
+Run probability calibration and threshold tuning after selecting the best estimator from this grid.
