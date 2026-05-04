@@ -14,6 +14,7 @@
 | 005     | 2026-05-03 | codex  | cpu     | full              | RandomForestClassifier | GridSearchCV with scoring="accuracy" over multiple RF parameter sets; select best CV model | 0.5 | no |
 | 006     | 2026-05-04 | codex  | cpu     | full              | RandomForestClassifier | GridSearchCV with scoring="balanced_accuracy" selection for class imbalance | 0.5673076923076923 | no |
 | 007     | 2026-05-04 | codex  | cpu     | full              | RandomForestClassifier | GridSearchCV with scoring="average_precision" over RF hyperparameters | 0.5 | no |
+| 008     | 2026-05-04 | codex  | cpu     | full              | RandomForestClassifier | GridSearchCV with scoring="f1" over RF hyperparameters | 0.5576923076923077 | no |
 
 ---
 
@@ -891,3 +892,79 @@ Notes:
 Next Recommendation:
 
 Run a threshold sweep and probability calibration (e.g., Platt/isotonic) on top of the selected RF to improve precision-recall behavior under class imbalance.
+
+---
+
+### ModelID: 008 (new experiment)
+
+Date:
+
+2026-05-04
+
+Notebook:
+
+model_training/train_nb/m_008.ipynb
+
+Model file:
+
+(not saved in repo; removed to satisfy PR restrictions)
+
+Validation prediction file:
+
+(not generated; validation scored in-memory via official scoring script)
+
+Runner:
+
+codex
+
+Machine:
+
+cpu
+
+Data Scope:
+
+full
+
+Model Type:
+
+RandomForestClassifier with preprocessing pipeline and GridSearchCV
+
+Key Parameters:
+
+```yaml
+cv: StratifiedKFold(n_splits=2, shuffle=True, random_state=42)
+scoring: f1
+param_grid:
+  rf__n_estimators: [200, 400]
+  rf__max_depth: [8, null]
+  rf__min_samples_leaf: [1, 4]
+  rf__class_weight: [null, balanced]
+best_params:
+  rf__class_weight: balanced
+  rf__max_depth: 8
+  rf__min_samples_leaf: 1
+  rf__n_estimators: 400
+```
+
+Validation Score:
+
+0.5576923076923077
+
+Model Saved:
+
+no
+
+Model Size:
+
+N/A (artifact intentionally not committed)
+
+Notes:
+
+* All-null training columns are dropped before preprocessing to avoid empty-feature issues.
+* Preprocessing uses median imputation for numeric/bool and most-frequent + one-hot for categoricals.
+* Official validation scorer loaded from `model_training/help_stuff/validation_score.py`.
+* Notebook executed end-to-end successfully.
+
+Next Recommendation:
+
+Try class-imbalance-focused alternatives (e.g., balanced subsampling, threshold tuning after probability calibration) and compare against this `m_008` baseline using the same official score.
