@@ -18,6 +18,8 @@
 
 | 005     | 2026-05-03 | codex  | cpu     | full              | RandomForestClassifier | GridSearchCV over multiple RF parameter sets; select best CV model | 0.5 | no |
 
+| 006     | 2026-05-04 | codex  | cpu     | full              | RandomForestClassifier | GridSearchCV with balanced_accuracy selection for class imbalance | 0.5673076923076923 | no |
+
 ---
 
 ## Detailed Records
@@ -777,3 +779,63 @@ Notes:
 Next Recommendation:
 
 After executing `m_005`, compare best RF setting against `m_001` logistic baseline and consider class-imbalance-focused scoring/tuning.
+
+
+### ModelID: 006
+
+Date:
+
+2026-05-04
+
+Notebook:
+
+model_training/train_nb/m_006.ipynb
+
+Runner:
+
+codex
+
+Machine:
+
+cpu
+
+Data Scope:
+
+full
+
+Model Type:
+
+RandomForestClassifier with preprocessing pipeline + GridSearchCV
+
+Key Parameters (grid):
+
+```yaml
+rf__n_estimators: [100, 200, 400]
+rf__max_depth: [None, 8, 16, 24]
+rf__min_samples_split: [2, 10, 20]
+rf__min_samples_leaf: [1, 4, 8]
+rf__class_weight: [None, balanced, balanced_subsample]
+cv: StratifiedKFold(n_splits=3, shuffle=True, random_state=42)
+scoring: balanced_accuracy
+```
+
+Validation Score:
+
+0.5673076923076923
+
+Model Saved:
+
+no
+
+Notes:
+
+* Created as a new RandomForest grid-search experiment focused on class-imbalance-aware model selection using balanced accuracy.
+* Notebook executed end-to-end with no errors.
+* Best CV params: rf__class_weight=balanced, rf__max_depth=8, rf__min_samples_leaf=4, rf__n_estimators=100.
+* Best CV balanced_accuracy: 0.5480901015654127.
+* Validation score from official scoring script: 0.5673076923076923.
+* Notebook preserves required data checks, official scoring-script integration, and artifact policy from prior experiments.
+
+Next Recommendation:
+
+Execute `m_006.ipynb`, compare balanced-accuracy-selected parameters against `m_005`, then evaluate recall/precision tradeoff via threshold sweep.
