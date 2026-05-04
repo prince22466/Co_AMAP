@@ -7,18 +7,13 @@
 | 001     | 2026-05-01 | codex  | cpu     | full              | LogisticRegression  | baseline with preprocessing + threshold tuning | 0.9858326650628174 | no |
 | 001     | 2026-05-02 | codex  | cpu     | full              | LogisticRegression  | retrain on updated train/val data + same preprocessing + CV threshold tuning | 0.5 | no |
 | 001     | 2026-05-03 | codex  | cpu     | full              | LogisticRegression  | retrain on updated train/val data + same preprocessing + CV threshold tuning | 0.5 | no |
-
 | 002     | 2026-05-03 | codex  | cpu     | full              | LogisticRegression  | fixed threshold at 0.6 (prob > 0.6 => 1) | 0.6730769230769231 | no |
-
 | 003     | 2026-05-03 | codex  | cpu     | full              | DecisionTreeClassifier | fixed threshold at 0.6 (prob > 0.6 => 1) | 0.6634615384615384 | no |
-
 | 003     | 2026-05-03 | codex  | cpu     | full              | DecisionTreeClassifier | append-only notebook-output capture (fixed threshold 0.6) | 0.6538461538461539 | no |
 
 | 004     | 2026-05-03 | codex  | cpu     | full              | RandomForestClassifier | fixed threshold at 0.6 (prob > 0.6 => 1) | 0.5288461538461539 | no |
-
-| 005     | 2026-05-03 | codex  | cpu     | full              | RandomForestClassifier | GridSearchCV over multiple RF parameter sets; select best CV model | 0.5 | no |
-
-| 006     | 2026-05-04 | codex  | cpu     | full              | RandomForestClassifier | GridSearchCV with balanced_accuracy selection for class imbalance | 0.5673076923076923 | no |
+| 005     | 2026-05-03 | codex  | cpu     | full              | RandomForestClassifier | GridSearchCV with scoring="accuracy" over multiple RF parameter sets; select best CV model | 0.5 | no |
+| 006     | 2026-05-04 | codex  | cpu     | full              | RandomForestClassifier | GridSearchCV with scoring="balanced_accuracy" selection for class imbalance | 0.5673076923076923 | no |
 
 ---
 
