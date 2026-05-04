@@ -13,6 +13,7 @@
 | 004     | 2026-05-03 | codex  | cpu     | full              | RandomForestClassifier | fixed threshold at 0.6 (prob > 0.6 => 1) | 0.5288461538461539 | no |
 | 005     | 2026-05-03 | codex  | cpu     | full              | RandomForestClassifier | GridSearchCV with scoring="accuracy" over multiple RF parameter sets; select best CV model | 0.5 | no |
 | 006     | 2026-05-04 | codex  | cpu     | full              | RandomForestClassifier | GridSearchCV with scoring="balanced_accuracy" selection for class imbalance | 0.5673076923076923 | no |
+| 007     | 2026-05-04 | codex  | cpu     | full              | RandomForestClassifier | GridSearchCV with scoring="average_precision" over RF hyperparameters | 0.5 | no |
 
 ---
 
@@ -833,3 +834,60 @@ Notes:
 Next Recommendation:
 
 Execute `m_006.ipynb`, compare balanced-accuracy-selected parameters against `m_005`, then evaluate recall/precision tradeoff via threshold sweep.
+
+### ModelID: 007
+
+Date:
+
+2026-05-04
+
+Notebook:
+
+model_training/train_nb/m_007.ipynb
+
+Runner:
+
+codex
+
+Machine:
+
+cpu
+
+Data Scope:
+
+full
+
+Model Type:
+
+RandomForestClassifier with preprocessing pipeline + GridSearchCV
+
+Key Parameters (grid):
+
+```yaml
+rf__n_estimators: [100, 300]
+rf__max_depth: [8, None]
+rf__min_samples_leaf: [1, 4]
+rf__class_weight: [None, balanced]
+cv: StratifiedKFold(n_splits=2, shuffle=True, random_state=42)
+scoring: average_precision
+```
+
+Validation Score:
+
+0.5
+
+Model Saved:
+
+no
+
+Notes:
+
+* Notebook executed end-to-end with no errors.
+* Best CV params: rf__class_weight=None, rf__max_depth=8, rf__min_samples_leaf=4, rf__n_estimators=300.
+* Best CV average_precision: 0.02500060006205744.
+* Validation score from official scoring script: 0.5.
+* Dropped all-null training columns before fitting to keep preprocessing robust.
+
+Next Recommendation:
+
+Run a threshold sweep and probability calibration (e.g., Platt/isotonic) on top of the selected RF to improve precision-recall behavior under class imbalance.
