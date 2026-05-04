@@ -333,8 +333,6 @@ Notebook modification statement:
 - Training notebook code was **not modified** in this audit task.
 - This audit appended documentation only to `model_audit/model_audit_log.md`.
 
----
-
 ## Follow-up (2026-05-03, m_002/m_003 update check)
 
 Reason for audit:
@@ -401,5 +399,110 @@ Audit conclusion:
 
 Notebook modification statement:
 
+- Training notebook code was **not modified** in this audit task.
+- This audit appended documentation only to `model_audit/model_audit_log.md`.
+
+---
+
+## Audit (2026-05-04, m_005 validation score investigation)
+
+Reason for audit:
+
+- User asked why new model `m_005` has validation score `0.5`, and whether predictions are all `0`s or all `1`s.
+
+Files reviewed:
+
+- `model_training/train_nb/m_005.ipynb`
+- `model_training/training_log.md`
+- `model_training/help_stuff/validation_score.py`
+- `model_audit/model_audit_log.md`
+
+Execution check:
+
+- `m_005` notebook logic was reproduced from the notebook code.
+- The reproduction used `n_jobs=1` locally because Windows multiprocessing through joblib failed with a permission error in this environment. Model grid, random seeds, data, and scoring logic were otherwise kept consistent with the notebook.
+
+Executive summary:
+
+- The validation score is **0.5 because `m_005` predicts all validation rows as class `0`**, not because predictions are all `1`.
+- The official scorer is behaving as expected. It compares predictions positionally against `model_training/val_data/val_df_target.csv`, and direct accuracy also equals `0.5`.
+- The root cause is metric/model-selection mismatch under severe training class imbalance: training target positive rate is only `0.004127646353912388`, while validation target positive rate is `0.5`. `GridSearchCV(scoring='accuracy')` therefore rewards majority-class behavior on training folds.
+- The fitted model's validation positive probabilities are very low; the maximum reproduced positive probability is only `0.0327695810824596`, so the default RandomForest `predict()` threshold of `0.5` emits no positive predictions.
+
+Checklist results:
+
+| Check | Status | Evidence |
+| --- | --- | --- |
+| Validation used for hyperparameter selection | PASS | `GridSearchCV` is fit on `X_train_model, y_train`; validation is only scored after model selection. |
+| Validation target used in fitting/preprocessing | PASS | No direct validation-target use was found before final scoring. |
+| Official scorer usage | PASS | Notebook imports `help_stuff/validation_score.py` via `importlib` and calls `prediction_score(y_val_pred)`. |
+| Scorer correctness for current output | PASS | Official score and direct positional accuracy both reproduce as `0.5`. |
+| Prediction class collapse | FAIL | Reproduced validation prediction counts are `{0: 104}`. |
+| Metric suitability under class imbalance | FAIL | Hyperparameter search uses plain accuracy with train counts `{0: 44876, 1: 186}`. |
+| Probability/threshold diagnostics | WARNING | Notebook does not report prediction counts, confusion matrix, or probability distribution. |
+| Training-log consistency | WARNING | `training_log.md` documents `max_depth: [None, 8, 16]` and `n_splits=3`, but the notebook code uses `max_depth: [8, 16]` and `n_splits=2`. |
+| Artifact policy | PASS | No committed `m_005` model or validation prediction CSV was found during this audit. |
+
+Reproduction evidence:
+
+```text
+train_shape: (45062, 74)
+validation_shape: (104, 74)
+train target counts: {0: 44876, 1: 186}
+validation target counts: {0: 52, 1: 52}
+all-null training columns dropped: 34
+
+best_params:
+{'rf__class_weight': None,
+ 'rf__max_depth': 8,
+ 'rf__min_samples_leaf': 1,
+ 'rf__n_estimators': 100}
+
+best_cv_accuracy: 0.9958723536460876
+validation prediction counts: {0: 104}
+official score: 0.5
+direct accuracy: 0.5
+balanced accuracy: 0.5
+confusion matrix rows true_0,true_1: [[52, 0], [52, 0]]
+precision / recall / f1: 0.0 / 0.0 / 0.0
+ROC-AUC / PR-AUC from probabilities: 0.7485207100591715 / 0.7444662628348875
+positive probability min / max / mean: 0.0008156869565238205 / 0.0327695810824596 / 0.0056036533576044505
+positive probability quantiles:
+0.00=0.0008156869565238205
+0.10=0.0014700002037203327
+0.25=0.0028595334091926668
+0.50=0.004320610366030151
+0.75=0.006868388399197509
+0.90=0.010337842788686998
+1.00=0.0327695810824596
+```
+
+Severity-ranked findings:
+
+1. **Medium: Accuracy-based CV selected a majority-class classifier.**  
+   With only `186` positives in `45,062` training rows, plain accuracy is maximized by predicting almost everything as class `0`. The selected model has excellent CV accuracy (`0.995872`) but zero validation recall.
+
+2. **Medium: Default `predict()` threshold is unsuitable for this probability scale.**  
+   Validation probabilities do carry ranking signal (`ROC-AUC ~= 0.749`, `PR-AUC ~= 0.744`), but every probability is far below `0.5`, so `RandomForestClassifier.predict()` collapses all validation labels to `0`.
+
+3. **Low: Notebook lacks diagnostic reporting needed to catch this immediately.**  
+   `m_005` reports only the compact result dictionary. It should print prediction counts, confusion matrix, precision, recall, F1, ROC-AUC, PR-AUC, and probability quantiles.
+
+4. **Low: Training-log grid description does not match notebook code.**  
+   The log says `cv: StratifiedKFold(n_splits=3...)` and `rf__max_depth: [None, 8, 16]`, while the notebook uses `n_splits=2` and `rf__max_depth: [8, 16]`.
+
+Concrete remediation actions:
+
+1. Do not treat the `0.995872` CV accuracy as evidence of useful prepayment detection. It mostly reflects the training-set base rate.
+2. For the next RF experiment, use training-only selection metrics aligned to the task, such as `balanced_accuracy`, `f1`, `recall`, `average_precision`, or a custom cost-sensitive score.
+3. Add training-only threshold selection from cross-validated probabilities. Do not choose the threshold from validation performance.
+4. Consider `class_weight='balanced'` or `balanced_subsample`, but evaluate with imbalance-aware CV metrics rather than plain accuracy.
+5. Add secondary diagnostics to `m_005` or the next notebook before scoring summary output.
+6. Correct the `m_005` training-log grid metadata so it matches the actual notebook code.
+
+Audit conclusion:
+
+- The `m_005` validation score of `0.5` is explained: validation predictions are **all zeros**.
+- This is a modeling and metric-selection issue, not an official scoring-script defect.
 - Training notebook code was **not modified** in this audit task.
 - This audit appended documentation only to `model_audit/model_audit_log.md`.
