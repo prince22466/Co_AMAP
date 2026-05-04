@@ -210,3 +210,14 @@ Think scientifically.
 Discuss openly.
 
 Iterate efficiently.
+
+
+## Training log update rule
+
+When updating `model_training/training_log.md` for a new experiment:
+
+1. Append exactly one new row to the **Experiment Summary** markdown table under `## Experiment Summary`.
+2. Do **not** append summary rows in the Detailed Records section.
+3. Then append the full experiment block under `## Detailed Records` at the end of that section.
+4. Keep the summary row and detailed block consistent (same ModelID/date/model/score).
+
