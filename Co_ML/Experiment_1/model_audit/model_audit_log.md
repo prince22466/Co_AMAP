@@ -506,3 +506,262 @@ Audit conclusion:
 - This is a modeling and metric-selection issue, not an official scoring-script defect.
 - Training notebook code was **not modified** in this audit task.
 - This audit appended documentation only to `model_audit/model_audit_log.md`.
+
+---
+
+## Audit (2026-05-04, m_006 and m_007)
+
+Reason for audit:
+
+- User requested an audit of `m_006` and `m_007`.
+
+Files reviewed:
+
+- `model_training/train_nb/m_006.ipynb`
+- `model_training/train_nb/m_007.ipynb`
+- `model_training/training_log.md`
+- `model_training/help_stuff/validation_score.py`
+- `model_audit/model_audit_log.md`
+
+Execution check:
+
+- Notebook logic for both models was reproduced from the notebook code.
+- `m_006` was reproduced with `n_jobs=1` locally because Windows multiprocessing through joblib can fail with a permission error in this environment. The data, random seeds, parameter grid, CV folds, model settings, and scoring logic were otherwise kept consistent with the notebook.
+- `m_007` already uses `n_jobs=1` in both the `RandomForestClassifier` and `GridSearchCV`.
+
+Executive summary:
+
+- No critical validation leakage was found in either notebook. Both notebooks fit preprocessing, run `GridSearchCV`, and select hyperparameters using training data only.
+- Both notebooks use the official scoring script for the final validation score.
+- `m_006` improves over `m_005` by using `scoring='balanced_accuracy'` and predicts both classes on validation, but recall remains low.
+- `m_007` uses `scoring='average_precision'`, but then still evaluates final labels with the default `RandomForestClassifier.predict()` threshold. This collapses validation predictions to all zeros, so its official score is `0.5`.
+- `m_006` has a training-log consistency issue: the log documents a larger grid and `n_splits=3`, while the notebook code uses a smaller grid and `n_splits=2`.
+
+Checklist results:
+
+| Check | m_006 | m_007 | Evidence |
+| --- | --- | --- | --- |
+| Validation used for hyperparameter selection | PASS | PASS | `GridSearchCV.fit` is called on `X_train_model, y_train`; validation is only used after model selection. |
+| Validation target used in preprocessing/fitting | PASS | PASS | Preprocessor is inside the pipeline and fitted during training CV/final fit only. |
+| Official scorer usage | PASS | PASS | Both notebooks load `help_stuff/validation_score.py` and call `prediction_score(y_val_pred)`. |
+| Scorer correctness for notebook output | PASS | PASS | Official score and direct positional accuracy reproduce exactly for both models. |
+| Prediction class collapse | PASS | FAIL | `m_006` predicts `{0: 85, 1: 19}`; `m_007` predicts `{0: 104}`. |
+| Metric/model-selection suitability | WARNING | WARNING | `m_006` uses imbalance-aware balanced accuracy; `m_007` uses average precision, but final threshold remains default `0.5`. |
+| Probability/threshold diagnostics in notebook | WARNING | WARNING | Neither notebook reports prediction counts, confusion matrix, probability quantiles, ROC-AUC, or PR-AUC. |
+| Row/ID integrity | WARNING | WARNING | Factor files still lack an obvious stable loan ID for key-based train/validation overlap and row-alignment checks. |
+| Training-log consistency | FAIL | PASS | `m_006` log grid differs from notebook code; `m_007` log grid matches notebook code. |
+| Artifact policy | PASS | PASS | No committed `m_006`/`m_007` model, validation prediction CSV, or feature-importance CSV was found. |
+
+Reproduction evidence:
+
+```text
+shared data:
+train shape: (45062, 74)
+validation shape: (104, 74)
+train target counts: {0: 44876, 1: 186}
+validation target counts: {0: 52, 1: 52}
+all-null training columns dropped: 34
+
+m_006:
+scoring: balanced_accuracy
+best_params: {'rf__class_weight': 'balanced',
+              'rf__max_depth': 8,
+              'rf__min_samples_leaf': 4,
+              'rf__n_estimators': 100}
+best_cv_score: 0.5480901015654127
+validation prediction counts: {0: 85, 1: 19}
+official score: 0.5673076923076923
+direct accuracy: 0.5673076923076923
+balanced accuracy: 0.5673076923076923
+confusion matrix rows true_0,true_1: [[46, 6], [39, 13]]
+precision / recall / f1: 0.6842105263157895 / 0.25 / 0.36619718309859156
+ROC-AUC / PR-AUC from probabilities: 0.7396449704142013 / 0.7114959487038762
+positive probability min / max / mean: 0.020263990011563645 / 0.716616910997833 / 0.3446101535696498
+
+m_007:
+scoring: average_precision
+best_params: {'rf__class_weight': None,
+              'rf__max_depth': 8,
+              'rf__min_samples_leaf': 4,
+              'rf__n_estimators': 300}
+best_cv_score: 0.02500060006205744
+validation prediction counts: {0: 104}
+official score: 0.5
+direct accuracy: 0.5
+balanced accuracy: 0.5
+confusion matrix rows true_0,true_1: [[52, 0], [52, 0]]
+precision / recall / f1: 0.0 / 0.0 / 0.0
+ROC-AUC / PR-AUC from probabilities: 0.7622041420118343 / 0.7615272181954545
+positive probability min / max / mean: 0.0007881969775410419 / 0.02273674086989726 / 0.005387968860450324
+```
+
+Threshold diagnostics from reproduced validation probabilities:
+
+```text
+m_006:
+threshold 0.10 -> prediction counts {0: 11, 1: 93}, accuracy 0.5865384615384616
+threshold 0.20 -> prediction counts {0: 20, 1: 84}, accuracy 0.6346153846153846
+threshold 0.50 -> prediction counts {0: 85, 1: 19}, accuracy 0.5673076923076923
+
+m_007:
+threshold 0.01 -> prediction counts {0: 89, 1: 15}, accuracy 0.5865384615384616
+threshold 0.02 -> prediction counts {0: 103, 1: 1}, accuracy 0.5096153846153846
+threshold 0.50 -> prediction counts {0: 104}, accuracy 0.5
+```
+
+These threshold diagnostics are explanatory only. Selecting thresholds from validation results would contaminate the holdout validation score.
+
+Severity-ranked findings:
+
+1. **Medium: `m_007` selects by average precision but evaluates with default `predict()` threshold.**  
+   The probabilities have ranking signal on validation (`ROC-AUC ~= 0.762`, `PR-AUC ~= 0.762`), but every validation probability is below `0.5`, so final predictions are all class `0`. The official validation score of `0.5` is therefore expected and not a scorer bug.
+
+2. **Medium: Both notebooks lack required secondary diagnostics for imbalanced classification.**  
+   The compact result dictionary hides the key behavior. Prediction counts, confusion matrix, precision, recall, F1, ROC-AUC, PR-AUC, and probability quantiles should be printed in the notebook.
+
+3. **Low: `m_006` training-log grid does not match notebook code.**  
+   The log says `rf__n_estimators: [100, 200, 400]`, `rf__max_depth: [None, 8, 16, 24]`, `rf__min_samples_split: [2, 10, 20]`, `rf__min_samples_leaf: [1, 4, 8]`, `rf__class_weight: [None, balanced, balanced_subsample]`, and `n_splits=3`. The notebook uses `n_estimators: [100, 200]`, `max_depth: [8, 16]`, `min_samples_leaf: [1, 4]`, `class_weight: [None, balanced]`, no `min_samples_split` grid, and `n_splits=2`.
+
+4. **Low: `m_006` training-log next recommendation is stale.**  
+   It says "Execute `m_006.ipynb`" even though the same entry says the notebook executed end-to-end.
+
+5. **Low: Row/ID integrity remains limited by available factor files.**  
+   The notebooks check row counts and schema, but no stable loan identifier is available in the factor files for key-based overlap/alignment checks. Positional scoring remains the assumption.
+
+Concrete remediation actions:
+
+1. Treat `m_006` as the stronger of the two current RF grid-search experiments by official score, but note that recall is only `0.25` at the default threshold.
+2. For `m_008`, add training-only threshold selection from cross-validated probabilities. Do not choose thresholds from validation diagnostics.
+3. For probability-based selection experiments like `m_007`, pair `scoring='average_precision'` with a documented training-only threshold policy before calling the official accuracy scorer.
+4. Add secondary diagnostics to both notebooks before the final result dictionary.
+5. Correct the `m_006` training-log grid and stale next recommendation so the log matches the notebook.
+6. If a stable loan identifier exists upstream, preserve it for audit checks and exclude it from model features.
+
+Audit conclusion:
+
+- `m_006` has no critical leakage issue and its score is reproducible: `0.5673076923076923`.
+- `m_007` has no critical leakage issue, but its score is `0.5` because validation predictions are all zeros under the default threshold.
+- Training notebook code was **not modified** in this audit task.
+- This audit appended documentation only to `model_audit/model_audit_log.md`.
+
+---
+
+## Audit (2026-05-04, m_009 model architecture and validation check)
+
+Reason for audit:
+
+- User asked to audit `m_009`, especially whether the model is a random forest of logistic-regression trees, meaning tree leaves contain logistic regression models.
+
+Files reviewed:
+
+- `model_training/train_nb/m_009.ipynb`
+- `model_training/training_log.md`
+- `model_training/help_stuff/validation_score.py`
+- `model_audit/model_audit_log.md`
+
+Executive summary:
+
+- `m_009` is **not** a random forest of logistic-regression trees.
+- The notebook implements a standard sklearn `Pipeline` with preprocessing plus a `GridSearchCV` over two separate candidate classifier families:
+  - standard `RandomForestClassifier`
+  - standard `LogisticRegression`
+- The selected final estimator is a plain `RandomForestClassifier`, not a hybrid model with logistic regressions at tree leaves.
+- No critical validation leakage was found. Hyperparameter selection is performed inside `GridSearchCV` using training data only, and validation is used afterward for final scoring.
+- The official validation score is reproducible: `0.7019230769230769`.
+
+Architecture conclusion:
+
+```text
+Implemented:
+preprocess -> GridSearchCV chooses one final clf from:
+  1. RandomForestClassifier(...)
+  2. LogisticRegression(...)
+
+Selected:
+preprocess -> RandomForestClassifier(max_depth=3,
+                                     min_samples_leaf=2,
+                                     n_estimators=120,
+                                     class_weight='balanced')
+
+Not implemented:
+random forest where each tree leaf fits or stores a LogisticRegression model
+```
+
+Checklist results:
+
+| Check | Status | Evidence |
+| --- | --- | --- |
+| Model is RF with logistic-regression leaves | FAIL / NOT PRESENT | Code uses sklearn `RandomForestClassifier` and `LogisticRegression` as separate grid candidates. No custom tree leaf model, model tree, stacking-by-leaf, or leaf-local logistic fit was found. |
+| Final selected estimator identified | PASS | `GridSearchCV.best_estimator_.named_steps['clf']` is `RandomForestClassifier`. |
+| Validation used for hyperparameter selection | PASS | `grid.fit(X_train_model, y_train)` only; validation is not passed into `GridSearchCV`. |
+| Validation target used in preprocessing/fitting | PASS | Preprocessor is inside the sklearn pipeline and fitted during training CV/final training only. |
+| Official scorer usage | PASS | Notebook loads `help_stuff/validation_score.py` and calls `prediction_score(y_val_pred)`. |
+| Scorer correctness for output | PASS | Official score and direct positional accuracy both reproduce as `0.7019230769230769`. |
+| Target directly included in features | PASS | No evidence that `Prepaied_3m` is loaded into factor columns. |
+| All-null handling | PASS | Notebook drops 34 all-null training columns before fitting. |
+| Secondary diagnostics | WARNING | Notebook result is compact and does not print confusion matrix, prediction counts, precision, recall, F1, ROC-AUC, PR-AUC, or probability range. |
+| Row/ID integrity | WARNING | Current factor files still lack a stable loan ID for key-based train/validation overlap and factor-target alignment checks. Positional scoring remains the assumption. |
+| Artifact policy | PASS | No committed `m_009` model pickle, validation prediction CSV, or feature-importance CSV was found. |
+
+Reproduction evidence:
+
+```text
+train shape: (45062, 74)
+validation shape: (104, 74)
+train target counts: {0: 44876, 1: 186}
+validation target counts: {0: 52, 1: 52}
+all-null training columns dropped: 34
+
+grid candidates:
+1. RandomForestClassifier, max_depth=3, min_samples_leaf=2, n_estimators=120, class_weight=balanced
+2. RandomForestClassifier, max_depth=5, min_samples_leaf=2, n_estimators=120, class_weight=balanced
+3. LogisticRegression, C=1.0, class_weight=balanced
+
+CV balanced accuracy:
+RandomForest max_depth=3: 0.6753329001904861, rank 1
+LogisticRegression:       0.669300, rank 2
+RandomForest max_depth=5: 0.639540, rank 3
+
+selected classifier: RandomForestClassifier
+best params:
+{'clf__class_weight': 'balanced',
+ 'clf__max_depth': 3,
+ 'clf__min_samples_leaf': 2,
+ 'clf__n_estimators': 120}
+
+validation prediction counts: {0: 57, 1: 47}
+official score: 0.7019230769230769
+direct accuracy: 0.7019230769230769
+balanced accuracy: 0.7019230769230769
+confusion matrix rows true_0,true_1: [[39, 13], [18, 34]]
+precision / recall / f1: 0.723404255319149 / 0.6538461538461539 / 0.6868686868686869
+ROC-AUC / PR-AUC from probabilities: 0.7699704142011834 / 0.7674822036443489
+positive probability min / max / mean: 0.2186086849772061 / 0.6598722904658045 / 0.47410732034604075
+```
+
+Severity-ranked findings:
+
+1. **Medium: Model description can be misread as a hybrid forest.**  
+   The training log says `RandomForestClassifier + LogisticRegression`, but the code means "grid search over RandomForestClassifier versus LogisticRegression." It does not mean a random forest whose tree leaves are logistic regression models. This should be clarified anywhere the model is summarized.
+
+2. **Low: Secondary diagnostics are missing from the notebook output.**  
+   The model performs materially better than prior RF experiments, but the notebook only reports a compact result dictionary. Prediction counts, confusion matrix, precision, recall, F1, ROC-AUC, PR-AUC, and probability range should be printed so future audits do not need to reconstruct behavior externally.
+
+3. **Low: Row/ID integrity remains limited by available input files.**  
+   The notebook checks row counts and schema, but no stable loan identifier is present in the factor files for key-based overlap or alignment checks. The official scorer is positional, so upstream row-order integrity remains an assumption.
+
+Concrete remediation actions:
+
+1. Rename or clarify the model type in `training_log.md` as `GridSearchCV over RandomForestClassifier and LogisticRegression; selected RandomForestClassifier`, not `RandomForestClassifier + LogisticRegression` if that phrase suggests a hybrid architecture.
+2. If the intended experiment is truly "random forest with logistic regression at leaves," create a new ModelID and implement an explicit custom/model-tree approach. The current sklearn `RandomForestClassifier` cannot express logistic models inside leaves.
+3. Add secondary diagnostics to `m_009.ipynb` so prediction behavior is visible in the notebook itself.
+4. If a stable loan identifier exists upstream, preserve it for audit checks and exclude it from model features.
+
+Audit conclusion:
+
+- `m_009` is a plain RandomForest-vs-LogisticRegression grid-search experiment.
+- The selected final model is a standard `RandomForestClassifier`.
+- It is **not** a random forest of logistic regression trees.
+- No critical validation leakage was found.
+- Training notebook code was **not modified** in this audit task.
+- This audit appended documentation only to `model_audit/model_audit_log.md`.
