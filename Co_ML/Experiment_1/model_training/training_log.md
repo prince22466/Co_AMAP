@@ -17,6 +17,7 @@
 | 008     | 2026-05-04 | codex  | cpu     | full              | RandomForestClassifier | GridSearchCV with scoring="f1" over RF hyperparameters | 0.5576923076923077 | no |
 | 009     | 2026-05-04 | codex  | cpu     | full              | RandomForestClassifier + LogisticRegression | classifier-agnostic grid with balanced_accuracy (3-fold CV) | 0.7019230769230769 | no |
 | 010     | 2026-05-05 | codex  | cpu     | full              | RandomForest-style Bagging(Tree+LeafLogistic) | GridSearchCV on bagged tree+leaf-logistic ensemble (scoring=balanced_accuracy, threshold > 0.6) | 0.5192307692307692 | no |
+| 011     | 2026-05-06 | codex  | cpu     | full              | KNeighborsClassifier | deterministic class-balanced training subset + GridSearchCV balanced_accuracy | 0.6634615384615384 | no |
 
 ---
 
@@ -1121,3 +1122,90 @@ Notes:
 Next Recommendation:
 
 Tune threshold and/or calibrate probabilities for the leaf-logistic ensemble, then compare against prior RF experiments (m_004–m_009).
+
+---
+
+### ModelID: 011 (executed)
+
+Date:
+
+2026-05-06
+
+Notebook:
+
+model_training/train_nb/m_011.ipynb
+
+Model file:
+
+(not saved in repo; artifact intentionally omitted per PR policy)
+
+Validation prediction file:
+
+(not generated; validation scored in-memory via official scoring script)
+
+Runner:
+
+codex
+
+Machine:
+
+cpu
+
+Data Scope:
+
+full
+
+Model Type:
+
+KNeighborsClassifier with deterministic class-balanced training subset
+
+Key Parameters:
+
+```yaml
+balanced_training_subset:
+  positive_rows: 186
+  negative_rows: 186
+  negative_to_positive_ratio: 1
+  random_state: 42
+preprocessing:
+  numeric: median imputation + StandardScaler
+  categorical: constant missing-value imputation + OneHotEncoder(handle_unknown='ignore')
+cv: StratifiedKFold(n_splits=3, shuffle=True, random_state=42)
+grid_scoring: balanced_accuracy
+param_grid:
+  knn__n_neighbors: [3, 5, 7, 11, 15, 21]
+  knn__weights: [uniform, distance]
+  knn__p: [1, 2]
+  knn__metric: [minkowski]
+best_cv_balanced_accuracy: 0.75
+best_params:
+  knn__metric: minkowski
+  knn__n_neighbors: 11
+  knn__p: 1
+  knn__weights: distance
+```
+
+Validation Score:
+
+0.6634615384615384
+
+Model Saved:
+
+no
+
+Model Size:
+
+0.32105350494384766 MB (estimated in-memory pickle size; not persisted)
+
+Notes:
+
+* Uses official validation scorer at `model_training/help_stuff/validation_score.py`.
+* Notebook executed successfully via nbconvert execution.
+* Validation predictions were generated in memory only.
+* Confusion matrix on validation data: [[30, 22], [13, 39]].
+* Validation prediction distribution: {0: 43, 1: 61}.
+* Model binary intentionally omitted from the repository to follow the PR artifact policy.
+
+Next Recommendation:
+
+Try KNN probability-threshold tuning or calibrated distance-weighted KNN variants, selecting thresholds only with training cross-validation before validation scoring.
