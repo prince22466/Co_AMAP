@@ -16,6 +16,7 @@
 | 007     | 2026-05-04 | codex  | cpu     | full              | RandomForestClassifier | GridSearchCV with scoring="average_precision" over RF hyperparameters | 0.5 | no |
 | 008     | 2026-05-04 | codex  | cpu     | full              | RandomForestClassifier | GridSearchCV with scoring="f1" over RF hyperparameters | 0.5576923076923077 | no |
 | 009     | 2026-05-04 | codex  | cpu     | full              | RandomForestClassifier + LogisticRegression | classifier-agnostic grid with balanced_accuracy (3-fold CV) | 0.7019230769230769 | no |
+| 010     | 2026-05-05 | codex  | cpu     | full              | RandomForest-style Bagging(Tree+LeafLogistic) | GridSearchCV on bagged tree+leaf-logistic ensemble (scoring=balanced_accuracy, threshold > 0.6) | 0.5192307692307692 | no |
 
 ---
 
@@ -1039,3 +1040,84 @@ Notes:
 Next Recommendation:
 
 Run probability calibration and threshold tuning after selecting the best estimator from this grid.
+
+---
+
+### ModelID: 010 (executed)
+
+Date:
+
+2026-05-05
+
+Notebook:
+
+model_training/train_nb/m_010.ipynb
+
+Model file:
+
+(not saved in repo; per artifact policy)
+
+Validation prediction file:
+
+(not generated)
+
+Runner:
+
+codex
+
+Machine:
+
+cpu
+
+Data Scope:
+
+full
+
+Model Type:
+
+BaggingClassifier (random-forest style ensemble) of shallow DecisionTree partitions with LogisticRegression models trained at leaves
+
+Key Parameters:
+
+```yaml
+base_tree_max_depth: 3
+base_tree_min_samples_leaf: 120
+leaf_logistic_solver: liblinear
+leaf_logistic_class_weight: balanced
+n_estimators: 20 (base estimator for search)
+max_samples: 0.8
+grid_n_estimators: [20, 40]
+grid_scoring: balanced_accuracy
+cv: StratifiedKFold(n_splits=2, shuffle=True, random_state=42)
+best_cv_balanced_accuracy: 0.5313727096985049
+best_params.clf__n_estimators: 20
+max_features: 0.8
+threshold: 0.6 (predict 1 if prob > 0.6 else 0)
+```
+
+Validation Score:
+
+0.5192307692307692
+
+Model Saved:
+
+no
+
+Model Size:
+
+N/A
+
+Notes:
+
+* Implemented as custom `TreeWithLogisticLeaves` base estimator.
+* Ensemble implemented with `BaggingClassifier` to mimic random-forest behavior while allowing logistic experts at leaves.
+* Uses median/mode imputation and one-hot encoding preprocessing.
+* Notebook executed successfully via nbconvert execution.
+* GridSearchCV used with scoring=`balanced_accuracy` over bagging-level parameters.
+* Best CV balanced_accuracy: 0.5313727096985049.
+* Decision threshold set to: predict 1 if probability > 0.6 else 0.
+* Notebook includes required shape/alignment/target-rate checks.
+
+Next Recommendation:
+
+Tune threshold and/or calibrate probabilities for the leaf-logistic ensemble, then compare against prior RF experiments (m_004–m_009).
