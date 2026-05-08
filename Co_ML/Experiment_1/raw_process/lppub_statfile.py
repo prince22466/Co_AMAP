@@ -1,9 +1,3 @@
-"""Port of the Fannie Mae LPPUB R stat-file workflow to pandas.
-
-This script reads raw pipe-delimited Loan Performance files and produces the
-one-row-per-loan statistical file created by LPPUB_StatFile.R and
-LPPUB_StatFile_Production.R.
-"""
 
 from __future__ import annotations
 
