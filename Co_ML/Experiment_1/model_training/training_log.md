@@ -1,5 +1,7 @@
 # Training Log
 
+## As of May 13rd 2026, this experiment is finished. best model is RandomForestClassifier as shown below. But most important is working experience with Codex with SKILLs.
+
 ## Experiment Summary
 
 | ModelID | Date       | Runner | Machine | data | Model Type          | Key Idea | Validation Score | Model Saved |
