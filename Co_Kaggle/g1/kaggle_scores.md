@@ -8,10 +8,10 @@ Use this file to record each Kaggle submission or serious notebook run. Keep one
 
 ## Summary Table
 
-| Exp ID | Kaggle Score | Method | Adapter / Output | Training Runtime on Kaggle | Notes |
-|---|---:|---|---|---:|---|
-| Base model | 0.5 | NA | NA | 0h | base model as benchmark |
-| LoRA-001 | TBD | LoRA SFT | TBD | TBD |  |
+| Exp ID | Kaggle Score | Method | LoRA pams | Train Config | Data Config | Adapter / Output | Training Runtime on Kaggle | Notes |
+|---|---:|---|---|---|---|---:|---:|---|
+| Base model | 0.5 | NA | NA | NA | NA | 0h | base model as benchmark |
+| LoRA-001 | TBD | LoRA SFT | TBD | TBD | TBD | TBD | TBD |  |
 
 ## Experiment Details
 
