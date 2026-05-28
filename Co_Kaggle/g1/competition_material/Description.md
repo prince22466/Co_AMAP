@@ -1,6 +1,6 @@
-NVIDIA Nemotron Model Reasoning Challenge: https://www.kaggle.com/competitions/nvidia-nemotron-model-reasoning-challenge/overview
+# NVIDIA Nemotron Model Reasoning Challenge: https://www.kaggle.com/competitions/nvidia-nemotron-model-reasoning-challenge/overview
 
-Description
+## Description
 Reasoning benchmarks are a useful way to measure progress on structured tasks. When approaches and results are shared openly, the community can compare methods, reproduce improvements, and iterate more effectively.
 
 Today, reasoning improvements are explored across many independent efforts - often using different datasets, prompts, and evaluation setups - making direct comparison difficult. A shared benchmark and common baseline model allow techniques to be tested and compared more consistently.
@@ -24,3 +24,7 @@ The only requirement is that the final submission produces a compatible LoRA ada
 Multiple valid solution paths are expected. Clear documentation - including notebooks and write-ups - is encouraged (and required for prize eligibility) to support reproducibility and communal learning.
 
 By bringing models, datasets, and evaluation into an open, shared environment, this challenge creates an opportunity for collaborative iteration - strengthening open reasoning workflows that others can study, reuse, and extend.
+
+
+## Submitting
+You must submit a LoRA adapter of rank at most 32 for the NVIDIA Nemotron-3-Nano-30B model packaged into a submission.zip file. You may consider adapting the NVIDIA Nemotron Submission Demo to produce your submission.
