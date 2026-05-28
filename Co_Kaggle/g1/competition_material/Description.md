@@ -1,4 +1,4 @@
-NVIDIA Nemotron Model Reasoning Challenge
+NVIDIA Nemotron Model Reasoning Challenge: https://www.kaggle.com/competitions/nvidia-nemotron-model-reasoning-challenge/overview
 
 Description
 Reasoning benchmarks are a useful way to measure progress on structured tasks. When approaches and results are shared openly, the community can compare methods, reproduce improvements, and iterate more effectively.
