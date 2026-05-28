@@ -1,10 +1,10 @@
-# Kaggle Experiment Scores
+# Kaggle Scores
 
 
 **Base model:** `Nemotron-3-Nano-30B`
 
 
-Use this file to record each Kaggle submission or serious notebook run. Keep one row per experiment, then add short details below when needed.
+Use this file to record each Kaggle submission or serious notebook run. Keep one row per submission.
 
 ## Summary Table
 
