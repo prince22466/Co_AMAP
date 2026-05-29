@@ -1,4 +1,4 @@
-# Ewa Pamasked
+# Ewa Masked
 
 # PREZENTACJA
 
