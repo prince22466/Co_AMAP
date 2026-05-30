@@ -9,7 +9,7 @@ Use this file to record each Kaggle interactive notebook run and the feedback it
 | Exp ID | Device | Method | LoRA Parameters | Training Config | Data Config | Runtime | Notes |
 |---|---|---|---|---|---|---:|---|
 | LoRA-001 | RTX Pro 6000 | LoRA SFT | `r=4`; `alpha=8`; `targets=in_proj,out_proj,up_proj,down_proj`; `dropout=0.05`; `bias=none`; `task=CAUSAL_LM` | `epochs=1`; `max_steps=200`; `batch=1`; `grad_accum=8`; `lr=1e-4`; `max_length=512`; `max_new_tokens=32`; `eval_every=10`; `early_val_rows=50`; `stop_when_val_worse=True`; `save_adapter=True` | 80/20 split on full `train.csv` | 45m | early stop,; due to hitting max_steps=200, ;which is 2.6%(200 / 7600) ep; batch=1-> 1 row per step, grad_accum=8-> optimizer updates every 8 steps, thus 1 ep 950 updates, 2.6% ep-> 250 updates |
-| LoRA-002 | RTX Pro 6000 | LoRA SFT | `r=4`; `alpha=8`; `targets=up_proj,down_proj`; `dropout=0.05`; `bias=none`; `task=CAUSAL_LM` | `epochs=1`; `max_steps=None`; `batch=2`; `grad_accum=10`; `lr=1e-4`; `max_length=512`; `max_new_tokens=32`; `eval_every=6`; `early_val_rows=50`; `stop_when_val_worse=True`; `save_adapter=True` | 80/20 split on full `train.csv` | 50m | ep completed: 1, optimizer_updates: 10 |
+| LoRA-002 | RTX Pro 6000 | LoRA SFT | `r=4`; `alpha=8`; `targets=up_proj,down_proj`; `dropout=0.05`; `bias=none`; `task=CAUSAL_LM` | `epochs=1`; `max_steps=None`; `batch=2`; `grad_accum=10`; `lr=1e-4`; `max_length=512`; `max_new_tokens=32`; `eval_every=6`; `early_val_rows=50`; `stop_when_val_worse=True`; `save_adapter=True` | 80/20 split on keep_0250_stratified_feature_coverage `train.csv` | 50m | ep completed: 1, optimizer_updates: 10 |
 
 
 ## other experiment info
@@ -20,3 +20,7 @@ batch_size =1 , gpu 58%,
 batch_size =2 , gpu 65%,
 
 probably batch_size could be set as 3 or 4
+
+
+### GPU runing time(GPU RTX Pro 6000)
+batch_size =2 , with full train.csv, and epoch =4, takes more than 12h, and no submission.zip being generated, system fails.
