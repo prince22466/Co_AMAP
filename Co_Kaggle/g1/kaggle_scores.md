@@ -6,7 +6,7 @@
 
 Use this file to record each Kaggle submission or effective notebook run. Keep one row per submission.
 
-## Summary Table
+## Summary Table(based on submission-lora.ipynb)
 
 | LoRA ID(depends on LoRA para) | Kaggle Score | Method | LoRA pams | Train Config | Data Config | Adapter / Output size | Training Runtime on Kaggle | Notes |
 |---|---:|---|---|---|---|---:|---:|---|
@@ -19,3 +19,14 @@ Use this file to record each Kaggle submission or effective notebook run. Keep o
 | LoRA-003 | 0.59 | LoRA SFT | L_R = 4;L_A = 8; MODULES = [in_proj, out_proj]; L_dropout = 0.05; L_BIAS = "none"; TYPE = TaskType.CAUSAL_LM |  TRAIN_FRACTION: 0.80; EP: 8; MAX_STEPS: None; BATCH_SIZE: 2; GRAD_ACC_STEPS: 10; L_RATE: 1e-4; MAX_LENGTH: 512; MAX_NEW_TOKENS: 32; EARLY_STOPPING: True; EVAL_EVERY_STEPS: 6; EARLY_STOPPING_VAL_ROWS: 50; STOP_WHEN_VAL_WORSE: True | keep_0250_stratified_feature_coverage on train.csv(250 rows) | | 2h | stop at finishing ep; ep=8, optimizer_updates: 80 |  |
 | LoRA-003 | 0.62 | LoRA SFT | L_R = 4;L_A = 8; MODULES = [in_proj, out_proj]; L_dropout = 0.05; L_BIAS = "none"; TYPE = TaskType.CAUSAL_LM |  TRAIN_FRACTION: 0.80; EP: 24; MAX_STEPS: None; BATCH_SIZE: 2; GRAD_ACC_STEPS: 10; L_RATE: 1e-4; MAX_LENGTH: 512; MAX_NEW_TOKENS: 32; EARLY_STOPPING: True; EVAL_EVERY_STEPS: 6; EARLY_STOPPING_VAL_ROWS: 50; STOP_WHEN_VAL_WORSE: True | keep_0250_stratified_feature_coverage on train.csv(250 rows) | 17MB | 3h | stop at finishing ep; ep=24, optimizer_updates: 240 |  |
 | LoRA-003 | 0.58 | LoRA SFT | L_R = 4;L_A = 8; MODULES = [in_proj, out_proj]; L_dropout = 0.05; L_BIAS = "none"; TYPE = TaskType.CAUSAL_LM |  TRAIN_FRACTION: 0.80; EP: 48; MAX_STEPS: None; BATCH_SIZE: 2; GRAD_ACC_STEPS: 10; L_RATE: 1e-4; MAX_LENGTH: 512; MAX_NEW_TOKENS: 32; EARLY_STOPPING: True; EVAL_EVERY_STEPS: 6; EARLY_STOPPING_VAL_ROWS: 50; STOP_WHEN_VAL_WORSE: True | keep_0250_stratified_feature_coverage on train.csv(250 rows) | 17MB | 5h | stop at finishing ep; ep=48, optimizer_updates: 480 |  |
+
+
+## Summary Table(based on submission-lora_v1.ipynb)
+
+| LoRA ID(depends on LoRA para) | Kaggle Score | Method | LoRA pams | Train Config | Data Config | Adapter / Output size | Training Runtime on Kaggle | Notes |
+|---|---:|---|---|---|---|---:|---:|---|
+| LoRA-002 | 0.54 | LoRA SFT | L_R = 4;L_A = 8; MODULES = [up_proj, down_proj]; L_dropout = 0.05; L_BIAS = "none"; TYPE = TaskType.CAUSAL_LM | TRAIN_FRACTION: 0.80; EP: 4; MAX_STEPS: None; BATCH_SIZE: 2; GRAD_ACC_STEPS: 10; L_RATE: 1e-4; MAX_LENGTH: 512; MAX_NEW_TOKENS: 32; EARLY_STOPPING: True; EVAL_EVERY_STEPS: 6; EARLY_STOPPING_VAL_ROWS: 50; STOP_WHEN_VAL_WORSE: True | keep_0250_stratified_feature_coverage on train.csv(250 rows) |  | 2.5h | stop at finishing ep; ep=4, optimizer_updates: 40 |  |
+| LoRA-004 | 0.55 | LoRA SFT | L_R = 8;L_A = 8; MODULES = [up_proj, down_proj]; L_dropout = 0.05; L_BIAS = "none"; TYPE = TaskType.CAUSAL_LM | TRAIN_FRACTION: 0.80; EP: 4; MAX_STEPS: None; BATCH_SIZE: 2; GRAD_ACC_STEPS: 10; L_RATE: 1e-4; MAX_LENGTH: 512; MAX_NEW_TOKENS: 32; EARLY_STOPPING: True; EVAL_EVERY_STEPS: 6; EARLY_STOPPING_VAL_ROWS: 50; STOP_WHEN_VAL_WORSE: True | keep_0250_stratified_feature_coverage on train.csv(250 rows) |  | 2h | stop at finishing ep; ep=4, optimizer_updates: 40 |  |
+| LoRA-005 | 0.57 | LoRA SFT | L_R = 32;L_A = 8; MODULES = [up_proj, down_proj]; L_dropout = 0.05; L_BIAS = "none"; TYPE = TaskType.CAUSAL_LM | TRAIN_FRACTION: 0.80; EP: 4; MAX_STEPS: None; BATCH_SIZE: 2; GRAD_ACC_STEPS: 10; L_RATE: 1e-4; MAX_LENGTH: 512; MAX_NEW_TOKENS: 32; EARLY_STOPPING: True; EVAL_EVERY_STEPS: 6; EARLY_STOPPING_VAL_ROWS: 50; STOP_WHEN_VAL_WORSE: True | keep_0250_stratified_feature_coverage on train.csv(250 rows) | 3.1G | 2h | stop at finishing ep; ep=4, optimizer_updates: 40 |  |
+| LoRA-003 | 0.54 | LoRA SFT | L_R = 4;L_A = 8; MODULES = [in_proj, out_proj]; L_dropout = 0.05; L_BIAS = "none"; TYPE = TaskType.CAUSAL_LM |  TRAIN_FRACTION: 0.80; EP: 4; MAX_STEPS: None; BATCH_SIZE: 2; GRAD_ACC_STEPS: 10; L_RATE: 1e-4; MAX_LENGTH: 512; MAX_NEW_TOKENS: 32; EARLY_STOPPING: True; EVAL_EVERY_STEPS: 6; EARLY_STOPPING_VAL_ROWS: 50; STOP_WHEN_VAL_WORSE: True | keep_0250_stratified_feature_coverage on train.csv(250 rows) | | 1h | stop at finishing ep; ep=4, optimizer_updates: 40  |  |
+
