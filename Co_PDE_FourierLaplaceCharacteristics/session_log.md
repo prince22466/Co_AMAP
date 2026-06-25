@@ -674,3 +674,70 @@
   next continue from the Fourier-side characteristic equation
   `v_t+k v_k=0`.
   Ask whether the moving variable should be `x(t)` or `k(t)`.
+
+## Continuation - 2026-06-25
+- Resumed from the Fourier-side characteristic equation:
+  `v_t+k v_k=0`.
+- User correctly identified that the variables are `k` and `t`,
+  so the moving characteristic variable should be `k(t)`, not `x(t)`.
+- Used the chain rule:
+  `d/dt v(k(t),t)=v_t+k'(t)v_k`.
+- Matched this to:
+  `v_t+k v_k`,
+  giving the characteristic equation:
+  `k'(t)=k(t)`.
+- User understood:
+  the coefficient in front of `v_k` determines the characteristic speed.
+- Solved:
+  `k'(t)=k(t)` gives `k(t)=k0 e^t`.
+- Clarified an important point:
+  along the characteristic,
+  `d/dt v(k(t),t)=v_t+k v_k=0`,
+  so `v` stays constant.
+- User asked whether this is change of `v` with respect to `t`.
+- Clarified:
+  `d/dt v(k(t),t)` is a total derivative,
+  because `v` depends on `t` directly and indirectly through `k(t)`.
+- Distinguished:
+  `v_t` means change in `t` while holding `k` fixed;
+  `d/dt v(k(t),t)` means change while `k` moves with time.
+- Traced characteristics backward:
+  from `k(t)=k0 e^t`,
+  get `k0=k e^{-t}`.
+- If `v(k,0)=h(k)`,
+  then:
+  `v(k,t)=h(k e^{-t})`.
+- User summarized:
+  `v(k,t)` still depends on two variables,
+  but its value comes from the initial one-variable function `h`
+  evaluated at the traced-back point.
+- Re-explained:
+  "characteristics reduce the PDE to following curves"
+  means we track a moving frequency location `k(t)`,
+  and along the right curve the PDE becomes an ODE.
+- User understood:
+  in the Fourier-side example, `k` moves along the curve,
+  while `v` is carried along unchanged.
+- Checked variation:
+  for `v_t+2k v_k=0`,
+  the characteristic equation is:
+  `k'(t)=2k(t)`.
+- Corrected solution:
+  `k(t)=k0 e^{2t}`,
+  not `k0 e^t`.
+- User found:
+  `k0=k e^{-2t}`.
+- Therefore:
+  if `v(k,0)=h(k)`,
+  then `v(k,t)=h(k e^{-2t})`.
+- Introduced next complication:
+  `v_t+k v_k=-v`.
+- Explained:
+  the characteristic path is still `k'(t)=k`,
+  but along the path:
+  `d/dt v(k(t),t)=-v`.
+- Stop point:
+  next ask whether `v` stays constant for
+  `v_t+k v_k=-v`.
+  Then solve the along-characteristic ODE
+  `dv/dt=-v`.
