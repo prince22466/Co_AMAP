@@ -1,4 +1,4 @@
-# 05 Fill Additive Marking - `local_3x3` v1 Submission Record
+# 05 Fill Additive Marking - `local_3x3` Submission Record
 
 This file records submissions for only the `local_3x3` subtype of `fill_enclosed_regions`.
 
