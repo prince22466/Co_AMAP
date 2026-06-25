@@ -591,3 +591,86 @@
   after Laplace in time only, the equation is an ODE in `x`;
   `s` is treated as a parameter,
   and we solve with respect to `x`.
+
+## Continuation - 2026-06-24
+- Resumed from the Laplace-in-time transformed heat equation:
+  `u_t=u_xx`, `u(x,0)=g(x)`.
+- Reviewed:
+  `u_t -> sU(x,s)-g(x)`,
+  while
+  `u_xx -> U_xx(x,s)`.
+- User understood:
+  Laplace in time transforms the `t` derivative into an expression involving `s`,
+  but leaves the `x` derivative as a second derivative in `x`.
+- Corrected misconception:
+  `g(x)` is not the unknown in
+  `U_xx-sU=-g(x)`;
+  the unknown is `U(x,s)`,
+  while `g(x)` is the known initial condition.
+- Reinforced:
+  after Laplace in time only,
+  the PDE becomes an ODE in `x`,
+  with `s` treated as a parameter.
+
+## Boundary Conditions and Reflection Review
+- Reviewed boundary transformation:
+  `u(0,t)=0 -> U(0,s)=0`,
+  because the Laplace transform of zero is zero.
+- Reviewed derivative boundary:
+  `u_x(0,t)=0 -> U_x(0,s)=0`,
+  because Laplace only transforms time.
+- Reconnected method choice:
+  whole line uses Fourier transform;
+  half-line uses reflection or sine/cosine transforms.
+- User understood:
+  the half-line is extended to the whole line so Fourier methods can apply.
+- Reviewed reflection rules:
+  `u(0,t)=0` uses odd reflection, `g(-x)=-g(x)`,
+  forcing `g(0)=0`.
+- Reviewed:
+  `u_x(0,t)=0` uses even reflection, `g(-x)=g(x)`,
+  forcing zero slope at the boundary.
+- User summarized:
+  reflection lets a boundary problem work as a whole-line problem while preserving the boundary.
+
+## Start of Characteristics
+- Introduced the Fourier rule:
+  multiplication by `x` becomes differentiation in Fourier space,
+  `x u(x,t) -> i partial_k u_hat(k,t)`.
+- Recalled the paired rule:
+  differentiation in physical space becomes multiplication in Fourier space,
+  `partial_x u -> ik u_hat`.
+- Motivation:
+  if Fourier produces a PDE such as
+  `v_t + k v_k = 0`,
+  characteristics are needed because a derivative in `k` remains.
+- Began with the standard simple example:
+  `u_t + u_x = 0`.
+- Explained that characteristics introduce an auxiliary moving path `x(t)`,
+  using `t` as the clock.
+- Clarified:
+  `x(t)` is not an assumption from the PDE;
+  it is a tool chosen so the chain rule matches the PDE.
+- Derived:
+  `d/dt u(x(t),t)=u_t+x'(t)u_x`.
+- For `u_t+u_x=0`, choose:
+  `x'(t)=1`.
+- Therefore:
+  `x(t)=x0+t`,
+  where `x0=x(0)` is the initial position.
+- Along the characteristic:
+  `d/dt u(x(t),t)=0`,
+  so `u` is constant on the moving path.
+- Derived solution:
+  `u(x,t)=g(x-t)`.
+- User understood:
+  the value changes due to `x` and `t` cancel each other,
+  so the profile moves right without changing shape.
+- Checked variation:
+  for `u_t+3u_x=0`,
+  the characteristic speed is `x'(t)=3`,
+  and the solution is `u(x,t)=g(x-3t)`.
+- Stop point:
+  next continue from the Fourier-side characteristic equation
+  `v_t+k v_k=0`.
+  Ask whether the moving variable should be `x(t)` or `k(t)`.
