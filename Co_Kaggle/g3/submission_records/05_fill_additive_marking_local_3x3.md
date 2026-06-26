@@ -19,3 +19,4 @@ Final target score: `0.72* 200 = 144`
 | 05_fill_additive_marking_local_3x3 - Version 3 | check the submission file | 74.32 | 05-fill-additive-marking-local-3x3-3.ipynb |
 | 05_fill_additive_marking_local_3x3 - Version 5 | check the submission file | 91.51 | 05-fill-additive-marking-local-3x3-5.ipynb |
 | 05_fill_additive_marking_local_3x3 - Version 6 | check the submission file | 91.51 | 05-fill-additive-marking-local-3x3-6.ipynb |
+| 05_fill_additive_marking_local_3x3 - Version 7 | check the submission file | 93.39 | 05-fill-additive-marking-local-3x3-7.ipynb |
