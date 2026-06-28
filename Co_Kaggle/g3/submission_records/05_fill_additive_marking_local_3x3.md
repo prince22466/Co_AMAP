@@ -6,7 +6,7 @@ Task tree: `task_groups/05_fill_additive_marking_task_tree.md`
 Subtype: `local_3x3`  
 Count of taks: `8`  
 Highest possbile score: `8*25 = 200`  
-Immediate target score: `0.5* 200 = 100`  
+Immediate target score: `0.6* 200 = 120`  
 Final target score: `0.72* 200 = 144`  
 
 
