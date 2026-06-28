@@ -14,4 +14,4 @@ Final target score: `0.75* 1025 = 768`
 
 | Kaggle Submission name | Modelling approach | Submission score | Submission file |
 | --- | --- | --- | --- |
-| 05_fill_additive_marking_nonlocal_1color - Version NA | check the submission file | NA | 05-fill-additive-marking-nonlocal_1color-NA.ipynb |
+| 05-fill-additive-marking_nonlocal_1color - Version 1 | check the submission file | 0.0 | 05-fill-additive-marking-nonlocal-1color-1.ipynb |
