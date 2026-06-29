@@ -862,3 +862,78 @@
 - Then continue to a short consolidation test of the two heat-equation solution views:
   1. Fourier-space frequency decay.
   2. Physical-space heat-kernel smoothing.
+
+## Session Progress - 2026-06-29
+
+## Heat Smoothing Consolidation
+- Confirmed: `k=1` survives longer than `k=10` because it decays by `e^{-t}` vs `e^{-100t}`.
+- User correctly stated: larger `k` means faster decay.
+- User summarized the two views of heat smoothing:
+  - Fourier-space view: profile is a sum of frequencies; high-frequency components decay faster; smoothing is seen as low-frequency components lasting longer.
+  - Physical-space view: smoothing is demonstrated by local averaging via the heat kernel.
+- Reinforced connection: wider heat kernel in physical space corresponds to stronger high-frequency decay in Fourier space.
+
+## Characteristics on Fourier Side with Source Term
+- Resumed from the equation:
+  `v_t + k v_k = -v`, with `v(k,0)=h(k)`.
+- Characteristic paths are still `k(t)=k0 e^t`, same as for `v_t + k v_k = 0`.
+- Along the characteristic, the total derivative gives:
+  `d/dt v(k(t),t) = -v`.
+- This is a decay ODE, not constant: `v` does NOT stay constant.
+- Solution of the along-path ODE `dv/dt = -v`:
+  `v(k(t),t) = C e^{-t}`.
+- At `t=0`, `C = v(k0,0) = h(k0)`.
+- Using `k0 = k e^{-t}`:
+  `v(k,t) = h(k e^{-t}) e^{-t}`.
+- Verified initial condition: at `t=0`, `v(k,0)=h(k·1)·1=h(k)`. Correct.
+
+## Two-Case Comparison
+- Compared the two Fourier-side characteristic cases:
+  - `v_t + k v_k = 0`: path `k(t)=k0 e^t`, `v` constant along path, solution `v(k,t)=h(ke^{-t})`.
+  - `v_t + k v_k = -v`: same path, `v` decays by `e^{-t}`, solution `v(k,t)=h(ke^{-t})e^{-t}`.
+- Key lesson: same characteristic paths; right-hand side determines how `v` changes along them.
+
+## User Summary of Characteristics
+- User correctly stated:
+  - Coefficient of `v_k` determines the characteristic path (speed).
+  - Right-hand side of the PDE determines how `v` changes along the path.
+
+## Method-Choice Consolidation Test
+- User attempted method selection for five PDEs.
+- Correct answers:
+  1. `u_t=u_xx`, whole line → Fourier transform. ✓
+  2. `u_t=u_xx`, `x>0`, `u(0,t)=0` → odd reflection + Fourier transform. ✓
+  3. `u_t=u_xx`, `0<x<L`, `u_x=0` at both ends → cosine series. (User said sine — corrected.)
+  4. `u_t+u_x=0`, whole line → characteristics. (User said Fourier+Laplace — corrected.)
+  5. `u_t+xu_x=0`, whole line → characteristics. (User said Fourier+Laplace — corrected.)
+- Key corrections reinforced:
+  - Zero-slope boundaries use cosine modes, not sine.
+  - Transport equations (`u_x` present) use characteristics, not Fourier.
+
+## Method-Choice Decision Rule Established
+- Signal for characteristics: first-order spatial derivative `u_x` (constant or variable coefficient).
+- Signal for Fourier/series: second-order spatial derivative `u_xx`.
+- Physical reason:
+  - `u_x` = slope → whole profile moves → transport → characteristics.
+  - `u_xx` = curvature → peaks flatten, valleys rise → smoothing → Fourier.
+
+## Stop Point - 2026-06-29
+- Completed a full consolidation of all four training levels.
+- User can now:
+  - Identify PDE type from its structure.
+  - Choose the correct method (Fourier transform, sine/cosine transform, sine/cosine series, characteristics).
+  - Explain why each method works using physical intuition.
+  - Solve using all covered methods.
+- All topics from `SKILL.md` have been covered:
+  Level 1: Fourier basics ✓
+  Level 2: Heat equation ✓
+  Level 3: Boundary problems ✓
+  Level 4: Non-constant PDE, xu term, characteristics ✓
+
+## Notes For Next Session - 2026-06-29
+- All SKILL.md topics are now covered.
+- Possible directions:
+  1. Mixed/combined problems: e.g., half-line heat with characteristics-type source term.
+  2. Non-homogeneous PDEs with forcing terms `f(x,t)`.
+  3. Deeper work on inverse transforms and explicit convolution formulas.
+  4. Review and exam-style practice problems covering all methods.
