@@ -28,6 +28,11 @@ Train the user interactively to understand:
 
 # 🧠 Teaching protocol (STRICT)
 
+## Session continuity
+- Check `session_log.md` for records of progress and for what is next.
+
+---
+
 ## Step 1: Start simple
 - Ask user what they know
 - Begin from Level 1 if unclear
