@@ -22,3 +22,4 @@ Final target score: `0.75* 1025 = 768`
 | 05-fill-additive-marking_nonlocal_1color - Version 6 | check the submission file | 65.58 | 05-fill-additive-marking-nonlocal-1color-6.ipynb |
 | 05-fill-additive-marking_nonlocal_1color - Version 7 | check the submission file | 65.58 | 05-fill-additive-marking-nonlocal-1color-7.ipynb |
 | 05-fill-additive-marking_nonlocal_1color - Version 9 | check the submission file | 65.58 | 05-fill-additive-marking-nonlocal-1color-9.ipynb |
+| 05-fill-additive-marking_nonlocal_1color - Version 10 | check the submission file | 65.58 | 05-fill-additive-marking-nonlocal-1color-10.ipynb |
