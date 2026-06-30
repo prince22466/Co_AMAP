@@ -26,7 +26,10 @@ Final target score: `0.75* 1025 = 768`
 | 05-fill-additive-marking_nonlocal_1color - Version 11 | check the submission file | 65.58 | 05-fill-additive-marking-nonlocal-1color-11.ipynb |
 
 
-## Model Size Audit Through Version 11
+
+
+
+## Model Size Audit up to Version 11
 
 Assumed competition requirement: each `taskNNN.onnx` should be at most about `1.44 MB`.
 
