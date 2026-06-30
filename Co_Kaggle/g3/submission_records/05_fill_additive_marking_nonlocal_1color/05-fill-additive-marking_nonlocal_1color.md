@@ -24,3 +24,43 @@ Final target score: `0.75* 1025 = 768`
 | 05-fill-additive-marking_nonlocal_1color - Version 9 | check the submission file | 65.58 | 05-fill-additive-marking-nonlocal-1color-9.ipynb |
 | 05-fill-additive-marking_nonlocal_1color - Version 10 | check the submission file | 65.58 | 05-fill-additive-marking-nonlocal-1color-10.ipynb |
 | 05-fill-additive-marking_nonlocal_1color - Version 11 | check the submission file | 65.58 | 05-fill-additive-marking-nonlocal-1color-11.ipynb |
+
+
+## Model Size Audit Through Version 11
+
+Assumed competition requirement: each `taskNNN.onnx` should be at most about `1.44 MB`.
+
+The sizes below are local lower-bound estimates from the notebook builders' dense initializers. Kaggle-executed profile values are still the source of truth, but these estimates are enough to identify models that are clearly too large.
+
+### Models Meeting The Size Requirement
+
+| Task | Model | Estimated size | First relevant version | Notes |
+| --- | --- | ---: | --- | --- |
+| task047 | `task047_cross_project_cnn` | ~0.005 MB | v5 | New after v4; size-safe. |
+| task050 | `task050_line_connect_cnn` | ~0.003 MB | v4 | Likely part of current scoring baseline. |
+| task126 | `task126_u_bottom_marker_cnn` | ~0.002 MB | v4 | Likely part of current scoring baseline. |
+| task176 | `task176_periodic_completion_cnn` | ~0.002 MB | v4 | Likely part of current scoring baseline. |
+| task299 | `task299_cross_extend_cnn` | ~0.227 MB | v4 | Likely part of current scoring baseline. |
+| task357 | `task357_bounce_path_gemm` | ~0.326 MB | v4 | Likely part of current scoring baseline. |
+
+### Models Larger Than The Size Requirement
+
+| Task | Model | Estimated size | First relevant version | Notes |
+| --- | --- | ---: | --- | --- |
+| task060 | `task060_row_bridges_gemm` | ~13.9 MB | v5 | Too large for 1.44 MB cap. |
+| task200 | `task200_periodic_lattice_gemm` | ~3.1 MB | v5 | Too large for 1.44 MB cap. |
+| task232 | `task232_right_alternating_gemm` | ~323.0 MB | v5/v11 | Listed in v5; confirmed selecting in later builder. Too large. |
+| task273 | `task273_corner_rectangles_gemm` | ~44.5 MB | v5 | Too large for 1.44 MB cap. |
+| task323 | `task323_seed_staircase_gemm` | ~5.8 MB | v5 | Too large for 1.44 MB cap. |
+| task348 | `task348_vertical_pyramid_gemm` | ~231.8 MB | v5 | Too large for 1.44 MB cap. |
+| task336 | `task336_gap_fill_gemm` | ~593.3 MB | v6 | Too large for 1.44 MB cap. |
+| task002 | `task002_visible_lookup_gemm` | ~9.2 MB | v9 | Lookup export; too large and likely poor hidden generalization. |
+| task027 | `task027_visible_lookup_gemm` | ~9.1 MB | v9 | Lookup export; too large and likely poor hidden generalization. |
+| task042 | `task042_visible_lookup_gemm` | ~9.0 MB | v9 | Lookup export; too large and likely poor hidden generalization. |
+| task102 | `task102_visible_lookup_gemm` | ~9.2 MB | v9 | Lookup export; too large and likely poor hidden generalization. |
+| task102 | `task102_square_hole_fill_gemm` | ~13.2 MB | v10 | Semantic attempt, but still too large. |
+| task371 | `task371_midpoint_plus_gemm` | ~87.5 MB | v11 | Simulator rule exported by enumeration; too large. |
+
+### Interpretation
+
+Versions 5 through 11 did not improve over `65.58`. A likely reason is that most newly added exportable models were much larger than the assumed per-model limit and therefore were not usable as practical competition models. Future runs should only add compact models under `1.44 MB`, and dense GEMM/enumerated lookup exports should be treated as analysis tools unless compressed.
