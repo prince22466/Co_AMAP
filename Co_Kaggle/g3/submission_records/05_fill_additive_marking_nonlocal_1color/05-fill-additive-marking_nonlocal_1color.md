@@ -26,7 +26,7 @@ Final target score: `0.75* 1025 = 768`
 | 05-fill-additive-marking_nonlocal_1color - Version 11 | check the submission file | 65.58 | 05-fill-additive-marking-nonlocal-1color-11.ipynb |
 | 05-fill-additive-marking_nonlocal_1color - Version 12 | check the submission file | 65.58 | 05-fill-additive-marking-nonlocal-1color-12.ipynb |
 | 05-fill-additive-marking_nonlocal_1color - Version 13 | check the submission file | 65.58 | 05-fill-additive-marking-nonlocal-1color-13.ipynb |
-
+| 05-fill-additive-marking_nonlocal_1color - Version 14 | check the submission file | 11.77 | 05-fill-additive-marking-nonlocal-1color-14.ipynb |
 
 
 ## Model Size Audit up to Version 11
@@ -67,3 +67,6 @@ The sizes below are local lower-bound estimates from the notebook builders' dens
 ### Interpretation
 
 Versions 5 through 11 did not improve over `65.58`. A likely reason is that most newly added exportable models were much larger than the assumed per-model limit and therefore were not usable as practical competition models. Future runs should only add compact models under `1.44 MB`, and dense GEMM/enumerated lookup exports should be treated as analysis tools unless compressed.
+
+### Version 14 for task002
+05-fill-additive-marking_nonlocal_1color - Version 14 runs only for task002 using hand-designed symbolic CNN(not a learned CNN). And it works, which didnt in previous notebooks.
