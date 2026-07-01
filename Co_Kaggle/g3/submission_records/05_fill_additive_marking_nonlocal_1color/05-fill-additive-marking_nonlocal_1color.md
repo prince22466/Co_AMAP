@@ -30,7 +30,7 @@ Final target score: `0.75* 1025 = 768`
 | 05-fill-additive-marking_nonlocal_1color - Version 15 | check the submission file | 77.36 | 05-fill-additive-marking-nonlocal-1color-15.ipynb |
 
 
-## Version 15 for task002
+## Version 15 for 6 tasks
 05-fill-additive-marking_nonlocal_1color - Version 15 runs only for 
 task002, 
 task050, 
