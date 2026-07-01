@@ -38,7 +38,7 @@ Final target score: `0.75* 1025 = 768`
 `task176`, 
 `task299`, 
 `task357`, 
-using existing approachs in previous notebooks. It gets 77.36 = 11.77 + 65.58. Which means task047 was not solved in previous runs.
+using existing approachs in previous notebooks. It gets 77.36 = 11.77 + 65.58. Which means `task047` was not solved in previous runs.
 
 ## Version 14 for task002
 05-fill-additive-marking_nonlocal_1color - Version 14 runs only for task002 using hand-designed symbolic CNN(not a learned CNN). And it works, which didnt in previous notebooks.
