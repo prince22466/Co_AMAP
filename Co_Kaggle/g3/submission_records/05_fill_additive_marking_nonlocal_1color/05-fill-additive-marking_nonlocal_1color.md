@@ -32,6 +32,11 @@ Final target score: `0.75* 1025 = 768`
 | 05-fill-additive-marking_nonlocal_1color - Version 19 | check the submission file | 91.01 | 05-fill-additive-marking-nonlocal-1color-19.ipynb |
 
 
+## Version 19 for 2 additional tasks
+05-fill-additive-marking_nonlocal_1color - Version 19 runs only for 
+6 in Version 15 + `task027` and `task042`
+It gets 91.01 = 13.65 + 77.36. But not sure it is from which new task
+
 ## Version 15 for 6 tasks
 05-fill-additive-marking_nonlocal_1color - Version 15 runs only for 
 `task002`, 
