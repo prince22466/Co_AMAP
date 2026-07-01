@@ -30,6 +30,12 @@ Final target score: `0.75* 1025 = 768`
 | 05-fill-additive-marking_nonlocal_1color - Version 15 | check the submission file | 77.36 | 05-fill-additive-marking-nonlocal-1color-15.ipynb |
 | 05-fill-additive-marking_nonlocal_1color - Version 17 | check the submission file | 77.36 | 05-fill-additive-marking-nonlocal-1color-17.ipynb |
 | 05-fill-additive-marking_nonlocal_1color - Version 19 | check the submission file | 91.01 | 05-fill-additive-marking-nonlocal-1color-19.ipynb |
+| 05-fill-additive-marking_nonlocal_1color - Version 20 | check the submission file | 13.64 | 05-fill-additive-marking-nonlocal-1color-20.ipynb |
+
+
+
+## Version 20 for task027
+05-fill-additive-marking_nonlocal_1color - Version 20 runs only for `task027`. which means model for `task042` doesnt work in version 19.
 
 
 ## Version 19 for 2 additional tasks
