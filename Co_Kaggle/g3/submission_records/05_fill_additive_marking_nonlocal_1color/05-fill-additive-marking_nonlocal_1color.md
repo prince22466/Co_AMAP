@@ -36,7 +36,7 @@ Final target score: `0.75* 1025 = 768`
 
 ## Version 22 for bug fixed task042
 05-fill-additive-marking_nonlocal_1color - Version 22 runs  for 
-Version 19 with task042 model being fixed(a bug)
+Version 19 with task042 model being fixed(a ONNX output issues)
 It gets 103.21 = 12.2 + 91.01. Improvement is from `task042`
 
 
