@@ -31,6 +31,13 @@ Final target score: `0.75* 1025 = 768`
 | 05-fill-additive-marking_nonlocal_1color - Version 17 | check the submission file | 77.36 | 05-fill-additive-marking-nonlocal-1color-17.ipynb |
 | 05-fill-additive-marking_nonlocal_1color - Version 19 | check the submission file | 91.01 | 05-fill-additive-marking-nonlocal-1color-19.ipynb |
 | 05-fill-additive-marking_nonlocal_1color - Version 20 | check the submission file | 13.64 | 05-fill-additive-marking-nonlocal-1color-20.ipynb |
+| 05-fill-additive-marking_nonlocal_1color - Version 22 | check the submission file | 103.21 | 05-fill-additive-marking-nonlocal-1color-22.ipynb |
+
+
+## Version 22 for bug fixed task042
+05-fill-additive-marking_nonlocal_1color - Version 22 runs  for 
+Version 19 with task042 model being fixed(a bug)
+It gets 103.21 = 12.2 + 91.01. Improvement is from `task042`
 
 
 
