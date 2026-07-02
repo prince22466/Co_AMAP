@@ -32,12 +32,26 @@ Final target score: `0.75* 1025 = 768`
 | 05-fill-additive-marking_nonlocal_1color - Version 19 | check the submission file | 91.01 | 05-fill-additive-marking-nonlocal-1color-19.ipynb |
 | 05-fill-additive-marking_nonlocal_1color - Version 20 | check the submission file | 13.64 | 05-fill-additive-marking-nonlocal-1color-20.ipynb |
 | 05-fill-additive-marking_nonlocal_1color - Version 22 | check the submission file | 103.21 | 05-fill-additive-marking-nonlocal-1color-22.ipynb |
+| 05-fill-additive-marking_nonlocal_1color - Version 23 | check the submission file | 13.78 | 05-fill-additive-marking-nonlocal-1color-23.ipynb |
+| 05-fill-additive-marking_nonlocal_1color - Version 24 | check the submission file | 13.50 | 05-fill-additive-marking-nonlocal-1color-24.ipynb |
+| 05-fill-additive-marking_nonlocal_1color - Version 26 | check the submission file | 13.16 | 05-fill-additive-marking-nonlocal-1color-26.ipynb |
+| 05-fill-additive-marking_nonlocal_1color - Version 27 | check the submission file | 14.08 | 05-fill-additive-marking-nonlocal-1color-27.ipynb |
+
+
+## solved tasks up to latest run
+
+
+## Version 23,24,26,27 for task
+Version 23 -> `task043`, 
+Version 24 -> `task050`, 
+Version 26 -> `task120`, 
+Version 27 -> `task105`
 
 
 ## Version 22 for bug fixed task042
 05-fill-additive-marking_nonlocal_1color - Version 22 runs  for 
 Version 19 with task042 model being fixed(a ONNX output issues)
-It gets 103.21 = 12.2 + 91.01. Improvement is from `task042`
+It gets 103.21 = 12.2 + 91.01. Improvement is from `task042`, aka `task042` scores 12.2
 
 
 
