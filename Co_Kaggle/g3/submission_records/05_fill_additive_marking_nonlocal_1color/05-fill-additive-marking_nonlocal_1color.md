@@ -70,7 +70,7 @@ Unsolved tasks:
 `task047`, `task060`, `task090`, `task162`, `task200`, `task219`, `task232`, `task246`, `task255`, `task265`, `task273`, `task278`, `task303`, `task323`, `task335`, `task336`, `task341`, `task348`, `task350`, `task367`, `task371`, `task381`, `task387`, `task392`, `task397`
 
 
-## Version 38 for tasks
+## Version 38,39,40,41 for tasks
 Version 38 -> `task047`, 
 Version 39 -> `task060`, 
 Version 40 -> `task126`, 
