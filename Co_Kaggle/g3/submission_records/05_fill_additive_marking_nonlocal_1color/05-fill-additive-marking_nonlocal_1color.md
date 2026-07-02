@@ -49,7 +49,7 @@ Final target score: `0.75* 1025 = 768`
 | `task050` | 13.50 |
 | `task102` | 13.16 |
 | `task105` | 14.08 |
-| `task126`, `task176`, `task299`, `task357` | included in the 65.58 five-task baseline with `task050` |
+| `task126`, `task176`, `task299`, `task357` | 65.58 (including `task050`) |
 
 Unsolved tasks:
 
