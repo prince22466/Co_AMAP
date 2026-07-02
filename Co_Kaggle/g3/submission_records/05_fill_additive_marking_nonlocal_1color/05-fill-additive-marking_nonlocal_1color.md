@@ -38,15 +38,23 @@ Final target score: `0.75* 1025 = 768`
 | 05-fill-additive-marking_nonlocal_1color - Version 27 | check the submission file | 14.08 | 05-fill-additive-marking-nonlocal-1color-27.ipynb |
 
 
-## solved and unsolved tasks up to Version 27
-task050+task126+task176+task299+task357->65.58; 
-task002 ->11.77; 
-task027 -> 13.65; 
-task042 -> 12.2; 
-task043 -> 13.78;  
-task050 -> 13.50; 
-task120 -> 13.16; 
-task105 -> 14.08; 
+## Solved And Unsolved Tasks Up To Version 27
+
+| Solved tasks | Scores |
+| --- | ---: |
+| `task050`, `task126`, `task176`, `task299`, `task357` | 65.58 |
+| `task002` | 11.77 |
+| `task027` | 13.65 |
+| `task042` | 12.20 |
+| `task043` | 13.78 |
+| `task050` | 13.50 |
+| `task105` | 14.08 |
+
+Note: the previous note had `task120 -> 13.16`, but `task120` is not in the 41-task `nonlocal_1color` set. Verify whether this was meant to be another task before counting it as solved.
+
+Unsolved tasks:
+
+`task047`, `task060`, `task063`, `task090`, `task102`, `task119`, `task139`, `task162`, `task166`, `task200`, `task219`, `task232`, `task246`, `task251`, `task255`, `task265`, `task273`, `task278`, `task303`, `task323`, `task335`, `task336`, `task341`, `task348`, `task350`, `task367`, `task371`, `task381`, `task387`, `task392`, `task397`
 
 
 
