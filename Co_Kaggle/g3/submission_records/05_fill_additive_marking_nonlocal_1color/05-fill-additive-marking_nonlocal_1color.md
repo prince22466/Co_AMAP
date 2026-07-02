@@ -45,6 +45,7 @@ Final target score: `0.75* 1025 = 768`
 ## Solved And Unsolved Tasks Up To Version 27
 
 | Solved tasks | Scores |
+| --- | ---: |
 | `task251` | 13.48 |
 | `task166` | 13.70 |
 | `task139` | 11.36 |
