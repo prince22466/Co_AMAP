@@ -45,7 +45,11 @@ Final target score: `0.75* 1025 = 768`
 ## Solved And Unsolved Tasks Up To Version 27
 
 | Solved tasks | Scores |
-| --- | ---: |
+| `task251` | 13.48 |
+| `task166` | 13.70 |
+| `task139` | 11.36 |
+| `task119` | 10.04 |
+| `task063` | 13.40 |
 | `task002` | 11.77 |
 | `task027` | 13.65 |
 | `task042` | 12.20 |
@@ -57,7 +61,7 @@ Final target score: `0.75* 1025 = 768`
 
 Unsolved tasks:
 
-`task047`, `task060`, `task063`, `task090`, `task119`, `task139`, `task162`, `task166`, `task200`, `task219`, `task232`, `task246`, `task251`, `task255`, `task265`, `task273`, `task278`, `task303`, `task323`, `task335`, `task336`, `task341`, `task348`, `task350`, `task367`, `task371`, `task381`, `task387`, `task392`, `task397`
+`task047`, `task060`, `task090`, `task162`, `task200`, `task219`, `task232`, `task246`, `task255`, `task265`, `task273`, `task278`, `task303`, `task323`, `task335`, `task336`, `task341`, `task348`, `task350`, `task367`, `task371`, `task381`, `task387`, `task392`, `task397`
 
 
 ## Version 31,32,34,36,37 for tasks
@@ -65,7 +69,7 @@ Version 31 -> `task251`,
 Version 32 -> `task166`,
 Version 34 -> `task139`,
 Version 36 -> `task119`,
-Version 37 -> `task063`,
+Version 37 -> `task063`
 
 ## Version 23,24,26,27 for tasks
 Version 23 -> `task043`, 
