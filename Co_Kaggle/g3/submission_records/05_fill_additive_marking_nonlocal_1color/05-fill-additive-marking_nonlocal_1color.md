@@ -53,6 +53,7 @@ Final target score: `0.75* 1025 = 768`
 | 05-fill-additive-marking_nonlocal_1color - Version 47 | check the submission file | 13.35 | 05-fill-additive-marking-nonlocal-1color-47.ipynb |
 | 05-fill-additive-marking_nonlocal_1color - Version 48 | check the submission file | 13.60 | 05-fill-additive-marking-nonlocal-1color-48.ipynb |
 | 05-fill-additive-marking_nonlocal_1color - Version 49 | check the submission file | 12.93 | 05-fill-additive-marking-nonlocal-1color-49.ipynb |
+| 05-fill-additive-marking_nonlocal_1color - Version 50 | check the submission file | 12.59 | 05-fill-additive-marking-nonlocal-1color-50.ipynb |
 
 
 ## Solved And Unsolved Tasks Up To Version 43
@@ -84,13 +85,15 @@ Unsolved tasks:
 `task090`, `task162`, `task219`, `task232`, `task255`, `task265`, `task273`, `task278`, `task303`, `task323`, `task335`, `task336`, `task341`, `task348`, `task350`, `task367`, `task371`, `task381`, `task387`, `task392`, `task397`
 
 
-## Version 44,45,46,47,48,49 for tasks
+## Version 44,45,46,47,48,49,50 for tasks
 Version 44 -> `task273`, 
 Version 45 -> `task299`, 
 Version 46 -> `task323`, 
 Version 47 -> `task335`, 
 Version 48 -> `task336`, 
 Version 49 -> `task348`, 
+Version 50 -> `task357`, 
+
 
 ## Version 38,39,40,41,42,43 for tasks
 Version 38 -> `task047`, 
