@@ -57,9 +57,18 @@ Final target score: `0.75* 1025 = 768`
 | 05-fill-additive-marking_nonlocal_1color - Version 51 | check the submission file | 13.33 | 05-fill-additive-marking-nonlocal-1color-51.ipynb |
 
 
-## Solved And Unsolved Tasks Up To Version 43
+## Solved And Unsolved Tasks Up To Version 51
 
 | Solved tasks | Scores |
+| --- | ---: |
+| `task273` | 12.24 |
+| `task299` | 13.04 |
+| `task323` | 13.16 |
+| `task335` | 13.35 |
+| `task336` | 13.60 |
+| `task348` | 12.93 |
+| `task357` | 12.59 |
+| `task371` | 13.33 |
 | --- | ---: |
 | `task047` | 12.91 |
 | `task060` | 11.32 |
