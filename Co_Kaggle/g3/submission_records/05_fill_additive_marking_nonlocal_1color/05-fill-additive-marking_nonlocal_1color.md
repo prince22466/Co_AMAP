@@ -69,7 +69,6 @@ Final target score: `0.75* 1025 = 768`
 | `task348` | 12.93 |
 | `task357` | 12.59 |
 | `task371` | 13.33 |
-| --- | ---: |
 | `task047` | 12.91 |
 | `task060` | 11.32 |
 | `task126` | 13.33 |
@@ -88,11 +87,10 @@ Final target score: `0.75* 1025 = 768`
 | `task050` | 13.50 |
 | `task102` | 13.16 |
 | `task105` | 14.08 |
-| `task299`, `task357` | 65.58 (including `task050`,`task126`,`task176` with old modelling approachs) |
 
 Unsolved tasks:
 
-`task090`, `task162`, `task219`, `task232`, `task255`, `task265`, `task273`, `task278`, `task303`, `task323`, `task335`, `task336`, `task341`, `task348`, `task350`, `task367`, `task371`, `task381`, `task387`, `task392`, `task397`
+`task090`, `task162`, `task219`, `task232`, `task255`, `task265`, `task278`, `task303`, `task341`, `task350`, `task367`, `task381`, `task387`, `task392`, `task397`
 
 
 ## Version 44,45,46,47,48,49,50,51 for tasks
