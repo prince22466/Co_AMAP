@@ -46,11 +46,19 @@ Final target score: `0.75* 1025 = 768`
 | 05-fill-additive-marking_nonlocal_1color - Version 40 | check the submission file | 13.33 | 05-fill-additive-marking-nonlocal-1color-40.ipynb |
 | 05-fill-additive-marking_nonlocal_1color - Version 41 | check the submission file | 13.75 | 05-fill-additive-marking-nonlocal-1color-41.ipynb |
 | 05-fill-additive-marking_nonlocal_1color - Version 42 | check the submission file | 9.61 | 05-fill-additive-marking-nonlocal-1color-42.ipynb |
+| 05-fill-additive-marking_nonlocal_1color - Version 43 | check the submission file | 13.35 | 05-fill-additive-marking-nonlocal-1color-43.ipynb |
 
-## Solved And Unsolved Tasks Up To Version 37
+
+## Solved And Unsolved Tasks Up To Version 43
 
 | Solved tasks | Scores |
 | --- | ---: |
+| `task047` | 12.91 |
+| `task060` | 11.32 |
+| `task126` | 13.33 |
+| `task176` | 13.75 |
+| `task200` | 9.61 |
+| `task246` | 13.35 |
 | `task251` | 13.48 |
 | `task166` | 13.70 |
 | `task139` | 11.36 |
@@ -63,19 +71,20 @@ Final target score: `0.75* 1025 = 768`
 | `task050` | 13.50 |
 | `task102` | 13.16 |
 | `task105` | 14.08 |
-| `task126`, `task176`, `task299`, `task357` | 65.58 (including `task050` with old modelling approach) |
+| `task299`, `task357` | 65.58 (including `task050`,`task126`,`task176` with old modelling approachs) |
 
 Unsolved tasks:
 
-`task047`, `task060`, `task090`, `task162`, `task200`, `task219`, `task232`, `task246`, `task255`, `task265`, `task273`, `task278`, `task303`, `task323`, `task335`, `task336`, `task341`, `task348`, `task350`, `task367`, `task371`, `task381`, `task387`, `task392`, `task397`
+`task090`, `task162`, `task219`, `task232`, `task255`, `task265`, `task273`, `task278`, `task303`, `task323`, `task335`, `task336`, `task341`, `task348`, `task350`, `task367`, `task371`, `task381`, `task387`, `task392`, `task397`
 
 
-## Version 38,39,40,41,42 for tasks
+## Version 38,39,40,41,42,43 for tasks
 Version 38 -> `task047`, 
 Version 39 -> `task060`, 
 Version 40 -> `task126`, 
 Version 41 -> `task176`, 
 Version 42 -> `task200`, 
+Version 43 -> `task246` 
 
 ## Version 31,32,34,36,37 for tasks
 Version 31 -> `task251`, 
