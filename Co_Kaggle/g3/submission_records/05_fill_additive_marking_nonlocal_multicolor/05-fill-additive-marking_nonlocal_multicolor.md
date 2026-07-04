@@ -19,13 +19,13 @@ Final target score: `0.75* 250 = 187.5`
 | 05-fill-additive-marking_nonlocal_multicolor - Version 5 | `task198` | 11.28 | 05-fill-additive-marking-nonlocal-multicolor-5.ipynb |
 | 05-fill-additive-marking_nonlocal_multicolor - Version 6 | `task204` | 11.10 | 05-fill-additive-marking-nonlocal-multicolor-6.ipynb |
 | 05-fill-additive-marking_nonlocal_multicolor - Version 7 | `task226` | 13.40 | 05-fill-additive-marking-nonlocal-multicolor-7.ipynb |
+| 05-fill-additive-marking_nonlocal_multicolor - Version 8 | `task302` | 11.28 | 05-fill-additive-marking-nonlocal-multicolor-8.ipynb |
 
 
 ## Unsolved Tasks Up To Version 2
 
 Unsolved tasks:
 | `task145` | 
-| `task256` | 
-| `task302` | 
+| `task256` |
 | `task349` | 
 | `task369` | 
