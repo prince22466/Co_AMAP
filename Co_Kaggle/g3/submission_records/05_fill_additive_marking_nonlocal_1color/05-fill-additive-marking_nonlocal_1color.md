@@ -62,10 +62,12 @@ Final target score: `0.75* 1025 = 768`
 | 05-fill-additive-marking_nonlocal_1color - Version 69 | check the submission file | 2.44 | 05-fill-additive-marking-nonlocal-1color-69.ipynb |
 
 
-## Solved And Unsolved Tasks Up To Version 61
+## Solved And Unsolved Tasks Up To Version 69
 
 | Solved tasks | Scores |
 | --- | ---: |
+| `task303` | 13.65 |
+| `task255` | 2.44 |
 | `task162` | 13.67 |
 | `task232` | 12.10 |
 | `task278` | 13.53 |
@@ -98,10 +100,10 @@ Final target score: `0.75* 1025 = 768`
 
 Unsolved tasks:
 
-`task090`, `task219`, `task255`, `task265`, `task303`, `task341`, `task350`, `task367`, `task381`, `task387`, `task392`, `task397`
+`task090`, `task219`, `task265`, `task341`, `task350`, `task367`, `task381`, `task387`, `task392`, `task397`
 
 
-## Version 65 for tasks
+## Version 65,69 for tasks
 Version 65 -> `task303`, 
 Version 69 -> `task255`, 
 
