@@ -10,19 +10,15 @@ Immediate target score: `0.6* 250 = 150`
 Final target score: `0.75* 250 = 187.5`  
 
 
-## Submission Summary
+## Single task Submission Summary
 
-| Kaggle Submission name | Modelling approach | Submission score | Submission file |
+| Kaggle Submission name | task | Submission score | Submission file |
 | --- | --- | --- | --- |
-| 05-fill-additive-marking_nonlocal_multicolor - Version 1 | check the submission file | 0.0 |
+| 05-fill-additive-marking_nonlocal_multicolor - Version 2 | `task055` | 13.30 | 05-fill-additive-marking-nonlocal-multicolor-2.ipynb |
 
-## Solved And Unsolved Tasks Up To Version 1
-
-| Solved tasks | Scores |
-| --- | ---: |
+## Unsolved Tasks Up To Version 2
 
 Unsolved tasks:
-| `task055` | 
 | `task145` | 
 | `task187` | 
 | `task198` | 
