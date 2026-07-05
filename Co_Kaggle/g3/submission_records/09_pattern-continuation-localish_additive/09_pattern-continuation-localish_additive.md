@@ -14,7 +14,7 @@ Final target score: `0.75* 375 = 281`
 
 | Kaggle Submission name | task | Submission score | Submission file |
 | --- | --- | --- | --- |
-| 09-pattern-continuation-localish_additive - Version 2 | |  |  | 
+| 09-pattern-continuation-localish_additive - Version 2 | `task041` | 12.19 | 09-pattern-continuation-localish-additive-2.ipynb | 
 
 ## Unsolved Tasks Up To Version 1  
 
