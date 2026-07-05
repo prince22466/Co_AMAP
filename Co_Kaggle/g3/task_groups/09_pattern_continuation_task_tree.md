@@ -9,24 +9,30 @@ Source: `task_groups/task_type_map.csv`
 | Primary family | `pattern_completion` |
 | Task count | `99` |
 | Common shape relation | `same_shape_variable_size` |
-| Common behavior | Input is mostly preserved while missing pattern cells are completed, extended, or repaired. |
+| Common behavior | Input is mostly preserved while missing pattern cells are completed, extended, repaired, or overwritten. |
 | Current notebook | `(not yet assigned)` |
 
 ## Flag-Based Subtypes
 
 | Subtype Flags | Count | Solver Meaning |
 | --- | ---: | --- |
-| `mostly_preserves_input_adds_or_changes` | 96 | Mostly same-color continuation/completion; output modifies or adds cells while preserving at least 80% of input nonzero cells. |
+| `mostly_preserves_input_adds_or_changes` | 96 | Mostly color-reusing continuation/completion; output adds background cells and/or changes existing cells while preserving at least 80% of input nonzero cells. |
 | `mostly_preserves_input_adds_or_changes|new_output_colors` | 3 | Completion introduces one or more colors not present in the input; may overlap with additive marking behavior. |
 
 ## Practical Solver Subtypes
 
+This split is mechanical and solver-oriented:
+
+- `localish` means `local_3x3_score >= 0.95`, but these are not zero-conflict local rules.
+- `additive` means `added_nonzero_cells == changed_cells`, so existing nonzero input cells are preserved.
+- `recolor` means `changed_cells > added_nonzero_cells`, so some existing cells are overwritten, recolored, or cleared.
+
 | Practical Subtype | Count | Characteristics | Current Solver Status |
 | --- | ---: | --- | --- |
-| `localish_additive_completion` | 15 | Near-local same-color completion; mostly explainable by small neighborhoods and only adds cells into background. | Candidate for widened symbolic/local completion solver; not covered by strict 3x3 consistency. |
-| `localish_recolor_completion` | 12 | Near-local completion with some existing nonzero cells also changed; local solver may need overwrite handling. | Candidate for widened symbolic/local completion solver; not covered by strict 3x3 consistency. |
-| `nonlocal_additive_completion` | 57 | Long-range or object-level completion; input foreground is preserved and missing cells are added. | Unhandled; likely identity fallback only. |
-| `nonlocal_recolor_completion` | 15 | Long-range completion with existing nonzero cells changed; highest risk for generic additive solvers. | Unhandled; likely identity fallback only. |
+| `localish_additive_completion` | 15 | High 3x3 consistency score and only adds nonzero cells into background. | Candidate for widened symbolic/local completion solver; not handled by strict zero-conflict 3x3 logic. |
+| `localish_recolor_completion` | 12 | High 3x3 consistency score with some existing nonzero cells also changed. | Candidate for widened symbolic/local completion solver with overwrite handling. |
+| `nonlocal_additive_completion` | 57 | Lower 3x3 consistency score; input foreground is preserved and missing cells are added. | Unhandled; likely identity fallback only. |
+| `nonlocal_recolor_completion` | 15 | Lower 3x3 consistency score with existing nonzero cells changed; highest risk for generic additive solvers. | Unhandled; likely identity fallback only. |
 
 ## Practical Subtype Metadata
 
