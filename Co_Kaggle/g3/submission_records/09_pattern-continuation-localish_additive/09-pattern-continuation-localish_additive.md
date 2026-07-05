@@ -19,14 +19,14 @@ Final target score: `0.75* 375 = 281`
 | 09-pattern-continuation-localish_additive - Version 5 | `task378` | 11.56 | 09-pattern-continuation-localish-additive-5.ipynb | 
 | 09-pattern-continuation-localish_additive - Version 12 | `task243` | 10.96 | 09-pattern-continuation-localish-additive-12.ipynb |
 | 09-pattern-continuation-localish_additive - Version 16 | `task017` | 10.71 | 09-pattern-continuation-localish-additive-16.ipynb |
+| 09-pattern-continuation-localish_additive - Version 17 | `task061` | 10.71 | 09-pattern-continuation-localish-additive-17.ipynb |
+| 09-pattern-continuation-localish_additive - Version 18 | `task110` | 9.32 | 09-pattern-continuation-localish-additive-18.ipynb |
 
 
 ## Unsolved Tasks Up To Version 16  
 
 Unsolved tasks:
 | `task020` | 
-| `task061` |
-| `task110` |
 | `task112` | 
 | `task133` |
 | `task168` | 
