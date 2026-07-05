@@ -14,10 +14,10 @@ Final target score: `0.75* 300 = 225`
 
 | Kaggle Submission name | task | Submission score | Submission file |
 | --- | --- | --- | --- |
-| 09-pattern-continuation-localish_recolor - Version 2 | `` |  | 09-pattern-continuation-localish-recolor-2.ipynb |
+| 09-pattern-continuation-localish_recolor - Version 2 | `task064` | 11.03 | 09-pattern-continuation-localish-recolor-2.ipynb |
 
 
-## Unsolved Tasks Up To Version 5  
+## Unsolved Tasks Up To Version   
 
 Unsolved tasks:
 | `task025` | 
