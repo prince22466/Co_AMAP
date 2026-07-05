@@ -4,7 +4,7 @@ This file records submissions for only the `localish_additive_completion` subtyp
 
 Task tree: `task_groups/09_pattern_continuation_task_tree.md`  
 Subtype: `localish_additive`  
-Count of taks: `15` 
+Count of taks: `15`  
 Highest possbile score: `15*25 = 375`  
 Immediate target score: `0.6* 375 = 225`  
 Final target score: `0.75* 375 = 281`  
@@ -16,7 +16,7 @@ Final target score: `0.75* 375 = 281`
 | --- | --- | --- | --- |
 | 09-pattern-continuation-localish_additive - Version 2 | |  |  | 
 
-## Unsolved Tasks Up To Version 1
+## Unsolved Tasks Up To Version 1  
 
 Unsolved tasks:
 | `task017` |
