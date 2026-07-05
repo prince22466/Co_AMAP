@@ -17,7 +17,7 @@ Source: `task_groups/task_type_map.csv`
 | Subtype Flags | Count | Solver Meaning |
 | --- | ---: | --- |
 | `mostly_preserves_input_adds_or_changes` | 96 | Mostly color-reusing continuation/completion; output adds background cells and/or changes existing cells while preserving at least 80% of input nonzero cells. |
-| `mostly_preserves_input_adds_or_changes|new_output_colors` | 3 | Completion introduces one or more colors not present in the input; may overlap with additive marking behavior. |
+| <code>mostly_preserves_input_adds_or_changes&#124;new_output_colors</code> | 3 | Completion introduces one or more colors not present in the input; may overlap with additive marking behavior. |
 
 ## Practical Solver Subtypes
 
@@ -84,7 +84,7 @@ This split is mechanical and solver-oriented:
 | `task064` | `competition_material/taskfiles/task064.json` | `mostly_preserves_input_adds_or_changes` | `[]` | `24x17:5;19x21:4;22x9:4;18x20:4;16x13:4` | 0.9714 | 452 | 0 | 2206 | 0.9706 |
 | `task074` | `competition_material/taskfiles/task074.json` | `mostly_preserves_input_adds_or_changes` | `[]` | `30x30:267` | 0.9609 | 2114 | 0 | 21717 | 0.8707 |
 | `task093` | `competition_material/taskfiles/task093.json` | `mostly_preserves_input_adds_or_changes` | `[]` | `14x14:265` | 0.9589 | 483 | 1395 | 3187 | 0.8789 |
-| `task118` | `competition_material/taskfiles/task118.json` | `mostly_preserves_input_adds_or_changes|new_output_colors` | `[8]` | `15x14:7;18x15:6;11x10:6;19x21:6;22x20:6` | 0.9851 | 273 | 0 | 2600 | 0.9445 |
+| `task118` | `competition_material/taskfiles/task118.json` | <code>mostly_preserves_input_adds_or_changes&#124;new_output_colors</code> | `[8]` | `15x14:7;18x15:6;11x10:6;19x21:6;22x20:6` | 0.9851 | 273 | 0 | 2600 | 0.9445 |
 | `task143` | `competition_material/taskfiles/task143.json` | `mostly_preserves_input_adds_or_changes` | `[]` | `10x10:266` | 0.9600 | 240 | 0 | 928 | 0.8574 |
 | `task158` | `competition_material/taskfiles/task158.json` | `mostly_preserves_input_adds_or_changes` | `[]` | `26x25:19;25x24:17;22x23:15;24x23:15;21x22:13` | 0.9629 | 1005 | 0 | 4987 | 0.9595 |
 | `task182` | `competition_material/taskfiles/task182.json` | `mostly_preserves_input_adds_or_changes` | `[]` | `20x20:267` | 0.9709 | 699 | 0 | 2516 | 0.8465 |
@@ -183,10 +183,10 @@ This split is mechanical and solver-oriented:
 | `task054` | `competition_material/taskfiles/task054.json` | `mostly_preserves_input_adds_or_changes` | `[]` | `30x30:266` | 0.9251 | 4043 | 0 | 20366 | 0.9149 |
 | `task059` | `competition_material/taskfiles/task059.json` | `mostly_preserves_input_adds_or_changes` | `[]` | `11x11:266` | 0.9021 | 711 | 3918 | 5981 | 0.8596 |
 | `task085` | `competition_material/taskfiles/task085.json` | `mostly_preserves_input_adds_or_changes` | `[]` | `16x30:22;12x20:21;9x20:18;16x20:17;15x20:16` | 0.9436 | 1066 | 0 | 5183 | 0.8454 |
-| `task094` | `competition_material/taskfiles/task094.json` | `mostly_preserves_input_adds_or_changes|new_output_colors` | `[6]` | `15x15:265` | 0.8764 | 1669 | 0 | 10834 | 0.8183 |
+| `task094` | `competition_material/taskfiles/task094.json` | <code>mostly_preserves_input_adds_or_changes&#124;new_output_colors</code> | `[6]` | `15x15:265` | 0.8764 | 1669 | 0 | 10834 | 0.8183 |
 | `task202` | `competition_material/taskfiles/task202.json` | `mostly_preserves_input_adds_or_changes` | `[]` | `19x14:4;20x18:4;17x20:4;14x15:3;10x35:3` | 0.9367 | 1176 | 0 | 4637 | 0.9419 |
 | `task206` | `competition_material/taskfiles/task206.json` | `mostly_preserves_input_adds_or_changes` | `[]` | `12x9:13;11x8:12;11x9:11;9x8:11;8x7:10` | 0.9351 | 350 | 1113 | 1379 | 0.8383 |
-| `task279` | `competition_material/taskfiles/task279.json` | `mostly_preserves_input_adds_or_changes|new_output_colors` | `[8]` | `16x15:31;16x16:28;15x15:19;15x16:19;16x14:14` | 0.9213 | 992 | 0 | 5539 | 0.8982 |
+| `task279` | `competition_material/taskfiles/task279.json` | <code>mostly_preserves_input_adds_or_changes&#124;new_output_colors</code> | `[8]` | `16x15:31;16x16:28;15x15:19;15x16:19;16x14:14` | 0.9213 | 992 | 0 | 5539 | 0.8982 |
 | `task281` | `competition_material/taskfiles/task281.json` | `mostly_preserves_input_adds_or_changes` | `[]` | `13x12:41;13x11:33;12x11:31;11x13:30;11x11:29` | 0.8519 | 1283 | 4473 | 5283 | 0.8194 |
 | `task314` | `competition_material/taskfiles/task314.json` | `mostly_preserves_input_adds_or_changes` | `[]` | `8x8:266` | 0.8862 | 437 | 0 | 522 | 0.9455 |
 | `task324` | `competition_material/taskfiles/task324.json` | `mostly_preserves_input_adds_or_changes` | `[]` | `18x14:8;11x10:7;17x19:6;18x16:6;10x12:6` | 0.7225 | 3738 | 0 | 10867 | 0.8174 |
