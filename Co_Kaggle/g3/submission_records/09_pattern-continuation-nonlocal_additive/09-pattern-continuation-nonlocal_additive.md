@@ -20,6 +20,7 @@ Final target score: `0.75* 1425 = 1068`
 ## Unsolved Tasks Up To Version 1  
 
 Unsolved tasks:
+`P1`
 `task005`  
 `task007`  
 `task009`  
@@ -31,6 +32,8 @@ Unsolved tasks:
 `task037`  
 `task045`  
 `task066`  
+
+`P2`
 `task076`  
 `task080`  
 `task082`  
@@ -42,6 +45,8 @@ Unsolved tasks:
 `task113`  
 `task117`  
 `task132`  
+
+`P3`
 `task136`  
 `task137`  
 `task141`  
@@ -53,6 +58,8 @@ Unsolved tasks:
 `task212`  
 `task214`  
 `task215`  
+
+`P4`
 `task217`  
 `task224`  
 `task225`  
@@ -64,6 +71,8 @@ Unsolved tasks:
 `task284`  
 `task286`  
 `task288`  
+
+`P5`
 `task297`  
 `task306`  
 `task322`  
@@ -75,5 +84,7 @@ Unsolved tasks:
 `task358`  
 `task361`  
 `task363`  
+
+`P6`
 `task382`  
 `task385`  
