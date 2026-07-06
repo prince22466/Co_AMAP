@@ -18,8 +18,9 @@ Final target score: `0.75* 300 = 225`
 | 09-pattern-continuation-localish_recolor - Version 11 | `task143` | 12.16 | 09-pattern-continuation-localish-recolor-11.ipynb |
 | 09-pattern-continuation-localish_recolor - Version 12 | `task025` | 11.13 | 09-pattern-continuation-localish-recolor-12.ipynb |
 | 09-pattern-continuation-localish_recolor - Version 13 | `task093` | 12.04 | 09-pattern-continuation-localish-recolor-13.ipynb |
+| 09-pattern-continuation-localish_recolor - Version 14 | `task340` | 12.04 | 09-pattern-continuation-localish-recolor-14.ipynb |
 
-## Unsolved Tasks Up To Version 13  
+## Unsolved Tasks Up To Version 14  
 
 Unsolved tasks:
 | `task074` | 
@@ -29,4 +30,3 @@ Unsolved tasks:
 | `task208` | 
 | `task228` | 
 | `task287` | 
-| `task340` | 
