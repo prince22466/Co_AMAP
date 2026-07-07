@@ -62,7 +62,7 @@ Final target score: `0.75* 1425 = 1068`
 
 
 
-## Unsolved Tasks Up To Version 85  
+## Unsolved Tasks Up To Version 87  
 
 Unsolved tasks:  
 `P1`  
