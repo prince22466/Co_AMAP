@@ -83,7 +83,6 @@ Unsolved tasks:
 
   
 `P5`
-`task306`  
 `task328`  
 `task343`  
 `task345`  
@@ -95,3 +94,4 @@ Unsolved tasks:
 `P6`
 `task382`  
 `task385`  
+`task306`  
