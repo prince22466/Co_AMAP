@@ -15,7 +15,7 @@ Final target score: `0.75* 1425 = 1068`
 | Kaggle Submission name | task | Submission score | Submission file |
 | --- | --- | --- | --- |
 | 09-pattern-continuation-nonlocal_additive - Version 9 | `task007` | 11.84 | 09-pattern-continuation-nonlocal-additive-9.ipynb |
-
+| 09-pattern-continuation-nonlocal_additive - Version 10 | `task012` | 10.87 | 09-pattern-continuation-nonlocal-additive-10.ipynb |
 
 ## Unsolved Tasks Up To Version 9  
 
