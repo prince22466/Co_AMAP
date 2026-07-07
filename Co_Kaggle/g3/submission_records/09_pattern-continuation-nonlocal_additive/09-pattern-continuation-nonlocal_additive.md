@@ -25,15 +25,10 @@ Final target score: `0.75* 1425 = 1068`
 Unsolved tasks:  
 `P1`
 `task005`  
-`task007`  
 `task009`  
-`task012`  
 `task013`  
-`task024`  
-`task028`  
 `task033`  
 `task037`  
-`task045`  
 `task066`  
   
 `P2`
