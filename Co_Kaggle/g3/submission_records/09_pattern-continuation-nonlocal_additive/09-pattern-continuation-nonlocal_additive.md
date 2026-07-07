@@ -14,12 +14,12 @@ Final target score: `0.75* 1425 = 1068`
 
 | Kaggle Submission name | task | Submission score | Submission file |
 | --- | --- | --- | --- |
-| 09-pattern-continuation-nonlocal_additive - Version 12 | `` | NA | 09-pattern-continuation-nonlocal_additive-1.ipynb |
+| 09-pattern-continuation-nonlocal_additive - Version 9 | `task007` | 11.84 | 09-pattern-continuation-nonlocal-additive-9.ipynb |
 
 
-## Unsolved Tasks Up To Version 1  
+## Unsolved Tasks Up To Version 9  
 
-Unsolved tasks:
+Unsolved tasks:  
 `P1`
 `task005`  
 `task007`  
@@ -32,7 +32,7 @@ Unsolved tasks:
 `task037`  
 `task045`  
 `task066`  
-
+  
 `P2`
 `task076`  
 `task080`  
@@ -45,7 +45,7 @@ Unsolved tasks:
 `task113`  
 `task117`  
 `task132`  
-
+  
 `P3`
 `task136`  
 `task137`  
@@ -58,7 +58,7 @@ Unsolved tasks:
 `task212`  
 `task214`  
 `task215`  
-
+  
 `P4`
 `task217`  
 `task224`  
@@ -71,7 +71,7 @@ Unsolved tasks:
 `task284`  
 `task286`  
 `task288`  
-
+  
 `P5`
 `task297`  
 `task306`  
@@ -84,7 +84,7 @@ Unsolved tasks:
 `task358`  
 `task361`  
 `task363`  
-
+  
 `P6`
 `task382`  
 `task385`  
