@@ -14,16 +14,15 @@ Final target score: `0.75* 375 = 281`
 
 | Kaggle Submission name | task | Submission score | Submission file |
 | --- | --- | --- | --- |
-| 09-pattern-continuation-localish_recolor - Version 2 | `` | NA | 09-pattern-continuation-localish-recolor-2.ipynb |
+| 09-pattern-continuation-nonlocal_rcolor - Version 1 | `task202` | 11.94 | 09-pattern-continuation-nonlocal-rcolor-1.ipynb |
+| 09-pattern-continuation-nonlocal_rcolor - Version 3 | `task054` | 10.44 | 09-pattern-continuation-nonlocal-rcolor-3.ipynb |
 
 
 ## Unsolved Tasks Up To Version 1  
 `task044`
-`task054`
 `task059`
 `task085`
 `task094`
-`task202`
 `task206`
 `task279`
 `task281`
