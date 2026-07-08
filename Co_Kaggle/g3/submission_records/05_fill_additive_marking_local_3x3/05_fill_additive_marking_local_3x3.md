@@ -10,7 +10,7 @@ Immediate target score: `0.6* 200 = 120`
 Final target score: `0.75* 200 = 150`  
 
 
-## Submission Summary
+## Submission Summary(tasks in one batch)
 
 | Kaggle Submission name | Modelling approach | Submission score | Submission file |
 | --- | --- | --- | --- |
