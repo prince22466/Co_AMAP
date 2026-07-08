@@ -20,6 +20,7 @@ Final target score: `0.75* 375 = 281`
 | 09-pattern-continuation-nonlocal_rcolor - Version 5 | `task044` | 10.49 | 09-pattern-continuation-nonlocal-rcolor-5.ipynb |
 | 09-pattern-continuation-nonlocal_rcolor - Version 7 | `task281` | 12.01 | 09-pattern-continuation-nonlocal-rcolor-7.ipynb |
 | 09-pattern-continuation-nonlocal_rcolor - Version 8 | `task059` | 11.65 | 09-pattern-continuation-nonlocal-rcolor-8.ipynb |
+| 09-pattern-continuation-nonlocal_rcolor - Version 9 | `task314` | 12.25 | 09-pattern-continuation-nonlocal-rcolor-9.ipynb |
 
 
 
@@ -27,7 +28,6 @@ Final target score: `0.75* 375 = 281`
 `task085`
 `task094`
 `task279`
-`task314`
 `task324`
 `task370`
 `task375`
