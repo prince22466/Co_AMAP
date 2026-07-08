@@ -47,21 +47,21 @@ Final target score: `0.75* 1025 = 768`
 | 05-fill-additive-marking_nonlocal_1color - Version 41 | check the submission file | 13.75 | 05-fill-additive-marking-nonlocal-1color-41.ipynb |
 | 05-fill-additive-marking_nonlocal_1color - Version 42 | check the submission file | 9.61 | 05-fill-additive-marking-nonlocal-1color-42.ipynb |
 | 05-fill-additive-marking_nonlocal_1color - Version 43 | check the submission file | 13.35 | 05-fill-additive-marking-nonlocal-1color-43.ipynb |
-| 05-fill-additive-marking_nonlocal_1color - Version 44 | check the submission file | 12.24 | 05-fill-additive-marking-nonlocal-1color-44.ipynb |
-| 05-fill-additive-marking_nonlocal_1color - Version 45 | check the submission file | 13.04 | 05-fill-additive-marking-nonlocal-1color-45.ipynb |
-| 05-fill-additive-marking_nonlocal_1color - Version 46 | check the submission file | 13.16 | 05-fill-additive-marking-nonlocal-1color-46.ipynb |
-| 05-fill-additive-marking_nonlocal_1color - Version 47 | check the submission file | 13.35 | 05-fill-additive-marking-nonlocal-1color-47.ipynb |
-| 05-fill-additive-marking_nonlocal_1color - Version 48 | check the submission file | 13.60 | 05-fill-additive-marking-nonlocal-1color-48.ipynb |
-| 05-fill-additive-marking_nonlocal_1color - Version 49 | check the submission file | 12.93 | 05-fill-additive-marking-nonlocal-1color-49.ipynb |
-| 05-fill-additive-marking_nonlocal_1color - Version 50 | check the submission file | 12.59 | 05-fill-additive-marking-nonlocal-1color-50.ipynb |
-| 05-fill-additive-marking_nonlocal_1color - Version 51 | check the submission file | 13.33 | 05-fill-additive-marking-nonlocal-1color-51.ipynb |
-| 05-fill-additive-marking_nonlocal_1color - Version 52 | check the submission file | 13.67 | 05-fill-additive-marking-nonlocal-1color-52.ipynb |
-| 05-fill-additive-marking_nonlocal_1color - Version 56 | check the submission file | 12.10 | 05-fill-additive-marking-nonlocal-1color-56.ipynb |
-| 05-fill-additive-marking_nonlocal_1color - Version 61 | check the submission file | 13.53 | 05-fill-additive-marking-nonlocal-1color-61.ipynb |
-| 05-fill-additive-marking_nonlocal_1color - Version 65 | check the submission file | 13.65 | 05-fill-additive-marking-nonlocal-1color-65.ipynb |
-| 05-fill-additive-marking_nonlocal_1color - Version 69 | check the submission file | 2.44 | 05-fill-additive-marking-nonlocal-1color-69.ipynb |
-| 05-fill-additive-marking_nonlocal_1color - Version 72 | check the submission file | 10.97 | 05-fill-additive-marking-nonlocal-1color-72.ipynb |
-| 05-fill-additive-marking_nonlocal_1color - Version 73 | check the submission file | 13.00 | 05-fill-additive-marking-nonlocal-1color-73.ipynb |
+| 05-fill-additive-marking_nonlocal_1color - Version 44 | `task273` | 12.24 | 05-fill-additive-marking-nonlocal-1color-44.ipynb |
+| 05-fill-additive-marking_nonlocal_1color - Version 45 | `task299` | 13.04 | 05-fill-additive-marking-nonlocal-1color-45.ipynb |
+| 05-fill-additive-marking_nonlocal_1color - Version 46 | `task323` | 13.16 | 05-fill-additive-marking-nonlocal-1color-46.ipynb |
+| 05-fill-additive-marking_nonlocal_1color - Version 47 | `task335` | 13.35 | 05-fill-additive-marking-nonlocal-1color-47.ipynb |
+| 05-fill-additive-marking_nonlocal_1color - Version 48 | `task336` | 13.60 | 05-fill-additive-marking-nonlocal-1color-48.ipynb |
+| 05-fill-additive-marking_nonlocal_1color - Version 49 | `task348` | 12.93 | 05-fill-additive-marking-nonlocal-1color-49.ipynb |
+| 05-fill-additive-marking_nonlocal_1color - Version 50 | `task357` | 12.59 | 05-fill-additive-marking-nonlocal-1color-50.ipynb |
+| 05-fill-additive-marking_nonlocal_1color - Version 51 | `task371` | 13.33 | 05-fill-additive-marking-nonlocal-1color-51.ipynb |
+| 05-fill-additive-marking_nonlocal_1color - Version 52 | `task162` | 13.67 | 05-fill-additive-marking-nonlocal-1color-52.ipynb |
+| 05-fill-additive-marking_nonlocal_1color - Version 56 | `task232` | 12.10 | 05-fill-additive-marking-nonlocal-1color-56.ipynb |
+| 05-fill-additive-marking_nonlocal_1color - Version 61 | `task278` | 13.53 | 05-fill-additive-marking-nonlocal-1color-61.ipynb |
+| 05-fill-additive-marking_nonlocal_1color - Version 65 | `task303` | 13.65 | 05-fill-additive-marking-nonlocal-1color-65.ipynb |
+| 05-fill-additive-marking_nonlocal_1color - Version 69 | `task255` | 2.44 | 05-fill-additive-marking-nonlocal-1color-69.ipynb |
+| 05-fill-additive-marking_nonlocal_1color - Version 72 | `task090` | 10.97 | 05-fill-additive-marking-nonlocal-1color-72.ipynb |
+| 05-fill-additive-marking_nonlocal_1color - Version 73 | `task341` | 13.00 | 05-fill-additive-marking-nonlocal-1color-73.ipynb |
 
 ## Solved And Unsolved Tasks Up To Version 73
 
@@ -106,28 +106,6 @@ Unsolved tasks:
 `task219`, `task265`, `task350`, `task367`, `task381`, `task387`, `task392`, `task397`
 
 
-## Version 65,69,72,73 for tasks
-Version 65 -> `task303`, 
-Version 69 -> `task255`, 
-Version 72 -> `task090`,
-Version 73 -> `task341`
-
-
-## Version 52,56,61 for tasks
-Version 52 -> `task162`, 
-Version 56 -> `task232`, 
-Version 61 -> `task278`
-
-
-## Version 44,45,46,47,48,49,50,51 for tasks
-Version 44 -> `task273`, 
-Version 45 -> `task299`, 
-Version 46 -> `task323`, 
-Version 47 -> `task335`, 
-Version 48 -> `task336`, 
-Version 49 -> `task348`, 
-Version 50 -> `task357`, 
-Version 51 -> `task371`, 
 
 ## Version 38,39,40,41,42,43 for tasks
 Version 38 -> `task047`, 
