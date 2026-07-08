@@ -58,6 +58,7 @@ Final target score: `0.75* 1425 = 1068`
 | 09-pattern-continuation-nonlocal_additive - Version 86 | `task286` | 8.58 | 09-pattern-continuation-nonlocal-additive-86.ipynb |
 | 09-pattern-continuation-nonlocal_additive - Version 87 | `task333` | 11.15 | 09-pattern-continuation-nonlocal-additive-87.ipynb |
 | 09-pattern-continuation-nonlocal_additive - Version 92 | `task343` | 9.64 | 09-pattern-continuation-nonlocal-additive-92.ipynb |
+| 09-pattern-continuation-nonlocal_additive - Version 97 | `task306` | 8.76 | 09-pattern-continuation-nonlocal-additive-97.ipynb |
 
 
 
@@ -93,4 +94,3 @@ Unsolved tasks:
 `P6`  
 `task382`  
 `task385`  
-`task306`  
