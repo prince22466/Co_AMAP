@@ -10,7 +10,7 @@ Immediate target score: `0.6* 1025 = 615`
 Final target score: `0.75* 1025 = 768`  
 
 
-## Submission Summary
+## Single task Submission Summary(in progress)
 
 | Kaggle Submission name | Task | Submission score | Submission file |
 | --- | --- | --- | --- |
