@@ -14,7 +14,8 @@ Final target score: `0.75* 750 = 563`
 
 | Kaggle Submission name | task | Submission score | Submission file |
 | --- | --- | --- | --- |
-| 05-fill-additive-marking_nonlocal_multicolor - Version 2 | `task055` | 13.30 | 05-fill-additive-marking-nonlocal-multicolor-2.ipynb |
+| 07-cropping-variable_size_extraction - Version 1 | `task224` | 9.47 | 07-cropping-variable-size-extraction-1.ipynb |
+| 07-cropping-variable_size_extraction - Version 8 | `task377` | 11.22 | 07-cropping-variable-size-extraction-8.ipynb |
 
 
 
@@ -47,6 +48,5 @@ Unsolved tasks:
 `task319`
 `task325`
 `task366`
-`task377`
 `task394`
 `task396`
