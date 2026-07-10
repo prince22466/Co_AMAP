@@ -171,7 +171,8 @@ MAPPING_SPEC = r"""
 `task382`
 `task385`]
 
-"submission_records\09_pattern-continuation-nonlocal_recolor"
+
+"submission_onnx\09_pattern-continuation-nonlocal_recolor"
 [`task044`
 `task054`
 `task059`
