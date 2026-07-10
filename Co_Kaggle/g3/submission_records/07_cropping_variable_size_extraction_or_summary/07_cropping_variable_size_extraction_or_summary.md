@@ -32,7 +32,7 @@ Final target score: `0.75* 750 = 563`
 
 
 
-## Unsolved Tasks Up To Version 17
+## Unsolved Tasks Up To Version 26
 Unsolved tasks:
 `task046`
 `task096`
