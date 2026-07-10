@@ -4,6 +4,30 @@
 # this zip file will be uploaded to kaggle as input
 # then simply change the file for submission.
 
+
 w1 Distribution of ONNX files:
+Total ONNX files zipped: 50
   - 05_fill_additive_marking_local_3x3: 8
   - 09_pattern-continuation-nonlocal_additive: 42
+
+w2 Distribution of ONNX files:
+Total ONNX files zipped: 103
+  - 05_fill_additive_marking_local_3x3: 8
+  - 05_fill_additive_marking_nonlocal_multicolor: 9
+  - 09_pattern-continuation-localish_additive: 13
+  - 09_pattern-continuation-localish_recolor: 12
+  - 09_pattern-continuation-nonlocal_additive: 53
+  - 09_pattern-continuation-nonlocal_recolor: 8
+
+w3 Distribution of ONNX files:
+Total ONNX files zipped: 117
+
+Distribution of ONNX files:
+  - 05_fill_additive_marking_local_3x3: 8
+  - 05_fill_additive_marking_nonlocal_1color: 1
+  - 05_fill_additive_marking_nonlocal_multicolor: 9
+  - 07_cropping_variable_size_extraction_or_summary: 7
+  - 09_pattern-continuation-localish_additive: 13
+  - 09_pattern-continuation-localish_recolor: 12
+  - 09_pattern-continuation-nonlocal_additive: 53
+  - 09_pattern-continuation-nonlocal_recolor: 14
