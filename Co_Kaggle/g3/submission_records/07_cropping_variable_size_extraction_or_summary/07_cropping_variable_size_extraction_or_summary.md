@@ -1,4 +1,4 @@
-# 07 Fill cropping_extraction - `variable_size_extraction_or_summary` Submission Record
+# 07 cropping_extraction - `variable_size_extraction_or_summary` Submission Record
 
 This file records submissions for only the `variable_size_extraction_or_summary` subtype of `cropping_extraction`.
 
