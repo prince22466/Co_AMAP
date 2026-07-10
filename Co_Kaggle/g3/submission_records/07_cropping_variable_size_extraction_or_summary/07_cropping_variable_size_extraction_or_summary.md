@@ -14,7 +14,7 @@ Final target score: `0.75* 750 = 563`
 
 | Kaggle Submission name | task | Submission score | Submission file |
 | --- | --- | --- | --- |
-| 07-cropping-variable_size_extraction - Version 1 | `task224` | 9.47 | 07-cropping-variable-size-extraction-1.ipynb |
+| 07-cropping-variable_size_extraction - Version 1 | `task244` | 9.47 | 07-cropping-variable-size-extraction-1.ipynb |
 | 07-cropping-variable_size_extraction - Version 8 | `task377` | 11.22 | 07-cropping-variable-size-extraction-8.ipynb |
 | 07-cropping-variable_size_extraction - Version 11 | `task021` | 14.46 | 07-cropping-variable-size-extraction-11.ipynb |
 | 07-cropping-variable_size_extraction - Version 17 | `task138` | 11.68 | 07-cropping-variable-size-extraction-17.ipynb |
@@ -47,7 +47,6 @@ Unsolved tasks:
 `task218`
 `task233`
 `task238`
-`task244`
 `task247`
 `task290`
 `task308`
