@@ -50,12 +50,3 @@ Unsolved tasks:
 `task377`
 `task394`
 `task396`
-`task247`  
-`task290`  
-`task308`  
-`task319`  
-`task325`  
-`task366`  
-`task377`  
-`task394`  
-`task396`
