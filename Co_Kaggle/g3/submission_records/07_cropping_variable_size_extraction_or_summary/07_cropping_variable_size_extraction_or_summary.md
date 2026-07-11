@@ -23,7 +23,8 @@ Final target score: `0.75* 750 = 563`
 | 07-cropping-variable_size_extraction - Version 24 | `task109` | 12.19 | 07-cropping-variable-size-extraction-24.ipynb |
 | 07-cropping-variable_size_extraction - Version 25 | `task115` | 11.88 | 07-cropping-variable-size-extraction-25.ipynb |
 | 07-cropping-variable_size_extraction - Version 26 | `task159` | 11.46 | 07-cropping-variable-size-extraction-26.ipynb |
-
+| 07-cropping-variable_size_extraction - Version 40 | `task096` | 10.72 | 07-cropping-variable-size-extraction-40.ipynb |
+| 07-cropping-variable_size_extraction - Version 41 | `task170` | 12.02 | 07-cropping-variable-size-extraction-41.ipynb |
 
 
 
@@ -35,8 +36,6 @@ Final target score: `0.75* 750 = 563`
 ## Unsolved Tasks Up To Version 26
 Unsolved tasks:
 `task046`
-`task096`
-`task170`
 `task178`
 `task183`
 `task184`
