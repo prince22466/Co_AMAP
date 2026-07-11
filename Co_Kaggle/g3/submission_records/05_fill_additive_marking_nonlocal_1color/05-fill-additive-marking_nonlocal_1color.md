@@ -62,6 +62,15 @@ Final target score: `0.75* 1025 = 768`
 | 05-fill-additive-marking_nonlocal_1color - Version 69 | `task255` | 2.44 | 05-fill-additive-marking-nonlocal-1color-69.ipynb |
 | 05-fill-additive-marking_nonlocal_1color - Version 72 | `task090` | 10.97 | 05-fill-additive-marking-nonlocal-1color-72.ipynb |
 | 05-fill-additive-marking_nonlocal_1color - Version 73 | `task341` | 13.00 | 05-fill-additive-marking-nonlocal-1color-73.ipynb |
+| 05-fill-additive-marking_nonlocal_1color - Version 80 | `task219` | 8.42 | task219.onnx(public file online) |
+| 05-fill-additive-marking_nonlocal_1color - Version 81 | `task265` | 14.42 | task265.onnx(public file online) |
+| 05-fill-additive-marking_nonlocal_1color - Version 82 | `task350` | 15.10 | task250.onnx(public file online) |
+| 05-fill-additive-marking_nonlocal_1color - Version 83 | `task367` | 13.14 | task367.onnx(public file online) |
+| 05-fill-additive-marking_nonlocal_1color - Version 84 | `task381` | 16.84 | task381.onnx(public file online) |
+| 05-fill-additive-marking_nonlocal_1color - Version 85 | `task387` | 14.55 | task387.onnx(public file online) |
+| 05-fill-additive-marking_nonlocal_1color - Version 86 | `task392` | 14.66 | task392.onnx(public file online) |
+| 05-fill-additive-marking_nonlocal_1color - Version 87 | `task397` | 15.08 | task397.onnx(public file online) |
+
 
 ## Solved And Unsolved Tasks Up To Version 73
 
@@ -102,9 +111,6 @@ Final target score: `0.75* 1025 = 768`
 | `task105` | 14.08 |
 
 Unsolved tasks:
-
-`task219`, `task265`, `task350`, `task367`, `task381`, `task387`, `task392`, `task397`
-
 
 
 
