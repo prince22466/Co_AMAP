@@ -43,11 +43,9 @@ Final target score: `0.75* 750 = 563`
 | 07-cropping-variable_size_extraction - Version 70 | `task178` | 16.03 | task178.onnx(public file online) |
 | 07-cropping-variable_size_extraction - Version 71 | `task325` | 14.33 | task325.onnx(public file online) |
 | 07-cropping-variable_size_extraction - Version 73 | `task183` | 16.27 | task183.onnx(public file online) |
-| 07-cropping-variable_size_extraction - Version 7xx | `task319` | xx | task319.onnx(public file online) |
+| 07-cropping-variable_size_extraction - Version 76 | `task319` | 11.15 | task319.onnx(public file online) |
 
 
-## Unsolved Tasks Up To Version 7xx
+## Unsolved Tasks Up To Version 76
 Unsolved tasks:
-
-`task319`
 
