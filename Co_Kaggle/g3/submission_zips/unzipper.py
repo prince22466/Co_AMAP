@@ -221,6 +221,21 @@ MAPPING_SPEC = r"""
 `task377`
 `task394`
 `task396`]
+
+"submission_onnx\07_cropping_exact_subgrid_fixed_output"
+[`task039`
+`task048`
+`task079`
+`task111`
+`task135`
+`task146`
+`task207`
+`task263`
+`task271`
+`task291`
+`task326`
+`task346`
+`task355`]
 """
 
 # Determine paths relative to script location
