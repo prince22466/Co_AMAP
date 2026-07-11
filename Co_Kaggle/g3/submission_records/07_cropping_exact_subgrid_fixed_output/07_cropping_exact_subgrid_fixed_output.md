@@ -20,7 +20,10 @@ Final target score: `0.75* 325 = 244`
 07-cropping-exact_subgrid_fixed_output - Version 3 | `task079` | 15.20 | task079.onnx(public file online) |
 07-cropping-exact_subgrid_fixed_output - Version 4 | `task111` | 18.39 | task111.onnx(public file online) |
 07-cropping-exact_subgrid_fixed_output - Version 5 | `task135` | 18.77 | task135.onnx(public file online) |
-
+07-cropping-exact_subgrid_fixed_output - Version 6 | `task271` | 16.51 | task271.onnx(public file online) |
+07-cropping-exact_subgrid_fixed_output - Version 8 | `task291` | 17.12 | task291.onnx(public file online) |
+07-cropping-exact_subgrid_fixed_output - Version 9 | `task326` | 19.60 | task326.onnx(public file online) |
+07-cropping-exact_subgrid_fixed_output - Version 10 | `task346` | 16.23 | task346.onnx(public file online) |
 
 
 ## Unsolved Tasks Up To Version 5
@@ -28,9 +31,5 @@ Unsolved tasks:
 `task146`
 `task207`
 `task263`
-`task271`
-`task291`
-`task326`
-`task346`
 `task355`
 
