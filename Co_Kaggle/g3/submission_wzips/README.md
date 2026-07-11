@@ -31,3 +31,32 @@ Distribution of ONNX files:
   - 09_pattern-continuation-localish_recolor: 12
   - 09_pattern-continuation-nonlocal_additive: 53
   - 09_pattern-continuation-nonlocal_recolor: 14
+
+
+w4 Distribution of ONNX files:
+Total ONNX files zipped: 177
+
+Distribution of ONNX files:
+  - 05_fill_additive_marking_local_3x3: 8
+  - 05_fill_additive_marking_nonlocal_1color: 34
+  - 05_fill_additive_marking_nonlocal_multicolor: 10
+  - 07_cropping_variable_size_extraction_or_summary: 27
+  - 09_pattern-continuation-localish_additive: 15
+  - 09_pattern-continuation-localish_recolor: 12
+  - 09_pattern-continuation-nonlocal_additive: 57
+  - 09_pattern-continuation-nonlocal_recolor: 14
+
+
+w5 Distribution of ONNX files:
+Total ONNX files zipped: 190
+
+Distribution of ONNX files:
+  - 05_fill_additive_marking_local_3x3: 8
+  - 05_fill_additive_marking_nonlocal_1color: 34
+  - 05_fill_additive_marking_nonlocal_multicolor: 10
+  - 07_cropping_exact_subgrid_fixed_output: 13
+  - 07_cropping_variable_size_extraction_or_summary: 27       
+  - 09_pattern-continuation-localish_additive: 15
+  - 09_pattern-continuation-localish_recolor: 12
+  - 09_pattern-continuation-nonlocal_additive: 57
+  - 09_pattern-continuation-nonlocal_recolor: 14
