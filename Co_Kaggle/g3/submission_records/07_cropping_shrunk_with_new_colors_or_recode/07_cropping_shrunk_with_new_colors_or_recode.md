@@ -1,0 +1,38 @@
+# 07 cropping_extraction - `shrunk_with_new_colors_or_recode` Submission Record
+
+This file records submissions for only the `shrunk_with_new_colors_or_recode` subtype of `cropping_extraction`.
+
+Task tree: `task_groups/07_cropping_extraction_task_tree.md`  
+Subtype: `shrunk_with_new_colors_or_recode`  
+
+Count of taks: `15`  
+Highest possbile score: `15* 25 = 375`  
+Immediate target score: `0.6* 350 = 225`  
+Final target score: `0.75* 350 = 281`  
+
+
+## Single task Submission Summary
+
+| Kaggle Submission name | task | Submission score | Submission file |
+| --- | --- | --- | --- |
+| 07-cropping-exact_subgrid_fixed_output - Version x | `x` | na | x.onnx(public file online) |
+07-cropping-exact_subgrid_fixed_output - Version x | `x` | na | x.onnx(public file online) |
+
+
+## Unsolved Tasks Up To Version x
+Unsolved tasks:
+`task006`
+`task026`
+`task072`
+`task103`
+`task144`
+`task149`
+`task227`
+`task235`
+`task236`
+`task259`
+`task318`
+`task334`
+`task347`
+`task386`
+`task395`
