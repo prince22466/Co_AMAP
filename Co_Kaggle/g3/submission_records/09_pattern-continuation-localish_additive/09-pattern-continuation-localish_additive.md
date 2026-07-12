@@ -7,7 +7,7 @@ Subtype: `localish_additive`
 Count of taks: `15`  
 Highest possbile score: `15*25 = 375`  
 Immediate target score: `0.6* 375 = 225`  
-Final target score: `0.75* 375 = 281`  
+Final target score> `0.7* 375 = 263`  
 
 
 ## Single task Submission Summary

@@ -8,7 +8,7 @@ Subtype: `shrunk_with_new_colors_or_recode`
 Count of taks: `15`  
 Highest possbile score: `15* 25 = 375`  
 Immediate target score: `0.6* 350 = 225`  
-Final target score: `0.75* 350 = 281`  
+Final target score> `0.7* 350 = 245`  
 
 
 ## Single task Submission Summary

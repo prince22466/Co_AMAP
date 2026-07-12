@@ -8,7 +8,7 @@ Subtype: `exact_subgrid_fixed_output`
 Count of taks: `13` 
 Highest possbile score: `13*25 = 325`  
 Immediate target score: `0.6* 325 = 195`  
-Final target score: `0.75* 325 = 244`  
+Final target score > `0.7* 325 = 228`  
 
 
 ## Single task Submission Summary

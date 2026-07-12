@@ -7,7 +7,7 @@ Subtype: `fixed_size_extraction_or_summary`
 Count of taks: `27` 
 Highest possbile score: `27* 25 = 675`  
 Immediate target score: `0.6* 675 = 405`  
-Final target score: `0.75* 675 = 506`  
+Final target score> `0.7* 675 = 473`  
 
 
 ## Single task Submission Summary

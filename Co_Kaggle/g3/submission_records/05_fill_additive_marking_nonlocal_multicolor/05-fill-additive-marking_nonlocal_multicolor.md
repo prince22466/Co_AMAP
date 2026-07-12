@@ -7,7 +7,7 @@ Subtype: `nonlocal_multicolor`
 Count of taks: `10` 
 Highest possbile score: `10*25 = 250`  
 Immediate target score: `0.6* 250 = 150`  
-Final target score: `0.75* 250 = 187.5`  
+Final target score > `0.7* 250 = 175`  
 
 
 ## Single task Submission Summary
