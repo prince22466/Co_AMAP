@@ -28,6 +28,10 @@ Final target score> `0.7* 675 = 473`
 | 07_cropping_fixed_size_extraction - Version 13 | `task321` | 17.26 | task321.onnx(public file online) |
 | 07_cropping_fixed_size_extraction - Version 14 | `task351` | 15.29 | task351.onnx(public file online) |
 | 07_cropping_fixed_size_extraction - Version 15 | `task100` | 16.13 | task100.onnx(public file online) |
+| 07_cropping_fixed_size_extraction - Version 17 | `task253` | 18.63 | task253.onnx(public file online) |
+| 07_cropping_fixed_size_extraction - Version 18 | `task257` | 15.84 | task257.onnx(public file online) |
+| 07_cropping_fixed_size_extraction - Version 19 | `task264` | 14.69 | task264.onnx(public file online) |
+| 07_cropping_fixed_size_extraction - Version 20 | `task121` | 16.21 | task121.onnx(public file online) |
 
 
 
@@ -35,7 +39,6 @@ Final target score> `0.7* 675 = 473`
 Unsolved tasks:
 `task022`
 `task057`
-`task121`
 `task130`
 `task134`
 `task153`
@@ -44,6 +47,3 @@ Unsolved tasks:
 `task189`
 `task195`
 `task242`
-`task253`
-`task257`
-`task264`
