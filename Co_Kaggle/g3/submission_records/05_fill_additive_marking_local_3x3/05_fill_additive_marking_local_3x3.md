@@ -7,8 +7,9 @@ Subtype: `local_3x3`
 Count of taks: `8`  
 Highest possbile score: `8*25 = 200`  
 Immediate target score: `0.6* 200 = 120`  
-Final target score(done) > `0.7* 200 = 140`  
-
+Final target score > `0.7* 200 = 140`  
+total score before optmization: 115
+Target Reached!!!!!!!!!  
 
 ## Submission Summary(tasks in one batch)
 
