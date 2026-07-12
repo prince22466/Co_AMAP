@@ -21,15 +21,16 @@ Final target score: `0.75* 325 = 263`
 07-cropping-exact_subgrid_variable_output - Version 4 | `task300` | 15.70 | task300.onnx(public file online) |
 07-cropping-exact_subgrid_variable_output - Version 5 | `task310` | 15.16 | task310.onnx(public file online) |
 07-cropping-exact_subgrid_variable_output - Version 6 | `task365` | 14.95 | task365.onnx(public file online) |
+07-cropping-exact_subgrid_variable_output - Version 7 | `task014` | 15.24 | task014.onnx(public file online) |
+07-cropping-exact_subgrid_variable_output - Version 8 | `task029` | 13.17 | task029.onnx(public file online) |
+07-cropping-exact_subgrid_variable_output - Version 9 | `task031` | 15.43 | task031.onnx(public file online) |
+07-cropping-exact_subgrid_variable_output - Version 10 | `task036` | 13.99 | task036.onnx(public file online) |
+07-cropping-exact_subgrid_variable_output - Version 11 | `task049` | 16.39 | task049.onnx(public file online) |
+07-cropping-exact_subgrid_variable_output - Version 12 | `task065` | 15.54 | task065.onnx(public file online) |
+
 
 
 ## Unsolved Tasks Up To Version x
 Unsolved tasks:
-`task014`
-`task029`
-`task031`
-`task036`
-`task049`
-`task065`
 `task067`
 `task091`
