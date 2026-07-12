@@ -42,7 +42,6 @@ Final target score > `0.7* 1025 = 718`
 | 05-fill-additive-marking_nonlocal_1color - Version 51 | `task371` | 13.33 | 05-fill-additive-marking-nonlocal-1color-51.ipynb |
 | 05-fill-additive-marking_nonlocal_1color - Version 52 | `task162` | 13.67 | 05-fill-additive-marking-nonlocal-1color-52.ipynb |
 | 05-fill-additive-marking_nonlocal_1color - Version 56 | `task232` | 12.10 | 05-fill-additive-marking-nonlocal-1color-56.ipynb |
-| 05-fill-additive-marking_nonlocal_1color - Version 60 | `task273` | 12.24 | 05-fill-additive-marking-nonlocal-1color-60.ipynb |
 | 05-fill-additive-marking_nonlocal_1color - Version 61 | `task278` | 13.53 | 05-fill-additive-marking-nonlocal-1color-61.ipynb |
 | 05-fill-additive-marking_nonlocal_1color - Version 65 | `task303` | 13.65 | 05-fill-additive-marking-nonlocal-1color-65.ipynb |
 | 05-fill-additive-marking_nonlocal_1color - Version 69 | `task255` | 2.44 | 05-fill-additive-marking-nonlocal-1color-69.ipynb |
