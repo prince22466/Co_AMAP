@@ -15,8 +15,12 @@ Final target score: `0.75* 325 = 263`
 
 | Kaggle Submission name | task | Submission score | Submission file |
 | --- | --- | --- | --- |
-| 07-cropping-exact_subgrid_fixed_output - Version x | `x` | na | x.onnx(public file online) |
-07-cropping-exact_subgrid_fixed_output - Version x | `x` | na | x.onnx(public file online) |
+| 07-cropping-exact_subgrid_variable_output - Version 1 | `task188` | 15.61 | task188.onnx(public file online) |
+07-cropping-exact_subgrid_variable_output - Version 2 | `task174` | 14.77 | task174.onnx(public file online) |
+07-cropping-exact_subgrid_variable_output - Version 3 | `task216` | 13.83 | task216.onnx(public file online) |
+07-cropping-exact_subgrid_variable_output - Version 4 | `task300` | 15.70 | task300.onnx(public file online) |
+07-cropping-exact_subgrid_variable_output - Version 5 | `task310` | 15.16 | task310.onnx(public file online) |
+07-cropping-exact_subgrid_variable_output - Version 6 | `task365` | 14.95 | task365.onnx(public file online) |
 
 
 ## Unsolved Tasks Up To Version x
@@ -29,9 +33,3 @@ Unsolved tasks:
 `task065`
 `task067`
 `task091`
-`task174`
-`task188`
-`task216`
-`task300`
-`task310`
-`task365`
