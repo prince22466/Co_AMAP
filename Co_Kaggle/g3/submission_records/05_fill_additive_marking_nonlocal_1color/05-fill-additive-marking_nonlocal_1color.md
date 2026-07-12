@@ -8,9 +8,9 @@ Count of taks: `41`
 Highest possbile score: `41*25 = 1025`  
 Immediate target score: `0.6* 1025 = 615`  
 Final target score > `0.7* 1025 = 718`  
+total score before optmization: 524  
 
-
-## Single task Submission Summary(in progress)
+## Single task Submission Summary
 
 | Kaggle Submission name | Task | Submission score | Submission file |
 | --- | --- | --- | --- |
