@@ -14,14 +14,19 @@ Final target score> `0.7* 675 = 473`
 
 | Kaggle Submission name | task | Submission score | Submission file |
 | --- | --- | --- | --- |
-| 07-cropping-variable_size_extraction - Version 1 | `` | xx | taskxxx.onnx(public file online) |
+| 07_cropping_fixed_size_extraction - Version 2 | `task056` | 18.67 | task056.onnx(public file online) |
+| 07_cropping_fixed_size_extraction - Version 3 | `task057` | 14.24 | task057.onnx(public file online) |
+| 07_cropping_fixed_size_extraction - Version 4 | `task360` | 16.43 | task360.onnx(public file online) |
+| 07_cropping_fixed_size_extraction - Version 5 | `task372` | 19.65 | task372.onnx(public file online) |
+| 07_cropping_fixed_size_extraction - Version 6 | `task391` | 18.91 | task391.onnx(public file online) |
+| 07_cropping_fixed_size_extraction - Version 7 | `task393` | 18.02 | task393.onnx(public file online) |
+| 07_cropping_fixed_size_extraction - Version 8 | `task400` | 15.78 | task400.onnx(public file online) |
 
 
 ## Unsolved Tasks Up To Version 7x
 Unsolved tasks:
 `task022`
 `task038`
-`task056`
 `task057`
 `task100`
 `task121`
@@ -41,8 +46,3 @@ Unsolved tasks:
 `task316`
 `task321`
 `task351`
-`task360`
-`task372`
-`task391`
-`task393`
-`task400`
