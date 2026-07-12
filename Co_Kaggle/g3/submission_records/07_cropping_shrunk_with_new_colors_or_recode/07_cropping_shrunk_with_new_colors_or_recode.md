@@ -18,6 +18,8 @@ Final target score> `0.7* 350 = 245`
 | 07_cropping_shrunk_with_new_or_rcolors - Version 8 | `task318` | 13.14 | task318.onnx(public file online) |
 | 07_cropping_shrunk_with_new_or_rcolors - Version 11 | `task227` | 19.12 | task227.onnx(public file online) |
 07-cropping-exact_subgrid_fixed_output - Version 12 | `task334` | 18.10 | task334.onnx(public file online) |
+07-cropping-exact_subgrid_fixed_output - Version 13 | `task144` | 18.94 | task144.onnx(public file online) |
+07-cropping-exact_subgrid_fixed_output - Version 14 | `task347` | 14.29 | task347.onnx(public file online) |
 
 
 ## Unsolved Tasks Up To Version x
@@ -26,11 +28,9 @@ Unsolved tasks:
 `task026`
 `task072`
 `task103`
-`task144`
 `task149`
 `task235`
 `task236`
 `task259`
-`task347`
 `task386`
 `task395`
