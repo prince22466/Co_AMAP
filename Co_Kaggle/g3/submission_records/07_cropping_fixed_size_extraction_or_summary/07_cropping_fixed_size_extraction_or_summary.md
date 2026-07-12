@@ -38,7 +38,6 @@ Final target score> `0.7* 675 = 473`
 ## Unsolved Tasks Up To Version 7x
 Unsolved tasks:
 `task022`
-`task057`
 `task130`
 `task134`
 `task153`
