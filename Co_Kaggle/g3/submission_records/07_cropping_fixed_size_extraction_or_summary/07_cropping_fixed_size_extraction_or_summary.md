@@ -32,12 +32,11 @@ Final target score> `0.7* 675 = 473`
 | 07_cropping_fixed_size_extraction - Version 18 | `task257` | 15.84 | task257.onnx(public file online) |
 | 07_cropping_fixed_size_extraction - Version 19 | `task264` | 14.69 | task264.onnx(public file online) |
 | 07_cropping_fixed_size_extraction - Version 20 | `task121` | 16.21 | task121.onnx(public file online) |
-
+| 07_cropping_fixed_size_extraction - Version 21 | `task022` | 17.25 | task022.onnx(public file online) |
 
 
 ## Unsolved Tasks Up To Version 7x
 Unsolved tasks:
-`task022`
 `task130`
 `task134`
 `task153`
