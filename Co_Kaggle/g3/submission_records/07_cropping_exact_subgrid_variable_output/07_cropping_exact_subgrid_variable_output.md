@@ -3,9 +3,9 @@
 This file records submissions for only the `exact_subgrid_variable_output` subtype of `cropping_extraction`.
 
 Task tree: `task_groups/07_cropping_extraction_task_tree.md`  
-Subtype: `exact_subgrid_variable_output`
+Subtype: `exact_subgrid_variable_output`  
 
-Count of taks: `14` 
+Count of taks: `14`  
 Highest possbile score: `14*25 = 350`  
 Immediate target score: `0.6* 350 = 210`  
 Final target score: `0.75* 325 = 263`  
