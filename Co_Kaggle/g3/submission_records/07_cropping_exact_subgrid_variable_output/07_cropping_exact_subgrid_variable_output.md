@@ -27,10 +27,8 @@ Final target score: `0.75* 325 = 263`
 07-cropping-exact_subgrid_variable_output - Version 10 | `task036` | 13.99 | task036.onnx(public file online) |
 07-cropping-exact_subgrid_variable_output - Version 11 | `task049` | 16.39 | task049.onnx(public file online) |
 07-cropping-exact_subgrid_variable_output - Version 12 | `task065` | 15.54 | task065.onnx(public file online) |
+07-cropping-exact_subgrid_variable_output - Version 13 | `task067` | 19.40 | task067.onnx(public file online) |
+07-cropping-exact_subgrid_variable_output - Version 14 | `task091` | 15.67 | task091.onnx(public file online) |
 
-
-
-## Unsolved Tasks Up To Version x
+## Unsolved Tasks Up To Version 14
 Unsolved tasks:
-`task067`
-`task091`
