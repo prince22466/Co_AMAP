@@ -71,6 +71,7 @@ Final target score > `0.7* 1025 = 718`
 | 05-fill-additive-marking_nonlocal_1color - Version 85 | `task387` | 14.55 | task387.onnx(public file online) |
 | 05-fill-additive-marking_nonlocal_1color - Version 86 | `task392` | 14.66 | task392.onnx(public file online) |
 | 05-fill-additive-marking_nonlocal_1color - Version 87 | `task397` | 15.08 | task397.onnx(public file online) |
+| 05-fill-additive-marking_nonlocal_1color - Version 88 | `task002` | 11.77 | task002.onnx(extracted from 05-fill-additive-marking_nonlocal_1color - Version 22) |
 
 
 ## Solved And Unsolved Tasks Up To Version 73
