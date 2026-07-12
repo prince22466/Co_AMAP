@@ -8,6 +8,8 @@ Count of taks: `8`
 Highest possbile score: `8*25 = 200`  
 Immediate target score: `0.6* 200 = 120`  
 Final target score: `0.75* 200 = 150`  
+  
+target basically reached(07 * 200)!!!!!!!!!!!!!!
 
 
 ## Submission Summary(tasks in one batch)
@@ -38,3 +40,4 @@ Final target score: `0.75* 200 = 150`
 | 05_fill_additive_marking_local_3x3 - Version 30 | check the submission file | 101.34 | 05-fill-additive-marking-local-3x3-30.ipynb |
 | 05_fill_additive_marking_local_3x3 - Version 31 | check the submission file | 115.20 | 05-fill-additive-marking-local-3x3-31.ipynb |
 | 05_fill_additive_marking_local_3x3 - Version 34 | check the submission file | 115.20 | 05-fill-additive-marking-local-3x3-34.ipynb |
+| 05_fill_additive_marking_local_3x3 - Version 40 | check the submission file | 140.15 | 05-fill-additive-marking-local-3x3_v2.zip |
