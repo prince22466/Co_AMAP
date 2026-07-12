@@ -4,11 +4,11 @@ This file records submissions for only the `nonlocal_multicolor` subtype of `fil
 
 Task tree: `task_groups/05_fill_additive_marking_task_tree.md`  
 Subtype: `nonlocal_multicolor`  
-Count of taks: `10` 
+Count of taks: `10`  
 Highest possbile score: `10*25 = 250`  
 Immediate target score: `0.6* 250 = 150`  
 Final target score > `0.7* 250 = 175`  
-
+total score before optmization: 118  
 
 ## Single task Submission Summary
 
