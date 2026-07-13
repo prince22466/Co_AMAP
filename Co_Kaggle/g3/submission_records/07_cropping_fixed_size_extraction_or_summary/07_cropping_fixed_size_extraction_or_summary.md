@@ -33,15 +33,14 @@ Final target score> `0.7* 675 = 473`
 | 07_cropping_fixed_size_extraction - Version 19 | `task264` | 14.69 | task264.onnx(public file online) |
 | 07_cropping_fixed_size_extraction - Version 20 | `task121` | 16.21 | task121.onnx(public file online) |
 | 07_cropping_fixed_size_extraction - Version 21 | `task022` | 17.25 | task022.onnx(public file online) |
-
+| 07_cropping_fixed_size_extraction - Version 22 | `task180 ` | 16.49 | task180 .onnx(public file online) |
+| 07_cropping_fixed_size_extraction - Version 23 | `task185` | 13.56 | task185.onnx(public file online) |
+| 07_cropping_fixed_size_extraction - Version 24 | `task189` | 15.81 | task189.onnx(public file online) |
+| 07_cropping_fixed_size_extraction - Version 25 | `task195` | 15.67 | task195.onnx(public file online) |
+| 07_cropping_fixed_size_extraction - Version 26 | `task242` | 14.92 | task242.onnx(public file online) |
+| 07_cropping_fixed_size_extraction - Version 27 | `task130` | 21.59 | task130.onnx(public file online) |
 
 ## Unsolved Tasks Up To Version 7x
 Unsolved tasks:
-`task130`
 `task134`
 `task153`
-`task180`
-`task185`
-`task189`
-`task195`
-`task242`
