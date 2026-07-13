@@ -14,25 +14,24 @@ total score before optimization:
 
 | Kaggle Submission name | tasks | Submission score | Submission file |
 | --- | --- | --- | --- |
-| 04_mask_same_position_recolor_or_clear - Version 1 | `` | na | .onnx(public file online) |
+| 04_mask- new_color_same_position - Version 1 | `task010` | 17.32 | task010.onnx(public file online) |
+| 04_mask- new_color_same_position - Version 2 | `task052` | 18.51 | task052.onnx(public file online) |
+| 04_mask- new_color_same_position - Version 3 | `task125` | 14.20 | task125.onnx(public file online) |
+| 04_mask- new_color_same_position - Version 5 | `task167` | 19.35 | task167.onnx(public file online) |
+| 04_mask- new_color_same_position - Version 8 | `task156` | 16.73 | task156.onnx(public file online) |
+| 04_mask- new_color_same_position - Version 10 | `task023` | 11.87 | task023.onnx(public file online) |
+| 04_mask- new_color_same_position - Version 13 | `task229` | 13.28 | task229.onnx(public file online) |
+| 04_mask- new_color_same_position - Version 18 | `task292` | 16.24 | task292.onnx(public file online) |
+| 04_mask- new_color_same_position - Version 19 | `task277` | 13.83 | task277.onnx(public file online) |
+| 04_mask- new_color_same_position - Version 20 | `task254` | 16.01 | task254.onnx(public file online) |
+| 04_mask- new_color_same_position - Version 21 | `task252` | 14.44 | task252.onnx(public file online) |
+| 04_mask- new_color_same_position - Version 22 | `task196` | 14.61 | task196.onnx(public file online) |
+| 04_mask- new_color_same_position - Version 23 | `task169` | 14.55 | task169.onnx(public file online) |
+| 04_mask- new_color_same_position - Version 24 | `task320` | 16.44 | task320.onnx(public file online) |
+| 04_mask- new_color_same_position - Version 25 | `task330` | 14.01 | task330.onnx(public file online) |
+| 04_mask- new_color_same_position - Version 26 | `task332` | 15.84 | task332.onnx(public file online) |
+| 04_mask- new_color_same_position - Version 27 | `task364` | 13.06 | task364.onnx(public file online) |
+| 04_mask- new_color_same_position - Version 28 | `task374` | 14.14 | task374.onnx(public file online) |
 
 
-## Unsolved Tasks Up To Version x  
-`task010`
-`task023`
-`task052`
-`task125`
-`task156`
-`task167`
-`task169`
-`task196`
-`task229`
-`task252`
-`task254`
-`task277`
-`task292`
-`task320`
-`task330`
-`task332`
-`task364`
-`task374`
+## Unsolved Tasks Up To Version 28  
