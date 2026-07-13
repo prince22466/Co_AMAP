@@ -12,7 +12,7 @@ total score before optimization:
 
 ## Single task Submission Summary
 
-| Kaggle Submission name | tasks | Submission score | Submission file |
+| Kaggle Submission name | task | Submission score | Submission file |
 | --- | --- | --- | --- |
 | 04_mask_same_position_recolor_or_clear - Version 1 | `` | na | .onnx(public file online) |
 

@@ -12,7 +12,7 @@ total score before optimization: 274
 
 ## Single task Submission Summary
 
-| Kaggle Submission name | tasks | Submission score | Submission file |
+| Kaggle Submission name | task | Submission score | Submission file |
 | --- | --- | --- | --- |
 | 04_mask- new_color_same_position - Version 1 | `task010` | 17.32 | task010.onnx(public file online) |
 | 04_mask- new_color_same_position - Version 2 | `task052` | 18.51 | task052.onnx(public file online) |
