@@ -8,7 +8,7 @@ Count of taks: `12`
 Highest possbile score: `12*25 = 300`  
 Immediate target score: `0.6* 300 = 180`  
 Final target score > `0.7* 300 = 210`  
-total score before optimization: 
+total score before optimization: 193  
 
 ## Single task Submission Summary
 
