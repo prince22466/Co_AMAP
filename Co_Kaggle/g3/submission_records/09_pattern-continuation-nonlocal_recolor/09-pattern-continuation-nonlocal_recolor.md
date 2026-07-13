@@ -29,7 +29,7 @@ total score before optmization: 170
 | 09-pattern-continuation-nonlocal_rcolor - Version 57 | `task085` | 12.07 | 09-pattern-continuation-nonlocal-rcolor-57.ipynb |
 | 09-pattern-continuation-nonlocal_rcolor - Version 59 | `task094` | 13.00 | 09-pattern-continuation-nonlocal-rcolor-59.ipynb |
 | 09-pattern-continuation-nonlocal_rcolor - Version 60 | `task383` | 12.55 | 09-pattern-continuation-nonlocal-rcolor-60.ipynb |
-
+| 09-pattern-continuation-nonlocal_rcolor - Version 79 | `taskALL` | 237.81 | 09_nonlocal_recolor_v2_d.zip |
 
 
 
