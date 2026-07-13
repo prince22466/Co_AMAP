@@ -14,18 +14,16 @@ total score before optimization:
 
 | Kaggle Submission name | task | Submission score | Submission file |
 | --- | --- | --- | --- |
-| 04_mask_same_position_recolor_or_clear - Version 1 | `` | na | .onnx(public file online) |
-
+| 04_mask_new_color_additive_or_mixed_highlight - Version 1 | `task058` | 15.55 | task058.onnx(public file online) |
+| 04_mask_new_color_additive_or_mixed_highlight - Version 2 | `task062` | 16.44 | task062.onnx(public file online) |
+| 04_mask_new_color_additive_or_mixed_highlight - Version 3 | `task160` | 16.97 | task160.onnx(public file online) |
+| 04_mask_new_color_additive_or_mixed_highlight - Version 4 | `task131` | 14.75 | task131.onnx(public file online) |
+| 04_mask_new_color_additive_or_mixed_highlight - Version 5 | `task148` | 15.28 | task148.onnx(public file online) |
+| 04_mask_new_color_additive_or_mixed_highlight - Version 7 | `task157` | 9.81 | task157.onnx(public file online) |
+| 04_mask_new_color_additive_or_mixed_highlight - Version 8 | `task171` | 15.27 | task171.onnx(public file online) |
+| 04_mask_new_color_additive_or_mixed_highlight - Version 9 | `task186` | 14.39 | task186.onnx(public file online) |
+| 04_mask_new_color_additive_or_mixed_highlight - Version 10 | `task199` | 13.19 | task199.onnx(public file online) |
+| 04_mask_new_color_additive_or_mixed_highlight - Version 11 | `task262` | 14.56 | task262.onnx(public file online) |
+| 04_mask_new_color_additive_or_mixed_highlight - Version 12 | `task338` | 11.76 | task338.onnx(public file online) |
 
 ## Unsolved Tasks Up To Version x  
-`task058`
-`task062`
-`task131`
-`task148`
-`task157`
-`task160`
-`task171`
-`task186`
-`task199`
-`task262`
-`task338`
