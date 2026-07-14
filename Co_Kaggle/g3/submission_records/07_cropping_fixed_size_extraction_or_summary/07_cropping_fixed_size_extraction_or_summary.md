@@ -4,7 +4,7 @@ This file records submissions for only the `fixed_size_extraction_or_summary` su
 
 Task tree: `task_groups/07_cropping_extraction_task_tree.md`  
 Subtype: `fixed_size_extraction_or_summary`  
-Count of taks: `27` 
+Count of taks: `27`  
 Highest possbile score: `27* 25 = 675`  
 Immediate target score: `0.6* 675 = 405`  
 Final target score> `0.7* 675 = 473`  
