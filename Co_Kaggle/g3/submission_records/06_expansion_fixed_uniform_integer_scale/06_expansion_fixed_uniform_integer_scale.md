@@ -14,23 +14,21 @@ total score before optmization:
 
 | Kaggle Submission name | task | Submission score | Submission file |
 | --- | --- | --- | --- |
-| 05-fill-additive-marking_nonlocal_multicolor - Version 2 | `` |  | 05-fill-additive-marking-nonlocal-multicolor-2.ipynb |
-
+| 06_expansion_fixed_uniform_integer_scale - Version 1 | `task001` | 17.65 | task001.onnx(public file online) |
+| 06_expansion_fixed_uniform_integer_scale - Version 2 | `task019` | 15.92 | task019.onnx(public file online) |
+| 06_expansion_fixed_uniform_integer_scale - Version 3 | `task083` | 17.79 | task083.onnx(public file online) |
+| 06_expansion_fixed_uniform_integer_scale - Version 4 | `task104` | 17.60 | task104.onnx(public file online) |
+| 06_expansion_fixed_uniform_integer_scale - Version 5 | `task106` | 17.95 | task106.onnx(public file online) |
+| 06_expansion_fixed_uniform_integer_scale - Version 6 | `task108` | 17.71 | task108.onnx(public file online) |
+| 06_expansion_fixed_uniform_integer_scale - Version 7 | `task123` | 17.00 | task123.onnx(public file online) |
+| 06_expansion_fixed_uniform_integer_scale - Version 8 | `task142` | 18.08 | task142.onnx(public file online) |
+| 06_expansion_fixed_uniform_integer_scale - Version 9 | `task152` | 18.08 | task152.onnx(public file online) |
+| 06_expansion_fixed_uniform_integer_scale - Version 10 | `task194` | 18.13 | task194.onnx(public file online) |
+| 06_expansion_fixed_uniform_integer_scale - Version 11 | `task223` | 17.65 | task223.onnx(public file online) |
+| 06_expansion_fixed_uniform_integer_scale - Version 12 | `task304` | 17.30 | task304.onnx(public file online) |
+| 06_expansion_fixed_uniform_integer_scale - Version 13 | `task307` | 23.39 | task307.onnx(public file online) |
+| 06_expansion_fixed_uniform_integer_scale - Version 14 | `task315` | 17.65 | task315.onnx(public file online) |
+| 06_expansion_fixed_uniform_integer_scale - Version 15 | `task327` | 17.27 | task327.onnx(public file online) |
+| 06_expansion_fixed_uniform_integer_scale - Version 16 | `task388` | 16.88 | task388.onnx(public file online) |
 
 ## Unsolved Tasks Up To Version x
-`task001`
-`task019`
-`task083`
-`task104`
-`task106`
-`task108`
-`task123`
-`task142`
-`task152`
-`task194`
-`task223`
-`task304`
-`task307`
-`task315`
-`task327`
-`task388`
