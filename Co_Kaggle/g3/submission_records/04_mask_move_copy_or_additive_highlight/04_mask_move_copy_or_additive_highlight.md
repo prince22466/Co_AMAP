@@ -34,11 +34,11 @@ total score before optimization:
 | 04_mask_move_copy_or_additive_highlight - Version 23 | `task075` | 17.41 | task075.onnx(public file online) |
 | 04_mask_move_copy_or_additive_highlight - Version 24 | `task078` | 16.81 | task078.onnx(public file online) |
 | 04_mask_move_copy_or_additive_highlight - Version 25 | `task086` | 15.45 | task086.onnx(public file online) |
-Version 26 | `task008` | 15.46 | task008.onnx(public file online) |
-Version 27 | `task011` | 16.14 | task011.onnx(public file online) |
-Version 29 | `task030` | 15.90 | task030.onnx(public file online) |
-Version 30 | `task032` | 16.72 | task032.onnx(public file online) |
-Version 31 | `task018` | 14.96 | task018.onnx(public file online) |
+| 04_mask_move_copy_or_additive_highlight - Version 26 | `task008` | 15.46 | task008.onnx(public file online) |
+| 04_mask_move_copy_or_additive_highlight - Version 27 | `task011` | 16.14 | task011.onnx(public file online) |
+| 04_mask_move_copy_or_additive_highlight - Version 29 | `task030` | 15.90 | task030.onnx(public file online) |
+| 04_mask_move_copy_or_additive_highlight - Version 30 | `task032` | 16.72 | task032.onnx(public file online) |
+| 04_mask_move_copy_or_additive_highlight - Version 31 | `task018` | 14.96 | task018.onnx(public file online) |
 
 
 ## Unsolved Tasks Up To Version 31
