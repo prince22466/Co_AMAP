@@ -56,8 +56,8 @@ total score before optmization: 524
 | 05-fill-additive-marking_nonlocal_1color - Version 86 | `task392` | 14.66 | task392.onnx(public file online) |
 | 05-fill-additive-marking_nonlocal_1color - Version 87 | `task397` | 15.08 | task397.onnx(public file online) |
 | 05-fill-additive-marking_nonlocal_1color - Version 89 | `task042` | 12.19 | task042.onnx(extracted from 05-fill-additive-marking_nonlocal_1color - Version 22 submission.zip) |
-
-
+05-fill-additive-marking_nonlocal_1color - Version 137 | `task batch 2` | 348.05 | 05_nonlocal_1color_b2_v2.zip |
+05-fill-additive-marking_nonlocal_1color - Version 136 | `task batch 1` | 318.02 | 05_nonlocal_1color_b1_v2.zip |
 
 ## Unsolved Tasks Up To Version 94
 
