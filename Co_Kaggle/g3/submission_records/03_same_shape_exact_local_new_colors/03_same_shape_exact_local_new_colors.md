@@ -9,14 +9,14 @@ Highest possbile score: `12*25 = 300`
 Immediate target score: `0.6* 300 = 180`  
 Final target score > `0.7* 300 = 210`  
 total score before optmization: 166.95  
-
+Target Reached!!!!!!!!!  
 
 ## Submission Summary(tasks in one batch)
 
 | Kaggle Submission name | Submission score | Submission file |
 | --- | --- | --- | --- |
 | 03_same_shape_exact_local_new_colors - Version 1 | 166.95 | 03_new_colors.zip |
-
+| 03_same_shape_exact_local_new_colors - Version 15 | 213.08 | 03_new_colors_v2.zip |
 
 
 tasks in batch:  
