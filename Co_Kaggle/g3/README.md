@@ -12,7 +12,7 @@
 
 ## How AI Was Used
 
-The project used Codex, ChatGPT, ChatGPT Chat, and ChatGPT Work throughout the competition.
+Codex, ChatGPT, ChatGPT-Chat(5.6), and ChatGPT-Work(5.6) throughout the competition.
 
 - Submission notebooks were written primarily with Codex 5.5 or ChatGPT 5.5.
 - ChatGPT served as the fallback when the Codex quota was exhausted. Its code generation was slower, but remained effective.
