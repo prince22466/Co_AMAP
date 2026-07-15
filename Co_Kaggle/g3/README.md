@@ -28,7 +28,7 @@ Codex, ChatGPT, ChatGPT-Chat(5.6), and ChatGPT-Work(5.6) throughout the competit
 | `05_fill_additive_marking_local_3x3` | 115.00 | 140.15 | +25.15 | Yes | Several hours | ChatGPT-Work |
 | `05_fill_additive_marking_nonlocal_1color` | 524.00 | 666.07 | +142.07 | No | 2-3 days | ChatGPT-Chat |
 | `09_pattern-continuation-nonlocal_additive` | 653.00 | 887.77 | +234.77 | No | 1-2 days | ChatGPT-Chat |
-| `09_pattern-continuation-nonlocal_recolor` | 170.00 | 237.81 | +67.81 | No | 1 days | ChatGPT-Work |
+| `09_pattern-continuation-nonlocal_recolor` | 170.00 | 237.81 | +67.81 | No | 1 day | ChatGPT-Work |
 
 ## Takeaway
 
