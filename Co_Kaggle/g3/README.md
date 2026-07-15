@@ -16,6 +16,7 @@ Codex, ChatGPT, ChatGPT-Chat(5.6), and ChatGPT-Work(5.6) throughout the competit
 
 - ALL submission notebooks were written primarily with Codex 5.5 or ChatGPT 5.5.
 - ChatGPT served as the fallback when the Codex quota was exhausted. Its code generation was slower, but effective.
+- task types and subtype groups are done by Codex.
 - All publicly available online files are found ChatGPT-Chat 5.6.
 - ChatGPT-Chat and ChatGPT-Work were used for subtype task-level optimization.
 - ChatGPT-Work depends on Codex availability. When the Codex quota was exhausted, optimization continued with ChatGPT-Chat.
@@ -34,7 +35,7 @@ Codex, ChatGPT, ChatGPT-Chat(5.6), and ChatGPT-Work(5.6) throughout the competit
 
 Time and quota constraints limited the amount of optimization that could be completed.  
 Even so, every recorded optimization improved its score, and two task subtypes reached the 70% target.  
-I believe '05_fill_additive_marking_nonlocal_1color' and '09_pattern-continuation-nonlocal_additive' can reach targets given a bit more time.  
+I believe `05_fill_additive_marking_nonlocal_1color` and `09_pattern-continuation-nonlocal_additive` can reach targets given a bit more time.  
 The results show clear potential for a longer-running, more autonomous optimization workflow.  
 
 ## Next Experiment
