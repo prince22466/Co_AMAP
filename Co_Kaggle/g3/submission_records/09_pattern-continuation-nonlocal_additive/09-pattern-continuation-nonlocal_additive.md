@@ -71,6 +71,11 @@ total score before optmization: 653
 | 09-pattern-continuation-nonlocal_additive - Version 125 | `task076` | 10.85 | 09-pattern-continuation-nonlocal-additive-125.ipynb |
 | 09-pattern-continuation-nonlocal_additive - Version 126 | `task101` | 11.30 | 09-pattern-continuation-nonlocal-additive-126.ipynb |
 | 09-pattern-continuation-nonlocal_additive - Version 131 | `task363` | 13.67 | task363.onnx(public file online) |
+| 09-pattern-continuation-nonlocal_additive - Version 185 | `task batch 1` | 191.64 | 09_nonlocal_additive_b1_v2.zip |
+| 09-pattern-continuation-nonlocal_additive - Version 186 | `task batch 2` | 200.02 | 09_nonlocal_additive_b2_v2.zip |
+| 09-pattern-continuation-nonlocal_additive - Version 187 | `task batch 3` | 240.04 | 09_nonlocal_additive_b3_v2.zip |
+| 09-pattern-continuation-nonlocal_additive - Version 188 | `task batch 4` | 256.07 | 09_nonlocal_additive_b4_v2.zip |
+
 
 ## Unsolved Tasks Up To Version 131  
 
