@@ -126,3 +126,47 @@ Distribution of ONNX files:
   - 09_pattern-continuation-localish_recolor: 12
   - 09_pattern-continuation-nonlocal_additive: 57
   - 09_pattern-continuation-nonlocal_recolor: 15
+
+
+
+w9 Distribution of ONNX files:
+Total ONNX files zipped: 378
+
+Distribution of ONNX files:
+  - 02_global_color_remap: 4
+  - 03_same_shape_exact_local_new_colors: 12
+  - 03_same_shape_exact_local_reuse_colors: 9
+  - 03_same_shape_near_local_reuse_and_new_color: 6
+  - 04_mask_move_copy_or_additive_highlight: 25
+  - 04_mask_new_color_additive_or_mixed_highlight: 11
+  - 04_mask_new_color_same_position_recode: 18
+  - 04_mask_same_position_recolor_or_clear: 12
+  - 05_fill_additive_marking_local_3x3: 8
+  - 05_fill_additive_marking_nonlocal_1color: 41
+  - 05_fill_additive_marking_nonlocal_multicolor: 10
+  - 06_expansion_fixed_axial_or_anisotropic_scale: 8
+  - 06_expansion_fixed_uniform_integer_scale: 16
+  - 07_cropping_exact_subgrid_fixed_output: 13
+  - 07_cropping_exact_subgrid_variable_output: 14
+  - 07_cropping_fixed_size_extraction_or_summary: 27
+  - 07_cropping_shrunk_with_new_colors_or_recode: 15
+  - 07_cropping_variable_size_extraction_or_summary: 30        
+  - 09_pattern-continuation-localish_additive: 15
+  - 09_pattern-continuation-localish_recolor: 12
+  - 09_pattern-continuation-nonlocal_additive: 57
+  - 09_pattern-continuation-nonlocal_recolor: 15
+
+  \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+
+w10 Distribution of ONNX files:
+Total ONNX files zipped: 378
+with optimized 134 onnx files(done by ChatGPT-chat, ChatGPT-work)
+  - 03_new_colors_v2.zip
+  - 05_nonlocal_1color_b1_v2.zip
+  - 05_nonlocal_1color_b2_v2.zip
+  - 05-fill-additive-marking-local-3x3_v2.zip
+  - 09_nonlocal_additive_b1_v2.zip
+  - 09_nonlocal_additive_b2_v2.zip
+  - 09_nonlocal_additive_b3_v2.zip
+  - 09_nonlocal_additive_b4_v2.zip
+  - 09_nonlocal_recolor_v2_d.zip
