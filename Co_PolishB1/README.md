@@ -2,12 +2,15 @@ How did I get TELC Polish B1 done in 4.5 months(accumulative) with AI and luck.
 
 it is not simple but totally doable with AI. And it will be easier and easier because model is becoming more capable.
 the most difficult thing is to start, then after 2 weeks, u just get used to it(for example, talk with AI more than 2 mins straight).
+since gpt voice mode backed by 4o, speaking proctice become much easier.
 
 
 Some guidance,
 the goal is to pass the exam.  
 preparation is according to exam requirement.  
 focus is on speaking and writing(my strategy).  
+
+
 
 results
 1st exam date :dec 12
