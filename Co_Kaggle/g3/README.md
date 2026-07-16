@@ -7,7 +7,12 @@
 | Participation period | June 23-July 15, 2026 |
 | Active participation | 2.5 weeks |
 | Tasks solved | 378 / 400 |
-| Final standing | Not recorded |
+| Highest possible score | 10000 |
+| Final standing(public board) | 1871/3061, with score 5882.20, 59% |
+| 1st place(public board) |  8314.03, 83% |
+| gold metal entry(public board) | 8000.10, 80% |
+| sliver metal entry(public board) | 7468.58, 75% |
+| brozen metal entry(public board) | 7394.92, 74% |
 | Notable event | GPT-5.6 became available on July 10, 2026 |
 
 ## How AI Was Used
@@ -36,7 +41,8 @@ Codex, ChatGPT, ChatGPT-Chat(5.6), and ChatGPT-Work(5.6) throughout the competit
 Time and quota constraints limited the amount of optimization that could be completed.  
 Even so, every recorded optimization improved its score, and two task subtypes reached the 70% target.  
 I believe `05_fill_additive_marking_nonlocal_1color` and `09_pattern-continuation-nonlocal_additive` can reach targets given a bit more time.  
-The results show clear potential for a longer-running, more autonomous optimization workflow.  
+And reaching final bronze or silver level is totally possible.  
+The results show clear realizable potential for a longer-running, more autonomous optimization workflow.  
 
 ## Next Experiment
 
