@@ -44,6 +44,7 @@ for Reading and language element, I find some materials, several articles, and n
 for listening, not used AI. just listen to these videos and sample test.
 for writing, i asked ChatGpt to generate about 15 topics. i write first. and upload it, let GPT exam it. GPT improves sentences, structures. And I get familiar with writing strucutre. and collect some useful sentence, words, and practice these sentence and words. And i passed this part. AI is most effective for writing.
 for speaking, very challenging. very difficult to start. at begining, i directly tried to have conversation with AI, it is difficult(i am new), and meaningless. for several days, i review the exam's judge standard, what part 1,2,3 could be. and restart. for part 1, i ask GPT to generate pictures. for part 2, i ask GPT to generate topics for presentation. for part 3, i ask GPT to give topics for conversation.
+it is very difficult to start speak, but i tried anyway, i can only speak several sentences to AI, and let AI judge and improve and give his version. then i read what AI printed out. But after 2 weeks, i can speak!!!!!!!!! for part 1, not fluent though. Then 
 
 preparation time : mid Fed - Mar 22
 2nd exam
@@ -53,5 +54,9 @@ preparation time : Mar End - Apr 24
 3rd exam
 
 
-
+materials i collected and used:
+reading,
+writing,
+speaking sentences,
+listening
 
