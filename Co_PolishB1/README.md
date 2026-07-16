@@ -42,7 +42,10 @@ listening: i bascially practice with these online videos
 speaking: i follow reading these material, and ask AI to generate contents for part 1 and part 2(some), part 3(not much). At that time(acutally just half year ago), the voice model of ChatGPT(plus, aka, 20d a month) had rather short time limit and quality is not that good. So, i mainly used it for text process. 
 for Reading and language element, I find some materials, several articles, and national exam materials(samples and past real exams). i simply screenshot these essays and questions and ask GPT to translate and explain. i collect these into a spreadsheet, so that i can review everyday(i probably can review 500 rows by mid Nov). then i dont do it anymore, simply exhausted. and spend more time on speaking.
 for listening, not used AI. just listen to these videos and sample test.
+
+gpt as content generator and refiner.
 for writing, i asked ChatGpt to generate about 15 topics. i write first. and upload it, let GPT exam it. GPT improves sentences, structures. And I get familiar with writing strucutre. and collect some useful sentence, words, and practice these sentence and words. And i passed this part. AI is most effective for writing.
+
 for speaking, very challenging. very difficult to start. at begining, i directly tried to have conversation with AI, it is difficult(i am new), and meaningless. for several days, i review the exam's judge standard, what part 1,2,3 could be. and restart. for part 1, i ask GPT to generate pictures. for part 2, i ask GPT to generate topics for presentation. for part 3, i ask GPT to give topics for conversation.
 it is very difficult to start speak, but i tried anyway, i can only speak several sentences to AI, and let AI judge and improve and give his version. then i read what AI printed out. But after 2 weeks, i can speak!!!!!!!!! for part 1, not fluent though. 
 Then the target is to iterate for improvment, for part 1, i made about 15 topics. it takes  a week to finish them. after 3 iteration, i was able to do it in 3,4 days. Still not fluent. but i can speak with confidence. i know where to start.
@@ -55,19 +58,23 @@ The writing passed was good signal, which I did some confidence. The reading+lan
 
 preparation time 2:  Feb  mid - Mar 22
 2nd exam
-for reading and lanuage elment. i didnt do more. just some simple review the spreadsheet i used in 1st preparation. And i didnt do it much.
-for writing, i didnt do more. just do sentence writing following what i collected in the spreadsheet. i didnt even review the topics. only writing sentence. and i started it like 2 weeks before exam.
+for reading and lanuage elment. didnt do much.
+for writing, only writing sentences that i collected in prep-1. and i started it like 2 weeks before exam.
 for listening,
 for speaking, this was the first to start. i find new resouces[], speand 2 weeks on its speaking materials, for follow-reading. 
 gpt does data engineering work. I used gpt to translate and put polish on left, english on right. so when i follow-read, i check see the meaning of sentences, words which i dont know. which makes things much more efficient. gpt works as data engineering work. Which helps me to absorb some difficult, abstract vocabulary, difficult to start, but it finally worked..
 lot of efforts were on part 2 and some on part3.
 
 I started to incoporate some abstract words, pros, cons into part2. 
+add much more topics for presentation, up to 24
+AI as q&a
+in part2,  ask AI to ask 2 questions after presentation and i answer.
+AI as converstion partner
+in part3, more topics and i started to have conversations with gpt(it upgraded its voice function, it started to show text of speaking as well.). I can either do record or live chat. when i cannot get what gpt say, i can just look at the text. and respond. so, things become i read/listen gpt response, and respond by speaking. I would say from this point, gpt is a real language practice parnter.
+and i can reply  in sound what gpt said to practice listening for q&a. 
+and i can ask gpt to continue conversation to reach 5,6 exchanges, where i respond immediately.
 
 
-in part3, i started to have simple conversation with gpt voice(it upgraded its voice function, it started to show text as well.). when i cannot get what gpt say, i can just look at the text. and say my thing, so, things become i read gpt response text, and respond by speaking. I would say from this point, gpt is a real language practice parnter.
-I didnt expect speaking part can pass, but i think there was a chance.
-The writing passed was good signal, which I did some confidence. The reading+language element+listening pass was still luck.
 i had huge hope that i would pass speaking part due to obvious effect of work. but result is depressing. stil 20 points, which i am very confused. 
 i was even able do good conversation with opponent in part3. why? i may not be fluent enough, but should be better than 1st, even not B1 level score, it should be close. 
 
