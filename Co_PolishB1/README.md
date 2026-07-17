@@ -104,6 +104,7 @@ I feel my speaking ability was pretty the same as 2nd exam, perhaps a bit more f
 3. efficient way could be ask gpt to provide sample answers, and just adopt them and then iterate.
 4. writing is easiest to do with gpt.
 5. u can ask gpt to generate topics for conversation, also u can ask gpt to process some b1/b2 level book chapters ,then based which, to generate a topic.
+6. since now gpt voice (or live) become so capbale, use it for listening practice could be a good idea.
 
 ## tips for joining/passing exam
 1. study the exam requirement and then develop stratgy.
@@ -125,8 +126,8 @@ speaking sentences: [my speaking sentences](b1%20speaking%20pattern%20700.pdf)
 1. [listening 1](https://www.youtube.com/watch?v=18TAQU58wYQ&list=PL3unSUgNwjoqmtBTgFXEHRSyK0rse3TjH&index=5)
 2. [listening 2](https://www.youtube.com/watch?v=rBvtTxfZpbU&list=PL3unSUgNwjoqmtBTgFXEHRSyK0rse3TjH&index=6)
 3. [listening 3](https://www.youtube.com/watch?v=u3SIc_UOBZs&list=PL3unSUgNwjoqmtBTgFXEHRSyK0rse3TjH&index=7)
-4. [listening and follow-read 3](https://www.youtube.com/watch?v=6tN42xqLwsg)
-5. [listening and follow-read 2](https://www.youtube.com/watch?v=AMmTgzcJO1w)
+4. [listening and follow-read 2](https://www.youtube.com/watch?v=6tN42xqLwsg)
+5. [listening and follow-read 3](https://www.youtube.com/watch?v=AMmTgzcJO1w)
 6. [listening and follow-read 1](https://www.youtube.com/watch?v=jzNz6iYRbAQ)
 
 
