@@ -42,13 +42,14 @@ simple asked gpt to give topic for writing and i provided my version, asked gpt 
 
 **for speaking part 3**, i didnt do a lot for conversation. at that time, my listening was not good, and i could not get what gpt(voice mode) was talking about. 
 
+
+**some thoughts**
+With this period of practice with gpt. i was Still not fluent at B1. but i could speak with bit confidence. I knew where to start, instead of only "a, wu, eh, .."  
+And I was able to say some A2 level sentence rather fluent.  
+I didnt expect speaking part can pass, but i thought there was a chance.  
+The writing passed was good signal, which I had some confidence.
+
 ---
-
-With this period of practice with gpt. i was Still not fluent at B1. but i could speak with bit confidence. I knew where to start, instead of only "a, wu, eh, .." 
-ANd I was able to say some A2 level sentence rather fluent.
-I didnt expect speaking part can pass, but i thought there was a chance.
-The writing passed was good signal, which I did with some confidence.
-
 
 preptime-2:  Feb  mid - Mar 22
 for reading and lanuage elment, didnt do many, just slightly reviewed the collection i did in preptime-1. thus no gpt.
