@@ -34,11 +34,14 @@ simple asked gpt to give topic for writing and i provided my version, asked gpt 
 
 ### AI as topcis giver and sample generator and examiner and tutorial  
 
-**for speaking part 1**, I asked gpt to generate pictures(or found some pictures and upload), it was very difficult to open mouth in the beginning, i then just asked gpt to give an sample. Then started to read these text. Then tried to describe the picture myself. this wa what happened for first 5 topcis. Then afterwards i got used to it, for more topics i started talking, and asked gpt work as examiner for giving scores and tutorial for making improvements.  
+**for speaking part 1**,   
+I asked gpt to generate pictures(or found some pictures and upload), it was very difficult to open mouth in the beginning, i then just asked gpt to give an sample. Then started to read these text. Then tried to describe the picture myself. this wa what happened for first 5 topcis. Then afterwards i got used to it, for more topics i started talking, and asked gpt work as examiner for giving scores and tutorial for making improvements.  
   
-**for speaking part 2**, similiar. asked gpt to give topics for presentation, i actually wrote the presentation notes to gpt, asked it to give score and improvements. then i read and speak with these.  
+**for speaking part 2**,  
+similiar. asked gpt to give topics for presentation, i actually wrote the presentation notes to gpt, asked it to give score and improvements. then i read and speak with these.  
 
-**for speaking part 3**, i didnt do a lot for conversation. at that time, my listening was not good, and i could not get what gpt(voice mode) was talking about.  
+**for speaking part 3**,  
+i didnt do a lot for conversation. at that time, my listening was not good, and i could not get what gpt(voice mode) was talking about.  
 
 **some thoughts**  
 With this period of practice with gpt. i was Still not fluent at B1. but i could speak with bit confidence. I knew where to start, instead of only "a, wu, eh, .."  
