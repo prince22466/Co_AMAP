@@ -20,28 +20,28 @@ focus is on speaking and writing(my strategy).
 | **3rd** | **Apr 24** | **Jun 23** | **28** | **Pass** | **9** | **Pass** | **36** | **Pass** |
 
 
-time line
+story time line
 
 preptime_1: Oct End - Dec 12
 1st exam
 
-how is i used AI, at that time 
 AI as translator and language elementer analyzier
-Directly go to exercises(reading, language element) in national sample and past exams, screenshot what i dont know and ask gpt to explain. I collect these in spreadsheet which is for review.  
+Directly go to exercises(reading, language element) in national sample and past exams, screenshot what i dont know and ask gpt to explain. I put these in spreadsheet which is for review.  
+
 AI as writing examiner and tutorail(very effective, easiest to do)
 simple ask gpt to give topic for writing and i provide my version, ask gpt to give points and improvments.
-AI as 
-listening: i didnt use gpt.
+
 AI as topcis giver and sample generator and examiner and tutorial
 speaking: for part 1, ask gpt to generate pictures(or find some picture and upload), if very difficult in the beginning, i then just ask gpt to give an sample. Then start to read these text. Then try to descript the picture myself. this what happened for first 5 topcis. Then after i get used to it, for more topics i start talking, and ask gpt work as examiner for giving points and tutorial for making improvements.
+listening: i didnt use gpt.
 
-for part 2, similiar. ask gpt to give topics for presentation, i actually write the notes to gpt, ask it to given score and improvements. then i read and then say these.
-for part 3, i didnt do a lot for conversation. at that time, my listening is not good, and i cannot get what gpt(voice mode) is talking about. 
+for part 2, similiar. ask gpt to give topics for presentation, i actually write the notes to gpt, ask it to given score and improvements. then i read and say these.
+for part 3, i didnt do a lot for conversation. at that time, my listening was not good, and i couldnot get what gpt(voice mode) was talking about. 
 
 
-With this period of practice with gpt. i was Still not fluent at B1. but i could speak with bit confidence. I know where to start, instead of only "a, wu, eh, .." 
+With this period of practice with gpt. i was Still not fluent at B1. but i could speak with bit confidence. I knew where to start, instead of only "a, wu, eh, .." 
 ANd I was able to say some A2 level sentence rather fluent.
-I didnt expect speaking part can pass, but i think there was a chance.
+I didnt expect speaking part can pass, but i thought there was a chance.
 The writing passed was good signal, which I did with some confidence.
 
 
