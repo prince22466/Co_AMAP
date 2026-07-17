@@ -53,9 +53,9 @@ The writing passed was good signal, which I had some confidence.
 
 ## preptime-2:  Feb  mid - Mar 22
 
-**for reading and lanuage elment,** didnt do many, just slightly reviewed the collection i did in preptime-1. thus no gpt.
+**for reading and lanuage elment** didnt do many, just slightly reviewed the collection i did in preptime-1. thus no gpt.
 
-**writing,** also only wrote sentences that i collected in preptime-1. and i started it like 2 weeks before exam.
+**writing** also only wrote sentences that i collected in preptime-1. and i started it like 2 weeks before exam.
 
 **for speaking,** this was the first to start. 
 
@@ -87,23 +87,40 @@ i may not be fluent enough, but should be better than 1st, even not B1 level sco
 ---
 
 
+## preptime-3: Apr 4 - Apr 24
 
-preptime-3: Apr 4 - Apr 24
-didnt use gpt for anything new.
-simply iterate more through the topics, conversations which generated in preptime-2.  
-gpt was mostly used in preptime-2.
+I didnt use gpt for anything new.  
+simply iterated more through the topics, conversations which generated in preptime-2.  
+gpt was mostly used in preptime-2.  
 
 and finally I passed with luck.
+I feel my speaking ability was pretty the same as 2nd exam, perhaps a bit more fluent.
 
+---
 
-tips for using gpt,
+## tips for using gpt
+1. use gpt to study the exam requirements, what the criterion for A2, B1 for speaking.
+2. when ask gpt to act as examiner, ask gpt to give score according to the exam requirement and criterion.
+3. efficient way could be ask gpt to provide sample answers, and i just adopt them and then iterate.
+4. writing is easiest to do with gpt.
+5. u can ask gpt to generate topics for conversation, also u can ask gpt to process some b1/b2 level book chapters ,then based which, to generate a topic.
 
+## tips for joining/passing exam
+1. study the exam requirement and then develop stratgy.
+2. find a test center and do registration 1.5 month before ur intended exam date.
+3. speaking part 1 in real exam is rather challenging, because no time for prepartion, sometimes wierd pictures.
+4. speaking part 1 in pracice, should be fluent description in 1.5 min, 2min at most
+5. speaking part 2 in pracice, should be fluent presentation in 2 min
+6. speaking part 3 in pracice, when listen gpt saying, try to catch key words, not necesarily need to understand everything. try to continue the converstation without totally knowing what the opponent is talking about.
+7. some abstract, advanced words are essential for b1
+8. some past tense, conditional sentence are preferable for b1
+9. pros, cons, positive, negative are essential for b1 when presentation and converstion
+10. sometimes it is just luck. it is a game of chance, take several exams, u may pass one of them.
 
+## materials i put togeter and used:
+writing: my collection
+speaking sentences: my collection
+listening: 
 
-materials i put togeter and used:
-writing,
-speaking sentences,
-listening,
-reading+language element: 
 
 useful sources:
