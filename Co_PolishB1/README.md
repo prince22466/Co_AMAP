@@ -134,3 +134,4 @@ speaking sentences: [my speaking sentences](b1%20speaking%20pattern%20700.pdf)
 ## useful sources:  
 [Prezentacja – Twój klucz do certyfikatu](Prezentacja_Twoj-klucz-do-certyfikatu--gwvrkc.md)  
 [TECL B1/B2 mock exam(very important, it gives the requirement and criterion which every exam taker should study)](https://www.telc.net/en/language-examinations/certificate-exams/polish/telc-polish-b1b2-school/)
+[National sample and past exams](https://certyfikatpolski.pl/o-egzaminie/przykladowe-testy-zbiory-zadan/)
