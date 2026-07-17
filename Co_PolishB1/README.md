@@ -5,7 +5,7 @@ And it will be easier and easier because model is becoming more capable.
 The most difficult thing is to start, then after 2 weeks, or 3 iterations. Things become different.  
 Ever since gpt voice mode backed by 4o, speaking proctice become much easier.  
   
-## Some guidance,
+## Some guidance
 the goal is to pass the exam.  
 preparation is according to exam requirement, so study the exam requirements.  
 focus is on speaking and writing(my strategy).  
