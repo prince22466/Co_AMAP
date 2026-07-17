@@ -61,29 +61,31 @@ The writing passed was good signal, which I had some confidence.
 
 ### gpt as data engineer
 
-i find new resouces[], speand 2 weeks on its speaking section of each chapter, for follow-reading.
+i found myself new material[Z językiem polskim każdego dnia cz. 2 - podręcznik. Poziom B1 z elementami B2], spent 2 weeks on its speaking section of each chapter, for follow-reading.
 
-I used gpt to translate sentences and put polish on left, english on right. Thus when following-reading with the recording, i could immediately know what the sentence mean. Which increase the efficiency of iteration. And becasue of gpt's work, i absorbed and collected many abstract, b1 vocabularies and sentence in short time(2weeks).
+I used gpt to translate sentences and put polish on left, english on right as these columns "Polish sentence
+| English explanation | Key vocabulary (PL → EN)". Thus when following-reading with the recording, thus i could immediately know what the sentence mean. Which increased the efficiency of iteration. And becasue of gpt's work, i absorbed and collected many abstract, b1 vocabularies and sentence in short time(2weeks).
 
-lot of efforts were on part 2 and some on part3.
+lot of efforts were on speaking part 2 and speaking part3.  
 
-**for part 1,** generated more pcitures for descriptions using gpt.
+**for speaking part 1,** generated more pcitures for descriptions using gpt.
 
 ### gpt as q&a machine
 
-**for part 2,** continue with the chat record in preptime 1, which are i re-do presentation and ask AI for scoring. and I ask AI to ask me questions based on the presentation.
-
-something like "ask me 2 more quesitons".
+**for speaking part 2,** continued with the chat record in preptime 1, which was i re-do presentation and asked AI for scoring. and I asked AI to ask me questions based on the presentation. something like "ask me 2 more quesitons".  
 
 ### gpt as real conversation practice parnter
 
-**for part 3,** there was an upgrade in gpt voice, it showed the text at same time when speaking. so it enabled me to read text even my listening not good. So pattern became, i read text, then i reply. so it made conversation practice easier, doable and allow me to engage. And after iteration, i could catch some of what gpt was saying without reading text, this was the start for real conversation practice. and more and more often i could do "continue the conversation", and up to 5,6 exchanges.
+**for speaking part 3,** there was an upgrade in gpt voice, it showed the text at same time when speaking. so it enabled me to read text even my listening not good. So the pattern became, i read text, then i reply. so it made conversation practice easier, doable and allowed me to engage. And after iterations, i could catch some of what gpt was saying without reading text, this was the start for simulation real exam on conversation. and more and more often i could do "continue the conversation", and up to 5,6 exchanges.
+
+
+### some thoughts
+i had huge hope that i would pass speaking part due to obvious effect of work. but result was depressing. stil 20 points, which i was very confused. 
+i was even able do good conversation with opponent in speaking part3 in the exam. why?   
+i may not be fluent enough, but should be better than 1st, even not B1 level score, it should be close. 
 
 ---
 
-i had huge hope that i would pass speaking part due to obvious effect of work. but result was depressing. stil 20 points, which i was very confused. 
-i was even able do good conversation with opponent in part3. why?   
-i may not be fluent enough, but should be better than 1st, even not B1 level score, it should be close. 
 
 
 preptime-3: Apr 4 - Apr 24
