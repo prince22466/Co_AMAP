@@ -61,7 +61,7 @@ The writing passed was good signal, which I had some confidence.
 
 ### gpt as data engineer
 
-i found myself new material[Z językiem polskim każdego dnia cz. 2 - podręcznik. Poziom B1 z elementami B2], spent 2 weeks on its speaking section of each chapter, for follow-reading.
+i found myself new material[Z językiem polskim każdego dnia cz. 2 - podręcznik. Poziom B1 z elementami B2](https://www.gov.pl/web/udsc/materialy-dydaktyczne-do-nauki-jezyka-polskiego---dla-doroslych), spent 2 weeks on its speaking section of each chapter, for follow-reading.
 
 I used gpt to translate sentences and put polish on left, english on right as these columns "Polish sentence
 | English explanation | Key vocabulary (PL → EN)". Thus when following-reading with the recording, thus i could immediately know what the sentence mean. Which increased the efficiency of iteration. And becasue of gpt's work, i absorbed and collected many abstract, b1 vocabularies and sentence in short time(2weeks).
@@ -118,9 +118,11 @@ I feel my speaking ability was pretty the same as 2nd exam, perhaps a bit more f
 10. sometimes it is just luck. it is a game of chance, take several exams, u may pass one of them.
 
 ## materials i put togeter and used:
-writing: my collection
-speaking sentences: my collection
+writing: [my collection 1](b1%20writing%20sentences%20182.pdf)  
+speaking sentences: [my collection 2](b1%20speaking%20pattern%20700.pdf)  
 listening: 
 
 
-useful sources:
+## useful sources:  
+[Prezentacja – Twój klucz do certyfikatu](Prezentacja_Twoj-klucz-do-certyfikatu--gwvrkc.md)  
+[TECL B1/B2 mock exam(very important, it gives the requirement and criterion which every exam taker should study)](https://www.telc.net/en/language-examinations/certificate-exams/polish/telc-polish-b1b2-school/)
