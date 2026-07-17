@@ -120,7 +120,12 @@ I feel my speaking ability was pretty the same as 2nd exam, perhaps a bit more f
 ## materials i put togeter and used:
 writing: [my writing sentences](b1%20writing%20sentences%20182.pdf)  
 speaking sentences: [my speaking sentences](b1%20speaking%20pattern%20700.pdf)  
-listening: 
+listening and follow-read: (https://www.youtube.com/watch?v=18TAQU58wYQ&list=PL3unSUgNwjoqmtBTgFXEHRSyK0rse3TjH&index=5), 
+(https://www.youtube.com/watch?v=rBvtTxfZpbU&list=PL3unSUgNwjoqmtBTgFXEHRSyK0rse3TjH&index=6), 
+(https://www.youtube.com/watch?v=u3SIc_UOBZs&list=PL3unSUgNwjoqmtBTgFXEHRSyK0rse3TjH&index=7),
+(https://www.youtube.com/watch?v=6tN42xqLwsg),
+(https://www.youtube.com/watch?v=AMmTgzcJO1w),
+(https://www.youtube.com/watch?v=jzNz6iYRbAQ)
 
 
 ## useful sources:  
