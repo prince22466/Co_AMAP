@@ -26,21 +26,21 @@ focus is on speaking and writing(my strategy).
 
 ### AI as translator and language elementer analyzier
 
-Directly go to exercises(reading, language element) in national sample and past exams, screenshot what i dont know and ask gpt to explain. I put these in spreadsheet which is for review.  
+I directly went to exercises(reading, language element) in national sample and past exams, screenshot what i didnt know and asked gpt to explain. I put these in spreadsheet which was for review and iteration.  
 
 ### AI as writing examiner and tutorail(very effective, easiest to do)
 
-simple ask gpt to give topic for writing and i provide my version, ask gpt to give points and improvments.
+simple asked gpt to give topic for writing and i provided my version, asked gpt to give scores and improvments.
 
 ### AI as topcis giver and sample generator and examiner and tutorial  
 
-**for speaking part 1**, ask gpt to generate pictures(or find some picture and upload), if very difficult in the beginning, i then just ask gpt to give an sample. Then start to read these text. Then try to descript the picture myself. this what happened for first 5 topcis. Then after i get used to it, for more topics i start talking, and ask gpt work as examiner for giving points and tutorial for making improvements.
+**for speaking part 1**, I asked gpt to generate pictures(or found some pictures and upload), it was very difficult to open mouth in the beginning, i then just asked gpt to give an sample. Then started to read these text. Then tried to describe the picture myself. this wa what happened for first 5 topcis. Then afterwards i got used to it, for more topics i started talking, and asked gpt work as examiner for giving scores and tutorial for making improvements.
 
 **listening:** i didnt use gpt.
   
-**for speaking part 2**, similiar. ask gpt to give topics for presentation, i actually write the notes to gpt, ask it to given score and improvements. then i read and say these.
+**for speaking part 2**, similiar. asked gpt to give topics for presentation, i actually wrote the presentation notes to gpt, asked it to give score and improvements. then i read and speak with these.
 
-**for speaking part 3**, i didnt do a lot for conversation. at that time, my listening was not good, and i couldnot get what gpt(voice mode) was talking about. 
+**for speaking part 3**, i didnt do a lot for conversation. at that time, my listening was not good, and i could not get what gpt(voice mode) was talking about. 
 
 ---
 
