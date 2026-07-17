@@ -51,21 +51,35 @@ The writing passed was good signal, which I had some confidence.
 
 ---
 
-preptime-2:  Feb  mid - Mar 22
-for reading and lanuage elment, didnt do many, just slightly reviewed the collection i did in preptime-1. thus no gpt.
-writing, also only wrote sentences that i collected in preptime-1. and i started it like 2 weeks before exam.
-for speaking, this was the first to start. 
-gpt as data engineer
-i find new resouces[], speand 2 weeks on its speaking section of each chapter, for follow-reading.
-I used gpt to translate sentences and put polish on left, english on right. Thus when following-reading with the recording, i could immediately know what the sentence mean. Which increase the efficiency of iteration. And becasue of gpt's work, i absorbed and collected many abstract, b1 vocabularies and sentence in short time(2weeks).
-lot of efforts were on part 2 and some on part3.
-for part 1, generated more pcitures for descriptions using gpt.
-gpt as q&a machine
-for part 2, continue with the chat record in preptime 1, which are i re-do presentation and ask AI for scoring. and I ask AI to ask me questions based on the presentation.
-something like "ask me 2 more quesitons".
-gpt as real conversation practice parnter
-for part 3, there was an upgrade in gpt voice, it showed the text at same time when speaking. so it enabled me to read text even my listening not good. So pattern became, i read text, then i reply. so it made conversation practice easier, doable and allow me to engage. And after iteration, i could catch some of what gpt was saying without reading text, this was the start for real conversation practice. and more and more often i could do "continue the conversation", and up to 5,6 exchanges.
+## preptime-2:  Feb  mid - Mar 22
 
+**for reading and lanuage elment,** didnt do many, just slightly reviewed the collection i did in preptime-1. thus no gpt.
+
+**writing,** also only wrote sentences that i collected in preptime-1. and i started it like 2 weeks before exam.
+
+**for speaking,** this was the first to start. 
+
+### gpt as data engineer
+
+i find new resouces[], speand 2 weeks on its speaking section of each chapter, for follow-reading.
+
+I used gpt to translate sentences and put polish on left, english on right. Thus when following-reading with the recording, i could immediately know what the sentence mean. Which increase the efficiency of iteration. And becasue of gpt's work, i absorbed and collected many abstract, b1 vocabularies and sentence in short time(2weeks).
+
+lot of efforts were on part 2 and some on part3.
+
+**for part 1,** generated more pcitures for descriptions using gpt.
+
+### gpt as q&a machine
+
+**for part 2,** continue with the chat record in preptime 1, which are i re-do presentation and ask AI for scoring. and I ask AI to ask me questions based on the presentation.
+
+something like "ask me 2 more quesitons".
+
+### gpt as real conversation practice parnter
+
+**for part 3,** there was an upgrade in gpt voice, it showed the text at same time when speaking. so it enabled me to read text even my listening not good. So pattern became, i read text, then i reply. so it made conversation practice easier, doable and allow me to engage. And after iteration, i could catch some of what gpt was saying without reading text, this was the start for real conversation practice. and more and more often i could do "continue the conversation", and up to 5,6 exchanges.
+
+---
 
 i had huge hope that i would pass speaking part due to obvious effect of work. but result was depressing. stil 20 points, which i was very confused. 
 i was even able do good conversation with opponent in part3. why?   
