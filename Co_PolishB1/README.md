@@ -23,7 +23,6 @@ focus is on speaking and writing(my strategy).
 story time line
 
 preptime_1: Oct End - Dec 12
-1st exam
 
 AI as translator and language elementer analyzier
 Directly go to exercises(reading, language element) in national sample and past exams, screenshot what i dont know and ask gpt to explain. I put these in spreadsheet which is for review.  
