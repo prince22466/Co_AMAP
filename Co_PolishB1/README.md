@@ -19,7 +19,7 @@ focus is on speaking and writing(my strategy).
 | --- | --- | --- | ---: | --- | ---: | --- | ---: | --- |
 | 1st | Dec 12 | Jan 21 | 36 | Pass | 8 | Pass | 20 | Fail |
 | 2nd | Mar 22 | May 21 | 32 | Pass | 11 | Pass | 20 | Fail |
-| 3rd | Apr 24 | Jun 23 | 28 | Pass | 9 | Pass | 36 | Pass |
+| **3rd** | **Apr 24** | **Jun 23** | **28** | **Pass** | **9** | **Pass** | **36** | **Pass** |
 
 
 time line
