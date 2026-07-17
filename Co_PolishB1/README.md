@@ -1,6 +1,6 @@
 # How AI(ChatGPT) helped me get TELC Polish B1 done in 4.5 months(accumulative) with luck  
   
-it is not simple but totally doable with gpt.  
+It is not simple but totally doable with gpt.  
 And it will be easier and easier because model is becoming more capable.  
 The most difficult thing is to start, then after 2 weeks, or 3 iterations. Things become different.  
 Ever since gpt voice mode backed by 4o, speaking proctice become much easier.  
