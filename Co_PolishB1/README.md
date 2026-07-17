@@ -13,25 +13,13 @@ focus is on speaking and writing(my strategy).
 
 
 
-results
-1st exam date :dec 12
-result publish date: Jan 21
-listening+reading+language element| 36 | pass
-writing |8 | pass
-speaking | 20 | fail
+## Results
 
-2nd exam date: mar 22
-result publish date: May 21
-listening+reading+language element| 32 | pass
-writing | 11 | pass
-speaking | 20 | fail
-
-
-3rd exam date apr 24
-result publish Jun 23
-listening+reading+language element|  | pass
-writing |  | pass
-speaking | 36 | fail
+| Exam | Exam date | Result published | Listening + Reading + Language Elements | Status | Writing | Status | Speaking | Status |
+| --- | --- | --- | ---: | --- | ---: | --- | ---: | --- |
+| 1st | Dec 12 | Jan 21 | 36 | Pass | 8 | Pass | 20 | Fail |
+| 2nd | Mar 22 | May 21 | 32 | Pass | 11 | Pass | 20 | Fail |
+| 3rd | Apr 24 | Jun 23 |  | Pass |  | Pass | 36 | Fail |
 
 
 time line
