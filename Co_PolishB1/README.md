@@ -101,7 +101,7 @@ I feel my speaking ability was pretty the same as 2nd exam, perhaps a bit more f
 ## tips for using gpt
 1. use gpt to study the exam requirements, what the criterion for A2, B1 for speaking.
 2. when ask gpt to act as examiner, ask gpt to give score according to the exam requirement and criterion.
-3. efficient way could be ask gpt to provide sample answers, and i just adopt them and then iterate.
+3. efficient way could be ask gpt to provide sample answers, and just adopt them and then iterate.
 4. writing is easiest to do with gpt.
 5. u can ask gpt to generate topics for conversation, also u can ask gpt to process some b1/b2 level book chapters ,then based which, to generate a topic.
 
