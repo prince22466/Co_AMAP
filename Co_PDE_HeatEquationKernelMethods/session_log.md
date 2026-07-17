@@ -31,3 +31,41 @@
   - Finish the diffusion-coefficient scaling check.
   - Briefly consolidate kernel and Gaussian decay.
   - Continue with the half-line Dirichlet reflection drill.
+
+## 2026-07-17
+
+- Finished the diffusion scaling check: multiplying `D` by `9` multiplies the characteristic distance `sqrt(Dt)` by `3`.
+- Consolidated the half-line reflection method:
+  - zero Dirichlet boundary `u(0,t)=0` uses an odd extension and an opposite-sign image;
+  - zero Neumann boundary `u_x(0,t)=0` uses an even extension and a same-sign image;
+  - `G(x+y,t)` represents the image source at `-y` because `x+y=x-(-y)`.
+- Explained why the heat kernel is symmetric: `G(-z,t)=G(z,t)` because the Gaussian depends on `z^2`.
+- Connected kernel symmetry to boundary enforcement:
+  - opposite-sign values cancel at the Dirichlet boundary;
+  - the derivative of an even kernel is odd, so same-sign slopes cancel at the Neumann boundary.
+- Reviewed the physical meaning of the boundaries:
+  - Dirichlet zero is absorbing;
+  - Neumann zero is reflecting/insulated and conserves total heat on the half-line under suitable decay at infinity.
+- Began a detailed Duhamel-principle drill for `u_t-Du_{xx}=F(x,t)`:
+  - `t` is the fixed observation time;
+  - `s` is the earlier injection time;
+  - `y` is the source location;
+  - `x` is the observation location;
+  - each source slice diffuses for age `t-s`.
+- Clarified causality: forcing active from time `2` cannot affect times before `2`; the value at the single switching instant does not affect the time integral.
+- Combined initial data and forcing:
+  - initial heat starts at time `0` and evolves for time `t`;
+  - heat injected at time `s` evolves for time `t-s`.
+- Built the time-slice intuition:
+  - older contributions are wider and flatter;
+  - newer contributions are narrower and taller;
+  - the final forced solution is a superposition of Gaussians with different ages.
+- Distinguished the two integrations in Duhamel's formula:
+  - the inner `dy` integral sums over source locations;
+  - the outer `ds` integral accumulates contributions over source times.
+- Clarified that a pointwise contribution depends on both source strength and Gaussian redistribution, not on `F` alone.
+- Stopped at the point-source example `F(y,s)=q\,\delta(y-a)`, after reducing it to `u(x,t)=q\int_0^t G(x-a,t-s)\,ds`.
+- Next session plan:
+  - identify the center of every Gaussian in the point-source example;
+  - complete one worked Duhamel example;
+  - verify the resulting formula against the PDE and initial condition at an intuitive level.
