@@ -118,8 +118,8 @@ I feel my speaking ability was pretty the same as 2nd exam, perhaps a bit more f
 10. sometimes it is just luck. it is a game of chance, take several exams, u may pass one of them.
 
 ## materials i put togeter and used:
-writing: [my collection 1](b1%20writing%20sentences%20182.pdf)  
-speaking sentences: [my collection 2](b1%20speaking%20pattern%20700.pdf)  
+writing: [my writing sentences](b1%20writing%20sentences%20182.pdf)  
+speaking sentences: [my speaking sentences](b1%20speaking%20pattern%20700.pdf)  
 listening: 
 
 
