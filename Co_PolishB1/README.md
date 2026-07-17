@@ -61,7 +61,7 @@ The writing passed was good signal, which I had some confidence.
 
 ### gpt as data engineer
 
-i found myself new material[Z językiem polskim każdego dnia cz. 2 - podręcznik. Poziom B1 z elementami B2](https://www.gov.pl/web/udsc/materialy-dydaktyczne-do-nauki-jezyka-polskiego---dla-doroslych), spent 2 weeks on its speaking section of each chapter, for follow-reading.
+i found myself new material [Z językiem polskim każdego dnia cz. 2 - podręcznik. Poziom B1 z elementami B2](https://www.gov.pl/web/udsc/materialy-dydaktyczne-do-nauki-jezyka-polskiego---dla-doroslych), spent 2 weeks on its speaking section of each chapter, for follow-reading.
 
 I used gpt to translate sentences and put polish on left, english on right as these columns "Polish sentence
 | English explanation | Key vocabulary (PL → EN)". Thus when following-reading with the recording, thus i could immediately know what the sentence mean. Which increased the efficiency of iteration. And becasue of gpt's work, i absorbed and collected many abstract, b1 vocabularies and sentence in short time(2weeks).
