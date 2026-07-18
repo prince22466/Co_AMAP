@@ -21,7 +21,8 @@ Destructive write: causing an agent to modify, overwrite, or delete protected da
 Confused deputy behavior: causing an agent to misuse its authority on behalf of an attacker or unintended context.  
 Your solution may use any attack discovery strategy that fits the competition rules. 
   
-*** Promising approaches may include prompt search, fuzzing, heuristic search, evolutionary algorithms, state-space exploration, trace-guided mutation, novelty search, Go-Explore-style archive methods, LLM-assisted candidate generation, or hybrid systems that learn from prior traces. *** Successful submissions will need to find high-impact failures, produce diverse replayable attack paths, and use the evaluation budget efficiently.
+*** Promising approaches may include prompt search, fuzzing, heuristic search, evolutionary algorithms, state-space exploration, trace-guided mutation, novelty search, Go-Explore-style archive methods, LLM-assisted candidate generation, or hybrid systems that learn from prior traces. *** 
+Successful submissions will need to find high-impact failures, produce diverse replayable attack paths, and use the evaluation budget efficiently.
   
 The environment is designed to make agent-security research more reproducible. Instead of attacking live systems, submissions operate in a controlled offline sandbox with fixture-backed tools. This lets participants test realistic tool-use risks while keeping evaluation deterministic, comparable, and safe for a public leaderboard.
 
@@ -31,7 +32,8 @@ By participating, you will help define how the field measures security for tool-
 Getting Started
 To get started, following this starter notebook, initialize an attack template, and run a local smoke test against the deterministic environment.
 
-Your public submission should provide an attack.py file defining an AttackAlgorithm class. *** The algorithm should interact with the environment, search for unsafe action traces, and return replayable attack candidates.*** The hosted evaluator will validate and score those candidates by replaying them, rather than trusting attacker-provided metadata.
+Your public submission should provide an attack.py file defining an AttackAlgorithm class. *** The algorithm should interact with the environment, search for unsafe action traces, and return replayable attack candidates.***  
+The hosted evaluator will validate and score those candidates by replaying them, rather than trusting attacker-provided metadata.
 
 
 What Makes This Different
