@@ -34,7 +34,7 @@ gemma_public,0.05
 gemma_private,0.02  
 
 
-Working Note Judging Criteria (Optional)
+Working Note Judging Criteria (Optional)  
 Working notes will be reviewed by the competition organizers and judged based on:  
 Technical clarity and reproducibility: Does the note clearly explain the approach, implementation, and assumptions?  
 Methodological contribution: Does the approach introduce an interesting, effective, or well-engineered way to search for multi-step agent failures?
