@@ -69,3 +69,31 @@
   - identify the center of every Gaussian in the point-source example;
   - complete one worked Duhamel example;
   - verify the resulting formula against the PDE and initial condition at an intuitive level.
+
+## 2026-07-19 to 2026-07-20
+
+- Completed the point-source Duhamel example for `F(y,s)=q\,\delta(y-a)`:
+  - reduced the solution to `u(x,t)=q\int_0^t G(x-a,t-s)\,ds`;
+  - identified that every Gaussian is centered at the fixed source location `a`;
+  - distinguished the center (set by source location) from the width (set by the age `t-s`);
+  - confirmed that older injections are wider and flatter, while newer injections are narrower and taller;
+  - considered a source active only over a finite time interval and confirmed that previously injected heat continues diffusing after the source stops.
+- Gave a correct verbal explanation of Duhamel: heat at the observation point is the sum of all previous injections, including the diffusion effect. Refined notation so `(x,t)` is the observation point and `s<t` is an injection time.
+- Rebuilt the near/far split for `u(x,t)\to f(x)` as `t\to0`:
+  - near region is controlled by continuity of `f`;
+  - far region is controlled by boundedness of `f` and Gaussian decay;
+  - understood that distant values need not be close to `f(x)` because their total Gaussian weight becomes negligible;
+  - reviewed the proof order: first choose the spatial radius `\delta`, then choose `t` small;
+  - confirmed that the heat kernel becomes narrower as `t\to0`.
+- Resumed the Fourier-to-ODE step:
+  - explained that the Fourier transform is taken only in `x`, so `\mathcal F_x[u_t]=\partial_t\hat u`;
+  - explained `\mathcal F_x[u_{xx}]=-k^2\hat u` using the Fourier mode `e^{ikx}`;
+  - obtained `\partial_t\hat u=-Dk^2\hat u` and `\hat u(k,t)=e^{-Dk^2t}\hat f(k)`;
+  - defined `D` as the diffusion coefficient, with units length squared per time;
+  - connected larger `D` to faster spreading and the scale `\sqrt{Dt}`;
+  - introduced the interpretation that high-frequency modes decay faster while the constant mode `k=0` does not decay.
+- Stopped before answering the comparison: with `D=t=1`, decide whether the `k=1` mode (`e^{-1}`) or the `k=3` mode (`e^{-9}`) survives more strongly.
+- Next session plan:
+  - finish the Fourier-mode comparison;
+  - consolidate why diffusion smooths high frequencies first;
+  - connect the Fourier multiplier `e^{-Dk^2t}` back to the Gaussian heat kernel.
