@@ -97,3 +97,41 @@
   - finish the Fourier-mode comparison;
   - consolidate why diffusion smooths high frequencies first;
   - connect the Fourier multiplier `e^{-Dk^2t}` back to the Gaussian heat kernel.
+
+## 2026-07-21
+
+- Finished the Fourier-mode comparison:
+  - the `k=1` mode survives more strongly because `e^{-1}` is much larger than `e^{-9}`;
+  - identified `e^{-Dk^2t}` as the diffusion attenuation factor;
+  - explained that the `k^2` dependence causes high-frequency modes to decay much faster.
+- Connected the Fourier and physical-space viewpoints:
+  - multiplication by `e^{-Dk^2t}` in Fourier space corresponds to convolution with the Gaussian heat kernel in physical space;
+  - as `t\to0`, the multiplier tends to `1`, so `u(x,t)\to f(x)`;
+  - for `k\neq0`, modes decay as time grows, while the constant mode `k=0` remains unchanged.
+- Consolidated the curvature interpretation of diffusion:
+  - at a local maximum, `u_{xx}<0`, so `u_t<0`;
+  - at a local minimum, `u_{xx}>0`, so `u_t>0`;
+  - if `u_{xx}=0`, the instantaneous time derivative is zero;
+  - high-frequency modes decay faster because their curvature scales like `k^2`.
+- Covered maximum-principle and kernel-average consequences:
+  - positivity is preserved;
+  - no new values above the initial maximum or below the initial minimum are created;
+  - constant initial data remains constant;
+  - jump discontinuities become smooth for every `t>0`;
+  - the transition width scales like `sqrt(Dt)`.
+- Covered heat conservation and boundary effects:
+  - total heat is conserved on the whole line when boundary flux vanishes at infinity;
+  - zero-Neumann boundaries conserve total heat on a finite interval;
+  - zero-Dirichlet boundaries generally allow heat to leave;
+  - zero-Neumann solutions approach the initial spatial average, while zero-Dirichlet solutions approach zero.
+- Optional extension beyond the required `SKILL.md` scope:
+  - introduced equilibrium solutions through `u_t=0`, hence `u_{xx}=0` and a linear equilibrium profile;
+  - used `u=u_{eq}+v` to subtract a nonzero Dirichlet equilibrium and obtain zero boundary conditions for `v`;
+  - introduced finite-interval sine and cosine eigenmodes and their decay factors `e^{-D(n\pi/L)^2t}`;
+  - observed that higher modes decay faster and the slowest nonzero mode controls the long-time transient shape.
+- Skill completion status:
+  - all required topics in `SKILL.md` have been covered;
+  - the completion criteria are satisfied: explain the heat kernel, Gaussian decay, reflection, Duhamel's principle, and the near/far split;
+  - finite-interval spectral solutions, equilibrium subtraction, and long-time asymptotics are supplementary rather than required.
+- Recommended next step:
+  - stop the required training track here, or continue only by explicitly choosing an optional extension topic.
