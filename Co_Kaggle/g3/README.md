@@ -9,10 +9,15 @@
 | Tasks solved | 378 / 400 |
 | Highest possible score | 10000 |
 | Final standing(public board) | 1871/3061, with score 5882.20, 59% |
+| Final standing | 1789/2963, with score 5882.20, 59% |
 | 1st place(public board) |  8314.03, 83% |
 | gold metal entry(public board) | 8000.10, 80% |
 | sliver metal entry(public board) | 7468.58, 75% |
 | brozen metal entry(public board) | 7394.92, 74% |
+| Final 1st place |  8314.03, 83% |
+| Final gold metal entry | 8000.10, 80% |
+| Final sliver metal entry | 7463.95, 75% |
+| Final brozen metal entry | 7393.63, 74% |
 | Notable event | GPT-5.6 became available on July 10, 2026 |
 
 ## How AI Was Used
