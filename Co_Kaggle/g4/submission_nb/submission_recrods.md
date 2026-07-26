@@ -7,7 +7,7 @@
 | Kaggle Submission name | nb feature | Submission score/feedback | Submission file |
 | --- | --- | --- | --- |
 | mutation_1 - Version 1 | simply for 1st test submission | 0.00 | mutation-1_v1.ipynb |
-| mutation_1 - Version 2 | message bank(252 messeges) test | build_message_bankSubmission Format Error(could be timeout) | mutation-1_v2.ipynb |
+| mutation_1 - Version 2 | message bank(252 messeges) test | Submission Format Error(could be timeout) | mutation-1_v2.ipynb |
 | mutation_1 - Version 3 | test on 
 
 _N = 168
