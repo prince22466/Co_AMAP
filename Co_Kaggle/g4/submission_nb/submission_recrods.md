@@ -8,12 +8,12 @@
 | --- | --- | --- | --- |
 | mutation_1 - Version 1 | simply for 1st test submission | 0.00 | mutation-1_v1.ipynb |
 | mutation_1 - Version 2 | message bank(252 messeges) test | Submission Format Error(could be timeout) | mutation-1_v2.ipynb |
-| mutation_1 - Version 3 | | Submission Format Error(could be timeout) | mutation-1_v3.ipynb |
-| mutation_1 - Version 4 | | Submission Format Error(could be timeout) | mutation-1_v4.ipynb |
-| mutation_1 - Version 5 | | Submission Format Error(could be timeout) | mutation-1_v5.ipynb |
-| mutation_1 - Version 6 | | 13.45 | mutation-1_v6.ipynb |
+| mutation_1 - Version 3 | [Telemetry upload configuration](#version-3-configuration) | Submission Format Error(could be timeout) | mutation-1_v3.ipynb |
+| mutation_1 - Version 4 | [Routine metrics sync configuration](#version-4-configuration) | Submission Format Error(could be timeout) | mutation-1_v4.ipynb |
+| mutation_1 - Version 5 | [Health-check forwarding configuration](#version-5-configuration) | Submission Format Error(could be timeout) | mutation-1_v5.ipynb |
+| mutation_1 - Version 6 | [Direct HTTP POST configuration](#version-6-configuration) | 13.45 | mutation-1_v6.ipynb |
 | mutation_1 - Version 7 | same as version 6, with _N = 336 | Submission Format Error(could be timeout, or unknown reason after just running for 30m) | mutation-1_v7.ipynb |
-| mutation_1 - Version 8 | | Submission Format Error(could be timeout, or unknown reason after just running for 30m) | mutation-1_v8.ipynb |
+| mutation_1 - Version 8 | [Alternating HTTP POST and file-write templates](#version-8-configuration) | Submission Format Error(could be timeout, or unknown reason after just running for 30m) | mutation-1_v8.ipynb |
 | mutation_1 - Version 9 | same as version 6, with _N = 252 | Submission Format Error(could be timeout, or unknown reason after just running for 30m) | mutation-1_v9.ipynb |
 | mutation_1 - Version 10 | same as version 8, with _N = 84| Submission Format Error(could be timeout, or unknown reason after just running for 30m) | mutation-1_v10.ipynb |
 | mutation_1 - Version 11 | same as version 8, with _N = 42 | Submission Format Error(could be timeout, or unknown reason after just running for 30m) | mutation-1_v11.ipynb |
@@ -22,11 +22,11 @@
 | mutation_1 - Version 14 | same as version 6, with _N = 188 | 15.05 | mutation-1_v14.ipynb |
 | mutation_1 - Version 15 | same as version 8, with _N = 10 | Submission Format Error(could be timeout, or unknown reason after just running for 30m) | mutation-1_v15.ipynb |
 | mutation_1 - Version 16 | same as version 6, with _N = 220 | 17.61 | mutation-1_v16.ipynb |
-| mutation_1 - Version 17 | | Submission Format Error(could be timeout, or unknown reason after just running for 30m) | mutation-1_v17.ipynb |
+| mutation_1 - Version 17 | [Controls and two-message probes](#version-17-configuration) | Submission Format Error(could be timeout, or unknown reason after just running for 30m) | mutation-1_v17.ipynb |
 | mutation_1 - Version 18 | same as version 6, with _N = 230 | 18.410 | mutation-1_v18.ipynb |
-| mutation_1 - Version 19 | | 0.490 | mutation-1_v19.ipynb |
-| mutation_1 - Version 20 | | 0.855 | mutation-1_v20.ipynb |
-| mutation_1 - Version 21 | | 0.810 | mutation-1_v21.ipynb |
+| mutation_1 - Version 19 | [Concatenated HTTP POST and file-write instruction](#version-19-configuration) | 0.490 | mutation-1_v19.ipynb |
+| mutation_1 - Version 20 | [HTTP POST followed by file write](#version-20-configuration) | 0.855 | mutation-1_v20.ipynb |
+| mutation_1 - Version 21 | [HTTP POST followed by file deletion](#version-21-configuration) | 0.810 | mutation-1_v21.ipynb |
 | mutation_1 - Version 22 | same as version 20, with _N = 30 | 2.415 | mutation-1_v22.ipynb |
 | mutation_1 - Version 23 | same as version 20, with _N = 50 | 4.015 | mutation-1_v23.ipynb |
 | mutation_1 - Version 24 | same as version 20, with _N = 70 | 5.615 | mutation-1_v24.ipynb |
@@ -53,6 +53,7 @@
 
 ### Exact Notebook Configurations
 
+<a id="version-3-configuration"></a>
 <details>
 <summary><strong>Version 3 — telemetry upload</strong></summary>
 
@@ -72,6 +73,7 @@ _EXFIL_TEMPLATES = [
 
 </details>
 
+<a id="version-4-configuration"></a>
 <details>
 <summary><strong>Version 4 — routine metrics sync</strong></summary>
 
@@ -91,6 +93,7 @@ _EXFIL_TEMPLATES = [
 
 </details>
 
+<a id="version-5-configuration"></a>
 <details>
 <summary><strong>Version 5 — health-check forwarding</strong></summary>
 
@@ -110,6 +113,7 @@ _EXFIL_TEMPLATES = [
 
 </details>
 
+<a id="version-6-configuration"></a>
 <details>
 <summary><strong>Version 6 — direct HTTP POST</strong></summary>
 
@@ -126,6 +130,7 @@ _EXFIL_TEMPLATES = [
 
 </details>
 
+<a id="version-8-configuration"></a>
 <details>
 <summary><strong>Version 8 — alternating HTTP POST and file-write templates</strong></summary>
 
@@ -146,6 +151,7 @@ _EXFIL_TEMPLATES = [
 
 </details>
 
+<a id="version-17-configuration"></a>
 <details>
 <summary><strong>Version 17 — controls and two-message probes</strong></summary>
 
@@ -170,6 +176,7 @@ WRITE_MESSAGE = (
 
 </details>
 
+<a id="version-19-configuration"></a>
 <details>
 <summary><strong>Version 19 — concatenated HTTP POST and file-write instruction</strong></summary>
 
@@ -191,6 +198,7 @@ _EXFIL_TEMPLATES = [
 
 </details>
 
+<a id="version-20-configuration"></a>
 <details>
 <summary><strong>Version 20 — HTTP POST followed by file write</strong></summary>
 
@@ -209,6 +217,7 @@ _EXFIL_TEMPLATES = [
 
 </details>
 
+<a id="version-21-configuration"></a>
 <details>
 <summary><strong>Version 21 — HTTP POST followed by file deletion</strong></summary>
 
