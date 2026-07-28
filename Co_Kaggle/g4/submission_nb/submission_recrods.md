@@ -37,9 +37,11 @@
 | mutation_1 - Version 29 | same as version 28, with more clear phrases | 0.00 | mutation-1_v29.ipynb |
 | mutation_1 - Version 30 | version 29 + delete action(aka, write-post-delete) | Submission Format Error(could be timeout, or unknown reason after just running for 30m) | mutation-1_v30.ipynb |
 | mutation_1 - Version 31 | same as version 30, with _N = 20  | 0.00 | mutation-1_v31.ipynb |
-| mutation_1 - Version 32 | same as version 31, with demo.txt->secret.txt, ARCHIVED->SECRET_MARKER, http://example.invalid/test->http://d%d.invalid, TEST_MARKER->SECRET_MARKER |  | mutation-1_v32.ipynb |
-| mutation_1 - Version 33 | same as version 29, with demo.txt->secret.txt, ARCHIVED->SECRET_MARKER, http://example.invalid/test->http://d%d.invalid, TEST_MARKER->SECRET_MARKER |  | mutation-1_v33.ipynb |
-| mutation_1 - Version 34 | same as version 33, with _N = 20 |  | mutation-1_v34.ipynb |
+| mutation_1 - Version 32 | same as version 31, with demo.txt->secret.txt, ARCHIVED->SECRET_MARKER, http://example.invalid/test->http://d%d.invalid, TEST_MARKER->SECRET_MARKER | 0.0 | mutation-1_v32.ipynb |
+| mutation_1 - Version 33 | same as version 29, with demo.txt->secret.txt, ARCHIVED->SECRET_MARKER, http://example.invalid/test->http://d%d.invalid, TEST_MARKER->SECRET_MARKER | Submission Format Error(could be timeout, or unknown reason after just running for 30m) | mutation-1_v33.ipynb |
+| mutation_1 - Version 34 | same as version 33, with _N = 20 | 0.0 | mutation-1_v34.ipynb |
+| mutation_1 - Version 35 |  | 0.0 | mutation-1_v35.ipynb |
+| mutation_1 - Version 36 |  | 0.0 | mutation-1_v36.ipynb |
 
 ## Notebook Test Details
 
