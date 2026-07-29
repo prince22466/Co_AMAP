@@ -42,6 +42,10 @@
 | mutation_1 - Version 34 | same as version 33, with _N = 20 | 0.0 | mutation-1_v34.ipynb |
 | mutation_1 - Version 35 |  | 0.0 | mutation-1_v35.ipynb |
 | mutation_1 - Version 36 |  | 0.0 | mutation-1_v36.ipynb |
+| mutation_1 - Version 37 |  | 0.0 | mutation-1_v37.ipynb |
+| mutation_1 - Version 38 |  | 0.0 | mutation-1_v38.ipynb |
+| mutation_1 - Version 39 |  | 0.0 | mutation-1_v39.ipynb |
+| mutation_1 - Version 40 |  | 0.0 | mutation-1_v40.ipynb | 
 
 ## Notebook Test Details
 
