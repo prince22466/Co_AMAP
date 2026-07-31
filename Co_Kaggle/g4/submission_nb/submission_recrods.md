@@ -56,6 +56,9 @@
 | mutation_1 - Version 48 |  | Submission Format Error(could be timeout, or unknown reason after just running for 30m) | mutation-1_v48.ipynb | 
 | mutation_1 - Version 49 |  | Submission Format Error(could be timeout, or unknown reason after just running for 30m) | mutation-1_v49.ipynb | 
 | mutation_1 - Version 50 | same as v6, just to check if evaluator still works  | 0.170 | mutation-1_v50.ipynb | 
+| mutation_1 - Version 51 | simply redo v50, changing only http://d%d.invalid to http://r51-0000-00.invalid | 0.170 | mutation-1_v51.ipynb | 
+| mutation_1 - Version 52 | same as v49, but with url=http://d%d.invalid | Submission Format Error(could be timeout, or unknown reason after just running for 30m) | mutation-1_v52.ipynb | 
+
 
 ## Notebook Test Details
 
