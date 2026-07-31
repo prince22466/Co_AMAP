@@ -55,7 +55,7 @@
 | mutation_1 - Version 47 |  | Submission Format Error(could be timeout, or unknown reason after just running for 30m) | mutation-1_v47.ipynb | 
 | mutation_1 - Version 48 |  | Submission Format Error(could be timeout, or unknown reason after just running for 30m) | mutation-1_v48.ipynb | 
 | mutation_1 - Version 49 |  | Submission Format Error(could be timeout, or unknown reason after just running for 30m) | mutation-1_v49.ipynb | 
-
+| mutation_1 - Version 50 | same as v6, just to check if evaluator still works  | 0.170 | mutation-1_v50.ipynb | 
 
 ## Notebook Test Details
 
