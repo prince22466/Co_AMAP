@@ -6,6 +6,7 @@
 
 | Kaggle Submission name | nb feature | Submission score/feedback | Submission file |
 | --- | --- | --- | --- |
+| Getting Started Notebook cpy - Version 1 | just a copy of sample notebook | 0.06 | getting-started-notebook-cpy.ipynb |
 | mutation_1 - Version 1 | simply for 1st test submission | 0.00 | mutation-1_v1.ipynb |
 | mutation_1 - Version 2 | message bank(252 messeges) test | Submission Format Error(could be timeout) | mutation-1_v2.ipynb |
 | mutation_1 - Version 3 | [Telemetry upload configuration](#version-3-configuration) | Submission Format Error(could be timeout) | mutation-1_v3.ipynb |
