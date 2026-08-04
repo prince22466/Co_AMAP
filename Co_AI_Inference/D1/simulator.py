@@ -6,7 +6,8 @@ request and a short summary.
 
 the queuing policy is rudimentry, all requests are put into one queue and to be 
 processed one by one( aka, only one batch of requests). it is to show end-to-end 
-latency is queuing + llm process.
+latency is queuing time + llm process time, where llm process time is a function of 
+requests tokoen, prefill cost , output token, decode cost.
 
 further developed queuing policies could be designed so that each batch of requests 
 latency meets the latency budget.
@@ -32,8 +33,8 @@ INTERARRIVAL_TIME_CHOICES = (
     0.009,
     0.010,
 )
-RESPONSE_TIME_CHOICES = INTERARRIVAL_TIME_CHOICES
-DEFAULT_LATENCY_BUDGET = 0.04
+
+DEFAULT_LATENCY_BUDGET = 0.2
 
 
 @dataclass(slots=True)
@@ -75,6 +76,28 @@ def expected_token_given_prompt_token(prompt_token: int) -> int:
     return round(prompt_token / 2)
 
 
+
+def estimate_service_time(
+    prompt_tokens: int,
+    output_tokens: int,
+) -> float:
+    
+    """
+    llm response time being function of below factors
+    Prompt length
+    Expected output length
+    Prefill cost
+    Decode cost
+    """
+
+    PREFILL_SECONDS_PER_TOKEN = 0.000002
+    DECODE_SECONDS_PER_TOKEN = 0.000050
+
+    prefill_time = prompt_tokens * PREFILL_SECONDS_PER_TOKEN
+    decode_time = output_tokens * DECODE_SECONDS_PER_TOKEN
+    return prefill_time + decode_time
+
+
 def requests_sim(
     request_id: int = 0,
     current_time: float = 0.0,
@@ -88,12 +111,13 @@ def requests_sim(
     generator = rng or random
     arrival_time = current_time + generator.choice(INTERARRIVAL_TIME_CHOICES)
     prompt_tokens = generator.choice(PROMPT_TOKEN_CHOICES)
+    expected_output_tokens = expected_token_given_prompt_token(prompt_tokens)
 
     return MetadataRequest(
         id=request_id,
         arrival_time=arrival_time,
         prompt_tokens=prompt_tokens,
-        expected_output_tokens=None,
+        expected_output_tokens=expected_output_tokens,
         deadline=arrival_time + latency_budget,
     )
 
@@ -119,7 +143,7 @@ def queue_requests(
             rng=generator,
         )
         requests.append(request)
-        #current_time = request.arrival_time
+        current_time = request.arrival_time
 
     return requests
 
@@ -138,14 +162,13 @@ def consume_queue(
     server_available_at = 0.0
 
     for request in queued_requests:
-        response_time = generator.choice(RESPONSE_TIME_CHOICES)
+        response_time =estimate_service_time(request.prompt_tokens,
+                                            request.expected_output_tokens)
         service_start = max(request.arrival_time, server_available_at)
 
         request.queue_waiting_time = service_start - request.arrival_time
         request.llm_response_time = response_time
-        request.expected_output_tokens = expected_token_given_prompt_token(
-            request.prompt_tokens
-        )
+
         server_available_at = service_start + response_time
 
     return list(queued_requests)
@@ -182,7 +205,7 @@ def run_simulation(
 
 
 def print_report(requests: Iterable[MetadataRequest]) -> None:
-    """Print request-level results and aggregate deadline statistics."""
+    """Print request-level results and aggregate performance statistics."""
     completed = list(requests)
     header = (
         f"{'id':>3} {'arrival':>8} {'prompt':>7} {'output':>7} "
@@ -216,8 +239,53 @@ def print_report(requests: Iterable[MetadataRequest]) -> None:
             f"{met_deadline:>4}"
         )
 
-    met_count = sum(request.met_deadline is True for request in completed)
-    print(f"\nCompleted: {len(completed)} | Deadlines met: {met_count}/{len(completed)}")
+    completed_requests = [
+        request
+        for request in completed
+        if request.completion_time is not None
+        and request.llm_response_time is not None
+        and request.total_latency is not None
+    ]
+    completed_count = len(completed_requests)
+    met_count = sum(request.met_deadline is True for request in completed_requests)
+    miss_count = completed_count - met_count
+
+    if completed_count:
+        average_queueing_time = sum(
+            request.queue_waiting_time for request in completed_requests
+        ) / completed_count
+        average_service_time = sum(
+            request.llm_response_time for request in completed_requests
+        ) / completed_count
+        average_end_to_end_latency = sum(
+            request.total_latency for request in completed_requests
+        ) / completed_count
+
+        first_arrival = min(
+            request.arrival_time for request in completed_requests
+        )
+        last_completion = max(
+            request.completion_time for request in completed_requests
+        )
+        elapsed_time = last_completion - first_arrival
+        throughput = completed_count / elapsed_time if elapsed_time > 0 else 0.0
+        deadline_miss_rate = miss_count / completed_count
+    else:
+        average_queueing_time = 0.0
+        average_service_time = 0.0
+        average_end_to_end_latency = 0.0
+        throughput = 0.0
+        deadline_miss_rate = 0.0
+
+    print(
+        f"\nCompleted: {completed_count} | "
+        f"Deadlines met: {met_count}/{completed_count}"
+    )
+    print(f"Average queueing time:      {average_queueing_time:.6f} s")
+    print(f"Average service time:       {average_service_time:.6f} s")
+    print(f"Average end-to-end latency: {average_end_to_end_latency:.6f} s")
+    print(f"Throughput:                 {throughput:.3f} requests/s")
+    print(f"Deadline-miss rate:         {deadline_miss_rate:.2%}")
 
 
 def parse_args() -> argparse.Namespace:
