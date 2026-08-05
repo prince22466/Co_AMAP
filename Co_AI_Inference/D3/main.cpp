@@ -1,4 +1,8 @@
 // C++20 real-time producer/consumer simulation for a single FIFO LLM server.
+// this simulator setup 5k requests, 80% short ones
+// naive FIFO queue policy, requests been processed one by one 
+// it shows end-to-end p95 latency is due to queuing time
+
 
 #include <algorithm>
 #include <chrono>
@@ -16,9 +20,9 @@ namespace {
 
 using Clock = std::chrono::steady_clock;
 
-constexpr int kRequestCount = 10'000;
-constexpr int kLongRequestCount = kRequestCount * 80 / 100;
-constexpr int kShortRequestCount = kRequestCount - kLongRequestCount;
+constexpr int kRequestCount = 5'000;
+constexpr int kShortRequestCount = kRequestCount * 80 / 100;
+constexpr int kLongRequestCount = kRequestCount - kShortRequestCount;
 constexpr double kLatencyBudgetSeconds = 0.040;
 constexpr double kPrefillSecondsPerToken = 0.000002;
 constexpr double kDecodeSecondsPerToken = 0.000050;
@@ -34,8 +38,14 @@ const std::vector<double> kInterarrivalTimeChoices{
     0.007, 0.008, 0.009, 0.010,
 };
 
+enum class RequestType {
+    Short,
+    Long,
+};
+
 struct Request {
     int id{};
+    RequestType type{RequestType::Short};
     double arrival_time{};
     int prompt_tokens{};
     std::optional<int> expected_output_tokens;
@@ -43,11 +53,6 @@ struct Request {
     double queue_waiting_time{};
     std::optional<double> llm_response_time;
     std::optional<double> completion_time;
-};
-
-enum class RequestType {
-    Short,
-    Long,
 };
 
 std::queue<Request> request_queue;
@@ -102,6 +107,7 @@ void producer() {
 
         Request request{
             .id = id,
+            .type = is_long ? RequestType::Long : RequestType::Short,
             .arrival_time = arrival_time,
             .prompt_tokens = prompt_tokens,
             .expected_output_tokens = output_tokens,
@@ -181,45 +187,98 @@ double percentile(
             * (sorted_values[upper_index] - sorted_values[lower_index]);
 }
 
-void print_report() {
+struct TimingSamples {
     std::vector<double> end_to_end_latencies;
     std::vector<double> queueing_times;
     std::vector<double> service_times;
-    end_to_end_latencies.reserve(completed_requests.size());
-    queueing_times.reserve(completed_requests.size());
-    service_times.reserve(completed_requests.size());
+
+    void reserve(std::size_t count) {
+        end_to_end_latencies.reserve(count);
+        queueing_times.reserve(count);
+        service_times.reserve(count);
+    }
+
+    void add(
+        double end_to_end_latency,
+        double queueing_time,
+        double service_time) {
+        end_to_end_latencies.push_back(end_to_end_latency);
+        queueing_times.push_back(queueing_time);
+        service_times.push_back(service_time);
+    }
+
+    void sort() {
+        std::sort(
+            end_to_end_latencies.begin(), end_to_end_latencies.end());
+        std::sort(queueing_times.begin(), queueing_times.end());
+        std::sort(service_times.begin(), service_times.end());
+    }
+
+    [[nodiscard]] std::size_t size() const {
+        return end_to_end_latencies.size();
+    }
+};
+
+void print_report() {
+    TimingSamples all_requests;
+    TimingSamples long_requests;
+    TimingSamples short_requests;
+    all_requests.reserve(completed_requests.size());
+    long_requests.reserve(kLongRequestCount);
+    short_requests.reserve(kShortRequestCount);
+    std::size_t deadline_misses = 0;
 
     for (const Request& request : completed_requests) {
         const double service_time =
             request.llm_response_time.value_or(0.0);
         const double completion_time =
             request.completion_time.value_or(request.arrival_time);
-        end_to_end_latencies.push_back(
-            completion_time - request.arrival_time);
-        queueing_times.push_back(request.queue_waiting_time);
-        service_times.push_back(service_time);
+        const double end_to_end_latency =
+            completion_time - request.arrival_time;
+
+        all_requests.add(
+            end_to_end_latency,
+            request.queue_waiting_time,
+            service_time);
+
+        TimingSamples& request_group =
+            request.type == RequestType::Long
+            ? long_requests
+            : short_requests;
+        request_group.add(
+            end_to_end_latency,
+            request.queue_waiting_time,
+            service_time);
+
+        if (completion_time > request.deadline) {
+            ++deadline_misses;
+        }
     }
 
-    std::sort(end_to_end_latencies.begin(), end_to_end_latencies.end());
-    std::sort(queueing_times.begin(), queueing_times.end());
-    std::sort(service_times.begin(), service_times.end());
+    all_requests.sort();
+    long_requests.sort();
+    short_requests.sort();
 
     std::cout << "Completed requests: " << completed_requests.size()
-              << "\nLong requests:      " << kLongRequestCount
+              << "\nLong requests:      " << long_requests.size()
               << " (80%)"
-              << "\nShort requests:     " << kShortRequestCount
+              << "\nShort requests:     " << short_requests.size()
               << " (20%)\n\n";
 
     std::cout << std::fixed << std::setprecision(6)
-              << std::left << std::setw(26) << "Metric"
+              << std::left << std::setw(12) << "Group"
+              << std::setw(26) << "Metric"
               << std::right << std::setw(14) << "p50 (s)"
               << std::setw(14) << "p95 (s)"
               << std::setw(14) << "p99 (s)" << '\n'
-              << std::string(68, '-') << '\n';
+              << std::string(80, '-') << '\n';
 
     const auto print_percentiles =
-        [](const char* label, const std::vector<double>& values) {
-            std::cout << std::left << std::setw(26) << label
+        [](const char* group,
+           const char* metric,
+           const std::vector<double>& values) {
+            std::cout << std::left << std::setw(12) << group
+                      << std::setw(26) << metric
                       << std::right << std::setw(14)
                       << percentile(values, 0.50)
                       << std::setw(14) << percentile(values, 0.95)
@@ -227,9 +286,60 @@ void print_report() {
                       << '\n';
         };
 
-    print_percentiles("End-to-end latency", end_to_end_latencies);
-    print_percentiles("Queueing time", queueing_times);
-    print_percentiles("Service time", service_times);
+    const auto print_group =
+        [&print_percentiles](
+            const char* group,
+            const TimingSamples& samples) {
+            print_percentiles(
+                group, "End-to-end latency",
+                samples.end_to_end_latencies);
+            print_percentiles(
+                group, "Queueing time", samples.queueing_times);
+            print_percentiles(
+                group, "Service time", samples.service_times);
+        };
+
+    print_group("All", all_requests);
+    print_group("Long", long_requests);
+    print_group("Short", short_requests);
+
+    double throughput = 0.0;
+    double deadline_miss_rate = 0.0;
+    if (!completed_requests.empty()) {
+        const auto first_arrival = std::min_element(
+            completed_requests.begin(),
+            completed_requests.end(),
+            [](const Request& left, const Request& right) {
+                return left.arrival_time < right.arrival_time;
+            });
+        const auto last_completion = std::max_element(
+            completed_requests.begin(),
+            completed_requests.end(),
+            [](const Request& left, const Request& right) {
+                return left.completion_time.value_or(0.0)
+                    < right.completion_time.value_or(0.0);
+            });
+        const double elapsed_time =
+            last_completion->completion_time.value_or(
+                first_arrival->arrival_time)
+            - first_arrival->arrival_time;
+        if (elapsed_time > 0.0) {
+            throughput =
+                static_cast<double>(completed_requests.size())
+                / elapsed_time;
+        }
+        deadline_miss_rate =
+            static_cast<double>(deadline_misses)
+            / static_cast<double>(completed_requests.size());
+    }
+
+    std::cout << '\n'
+              << std::setprecision(3)
+              << "Throughput:         " << throughput
+              << " requests/s\n"
+              << std::setprecision(2)
+              << "Deadline-miss rate: "
+              << deadline_miss_rate * 100.0 << "%\n";
 }
 
 }  // namespace
