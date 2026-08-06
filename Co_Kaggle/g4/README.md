@@ -1,2 +1,3 @@
 1st submission date: 18th July 2026  
-Codex doesnt work becasue of cyber security guardrail. Mainly work with ChatGPT
+Codex hardly works becasue of cyber security guardrail. Mainly work with ChatGPT(which also has guardrail).  
+OpenAI sent email on Aug 2nd, "OpenAI ChatGPT - Usage Policy Violation & Deactivation Warning [C-K6gNwNSLYL1n]" for Cyber Abuse.  
