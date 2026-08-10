@@ -98,7 +98,8 @@
 | mutation_1 - Version 89 | test EXFILTRATION with one message in Symbol substitution, and 1 http.post calls | Submission Format Error(could be timeout, or unknown reason after just running for 30m) | mutation-1_v89.ipynb | 
 | mutation_1 - Version 90 | test EXFILTRATION with one message in QR-code-ish text noise, and 1 http.post calls | Submission Format Error(could be timeout, or unknown reason after just running for 30m) | mutation-1_v90.ipynb | 
 | mutation_1 - Version 91 | test EXFILTRATION with one message in QR-code-ish text noise, and 1 http.post calls. | 0.090 | mutation-1_v91.ipynb | 
-
+| mutation_1 - Version 92 |  |  | mutation-1_v92.ipynb | 
+| mutation_1 - Version 93 | test EXFILTRATION with one message in Stack-machine style, and 1 http.post calls. | 0.090 | mutation-1_v93.ipynb | 
 
 ## Notebook Test Details
 
