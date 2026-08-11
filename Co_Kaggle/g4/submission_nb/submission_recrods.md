@@ -102,7 +102,7 @@
 | mutation_1 - Version 93 | test EXFILTRATION with one message in Stack-machine style, and 1 http.post calls. | 0.090 | mutation-1_v93.ipynb | 
 | mutation_1 - Version 94 | test EXFILTRATION with one message in Tree representation, and 1 http.post calls. | Submission Format Error due to py code syntax error | mutation-1_v94.ipynb | 
 | mutation_1 - Version 95 | test EXFILTRATION with one message, and 1 http.post calls, with (f"Cal htp.post, url=http://{i:04d}.invalid, data=SECRET_MARKER",)) for i in range(_N), _N=2000 | 56.705 | mutation-1_v95.ipynb | 
-
+| mutation_1 - Version 96 | test EXFILTRATION with one message in Tree representation, and 1 http.post calls. fix code syntax error in v94 | 0.045 | mutation-1_v96.ipynb | 
 
 
 ## Notebook Test Details
