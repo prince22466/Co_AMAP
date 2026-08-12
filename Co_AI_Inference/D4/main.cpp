@@ -13,10 +13,19 @@
 #include <optional>
 #include <queue>
 #include <random>
+#include <string_view>
 #include <thread>
 #include <vector>
 
 namespace {
+
+#if defined(__GNUC__) || defined(__clang__)
+#define PERF_NOINLINE __attribute__((noinline))
+#elif defined(_MSC_VER)
+#define PERF_NOINLINE __declspec(noinline)
+#else
+#define PERF_NOINLINE
+#endif
 
 using Clock = std::chrono::steady_clock;
 
@@ -41,6 +50,11 @@ const std::vector<double> kInterarrivalTimeChoices{
 enum class RequestType {
     Short,
     Long,
+};
+
+enum class ServiceMode {
+    Sleep,
+    Cpu,
 };
 
 struct Request {
@@ -71,6 +85,32 @@ double seconds_since_start() {
 double estimate_service_time(int prompt_tokens, int output_tokens) {
     return prompt_tokens * kPrefillSecondsPerToken
         + output_tokens * kDecodeSecondsPerToken;
+}
+
+volatile double cpu_work_sink = 0.0;
+
+PERF_NOINLINE void perform_cpu_work(int input_tokens) {
+    double value = 1.0;
+    for (int i = 0; i <  input_tokens*input_tokens; ++i) {
+        value = value + i;  // Simulate CPU-intensive work.
+    }
+    // Make the result observable so the optimizer retains the CPU work.
+    cpu_work_sink = value;
+}
+
+PERF_NOINLINE void perform_service(
+    ServiceMode service_mode,
+    double service_time,
+    int input_tokens) {
+    switch (service_mode) {
+    case ServiceMode::Sleep:
+        std::this_thread::sleep_for(
+            std::chrono::duration<double>(service_time));
+        break;
+    case ServiceMode::Cpu:
+        perform_cpu_work(input_tokens);
+        break;
+    }
 }
 
 void producer() {
@@ -131,7 +171,7 @@ void producer() {
     request_available.notify_all();
 }
 
-void consumer() {
+void consumer(ServiceMode service_mode) {
     while (true) {
         Request request;
         {
@@ -156,14 +196,37 @@ void consumer() {
             request.prompt_tokens,
             request.expected_output_tokens.value_or(0));
         const auto service_started_at = Clock::now();
-        std::this_thread::sleep_for(
-            std::chrono::duration<double>(requested_service_time));
+        perform_service(
+            service_mode,
+            requested_service_time,
+            request.prompt_tokens);
         request.llm_response_time = std::chrono::duration<double>(
                                         Clock::now() - service_started_at)
                                         .count();
         request.completion_time = seconds_since_start();
         completed_requests.push_back(std::move(request));
     }
+}
+
+std::optional<ServiceMode> parse_service_mode(int argc, char* argv[]) {
+    if (argc == 1) {
+        return ServiceMode::Sleep;
+    }
+
+    if (argc == 3
+        && std::string_view(argv[1]) == "--service-mode") {
+        const std::string_view mode(argv[2]);
+        if (mode == "sleep") {
+            return ServiceMode::Sleep;
+        }
+        if (mode == "cpu") {
+            return ServiceMode::Cpu;
+        }
+    }
+
+    std::cerr << "Usage: " << argv[0]
+              << " [--service-mode sleep|cpu]\n";
+    return std::nullopt;
 }
 
 double percentile(
@@ -261,9 +324,9 @@ void print_report() {
 
     std::cout << "Completed requests: " << completed_requests.size()
               << "\nLong requests:      " << long_requests.size()
-              << " (80%)"
+              << " (20%)"
               << "\nShort requests:     " << short_requests.size()
-              << " (20%)\n\n";
+              << " (80%)\n\n";
 
     std::cout << std::fixed << std::setprecision(6)
               << std::left << std::setw(12) << "Group"
@@ -344,14 +407,20 @@ void print_report() {
 
 }  // namespace
 
-int main() {
+int main(int argc, char* argv[]) {
+    const std::optional<ServiceMode> service_mode =
+        parse_service_mode(argc, argv);
+    if (!service_mode) {
+        return 1;
+    }
+
     simulation_start = Clock::now();
 
     {
         // std::jthread is a C++20 joining thread. Both threads are joined
         // automatically when this scope ends.
         std::jthread producer_thread(producer);
-        std::jthread consumer_thread(consumer);
+        std::jthread consumer_thread(consumer, *service_mode);
     }
 
     print_report();
