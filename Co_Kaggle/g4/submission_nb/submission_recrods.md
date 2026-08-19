@@ -203,6 +203,8 @@ Strict criteria: one candidate (`_N = 1`) containing one user message that inten
 
 #### v118 and 117, effect of 3 and 2 tool calls in 1 message with _N=500, scale terrible, scores much lower than v113
 
+#### v127, the standard version of prompt, _N=500, perform similarly with magic version, seems it scales well, the prompt would score 0.09 if _N=1.
+
 
 --------------------------------------------
 
