@@ -205,6 +205,8 @@ Strict criteria: one candidate (`_N = 1`) containing one user message that inten
 
 #### v127, the standard version of prompt, _N=500, perform similarly with magic version v113, seems it scales well, the prompt would score 0.09 if _N=1.
 
+#### v100,  one candidate with 8 messages, _N=500, doesnt scale well.
+
 
 --------------------------------------------
 
