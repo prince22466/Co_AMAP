@@ -194,8 +194,10 @@ Each candidate in these runs contains one message, so score per message and scor
 
 #### v120, effect of env.reset() every 10 messages, it scores much lower than v113
 
-#### v118, effect of 3 tool calls in 1 message with _N=500, scale terrible, scores much lower than v113
+#### v118 and 117, effect of 3 and 2 tool calls in 1 message with _N=500, scale terrible, scores much lower than v113
 
+
+--------------------------------------------
 
 
 | Version | Candidate setup | Prompt strategy |
