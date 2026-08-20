@@ -1,3 +1,6 @@
+// broad comparison heap allocation vs stack 
+// effect on cache usage efficiency
+
 #include <charconv>
 #include <chrono>
 #include <cstdint>
@@ -26,10 +29,10 @@ constexpr std::size_t kProcessingIterations = 1;
 
 struct LargeRequest {
     std::uint64_t id;
-    std::string prompt;
-    std::string user_id;
-    std::string model_name;
-    std::vector<int> token_ids;
+    std::string prompt;// heap allocation if string is bit long
+    std::string user_id;// heap allocation if string is bit long
+    std::string model_name;// heap allocation if string is bit long
+    std::vector<int> token_ids;// heap allocation
     double deadline;
     int priority;
     int result;
