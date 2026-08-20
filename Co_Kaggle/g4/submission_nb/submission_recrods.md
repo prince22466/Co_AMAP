@@ -202,6 +202,10 @@ Strict criteria: one candidate (`_N = 1`) containing one user message that inten
 
 #### v113, not only score better than v112, but also spend much less time, something like faster at least by 5h
 
+#### v86, v87,v92, failure of scaling with magic prompt, with _N goes beyond 1200
+
+#### v98, v99, failure of scaling with mixture of mutli-tool-call prompt and multi-message prompt, with _N goes beyond 500
+
 #### v120, effect of env.reset() every 10 messages, it scores much lower than v113
 
 #### v118 and 117, effect of 3 and 2 tool calls in 1 message with _N=500, scale terrible, scores much lower than v113
@@ -210,6 +214,9 @@ Strict criteria: one candidate (`_N = 1`) containing one user message that inten
 
 #### v100,  one candidate with 8 messages, _N=500, doesnt scale well.
 
+#### mixture of prompots, v126, v129, v131.  v126 socre much less than v76 + v13, v129 socre better than v129, but not much, v131 socre similiar with v129
+
+#### mixture of prompots, v138. v138 score much lower than v80 + v127
 
 --------------------------------------------
 
