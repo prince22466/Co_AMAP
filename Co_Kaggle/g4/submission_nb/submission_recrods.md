@@ -221,6 +221,8 @@ Strict criteria: one candidate (`_N = 1`) containing one user message that inten
 
 #### mixture of prompots, v138. v138 score much lower than v80 + v127
 
+#### mixture of prompots of 2 types of tool calls, v140, v141. v140 score similiar with v86, v141 score much lower than v140.
+
 --------------------------------------------
 
 
