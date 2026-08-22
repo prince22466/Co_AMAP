@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.16)
 
 project(request_layout_benchmark LANGUAGES CXX)
 
+find_package(Threads REQUIRED)
+
 add_executable(request_layout_benchmark main_1.cpp)
 target_compile_features(request_layout_benchmark PRIVATE cxx_std_17)
 set_target_properties(request_layout_benchmark PROPERTIES CXX_EXTENSIONS OFF)
@@ -10,9 +12,15 @@ add_executable(aos_soa_benchmark main_2.cpp)
 target_compile_features(aos_soa_benchmark PRIVATE cxx_std_17)
 set_target_properties(aos_soa_benchmark PROPERTIES CXX_EXTENSIONS OFF)
 
+add_executable(false_sharing_benchmark main_3.cpp)
+target_compile_features(false_sharing_benchmark PRIVATE cxx_std_17)
+target_link_libraries(false_sharing_benchmark PRIVATE Threads::Threads)
+set_target_properties(false_sharing_benchmark PROPERTIES CXX_EXTENSIONS OFF)
+
 if(MSVC)
     target_compile_options(request_layout_benchmark PRIVATE /W4)
     target_compile_options(aos_soa_benchmark PRIVATE /W4)
+    target_compile_options(false_sharing_benchmark PRIVATE /W4 /Od)
 elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(
         request_layout_benchmark
@@ -21,6 +29,10 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(
         aos_soa_benchmark
         PRIVATE -Wall -Wextra -Wpedantic -fno-omit-frame-pointer
+    )
+    target_compile_options(
+        false_sharing_benchmark
+        PRIVATE -Wall -Wextra -Wpedantic -fno-omit-frame-pointer -O0
     )
 endif()
 
@@ -39,6 +51,20 @@ add_custom_target(
     run_large
     COMMAND $<TARGET_FILE:request_layout_benchmark> --mode large
     DEPENDS request_layout_benchmark
+    USES_TERMINAL
+)
+
+add_custom_target(
+    run_normal
+    COMMAND $<TARGET_FILE:false_sharing_benchmark> --mode normal
+    DEPENDS false_sharing_benchmark
+    USES_TERMINAL
+)
+
+add_custom_target(
+    run_padded
+    COMMAND $<TARGET_FILE:false_sharing_benchmark> --mode padded
+    DEPENDS false_sharing_benchmark
     USES_TERMINAL
 )
 
@@ -80,6 +106,22 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
             COMMAND ${PERF_EXECUTABLE} stat -r 5 -e ${PERF_EVENTS} --
                     $<TARGET_FILE:aos_soa_benchmark> --mode soa
             DEPENDS aos_soa_benchmark
+            USES_TERMINAL
+        )
+
+        add_custom_target(
+            perf_normal
+            COMMAND ${PERF_EXECUTABLE} stat -r 5 -e ${PERF_EVENTS} --
+                    $<TARGET_FILE:false_sharing_benchmark> --mode normal
+            DEPENDS false_sharing_benchmark
+            USES_TERMINAL
+        )
+
+        add_custom_target(
+            perf_padded
+            COMMAND ${PERF_EXECUTABLE} stat -r 5 -e ${PERF_EVENTS} --
+                    $<TARGET_FILE:false_sharing_benchmark> --mode padded
+            DEPENDS false_sharing_benchmark
             USES_TERMINAL
         )
     endif()
