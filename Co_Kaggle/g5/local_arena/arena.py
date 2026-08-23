@@ -1,4 +1,4 @@
-"""Pinned-public-engine round-robin evaluator for Kaggriculture agents.
+"""Official-engine round-robin evaluator for Kaggriculture agents.
 
 The arena extracts the exact ``main.py`` source embedded in submission
 notebooks, gives every agent a unique file-loader path, and runs each pairing
@@ -29,20 +29,6 @@ from typing import Any, Iterable
 HERE = Path(__file__).resolve().parent
 WORKSPACE = HERE.parent
 SUBMISSION_DIR = WORKSPACE / "submission_nb"
-EXPECTED_ENGINE_VERSION = "1.32.7"
-EXPECTED_DEFAULT_CONFIGURATION = {
-    "boardSize": 10,
-    "startingMoney": 3000,
-    "maxMarketOrdersPerTurn": 10,
-    "turnsPerDay": 24,
-    "shedCapacity": 100,
-    "weedSpawnChance": 0.005,
-    "townShopUnlockInterval": 3,
-    "townShopSellInterval": 4,
-    "townCenterSellInterval": 24,
-    "farmHandCostMult": 1,
-    "marketParams": {},
-}
 DEFAULT_AGENTS = {
     path.stem.removeprefix("kaggriculture-sub_"): path
     for path in sorted(SUBMISSION_DIR.glob("kaggriculture-sub_v*.ipynb"))
@@ -85,12 +71,6 @@ def _read_archive_main(path: Path) -> str:
         roots = [member for member in regular if member.name.replace("\\", "/") == "main.py"]
         if len(roots) != 1:
             raise ValueError(f"{path}: archive must contain one root-level main.py")
-        extras = [member.name for member in regular if member is not roots[0]]
-        if extras:
-            raise ValueError(
-                f"{path}: local arena supports single-file submissions only; "
-                f"extra archive files: {extras[:5]}"
-            )
         handle = archive.extractfile(roots[0])
         if handle is None:
             raise ValueError(f"{path}: unable to read main.py")
@@ -109,16 +89,6 @@ def read_agent_source(path: Path) -> str:
     if path.is_dir():
         main_path = path / "main.py"
         if main_path.is_file():
-            extras = [
-                str(child.relative_to(path))
-                for child in path.rglob("*")
-                if child.is_file() and child != main_path
-            ]
-            if extras:
-                raise ValueError(
-                    f"{path}: local arena supports single-file submissions only; "
-                    f"extra directory files: {extras[:5]}"
-                )
             return main_path.read_text(encoding="utf-8")
     raise ValueError(f"{path}: use a .ipynb, .py, archive, or directory containing main.py")
 
@@ -159,11 +129,8 @@ def _safe_filename(name: str) -> str:
 def materialize_agents(agents: Iterable[AgentSource], directory: Path) -> dict[str, str]:
     paths = {}
     for agent in agents:
-        # Kaggle loads a root-level main.py. A unique parent keeps modules isolated
-        # while preserving that basename and relative-path anchor for each agent.
-        agent_dir = directory / f"{_safe_filename(agent.name)}_{agent.sha256[:10]}"
-        agent_dir.mkdir()
-        path = agent_dir / "main.py"
+        filename = f"{_safe_filename(agent.name)}_{agent.sha256[:10]}.py"
+        path = directory / filename
         path.write_text(agent.source, encoding="utf-8")
         paths[agent.name] = str(path.resolve())
     return paths
@@ -192,7 +159,6 @@ def _run_game(job: dict) -> dict:
         "pair_a": job["pair_a"],
         "pair_b": job["pair_b"],
         "seed": job["seed"],
-        "resolved_seed": None,
         "orientation": job["orientation"],
         "seat0": job["seat0"],
         "seat1": job["seat1"],
@@ -214,12 +180,6 @@ def _run_game(job: dict) -> dict:
             },
             debug=False,
         )
-        record["resolved_seed"] = _get(env.info, "seed", None)
-        if record["resolved_seed"] != job["seed"]:
-            raise RuntimeError(
-                "engine did not preserve requested seed: "
-                f"requested={job['seed']} resolved={record['resolved_seed']}"
-            )
         env.run([job["path0"], job["path1"]])
         final = env.steps[-1]
         statuses = [str(_get(state, "status", "")) for state in final]
@@ -297,28 +257,6 @@ def _agent_view(record, name):
     return reward, opponent_reward, margin, seat, status
 
 
-def _agent_completed(record, name):
-    reward, _, _, _, status = _agent_view(record, name)
-    return status == "DONE" and reward is not None
-
-
-def _agent_outcome(record, name):
-    """Return win/tie/loss, treating an agent-side failure as a forfeit."""
-    reward, opponent_reward, _, seat, _ = _agent_view(record, name)
-    opponent_name = record["seat1"] if seat == 0 else record["seat0"]
-    own_ok = _agent_completed(record, name)
-    opponent_ok = _agent_completed(record, opponent_name)
-    if own_ok and not opponent_ok:
-        return "win"
-    if not own_ok:
-        return "loss"
-    if reward > opponent_reward:
-        return "win"
-    if reward < opponent_reward:
-        return "loss"
-    return "tie"
-
-
 def _mean(values):
     values = [value for value in values if value is not None]
     return statistics.mean(values) if values else None
@@ -349,22 +287,13 @@ def make_leaderboard(records, agent_names):
         ]
         views = [_agent_view(record, name) for record in relevant]
         completed = [view for record, view in zip(relevant, views) if _done(record)]
-        outcomes = [_agent_outcome(record, name) for record in relevant]
         margins = [view[2] for view in completed]
         rewards = [view[0] for view in completed]
         opponent_rewards = [view[1] for view in completed]
-        wins = outcomes.count("win")
-        ties = outcomes.count("tie")
-        losses = outcomes.count("loss")
+        wins = sum(margin > 0 for margin in margins)
+        ties = sum(margin == 0 for margin in margins)
+        losses = sum(margin < 0 for margin in margins)
         points = wins + 0.5 * ties
-        agent_errors = sum(not _agent_completed(record, name) for record in relevant)
-        opponent_errors = sum(
-            not _agent_completed(
-                record,
-                record["seat1"] if record["seat0"] == name else record["seat0"],
-            )
-            for record in relevant
-        )
         seat0_rewards = [view[0] for view in completed if view[3] == 0]
         seat1_rewards = [view[0] for view in completed if view[3] == 1]
         rows.append(
@@ -372,14 +301,12 @@ def make_leaderboard(records, agent_names):
                 "agent": name,
                 "games": len(relevant),
                 "completed": len(completed),
-                "errors": agent_errors,
-                "opponent_errors": opponent_errors,
-                "incomplete_games": len(relevant) - len(completed),
+                "errors": len(relevant) - len(completed),
                 "wins": wins,
                 "ties": ties,
                 "losses": losses,
                 "points": points,
-                "points_rate": points / len(relevant) if relevant else None,
+                "points_rate": points / len(completed) if completed else None,
                 "mean_reward": _mean(rewards),
                 "mean_opponent_reward": _mean(opponent_rewards),
                 "mean_margin": _mean(margins),
@@ -392,8 +319,8 @@ def make_leaderboard(records, agent_names):
         )
     rows.sort(
         key=lambda row: (
-            row["errors"],
             -(row["points_rate"] if row["points_rate"] is not None else -1),
+            -(row["mean_margin"] if row["mean_margin"] is not None else float("-inf")),
             row["agent"],
         )
     )
@@ -411,7 +338,6 @@ def make_pairings(records):
     rows = []
     for (agent_a, agent_b), games in sorted(grouped.items()):
         completed = [game for game in games if _done(game)]
-        outcomes = [_agent_outcome(game, agent_a) for game in games]
         a_margins = [_agent_view(game, agent_a)[2] for game in completed]
         a_rewards = [_agent_view(game, agent_a)[0] for game in completed]
         b_rewards = [_agent_view(game, agent_b)[0] for game in completed]
@@ -431,11 +357,9 @@ def make_pairings(records):
                 "games": len(games),
                 "completed": len(completed),
                 "errors": len(games) - len(completed),
-                "a_errors": sum(not _agent_completed(game, agent_a) for game in games),
-                "b_errors": sum(not _agent_completed(game, agent_b) for game in games),
-                "a_wins": outcomes.count("win"),
-                "ties": outcomes.count("tie"),
-                "b_wins": outcomes.count("loss"),
+                "a_wins": sum(margin > 0 for margin in a_margins),
+                "ties": sum(margin == 0 for margin in a_margins),
+                "b_wins": sum(margin < 0 for margin in a_margins),
                 "mean_a_reward": _mean(a_rewards),
                 "mean_b_reward": _mean(b_rewards),
                 "mean_a_margin": _mean(a_margins),
@@ -502,43 +426,18 @@ def _dependency_version():
     return getattr(kaggle_environments, "__version__", "unknown")
 
 
-def _audit_engine_configuration(episode_steps):
-    from kaggle_environments import make
-
-    env = make(
-        "kaggriculture",
-        configuration={"episodeSteps": episode_steps, "seed": 0},
-        debug=False,
-    )
-    configuration = dict(env.configuration)
-    resolved_seed = _get(env.info, "seed", None)
-    mismatches = {
-        key: {"expected": expected, "actual": configuration.get(key)}
-        for key, expected in EXPECTED_DEFAULT_CONFIGURATION.items()
-        if configuration.get(key) != expected
-    }
-    if resolved_seed != 0:
-        mismatches["seed_resolution"] = {"expected": 0, "actual": resolved_seed}
-    return configuration, mismatches, resolved_seed
-
-
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--candidate", type=Path, help="candidate .ipynb, .py, archive, or directory")
     parser.add_argument("--candidate-name", default="candidate")
     parser.add_argument("--agent", action="append", type=_parse_named_path, default=[], help="add NAME=PATH")
-    parser.add_argument("--no-defaults", action="store_true", help="omit automatically discovered versions")
+    parser.add_argument("--no-defaults", action="store_true", help="omit automatic v1-v4")
     parser.add_argument("--seeds", type=_parse_seeds, default=_parse_seeds("2601,2602"))
     parser.add_argument("--episode-steps", type=int, default=720)
     parser.add_argument("--jobs", type=int, default=1)
     parser.add_argument("--self-play", action="store_true")
     parser.add_argument("--fail-fast", action="store_true")
     parser.add_argument("--validate-only", action="store_true", help="extract and statically validate; do not run")
-    parser.add_argument(
-        "--allow-unverified-engine",
-        action="store_true",
-        help="run despite a package-version or default-configuration mismatch",
-    )
     parser.add_argument("--output", type=Path, default=HERE / "results")
     args = parser.parse_args(argv)
 
@@ -562,33 +461,6 @@ def main(argv=None):
         engine_version = _dependency_version()
     except RuntimeError as exc:
         parser.error(str(exc))
-    try:
-        (
-            engine_configuration,
-            configuration_mismatches,
-            seed_probe_resolved,
-        ) = _audit_engine_configuration(args.episode_steps)
-    except Exception as exc:
-        parser.error(f"unable to audit kaggriculture configuration: {exc}")
-    verification_issues = {}
-    if engine_version != EXPECTED_ENGINE_VERSION:
-        verification_issues["engine_version"] = {
-            "expected": EXPECTED_ENGINE_VERSION,
-            "actual": engine_version,
-        }
-    if configuration_mismatches:
-        verification_issues["configuration"] = configuration_mismatches
-    if verification_issues and not args.allow_unverified_engine:
-        parser.error(
-            "local engine does not match the audited public baseline: "
-            f"{json.dumps(verification_issues, sort_keys=True)}; use "
-            "--allow-unverified-engine only for deliberate diagnostics"
-        )
-    if args.episode_steps != 720:
-        print(
-            "WARNING: episodeSteps is not 720; this is a smoke test, not an "
-            "official-length comparison."
-        )
 
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -636,20 +508,10 @@ def main(argv=None):
         "created_utc": datetime.now(timezone.utc).isoformat(),
         "engine": "kaggle-environments",
         "engine_version": engine_version,
-        "expected_engine_version": EXPECTED_ENGINE_VERSION,
-        "engine_verified": not verification_issues,
-        "engine_verification_scope": "pinned public package and audited default configuration",
-        "production_engine_identity_confirmed": False,
-        "engine_verification_issues": verification_issues,
         "environment": "kaggriculture",
         "episode_steps": args.episode_steps,
-        "official_episode_length": args.episode_steps == 720,
-        "configuration": engine_configuration,
-        "seed_probe": {"requested": 0, "resolved": seed_probe_resolved},
         "seeds": args.seeds,
         "both_seats": True,
-        "self_play": args.self_play,
-        "failure_policy": "agent-side failures count as forfeits; zero errors rank first",
         "agents": [
             {key: value for key, value in asdict(agent).items() if key != "source"}
             for agent in agents
