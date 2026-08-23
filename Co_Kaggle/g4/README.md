@@ -4,3 +4,4 @@ OpenAI sent email on Aug 2nd, "OpenAI ChatGPT - Usage Policy Violation & Deactiv
 
 
 starting from Aug 21st, start the latency based prompot election.
+and folder model_test folder is for selecting low latency prompts
