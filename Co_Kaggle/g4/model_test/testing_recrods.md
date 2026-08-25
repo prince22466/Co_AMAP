@@ -60,7 +60,7 @@ prompt9 :
 
 
 
-for gemma4, prompt8  
+for gemma4, prompt9  
 
 second/tool calls  
 
@@ -75,3 +75,17 @@ second/tool calls
 423/480 =  0.88 -> 1 candidate 12 msg, each msg 2 tool call  
 
 580/640 = 0.90 -> 1 candidate 16 msg, each msg 2 tool call
+
+
+
+
+for gpt, prompt8  
+
+second /tool-call  
+
+163 / 200 = 0.815  1 candidate 1 msg, each msg 2 tool call  
+63/ 80 = 0.79  1 candidate 2 msg, each msg 2 tool call  
+318 /  400 = 0.795  1 candidate 2 msg, each msg 2 tool call  
+132/ 160= 0.825 1 candidate 4 msg, each msg 2 tool call  
+204/ 240 = 0.85 1 candidate 6 msg, each msg 2 tool call  
+starting from 1 candidate 8 msg and beyond, each msg 2 tool call, tool call becomes inconsistent
