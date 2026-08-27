@@ -14,7 +14,7 @@ D1–D3 provide an intuitive example of a basic LLM serving system.
 - **1 Producer 1 Consumer 1 FIFO:** Naive producer consumer pipline pattern.
 
 
-## D4 — Multithreading Bottleneck with a Single FIFO Queue
+## D4 — Producer Consumer with Naive Single FIFO Queue Policy, 2 Cases
 
 D4 demonstrates the 2 cases for worker, sleep mode(waiting time) and computating mode(CPU bound).
 
@@ -59,13 +59,13 @@ elapsed time will be `8 workers > 2 workers > 4 workers`
 
 ## D6 — Cache-Friendly Request Design
 
-### Heavy request vs. Compact request
+### Large request vs. Compact request
 
-Heavy request is object which has most members which are heap allocated.
+Large request is object which has most members which are heap allocated.
+A vector of Large requests will have elements allocated in different memory locations.
+
 Compact request is object which has most members which are stack allocated or allocated next to each other.
-Heap allocation has diverse distribution in memory. which is not cache friendly.
-Stack allocation has adjacent distribution in memeory. which is cache friendly.
-
+A vector of Compact requests will have element allocated next to each other(aka, inline).
 
 ### Array of Structures (AoS) vs. Structure of Arrays (SoA)
 
@@ -94,3 +94,32 @@ Although the cores operate on different variables, the cache-coherence system tr
 Separate frequently modified variables so that they occupy different cache lines. Padding or cache-line alignment can prevent one core's writes from invalidating another core's data.
 
 The tradeoff is increased memory usage because padding leaves some bytes unused.
+
+
+
+
+# CPU Performance Characteristics of a Multithreaded Inference Scheduler
+
+In D5,
+Baseline:
+multiple workers consume directly from one mutex-protected FIFO.
+
+bottleneck:
+too much time on getting and waiting for mutex.
+it is manifested as time elapsed increase as workers increase.
+and with contenct switches and content migrations explode.
+
+
+Solution
+central scheduler to reduce multi workers getting/waiting for mutex.
+it makes the time lapsed reduce with workers increase until reaching the 
+logical CPU limits.
+
+
+Tradeoff:
+the mutex cost will be taken to scheduler,  and scheduler keeping looing through
+workers, thus the workloads of scheduler is the cost of reducing mutex of multi workers.
+the net effect is not always positive.
+when 2 workers, the time elapsed is shorter for no-scheduler.
+
+
