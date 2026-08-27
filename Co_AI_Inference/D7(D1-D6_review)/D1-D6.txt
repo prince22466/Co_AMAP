@@ -1,0 +1,96 @@
+# D1–D6 Review Notes
+
+## D1–D3 — Introduction to a Naive LLM Serving System
+
+D1–D3 provide an intuitive example of a basic LLM serving system.
+
+### Key Concepts
+
+- **Prefill (prefix processing):** Processes the input prompt before token generation begins.
+- **Decoding:** Generates output tokens one at a time.
+- **Request queuing:** Manages requests waiting to be processed.
+- **Long/short Request:** Short and Long requests should be treated differently and their related LLM response time and their impact on end-to-end latency.
+- **End-to-end latency breakdown:** Separates total latency into the time spent in each serving component.
+- **1 Producer 1 Consumer 1 FIFO:** Naive producer consumer pipline pattern.
+
+
+## D4 — Multithreading Bottleneck with a Single FIFO Queue
+
+D4 demonstrates the 2 cases for worker, sleep mode(waiting time) and computating mode(CPU bound).
+
+### Architecture
+
+1. A producer sends tasks to a FIFO pipeline.
+2. A worker takes tasks from the same queue.
+
+For the time elapsed, in the 'cpu' mode, most of time is on user, while in the 'sleep' mode, time on user is nearly 0.
+
+## D5 — Reducing Contention with a Scheduler
+
+D5 demonstrates the multithreading bottleneck caused by mutex contention when individual tasks are fast to compute.  
+and demonstrates how a scheduler can reduce the overhead of multiple threads competing for a single FIFO queue. The effect can be observed with Linux `perf`.
+
+### Problem: Direct Access to the FIFO Queue
+
+When multiple workers take tasks directly from one queue, they repeatedly lock and unlock its mutex. Increasing the number of workers can therefore make the process slower rather than faster.
+
+For example, on a system with 4 logical CPUs, task-completion time may follow this pattern:
+
+`8 workers > 4 workers > 2 workers`
+
+Relevant `perf stat` indicators include:
+
+- Increased context switches
+- Increased CPU migrations
+- Reduced CPU efficiency, as shown by less useful work per cycle
+- Time spent waiting for access to the shared queue
+
+### Solution: Add a Scheduler
+
+Place a scheduler between the FIFO queue and the worker threads:
+
+`Producer → FIFO queue → Scheduler → Available workers`
+
+The scheduler takes tasks from the FIFO queue and dispatches them only to workers that are not busy. This reduces mutex contention and improves CPU utilization.
+
+Before the number of active workers exceeds the system's physical-thread capacity, this design can reduce overall program latency.
+
+elapsed time will be `8 workers > 2 workers > 4 workers`
+
+## D6 — Cache-Friendly Request Design
+
+### Heavy request vs. Compact request
+
+Heavy request is object which has most members which are heap allocated.
+Compact request is object which has most members which are stack allocated or allocated next to each other.
+Heap allocation has diverse distribution in memory. which is not cache friendly.
+Stack allocation has adjacent distribution in memeory. which is cache friendly.
+
+
+### Array of Structures (AoS) vs. Structure of Arrays (SoA)
+
+AoS and SoA are two ways to organize data, and the choice between them can significantly affect performance.
+
+Modern CPUs fetch data from shared memory—such as RAM or the last-level cache—into their local caches (L1 and L2) in fixed-size cache lines. A cache line is commonly **64 bytes**. When the CPU requests one value, it also loads adjacent data within the same cache line.
+
+If values that will be processed together are stored next to one another, the CPU can reuse data already present in the cache instead of repeatedly fetching it from slower memory. This improves spatial locality and reduces latency.
+
+In Linux `perf`, the effect can be observed through the number or rate of cache misses.
+
+### False Sharing
+
+False sharing occurs when different CPU cores modify separate variables that happen to occupy the same cache line.
+
+#### Example
+
+- Core 1 modifies variable `A`.
+- Core 2 modifies variable `B`.
+- `A` and `B` occupy the same cache line.
+
+Although the cores operate on different variables, the cache-coherence system tracks ownership at cache-line granularity. A write by either core invalidates the other core's copy of that cache line. The cores must then exchange coherence messages over the interconnect, adding latency and reducing computational efficiency.
+
+#### Mitigation
+
+Separate frequently modified variables so that they occupy different cache lines. Padding or cache-line alignment can prevent one core's writes from invalidating another core's data.
+
+The tradeoff is increased memory usage because padding leaves some bytes unused.
