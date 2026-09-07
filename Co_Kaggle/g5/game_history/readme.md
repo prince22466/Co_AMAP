@@ -1,0 +1,2 @@
+the game histories(Submissions->Episodes->Game History->select game->Download replay) of loss ones(some of them, not all of them) downloaded for each submitted nb(different versions).
+They should be used for analysis and for improvment for next version.
