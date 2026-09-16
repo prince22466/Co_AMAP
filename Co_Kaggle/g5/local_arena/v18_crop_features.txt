@@ -1,0 +1,58 @@
+FEATURE_CROPS=('WHEAT','CARROT','TOMATO','STRAWBERRY','MELON')
+FEATURE_ANIMALS=('COW','SHEEP','GOOSE')
+FEATURE_SHOPS=tuple(SHOPS)
+def crop_features(obs,p,counts=None):
+    f=obs['farms'][obs['player']]
+    if counts is None:
+        counts={c:0 for c in FEATURE_CROPS+FEATURE_ANIMALS}
+        for row in f['tiles']:
+            for t in row:
+                if isinstance(t,dict):
+                    c=t.get('crop',t.get('animal'))
+                    if c in counts:counts[c]+=1
+    prices=obs['market']['prices'];shops=obs['town']['unlocked_shops']
+    features=[obs['day'],len(f['unlocked_quadrants']),p[0],p[1]]
+    features += [counts[c] for c in FEATURE_CROPS+FEATURE_ANIMALS]
+    features += [shops.count(c) for c in FEATURE_SHOPS]
+    features += [prices[c] for c in FEATURE_CROPS+('MILK','WOOL','EGG','FERTILIZER')]
+    other={c:0 for c in FEATURE_CROPS+FEATURE_ANIMALS}
+    for row in obs['farms'][1-obs['player']]['tiles']:
+        for t in row:
+            if isinstance(t,dict):
+                c=t.get('crop',t.get('animal'))
+                if c in other:other[c]+=1
+    features += [other[c] for c in FEATURE_CROPS+FEATURE_ANIMALS]
+    return features
+
+def learned_crop(obs,p,counts):
+    x=crop_features(obs,p,counts);votes=[0.]*5
+    for tree in CROP_TREES:
+        i=0
+        while tree[i][0]>=0:
+            feature,threshold,left,right=tree[i]
+            i=left if x[feature]<=threshold else right
+        for c,v in enumerate(tree[i][1]):votes[c]+=v
+    possible=[i for i,c in enumerate(FEATURE_CROPS) if obs['day']+CROPS[c][3]<=29]
+    if not possible:return None
+    return FEATURE_CROPS[max(possible,key=lambda i:votes[i])]
+
+def crop_plan(obs,projected,animal):
+    f=obs['farms'][obs['player']];day=obs['day'];plan={}
+    points=[(x,y) for y in range(10) for x in range(10) if tile(f,(x,y))!='LOCKED' and (x,y) not in ANIMAL_POINTS]
+    points.sort(key=lambda p:(dist(p,nearest_shed(p)),p[1],p[0]))
+    counts={c:0 for c in FEATURE_CROPS+FEATURE_ANIMALS}
+    for row in f['tiles']:
+        for t in row:
+            if isinstance(t,dict):
+                c=t.get('crop',t.get('animal'))
+                if c in counts:counts[c]+=1
+    opening=sorted((p for p in points if p[0]<5 and p[1]<5),key=lambda p:(p[1],p[0]))
+    for p in points:
+        t=tile(f,p)
+        if isinstance(t,dict) and 'crop' in t:plan[p]=t['crop'];continue
+        if isinstance(t,dict) and t.get('kind')!='WEED':continue
+        if day<=3 and p in opening:c='WHEAT' if p in opening[:7] else 'MELON'
+        else:c=learned_crop(obs,p,counts)
+        if c is not None:plan[p]=c;counts[c]+=1
+    return plan
+

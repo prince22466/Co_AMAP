@@ -1,0 +1,69 @@
+import copy
+from types import SimpleNamespace
+
+class SimStruct(dict):
+    def __getattr__(self,k):return self[k]
+    def __setattr__(self,k,v):self[k]=v
+
+def farm_value(obs,prices):
+    f=obs['farms'][obs['player']];p=obs['private'];day=obs['day']
+    value=f['money']+sum(n*prices.get(c,ANIMALS.get(c,(0,))[0]) for c,n in totals(p).items())
+    value+=sum(n*CROPS[c][0]*.5 for c,n in p['seeds'].items())
+    for row in f['tiles']:
+        for t in row:
+            if not isinstance(t,dict):continue
+            if 'animal' in t:
+                a=ANIMALS[t['animal']]
+                value+=a[0]*1.2+t.get('yield_units',0)*prices[a[1]]
+                value+=min(4,t.get('pending_care_bonus',0))*prices[a[1]]*.8
+                value+=t.get('fertilizer_available',False)*prices['FERTILIZER']*.8
+            elif 'crop' in t:
+                c=t['crop'];age=day-t['planted_day'];held=t['yield_units']
+                if c in ('STRAWBERRY','TOMATO'):
+                    future=sum(n for at,n in CROPS[c][2] if at>age and day+at-age<=29)
+                    v=held*prices[c]+future*prices[c]*.6
+                else:
+                    remaining=max(0,CROPS[c][3]-age)
+                    v=(held+min(remaining,3))*prices[c]*(.9**remaining)
+                value+=v*(.85 if t.get('consecutive_unwatered') else 1)
+    value+=sum((1000,2000,4000)[:max(0,len(f['unlocked_quadrants'])-1)])
+    return value
+
+def simulate_day(obs,hands,plant):
+    global HIRE_OVERRIDE,PLANT_WEIGHT
+    HIRE_OVERRIDE=hands;PLANT_WEIGHT=plant
+    o=SimStruct(copy.deepcopy(obs));seat=o.player
+    private_other=SIM['_new_private']()
+    other=SimStruct(o.copy());other.player=1-seat;other.private=private_other
+    state=[None,None];state[seat]=SimStruct(observation=o,action={},reward=0,status='ACTIVE')
+    state[1-seat]=SimStruct(observation=other,action={},reward=0,status='ACTIVE')
+    env=SimpleNamespace(configuration=SimStruct(episodeSteps=720),info={},done=False)
+    prices=dict(o.market['prices']);day=o.day
+    for hour in range(o.hour,23 if day==29 else 24):
+        o.hour=hour;o.step=day*24+hour
+        action=policy(o);state[seat].action=action
+        for i,a in enumerate([action['farmer']]+action['hands']):
+            SIM['_apply_unit_action'](o.farms[seat],o.private,i,a,10,day,24,100)
+        SIM['_process_market'](state,env)
+        SIM['_town_consume'](env,state,o.step)
+        SIM['_decay_plants'](o.farms[seat],o.step)
+    if day<29:
+        SIM['_daily_refresh_plants'](o.farms[seat],day,24)
+        SIM['_daily_refresh_animals'](o.farms[seat],day)
+        SIM['_drop_inventories_to_shed'](o.private,100)
+        o.day=day+1
+    return farm_value(o,prices)
+
+def agent(obs):
+    global HIRE_OVERRIDE,PLANT_WEIGHT,OPP_STYLE
+    if obs['day']==0 and obs['hour']==0:
+        HIRE_OVERRIDE=None;PLANT_WEIGHT=120
+    elif obs['hour']==0 and obs['day']>=3:
+        saved_style=OPP_STYLE
+        choices=[]
+        for hands,plant in ROLLOUT_CHOICES:
+            value=simulate_day(obs,hands,plant)
+            choices.append((value,hands,plant))
+        _,HIRE_OVERRIDE,PLANT_WEIGHT=max(choices)
+        OPP_STYLE=saved_style
+    return policy(obs)

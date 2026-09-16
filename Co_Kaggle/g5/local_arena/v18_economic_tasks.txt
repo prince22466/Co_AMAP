@@ -1,0 +1,29 @@
+    if 3<=day<29:
+        projection,_=forecast(obs)
+        economic=[]
+        for p,op,weight,resource in tasks:
+            t=tile(f,p);kind=op[0]
+            if kind=='PLANT':
+                c=op[1];cost,_,events,_=CROPS[c]
+                revenue=sum(n*price(c,projection[c][day+age]) for age,n in events if day+age<=29)
+                duration=max((age for age,n in events if day+age<=29),default=1)
+                weight=max(10,(revenue-cost)/duration*PLANT_VALUE)
+            elif kind=='CARE':
+                a=ANIMALS[t['animal']]
+                weight=max(10,prices[a[1]]*CARE_VALUE)
+            elif kind=='COLLECT_FERTILIZER':weight=max(10,prices['FERTILIZER']*FERT_VALUE)
+            elif kind=='HARVEST':
+                c=t.get('crop') or ANIMALS[t['animal']][1]
+                weight=max(20,t['yield_units']*prices[c]*HARVEST_VALUE)
+            elif kind=='WATER':
+                c=t['crop'];age=day-t['planted_day']
+                if c in ('WHEAT','CARROT','MELON'):
+                    weight=prices[c] if age>=({'WHEAT':2,'CARROT':2,'MELON':6}[c]) else 10
+                else:
+                    weight=prices[c]*.6 if any(age+1==a for a,n in CROPS[c][2]) else 10
+                if t['consecutive_unwatered']:
+                    future=sum(n*price(c,projection[c][day+a-age]) for a,n in CROPS[c][2] if a>=age and day+a-age<=29)
+                    weight+=max(50,future*SURVIVAL_VALUE)
+                if hour>=16:weight*=2
+            economic.append((p,op,weight,resource))
+        tasks=economic

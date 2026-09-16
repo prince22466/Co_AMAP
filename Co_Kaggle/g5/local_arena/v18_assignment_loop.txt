@@ -1,0 +1,30 @@
+    groups={}
+    for task in tasks:groups.setdefault(task[0],[]).append(task)
+    targets=list(groups);cost=[];chosen={}
+    for row,i in enumerate(free):
+        values=[]
+        for col,p in enumerate(targets):
+            best_score=0.;best_op=None
+            distance=dist(positions[i],p)
+            if distance<24-hour:
+                for p,op,weight,resource in groups[p]:
+                    if resource=='NO_WHEAT':
+                        if invs[i].get('WHEAT',0):continue
+                    elif resource=='NO_FERTILIZER':
+                        if invs[i].get('FERTILIZER',0):continue
+                    elif resource and not invs[i].get(resource,0):continue
+                    score=weight/(1+distance*.65)
+                    if LAST_TARGETS.get(i)==p:score*=STICKINESS
+                    if score>best_score:best_score=score;best_op=op
+            values.append(-best_score)
+            chosen[row,col]=best_op
+        cost.append(values+[0.]*len(free))
+    next_targets={}
+    for row,col in enumerate(optimal_assignment(cost)):
+        if col<0 or col>=len(targets):continue
+        i=free[row];p=targets[col];op=chosen[row,col]
+        if op is None:continue
+        actions[i]=op if tuple(positions[i])==p else move(positions[i],p)
+        next_targets[i]=p
+    LAST_TARGETS=next_targets
+    free=[i for i in free if actions[i] is None]

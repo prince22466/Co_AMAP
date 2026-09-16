@@ -1,0 +1,23 @@
+TASK_OPS=('PLANT','DIG','HARVEST','WATER','FERTILIZE','FEED','CARE','COLLECT_FERTILIZER','PICKUP')
+TASK_KINDS=('WHEAT','CARROT','TOMATO','STRAWBERRY','MELON','COW','SHEEP','GOOSE')
+def task_features(obs,i,task):
+    p,op,weight,resource=task
+    farm=obs['farms'][obs['player']];positions=[farm['farmer']]+farm['hands']
+    pos=positions[i];t=tile(farm,p);t=t if isinstance(t,dict) else {}
+    inv=obs['private']['inventories'][i];kind=t.get('crop',t.get('animal',op[1] if op[0]=='PLANT' else ''))
+    age=obs['day']-t.get('planted_day',t.get('placed_day',obs['day']))
+    return [obs['day'],obs['hour'],dist(pos,p),weight,TASK_OPS.index(op[0]),TASK_KINDS.index(kind) if kind in TASK_KINDS else -1,
+        age,t.get('yield_units',0),t.get('consecutive_unwatered',0),int(t.get('fed_today',False)),int(t.get('cared_today',False)),
+        t.get('fertilized_until_day',-1)-obs['day'],inv.get('WHEAT',0),inv.get('FERTILIZER',0),sum(inv.values()),dist(p,nearest_shed(p)),
+        p[0],p[1],pos[0],pos[1],len(positions)]
+
+def learned_task_score(features):
+    value=0.
+    for tree in TASK_TREES:
+        i=0
+        while tree[i][0]>=0:
+            f,threshold,left,right=tree[i]
+            i=left if features[f]<=threshold else right
+        value+=tree[i][1]
+    return value
+
