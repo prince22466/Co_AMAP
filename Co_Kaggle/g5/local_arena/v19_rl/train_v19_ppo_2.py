@@ -159,8 +159,14 @@ def run_episode(actor, device, executor_path, opponent, seed, seat, episode_step
         executor_path, actor, device, exploration_std, forced_threshold,
         np.random.default_rng(seed ^ 0x5EED5EED),
     )
+    # Match the working wrapper used by train_v19_ppo.py. Kaggle inspects
+    # plain functions by __code__.co_argcount and passes only the observation.
+    # A callable object may instead receive (observation, configuration).
+    def candidate_agent(obs):
+        return controller(obs)
+
     players: list[Any] = [None, None]
-    players[seat], players[1-seat] = controller, opponent_runner
+    players[seat], players[1-seat] = candidate_agent, opponent_runner
     try:
         env = make("kaggriculture",
                    configuration={"episodeSteps": episode_steps, "seed": seed},
@@ -401,6 +407,11 @@ def main():
                 )
                 write_jsonl(episodes_log, {"update":update_no, **asdict(result)})
                 if not result.ok or result.terminal_reward is None or not steps:
+                    print(
+                        f"episode failed update={update_no} seed={seed} "
+                        f"opponent={result.opponent} seat={seat}: {result.error}",
+                        flush=True,
+                    )
                     continue
                 steps_all.extend(steps)
                 targets_all.append(mc_targets(steps, result.terminal_reward, args.gamma))
