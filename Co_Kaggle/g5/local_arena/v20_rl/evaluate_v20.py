@@ -12,11 +12,9 @@ import numpy as np
 import torch
 
 from train_v20_ppo import (
-    DEFAULT_EXECUTOR, GLOBAL_FEATURE_NAMES, TASK_FEATURE_NAMES, TaskActorCritic,
+    ActorCritic, DEFAULT_EXECUTOR, GLOBAL_FEATURE_NAMES, TASK_FEATURE_NAMES,
     choose_device, load_checkpoint, prepare_opponents, run_episode,
 )
-
-HERE = Path(__file__).resolve().parent
 
 
 def parser():
@@ -37,7 +35,7 @@ def main():
     checkpoint=args.checkpoint.expanduser().resolve()
     payload=torch.load(checkpoint,map_location=device,weights_only=False)
     hidden=int(payload.get("args",{}).get("hidden",64));baseline_scale=float(payload.get("baseline_scale",1.0))
-    model=TaskActorCritic(len(TASK_FEATURE_NAMES),len(GLOBAL_FEATURE_NAMES),hidden).to(device)
+    model=ActorCritic(len(TASK_FEATURE_NAMES),len(GLOBAL_FEATURE_NAMES),hidden).to(device)
     load_checkpoint(checkpoint,model,None,device);model.eval()
     rng=np.random.default_rng(args.seed);rows=[]
     with tempfile.TemporaryDirectory(prefix="v20_eval_") as tmp:
@@ -47,8 +45,8 @@ def main():
             for seat in (0,1):
                 result,_=run_episode(
                     model,device,args.executor.expanduser().resolve(),opponent,seed,seat,
-                    args.episode_steps,baseline_scale,deterministic=True,forced_baseline=False,
-                    collect_steps=False,
+                    args.episode_steps,baseline_scale,deterministic=True,
+                    forced_baseline=False,collect_steps=False,
                 )
                 rows.append(asdict(result));print(json.dumps(rows[-1],sort_keys=True))
     ok=[r for r in rows if r["ok"]];margins=np.asarray([r["margin"] for r in ok],dtype=np.float64)
@@ -63,7 +61,9 @@ def main():
     }
     print(json.dumps(summary,indent=2,sort_keys=True))
     if args.output:
-        args.output.expanduser().resolve().write_text(json.dumps({"summary":summary,"games":rows},indent=2)+"\n",encoding="utf-8")
+        args.output.expanduser().resolve().write_text(
+            json.dumps({"summary":summary,"games":rows},indent=2)+"\n",encoding="utf-8"
+        )
 
 
 if __name__=="__main__":main()
