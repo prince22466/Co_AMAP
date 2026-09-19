@@ -451,7 +451,10 @@ def main() -> int:
     print(f"checkpoint_sha256={_sha256(checkpoint)}")
     print(f"executor={executor}")
     print(f"executor_sha256={_sha256(executor)}")
-    print(\n        f"policies=baseline500, static{args.static_threshold:g}, "\n        "learned deterministic update99"\n    )
+    print(
+        f"policies=baseline500, static{args.static_threshold:g}, "
+        "learned deterministic update99"
+    )
     print("exploration=disabled")
     print()
 
