@@ -98,3 +98,47 @@ Twenty seeds are evaluated from both seats, for 40 games total.
 ## Scope
 
 v20.0 only asks whether sparse end-of-game RL can improve v19's constrained worker-task decisions. Crop selection, animal expansion, hiring, land purchases, and market orders remain v19 logic and can become later policy heads if this baseline learns.
+
+
+## Train on real game-history seeds until >70% vs v19
+
+Use the dynamic-rematch protocol described in `game_history/readme.md`: extract the actual game seed from each replay JSON and rerun v20 against frozen v19.
+
+```bash
+python local_arena/v20_rl/train_v20_history.py
+```
+
+Defaults:
+
+- scans every JSON under `game_history/`
+- reads `seed`, `randomSeed`, or `random_seed` from replay `info` / `configuration`
+- deduplicates the real seeds
+- deterministic 80/20 train/validation split using `--split-seed 20260919`
+- trains only on the training seeds
+- opponent is frozen v19 only
+- randomly trains from either player seat
+- evaluates every update on **all held-out seeds from both seats**
+- stops only when held-out deterministic win rate is **strictly greater than 70%**
+- saves the passing model as `runs/history_vs_v19/checkpoints/target.pt`
+
+The exact split is written to:
+
+```text
+local_arena/v20_rl/runs/history_vs_v19/history_seed_split.json
+```
+
+The passing evaluation is written to:
+
+```text
+local_arena/v20_rl/runs/history_vs_v19/TARGET_REACHED.json
+```
+
+To continue a run that reaches the update cap before 70%:
+
+```bash
+python local_arena/v20_rl/train_v20_history.py \
+  --resume local_arena/v20_rl/runs/history_vs_v19/checkpoints/latest.pt \
+  --max-updates 2000
+```
+
+This intentionally keeps validation seeds out of PPO updates, so the 70% threshold is not measured on training games.
