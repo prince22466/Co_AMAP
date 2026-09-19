@@ -118,8 +118,16 @@ Defaults:
 - opponent is frozen v19 only
 - randomly trains from either player seat
 - evaluates every update on **all held-out seeds from both seats**
-- stops only when held-out deterministic win rate is **strictly greater than 70%**
+- stops when held-out deterministic win rate is **strictly greater than 70%**, or when wall-clock training time reaches **2 hours**
+- the two break conditions are deliberately defined at the top of `main()` in `train_v20_history.py`:
+
+```python
+TARGET_WIN_RATE = 0.70
+MAX_TRAINING_HOURS = 2.0
+```
+
 - saves the passing model as `runs/history_vs_v19/checkpoints/target.pt`
+- saves a timeout checkpoint as `runs/history_vs_v19/checkpoints/timeout.pt`
 
 The exact split is written to:
 
@@ -133,12 +141,13 @@ The passing evaluation is written to:
 local_arena/v20_rl/runs/history_vs_v19/TARGET_REACHED.json
 ```
 
-To continue a run that reaches the update cap before 70%:
+To continue a run that hits the 2-hour timeout before 70%:
 
 ```bash
 python local_arena/v20_rl/train_v20_history.py \
-  --resume local_arena/v20_rl/runs/history_vs_v19/checkpoints/latest.pt \
-  --max-updates 2000
+  --resume local_arena/v20_rl/runs/history_vs_v19/checkpoints/timeout.pt
 ```
+
+For later experiments, edit only `TARGET_WIN_RATE` and `MAX_TRAINING_HOURS` in `main()`.
 
 This intentionally keeps validation seeds out of PPO updates, so the 70% threshold is not measured on training games.
