@@ -55,7 +55,7 @@ DEFAULT_CHECKPOINT = (
 DEFAULT_OUTPUT = (
     HERE / "runs" / "herd_differentiable_2" / "v18_loss_replay_update_0099_compare.json"
 )
-STATIC_TEST_THRESHOLD = 800.0
+DEFAULT_STATIC_TEST_THRESHOLD = 800.0
 
 
 def _state_core_without_timing(state: Any) -> dict[str, Any]:
@@ -451,7 +451,7 @@ def main() -> int:
     print(f"checkpoint_sha256={_sha256(checkpoint)}")
     print(f"executor={executor}")
     print(f"executor_sha256={_sha256(executor)}")
-    print("policies=baseline500, static_test, learned deterministic update99")
+    print(\n        f"policies=baseline500, static{args.static_threshold:g}, "\n        "learned deterministic update99"\n    )
     print("exploration=disabled")
     print()
 
