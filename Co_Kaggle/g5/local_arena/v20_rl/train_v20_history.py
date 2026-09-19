@@ -126,11 +126,9 @@ def parser():
     p.add_argument("--history-root", type=Path, default=DEFAULT_HISTORY_ROOT)
     p.add_argument("--executor", type=Path, default=DEFAULT_EXECUTOR)
     p.add_argument("--output-dir", type=Path, default=HERE / "runs" / "history_vs_v19")
-    p.add_argument("--target-win-rate", type=float, default=0.70)
     p.add_argument("--validation-fraction", type=float, default=0.20)
     p.add_argument("--split-seed", type=int, default=20260919)
     p.add_argument("--training-seed", type=int, default=32020)
-    p.add_argument("--max-updates", type=int, default=1000)
     p.add_argument("--episodes-per-update", type=int, default=8)
     p.add_argument("--episode-steps", type=int, default=720)
     p.add_argument("--device", default="auto")
@@ -149,11 +147,22 @@ def parser():
 
 
 def main():
+    # ------------------------------------------------------------------
+    # TRAINING BREAK CONDITIONS — edit these two values for later runs.
+    # Training stops when EITHER condition becomes true:
+    #   1) held-out deterministic win rate vs frozen v19 > TARGET_WIN_RATE
+    #   2) wall-clock runtime >= MAX_TRAINING_HOURS
+    # ------------------------------------------------------------------
+    TARGET_WIN_RATE = 0.70
+    MAX_TRAINING_HOURS = 2.0
+
     args = parser().parse_args()
     if not (0.0 < args.validation_fraction < 1.0):
         raise SystemExit("--validation-fraction must be between 0 and 1")
-    if not (0.0 < args.target_win_rate <= 1.0):
-        raise SystemExit("--target-win-rate must be in (0,1]")
+    if not (0.0 < TARGET_WIN_RATE <= 1.0):
+        raise SystemExit("TARGET_WIN_RATE must be in (0,1]")
+    if MAX_TRAINING_HOURS <= 0.0:
+        raise SystemExit("MAX_TRAINING_HOURS must be > 0")
 
     history_root = args.history_root.expanduser().resolve()
     executor = args.executor.expanduser().resolve()
@@ -212,7 +221,12 @@ def main():
                 "executor": str(executor),
                 "device_resolved": str(device),
                 "opponent": "frozen v19",
-                "target_condition": "held_out_win_rate > target_win_rate",
+                "target_win_rate": TARGET_WIN_RATE,
+                "max_training_hours": MAX_TRAINING_HOURS,
+                "break_conditions": [
+                    "held_out_win_rate > TARGET_WIN_RATE",
+                    "elapsed_wall_clock_hours >= MAX_TRAINING_HOURS",
+                ],
                 "evaluation_seats": [0, 1],
             },
             indent=2,
@@ -238,16 +252,42 @@ def main():
 
         if (
             baseline_eval["games_ok"] == baseline_eval["games"]
-            and baseline_eval["win_rate"] > args.target_win_rate
+            and baseline_eval["win_rate"] > TARGET_WIN_RATE
         ):
             save_checkpoint(ckpts / "target.pt", model, optimizer, -1, args)
             print(
                 f"target already reached: {baseline_eval['win_rate']:.3f} "
-                f"> {args.target_win_rate:.3f}"
+                f"> {TARGET_WIN_RATE:.3f}"
             )
             return 0
 
-        for update_no in range(start_update, args.max_updates):
+        training_started = time.perf_counter()
+        update_no = start_update
+
+        while True:
+            elapsed_hours = (time.perf_counter() - training_started) / 3600.0
+            if elapsed_hours >= MAX_TRAINING_HOURS:
+                save_checkpoint(ckpts / "timeout.pt", model, optimizer, update_no - 1, args)
+                (out / "TRAINING_STOPPED.json").write_text(
+                    json.dumps(
+                        {
+                            "reason": "timeout",
+                            "elapsed_hours": elapsed_hours,
+                            "max_training_hours": MAX_TRAINING_HOURS,
+                            "target_win_rate": TARGET_WIN_RATE,
+                            "last_completed_update": update_no - 1,
+                        },
+                        indent=2,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                print(
+                    f"TIMEOUT: {elapsed_hours:.3f}h >= "
+                    f"{MAX_TRAINING_HOURS:.3f}h"
+                )
+                return 0
+
             started = time.perf_counter()
             results = []
             steps = []
@@ -342,14 +382,14 @@ def main():
 
             if (
                 val["games_ok"] == val["games"]
-                and val["win_rate"] > args.target_win_rate
+                and val["win_rate"] > TARGET_WIN_RATE
             ):
                 save_checkpoint(ckpts / "target.pt", model, optimizer, update_no, args)
                 (out / "TARGET_REACHED.json").write_text(
                     json.dumps(
                         {
                             "update": update_no,
-                            "target_win_rate": args.target_win_rate,
+                            "target_win_rate": TARGET_WIN_RATE,
                             "observed_validation_win_rate": val["win_rate"],
                             "wins": val["wins"],
                             "ties": val["ties"],
@@ -365,14 +405,38 @@ def main():
                 )
                 print(
                     f"TARGET REACHED at update {update_no}: "
-                    f"{val['win_rate']:.3f} > {args.target_win_rate:.3f}"
+                    f"{val['win_rate']:.3f} > {TARGET_WIN_RATE:.3f}"
                 )
                 return 0
 
-    raise SystemExit(
-        f"target not reached within {args.max_updates} updates; "
-        "resume from checkpoints/latest.pt to continue"
-    )
+            elapsed_hours = (time.perf_counter() - training_started) / 3600.0
+            if elapsed_hours >= MAX_TRAINING_HOURS:
+                save_checkpoint(ckpts / "timeout.pt", model, optimizer, update_no, args)
+                (out / "TRAINING_STOPPED.json").write_text(
+                    json.dumps(
+                        {
+                            "reason": "timeout",
+                            "elapsed_hours": elapsed_hours,
+                            "max_training_hours": MAX_TRAINING_HOURS,
+                            "target_win_rate": TARGET_WIN_RATE,
+                            "last_completed_update": update_no,
+                            "last_validation_win_rate": val["win_rate"],
+                            "wins": val["wins"],
+                            "ties": val["ties"],
+                            "losses": val["losses"],
+                        },
+                        indent=2,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                print(
+                    f"TIMEOUT after update {update_no}: "
+                    f"{elapsed_hours:.3f}h >= {MAX_TRAINING_HOURS:.3f}h"
+                )
+                return 0
+
+            update_no += 1
 
 
 if __name__ == "__main__":
