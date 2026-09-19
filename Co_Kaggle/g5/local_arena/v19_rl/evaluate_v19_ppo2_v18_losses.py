@@ -247,6 +247,7 @@ def evaluate_one(
     executor: Path,
     actor: ThresholdActor,
     device: torch.device,
+    static_threshold: float,
 ) -> dict[str, Any]:
     history = json.loads(path.read_text(encoding="utf-8"))
     original_rewards = _saved_final_rewards(history)
@@ -291,15 +292,15 @@ def evaluate_one(
         row["error"] = "v18 executor parity failed under threshold=500"
         return row
 
-    static800 = run_replacement(
-        history, seat, actor, device, executor, forced_threshold=STATIC_TEST_THRESHOLD
+    static_run = run_replacement(
+        history, seat, actor, device, executor, forced_threshold=static_threshold
     )
     learned = run_replacement(
         history, seat, actor, device, executor, forced_threshold=None
     )
 
-    if static800["statuses"] != ["DONE", "DONE"]:
-        row["error"] = f"static-800 replay failed: {static800['statuses']}"
+    if static_run["statuses"] != ["DONE", "DONE"]:
+        row["error"] = f"static-{static_threshold:g} replay failed: {static_run['statuses']}"
         return row
     if learned["statuses"] != ["DONE", "DONE"]:
         row["error"] = f"learned replay failed: {learned['statuses']}"
@@ -307,7 +308,7 @@ def evaluate_one(
 
     row.update(
         _policy_fields(
-            "static800", static800, original_rewards, original_margin, seat
+            "static_test", static_run, original_rewards, original_margin, seat
         )
     )
     row.update(
@@ -315,13 +316,13 @@ def evaluate_one(
             "learned", learned, original_rewards, original_margin, seat
         )
     )
-    row["learned_minus_static800_margin"] = (
-        float(learned["margin"]) - float(static800["margin"])
+    row["learned_minus_static_test_margin"] = (
+        float(learned["margin"]) - float(static_run["margin"])
     )
-    row["learned_same_actions_as_static800"] = (
-        learned["rewards"] == static800["rewards"]
-        and learned["margin"] == static800["margin"]
-        and learned["action_divergences"] == static800["action_divergences"]
+    row["learned_same_actions_as_static_test"] = (
+        learned["rewards"] == static_run["rewards"]
+        and learned["margin"] == static_run["margin"]
+        and learned["action_divergences"] == static_run["action_divergences"]
     )
     row["valid"] = True
     return row
@@ -359,18 +360,18 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "games_total": len(rows),
         "games_valid": len(valid),
         "games_invalid": len(invalid),
-        "static800": summarize_policy(rows, "static800"),
+        "static_test": summarize_policy(rows, "static_test"),
         "learned": summarize_policy(rows, "learned"),
     }
     if valid:
-        comparisons = [float(r["learned_minus_static800_margin"]) for r in valid]
-        out["learned_vs_static800"] = {
+        comparisons = [float(r["learned_minus_static_test_margin"]) for r in valid]
+        out["learned_vs_static_test"] = {
             "learned_better_cases": sum(x > 0 for x in comparisons),
-            "static800_better_cases": sum(x < 0 for x in comparisons),
+            "static_test_better_cases": sum(x < 0 for x in comparisons),
             "equal_margin_cases": sum(x == 0 for x in comparisons),
-            "mean_learned_minus_static800_margin": statistics.mean(comparisons),
+            "mean_learned_minus_static_test_margin": statistics.mean(comparisons),
             "same_action_outcome_cases": sum(
-                bool(r["learned_same_actions_as_static800"]) for r in valid
+                bool(r["learned_same_actions_as_static_test"]) for r in valid
             ),
             "mean_learned_threshold": statistics.mean(
                 float(r["learned_threshold_mean"])
@@ -384,12 +385,12 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
 def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
     fields = [
         "episode", "valid", "seed", "v18_seat", "original_v18_margin",
-        "static800_margin", "static800_margin_improvement",
-        "static800_action_divergences", "static800_result",
+        "static_test_margin", "static_test_margin_improvement",
+        "static_test_action_divergences", "static_test_result",
         "learned_margin", "learned_margin_improvement",
         "learned_action_divergences", "learned_result",
         "learned_threshold_mean", "learned_threshold_min", "learned_threshold_max",
-        "learned_minus_static800_margin", "learned_same_actions_as_static800",
+        "learned_minus_static_test_margin", "learned_same_actions_as_static_test",
         "error",
     ]
     with path.open("w", newline="", encoding="utf-8") as f:
@@ -406,6 +407,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--executor", type=Path, default=DEFAULT_EXECUTOR)
     p.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     p.add_argument("--device", default="cpu")
+    p.add_argument(
+        "--static-threshold",
+        type=float,
+        default=DEFAULT_STATIC_TEST_THRESHOLD,
+        help="fixed HERD_THRESHOLD to compare with baseline=500 and learned actor",
+    )
     p.add_argument("--episodes", default="")
     p.add_argument("--fail-fast", action="store_true")
     return p
@@ -417,6 +424,10 @@ def main() -> int:
     checkpoint = args.checkpoint.expanduser().resolve()
     executor = args.executor.expanduser().resolve()
     output = args.output.expanduser().resolve()
+    if args.output == DEFAULT_OUTPUT and args.static_threshold != DEFAULT_STATIC_TEST_THRESHOLD:
+        output = output.with_name(
+            f"v18_loss_replay_update_0099_static_{args.static_threshold:g}_compare.json"
+        )
     csv_output = output.with_suffix(".csv")
 
     wanted = {x.strip() for x in args.episodes.split(",") if x.strip()}
@@ -440,14 +451,16 @@ def main() -> int:
     print(f"checkpoint_sha256={_sha256(checkpoint)}")
     print(f"executor={executor}")
     print(f"executor_sha256={_sha256(executor)}")
-    print("policies=baseline500, static800, learned deterministic update99")
+    print("policies=baseline500, static_test, learned deterministic update99")
     print("exploration=disabled")
     print()
 
     rows: list[dict[str, Any]] = []
     for i, path in enumerate(paths, 1):
         try:
-            row = evaluate_one(path, checkpoint, executor, actor, device)
+            row = evaluate_one(
+                path, checkpoint, executor, actor, device, args.static_threshold
+            )
         except Exception as exc:
             row = {
                 "episode": path.stem,
@@ -460,12 +473,12 @@ def main() -> int:
             print(
                 f"[{i:2d}/{len(paths)}] {row['episode']} "
                 f"v18={row['original_v18_margin']:+.0f} "
-                f"800={row['static800_margin']:+.0f} "
-                f"Δ800={row['static800_margin_improvement']:+.0f} "
+                f"static{args.static_threshold:g}={row['static_test_margin']:+.0f} "
+                f"Δstatic={row['static_test_margin_improvement']:+.0f} "
                 f"learned={row['learned_margin']:+.0f} "
                 f"ΔL={row['learned_margin_improvement']:+.0f} "
                 f"tau={row['learned_threshold_mean']:.1f} "
-                f"div800={row['static800_action_divergences']} "
+                f"divStatic={row['static_test_action_divergences']} "
                 f"divL={row['learned_action_divergences']}"
             )
         else:
@@ -498,7 +511,7 @@ def main() -> int:
                 "executor_sha256": _sha256(executor),
                 "deterministic_learned_policy": True,
                 "exploration_std": 0.0,
-                "comparison_thresholds": [500.0, 800.0],
+                "comparison_thresholds": [500.0, float(args.static_threshold)],
                 "replay_parity_ignored_fields": [
                     "observation.remainingOverageTime"
                 ],
@@ -517,7 +530,10 @@ def main() -> int:
         f"  valid/total: {summary['games_valid']}/{summary['games_total']} "
         f"(invalid {summary['games_invalid']})"
     )
-    for key, label in (("static800", "static 800"), ("learned", "learned")):
+    for key, label in (
+        ("static_test", f"static {args.static_threshold:g}"),
+        ("learned", "learned"),
+    ):
         s = summary.get(key) or {}
         if not s:
             continue
@@ -528,14 +544,14 @@ def main() -> int:
             f"mean_delta={s['mean_margin_improvement']:+.1f} "
             f"games_with_divergence={s['games_with_action_divergence']}"
         )
-    comp = summary.get("learned_vs_static800") or {}
+    comp = summary.get("learned_vs_static_test") or {}
     if comp:
         print(
-            "  learned vs 800: "
+            f"  learned vs static {args.static_threshold:g}: "
             f"better/equal/worse={comp['learned_better_cases']}/"
             f"{comp['equal_margin_cases']}/"
-            f"{comp['static800_better_cases']} "
-            f"mean_delta={comp['mean_learned_minus_static800_margin']:+.1f} "
+            f"{comp['static_test_better_cases']} "
+            f"mean_delta={comp['mean_learned_minus_static_test_margin']:+.1f} "
             f"same_action_outcomes={comp['same_action_outcome_cases']}"
         )
         print(f"  mean learned threshold={comp['mean_learned_threshold']:.2f}")
