@@ -78,8 +78,17 @@ def split_seeds(seeds: list[int], validation_fraction: float, split_seed: int):
     return train, val
 
 
-def evaluate(model, device, executor, opponent, seeds, episode_steps, baseline_scale):
+def evaluate(
+    model, device, executor, opponent, seeds, episode_steps, baseline_scale,
+    phase="validation",
+):
     rows = []
+    total_games = len(seeds) * 2
+    completed = 0
+    wins = 0
+    ties = 0
+    losses = 0
+    print(f"[{phase}] starting {total_games} games", flush=True)
     for seed in seeds:
         for seat in (0, 1):
             result, _ = run_episode(
@@ -96,6 +105,32 @@ def evaluate(model, device, executor, opponent, seeds, episode_steps, baseline_s
                 collect_steps=False,
             )
             rows.append(result)
+            completed += 1
+            if result.ok and result.margin is not None:
+                if result.margin > 0:
+                    wins += 1
+                    outcome = "WIN"
+                elif result.margin < 0:
+                    losses += 1
+                    outcome = "LOSS"
+                else:
+                    ties += 1
+                    outcome = "TIE"
+                running_win_rate = wins / completed
+                print(
+                    f"[{phase}] {completed}/{total_games} "
+                    f"seed={seed} seat={seat} {outcome} "
+                    f"margin={result.margin:+.0f} "
+                    f"running W/T/L={wins}/{ties}/{losses} "
+                    f"win_rate={running_win_rate:.1%}",
+                    flush=True,
+                )
+            else:
+                print(
+                    f"[{phase}] {completed}/{total_games} "
+                    f"seed={seed} seat={seat} ERROR {result.error}",
+                    flush=True,
+                )
     ok = [r for r in rows if r.ok and r.margin is not None]
     if not ok:
         return {
@@ -171,6 +206,16 @@ def main():
     if not executor.is_file():
         raise SystemExit(f"v19 executor not found: {executor}")
 
+    print("=== v20 history-seed PPO training ===", flush=True)
+    print(f"history_root={history_root}", flush=True)
+    print(f"executor={executor}", flush=True)
+    print(
+        f"break conditions: validation win rate > {TARGET_WIN_RATE:.1%} "
+        f"OR runtime >= {MAX_TRAINING_HOURS:.2f}h",
+        flush=True,
+    )
+    print("loading real game-history seeds...", flush=True)
+
     all_seeds, source_rows = load_history_seeds(history_root)
     if len(all_seeds) < 2:
         raise SystemExit("fewer than two usable real game-history seeds found")
@@ -178,7 +223,14 @@ def main():
         all_seeds, args.validation_fraction, args.split_seed
     )
 
+    print(
+        f"loaded {len(all_seeds)} unique seeds: "
+        f"{len(train_seeds)} train / {len(val_seeds)} validation",
+        flush=True,
+    )
+
     device = choose_device(args.device)
+    print(f"device={device}", flush=True)
     random.seed(args.training_seed)
     np.random.seed(args.training_seed)
     torch.manual_seed(args.training_seed)
@@ -240,15 +292,24 @@ def main():
         opponent = prepare_opponents([str(executor)], Path(tmp))[0]
 
         # Baseline measurement before any update.
+        print(
+            f"\n=== initial held-out validation vs frozen v19 "
+            f"({len(val_seeds) * 2} games) ===",
+            flush=True,
+        )
         baseline_eval = evaluate(
             model, device, executor, opponent, val_seeds,
-            args.episode_steps, args.baseline_scale
+            args.episode_steps, args.baseline_scale,
+            phase="baseline validation",
         )
         baseline_summary = {k: v for k, v in baseline_eval.items() if k != "rows"}
         baseline_summary["update"] = -1
         baseline_summary["phase"] = "initial"
         write_jsonl(out / "validation.jsonl", baseline_summary)
-        print(json.dumps(baseline_summary, sort_keys=True))
+        print(
+            "baseline summary: " + json.dumps(baseline_summary, sort_keys=True),
+            flush=True,
+        )
 
         if (
             baseline_eval["games_ok"] == baseline_eval["games"]
@@ -288,6 +349,11 @@ def main():
                 )
                 return 0
 
+            print(
+                f"\n=== update {update_no} training "
+                f"({args.episodes_per_update} episodes) ===",
+                flush=True,
+            )
             started = time.perf_counter()
             results = []
             steps = []
@@ -317,6 +383,25 @@ def main():
                     out / "episodes.jsonl",
                     {"update": update_no, "split": "train", **asdict(result)},
                 )
+                if result.ok and result.margin is not None:
+                    outcome = (
+                        "WIN" if result.margin > 0
+                        else "LOSS" if result.margin < 0
+                        else "TIE"
+                    )
+                    print(
+                        f"[train u{update_no}] attempt={attempts} "
+                        f"seed={seed} seat={seat} {outcome} "
+                        f"margin={result.margin:+.0f} "
+                        f"accepted={len(results) + 1}/{args.episodes_per_update}",
+                        flush=True,
+                    )
+                else:
+                    print(
+                        f"[train u{update_no}] attempt={attempts} "
+                        f"seed={seed} seat={seat} ERROR {result.error}",
+                        flush=True,
+                    )
                 if (
                     not result.ok
                     or result.terminal_reward is None
@@ -334,6 +419,11 @@ def main():
                 )
                 results.append(result)
 
+            print(
+                f"[train u{update_no}] collected {len(results)} episodes, "
+                f"{len(steps)} PPO decisions; updating model...",
+                flush=True,
+            )
             returns = np.concatenate(return_chunks)
             stats = ppo_update(
                 model, optimizer, device, steps, returns,
@@ -360,10 +450,17 @@ def main():
             save_checkpoint(numbered, model, optimizer, update_no, args)
             save_checkpoint(ckpts / "latest.pt", model, optimizer, update_no, args)
 
+            print(
+                f"[train u{update_no}] PPO update complete. "
+                f"train win rate={train_metrics['train_win_rate']:.1%}; "
+                "starting held-out validation...",
+                flush=True,
+            )
             eval_started = time.perf_counter()
             val = evaluate(
                 model, device, executor, opponent, val_seeds,
-                args.episode_steps, args.baseline_scale
+                args.episode_steps, args.baseline_scale,
+                phase=f"validation u{update_no}",
             )
             val_summary = {k: v for k, v in val.items() if k != "rows"}
             val_summary.update(
@@ -378,7 +475,18 @@ def main():
                     {"update": update_no, "split": "validation", **asdict(row)},
                 )
 
-            print(json.dumps({**train_metrics, **val_summary}, sort_keys=True))
+            print(
+                f"[update {update_no}] validation W/T/L="
+                f"{val['wins']}/{val['ties']}/{val['losses']} "
+                f"win_rate={val['win_rate']:.1%} "
+                f"mean_margin={val['mean_margin']}",
+                flush=True,
+            )
+            print(
+                "update metrics: "
+                + json.dumps({**train_metrics, **val_summary}, sort_keys=True),
+                flush=True,
+            )
 
             if (
                 val["games_ok"] == val["games"]
@@ -436,6 +544,13 @@ def main():
                 )
                 return 0
 
+            elapsed_hours = (time.perf_counter() - training_started) / 3600.0
+            print(
+                f"[update {update_no}] elapsed={elapsed_hours:.3f}h / "
+                f"{MAX_TRAINING_HOURS:.3f}h, "
+                f"target>{TARGET_WIN_RATE:.1%}",
+                flush=True,
+            )
             update_no += 1
 
 
