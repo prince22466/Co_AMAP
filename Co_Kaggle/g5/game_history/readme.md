@@ -1,2 +1,4 @@
 the game histories(Submissions->Episodes->Game History->select game->Download replay) of loss ones(some of them, not all of them) downloaded for each submitted nb(different versions).
 They should be used for analysis and for improvment for next version.
+Static traning or performance validation is just using the action records of opponents, and plug in new version of files such as v19 when v18 is the previous version. Becasue the records file do not reflect opponents behavior process when they have adaptive decision making.
+Dynamic traing or performance validation is using the game seeds and plug in old version and new version, and let them play against each other. for example, using loss cases of v18, then plug in both v18 and v19 to check if v19 can win or lose.
