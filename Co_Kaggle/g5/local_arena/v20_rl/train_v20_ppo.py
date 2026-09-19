@@ -61,8 +61,9 @@ def _extract_notebook_main(path:Path)->str:
         if cell.get("cell_type")!="code":continue
         lines="".join(cell.get("source",[])).splitlines()
         if not lines:continue
-        m=re.match(r"^\\s*%%writefile\\s+(.+?)\\s*$",lines[0])
-        if m and Path(m.group(1).strip("'\\\"")).name=="main.py":found.append("\\n".join(lines[1:])+"\\n")
+        m=re.match(r"^\s*%%writefile\s+(.+?)\s*$",lines[0])
+        if m and Path(m.group(1).strip("'\"")).name=="main.py":
+            found.append("\n".join(lines[1:])+"\n")
     if len(found)!=1:raise ValueError(f"{path}: expected one main.py cell, found {len(found)}")
     return found[0]
 
