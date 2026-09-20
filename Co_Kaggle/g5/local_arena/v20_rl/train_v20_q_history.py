@@ -35,11 +35,12 @@ from train_v20_ppo import (
     prepare_opponents,
     write_jsonl,
 )
-from train_v20_history import load_history_seeds, split_seeds
+from train_v20_history import load_history_seeds
 
 HERE = Path(__file__).resolve().parent
 G5_ROOT = HERE.parent.parent
 DEFAULT_HISTORY_ROOT = G5_ROOT / "game_history"
+DEFAULT_VALIDATION_HISTORY_ROOT = DEFAULT_HISTORY_ROOT / "v19"
 
 
 def normalized_prior(raw_scores: np.ndarray) -> np.ndarray:
@@ -855,13 +856,18 @@ def evaluate(
 def parser():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--history-root", type=Path, default=DEFAULT_HISTORY_ROOT)
+    p.add_argument(
+        "--validation-history-root",
+        type=Path,
+        default=DEFAULT_VALIDATION_HISTORY_ROOT,
+        help="Loss-case replay directory for the previous version (v19 for v20).",
+    )
     p.add_argument("--executor", type=Path, default=DEFAULT_EXECUTOR)
     p.add_argument(
         "--output-dir",
         type=Path,
         default=HERE / "runs" / "history_q_vs_v19",
     )
-    p.add_argument("--validation-fraction", type=float, default=0.20)
     p.add_argument("--split-seed", type=int, default=20260919)
     p.add_argument("--training-seed", type=int, default=32020)
     p.add_argument("--episodes-per-update", type=int, default=8)
@@ -898,8 +904,6 @@ def main():
     VALIDATE_EVERY_UPDATES = 1
 
     args = parser().parse_args()
-    if not (0.0 < args.validation_fraction < 1.0):
-        raise SystemExit("--validation-fraction must be between 0 and 1")
     if not (0.0 <= args.epsilon_end <= args.epsilon_start <= 1.0):
         raise SystemExit("require 0 <= epsilon_end <= epsilon_start <= 1")
     if args.explore_top_k < 1:
@@ -910,14 +914,24 @@ def main():
         raise SystemExit("--reward-scale must be > 0")
 
     history_root = args.history_root.expanduser().resolve()
+    validation_history_root = args.validation_history_root.expanduser().resolve()
     executor = args.executor.expanduser().resolve()
     if not history_root.is_dir():
         raise SystemExit(f"history root not found: {history_root}")
+    if not validation_history_root.is_dir():
+        raise SystemExit(
+            f"validation history root not found: {validation_history_root}"
+        )
     if not executor.is_file():
         raise SystemExit(f"v19 executor not found: {executor}")
 
     print("=== v20 residual Double-DQN training ===", flush=True)
     print(f"history_root={history_root}", flush=True)
+    print(
+        f"validation_history_root={validation_history_root} "
+        "(previous-version loss cases)",
+        flush=True,
+    )
     print(f"executor={executor}", flush=True)
     print(
         f"break conditions: validation win rate > {TARGET_WIN_RATE:.1%} "
@@ -931,15 +945,30 @@ def main():
     )
 
     all_seeds, source_rows = load_history_seeds(history_root)
-    if len(all_seeds) < 2:
-        raise SystemExit("fewer than two usable real game-history seeds found")
-    train_seeds, val_seeds = split_seeds(
-        all_seeds, args.validation_fraction, args.split_seed
+    val_seeds, validation_source_rows = load_history_seeds(
+        validation_history_root
     )
+    if not val_seeds:
+        raise SystemExit(
+            "no usable previous-version loss-case seeds found for validation"
+        )
+
+    validation_set = set(val_seeds)
+    train_seeds = sorted(seed for seed in all_seeds if seed not in validation_set)
+    if not train_seeds:
+        raise SystemExit(
+            "no training seeds remain after excluding validation loss-case seeds"
+        )
 
     print(
-        f"loaded {len(all_seeds)} unique seeds: "
-        f"{len(train_seeds)} train / {len(val_seeds)} validation",
+        f"loaded {len(all_seeds)} unique history seeds: "
+        f"{len(train_seeds)} train + "
+        f"{len(val_seeds)} previous-version loss-case validation seeds",
+        flush=True,
+    )
+    print(
+        f"validation runs {len(val_seeds) * 2} games "
+        "(each loss-case seed from both seats)",
         flush=True,
     )
 
@@ -988,14 +1017,18 @@ def main():
 
     split_payload = {
         "history_root": str(history_root),
+        "validation_history_root": str(validation_history_root),
+        "validation_protocol": (
+            "dynamic rematch on previous-version loss-case seeds; both seats"
+        ),
         "source_files": source_rows,
+        "validation_source_files": validation_source_rows,
         "unique_seed_count": len(all_seeds),
         "train_seed_count": len(train_seeds),
         "validation_seed_count": len(val_seeds),
         "train_seeds": train_seeds,
         "validation_seeds": val_seeds,
-        "split_seed": args.split_seed,
-        "validation_fraction": args.validation_fraction,
+        "validation_seeds_excluded_from_training": True,
     }
     (out / "history_seed_split.json").write_text(
         json.dumps(split_payload, indent=2) + "\n", encoding="utf-8"
@@ -1008,6 +1041,10 @@ def main():
                 "executor": str(executor),
                 "device_resolved": str(device),
                 "opponent": "frozen v19",
+                "validation_history_root": str(validation_history_root),
+                "validation_protocol": (
+                    "v20 vs frozen v19 on v19 loss-case history seeds, both seats"
+                ),
                 "target_win_rate": TARGET_WIN_RATE,
                 "max_training_hours": MAX_TRAINING_HOURS,
                 "validate_every_updates": VALIDATE_EVERY_UPDATES,
@@ -1044,8 +1081,8 @@ def main():
 
         phase = "resume_initial" if args.resume else "initial"
         print(
-            f"\n=== {phase} held-out validation vs frozen v19 "
-            f"({len(val_seeds) * 2} games) ===",
+            f"\n=== {phase} validation on v19 loss-case seeds "
+            f"vs frozen v19 ({len(val_seeds) * 2} games) ===",
             flush=True,
         )
         baseline_started = time.perf_counter()
