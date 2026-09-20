@@ -151,3 +151,82 @@ python local_arena/v20_rl/train_v20_history.py \
 For later experiments, edit only `TARGET_WIN_RATE` and `MAX_TRAINING_HOURS` in `main()`.
 
 This intentionally keeps validation seeds out of PPO updates, so the 70% threshold is not measured on training games.
+
+
+## Residual Q-learning experiment
+
+`train_v20_q_history.py` is the value-based alternative to the PPO worker-task selector.
+
+It keeps the same frozen v19 strategy and legal candidate generation, but treats
+`learned_task_score()` as a fixed action-ranking prior and learns only a neural
+Q-value correction:
+
+```text
+Q(s,a) = normalized_v19_task_score(s,a) + neural_residual(s,a)
+```
+
+The final residual layer is initialized to zero, so deterministic inference starts
+with the exact v19 candidate ordering.
+
+Training uses:
+
+- residual **Double-DQN**
+- experience replay
+- a separate target network
+- conservative **top-k epsilon-greedy** exploration
+- default epsilon from 2.0% down to 0.5%
+- exploration restricted to the current top 3 Q-ranked candidates
+- dense reward from the change in money margin between environment hours
+- terminal +1 / 0 / -1 for win / tie / loss
+- Huber TD loss
+- gradient clipping
+- held-out real-history seeds, evaluated from both seats against frozen v19
+- automatic `best.pt` checkpoint preservation
+
+Run from `Co_Kaggle/g5`:
+
+```bash
+python local_arena/v20_rl/train_v20_q_history.py
+```
+
+Outputs are isolated from PPO under:
+
+```text
+local_arena/v20_rl/runs/history_q_vs_v19/
+```
+
+Important outputs:
+
+```text
+config.json
+history_seed_split.json
+episodes.jsonl
+metrics.jsonl
+validation.jsonl
+validation_games.jsonl
+BEST.json
+checkpoints/latest.pt
+checkpoints/best.pt
+checkpoints/timeout.pt
+checkpoints/target.pt
+```
+
+The default stopping conditions are intentionally visible at the top of
+`main()`:
+
+```python
+TARGET_WIN_RATE = 0.70
+MAX_TRAINING_HOURS = 2.0
+VALIDATE_EVERY_UPDATES = 1
+```
+
+To resume after timeout:
+
+```bash
+python local_arena/v20_rl/train_v20_q_history.py \
+  --resume local_arena/v20_rl/runs/history_q_vs_v19/checkpoints/timeout.pt
+```
+
+The checkpoint restores model, target network, optimizer, and RNG states. The
+replay buffer itself is not checkpointed, so resumed training rebuilds replay
+experience from new episodes before further replay updates.
