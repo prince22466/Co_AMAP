@@ -13,6 +13,7 @@ import copy
 import json
 import random
 import tempfile
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
@@ -786,27 +787,47 @@ def evaluate(
         flush=True,
     )
 
+    # Kaggle environment plugins are lazily registered in a process-global
+    # registry. Resolve kaggriculture once on the caller thread before workers
+    # race to call make() for the first time.
+    from kaggle_environments import make as kaggle_make
+    kaggle_make(
+        "kaggriculture",
+        configuration={"episodeSteps": args.episode_steps, "seed": 0},
+        debug=False,
+    )
+
+    # Give each validation worker its own frozen model copy. This avoids any
+    # dependency on concurrent reads of one nn.Module object and keeps future
+    # stateful layers safe if the architecture changes.
+    worker_state = threading.local()
+
     def run_validation_game(seed, seat):
+        if not hasattr(worker_state, "model"):
+            worker_state.model = copy.deepcopy(model).to(device)
+            worker_state.model.eval()
+        local_model = worker_state.model
         eval_rng = random.Random((int(seed) << 1) ^ int(seat))
-        result, _, _ = run_episode(
-            model=model,
-            device=device,
-            executor_path=executor,
-            opponent=opponent,
-            seed=seed,
-            seat=seat,
-            episode_steps=args.episode_steps,
-            prior_scale=args.prior_scale,
-            epsilon=0.0,
-            explore_top_k=args.explore_top_k,
-            gamma=args.gamma,
-            reward_scale=args.reward_scale,
-            reward_clip=args.reward_clip,
-            bootstrap_candidates=args.bootstrap_candidates,
-            explore_rng=eval_rng,
-            deterministic=True,
-            collect=False,
-        )
+        with torch.inference_mode():
+            result, _, _ = run_episode(
+            model=local_model,
+                device=device,
+                executor_path=executor,
+                opponent=opponent,
+                seed=seed,
+                seat=seat,
+                episode_steps=args.episode_steps,
+                prior_scale=args.prior_scale,
+                epsilon=0.0,
+                explore_top_k=args.explore_top_k,
+                gamma=args.gamma,
+                reward_scale=args.reward_scale,
+                reward_clip=args.reward_clip,
+                bootstrap_candidates=args.bootstrap_candidates,
+                explore_rng=eval_rng,
+                deterministic=True,
+                collect=False,
+            )
         return result
 
     if workers == 1:
