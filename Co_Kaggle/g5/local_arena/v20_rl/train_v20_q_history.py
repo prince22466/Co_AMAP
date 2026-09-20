@@ -14,6 +14,7 @@ import json
 import random
 import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -776,56 +777,104 @@ def evaluate(
     rows = []
     total = len(seeds) * 2
     wins = ties = losses = 0
-    eval_rng = random.Random(0)
+    workers = max(1, min(int(args.validation_workers), total))
+    jobs = [(seed, seat) for seed in seeds for seat in (0, 1)]
 
-    print(f"[{phase}] starting {total} games", flush=True)
-    for seed in seeds:
-        for seat in (0, 1):
-            result, _, _ = run_episode(
-                model=model,
-                device=device,
-                executor_path=executor,
-                opponent=opponent,
-                seed=seed,
-                seat=seat,
-                episode_steps=args.episode_steps,
-                prior_scale=args.prior_scale,
-                epsilon=0.0,
-                explore_top_k=args.explore_top_k,
-                gamma=args.gamma,
-                reward_scale=args.reward_scale,
-                reward_clip=args.reward_clip,
-                bootstrap_candidates=args.bootstrap_candidates,
-                explore_rng=eval_rng,
-                deterministic=True,
-                collect=False,
-            )
-            rows.append(result)
+    print(
+        f"[{phase}] starting {total} games with "
+        f"{workers} validation thread(s)",
+        flush=True,
+    )
 
-            if result.ok and result.margin is not None:
-                if result.margin > 0:
-                    wins += 1
-                    outcome = "WIN"
-                elif result.margin < 0:
-                    losses += 1
-                    outcome = "LOSS"
-                else:
-                    ties += 1
-                    outcome = "TIE"
-                completed = len(rows)
-                print(
-                    f"[{phase}] {completed}/{total} seed={seed} seat={seat} "
-                    f"{outcome} margin={result.margin:+.0f} "
-                    f"running W/T/L={wins}/{ties}/{losses} "
-                    f"win_rate={wins / completed:.1%}",
-                    flush=True,
-                )
+    def run_validation_game(seed, seat):
+        eval_rng = random.Random((int(seed) << 1) ^ int(seat))
+        result, _, _ = run_episode(
+            model=model,
+            device=device,
+            executor_path=executor,
+            opponent=opponent,
+            seed=seed,
+            seat=seat,
+            episode_steps=args.episode_steps,
+            prior_scale=args.prior_scale,
+            epsilon=0.0,
+            explore_top_k=args.explore_top_k,
+            gamma=args.gamma,
+            reward_scale=args.reward_scale,
+            reward_clip=args.reward_clip,
+            bootstrap_candidates=args.bootstrap_candidates,
+            explore_rng=eval_rng,
+            deterministic=True,
+            collect=False,
+        )
+        return result
+
+    if workers == 1:
+        completed_results = [
+            run_validation_game(seed, seat) for seed, seat in jobs
+        ]
+    else:
+        completed_results = []
+        with ThreadPoolExecutor(
+            max_workers=workers,
+            thread_name_prefix="v20-q-val",
+        ) as pool:
+            future_to_job = {
+                pool.submit(run_validation_game, seed, seat): (seed, seat)
+                for seed, seat in jobs
+            }
+            for future in as_completed(future_to_job):
+                seed, seat = future_to_job[future]
+                try:
+                    completed_results.append(future.result())
+                except Exception as exc:
+                    completed_results.append(
+                        EpisodeResult(
+                            ok=False,
+                            seed=seed,
+                            opponent=opponent[0],
+                            seat=seat,
+                            our_money=None,
+                            opponent_money=None,
+                            margin=None,
+                            terminal_reward=None,
+                            status_ours="ERROR",
+                            status_opponent="ERROR",
+                            decisions=0,
+                            error=f"{type(exc).__name__}: {exc}",
+                        )
+                    )
+
+    for result in completed_results:
+        rows.append(result)
+        if result.ok and result.margin is not None:
+            if result.margin > 0:
+                wins += 1
+                outcome = "WIN"
+            elif result.margin < 0:
+                losses += 1
+                outcome = "LOSS"
             else:
-                print(
-                    f"[{phase}] {len(rows)}/{total} seed={seed} seat={seat} "
-                    f"ERROR {result.error}",
-                    flush=True,
-                )
+                ties += 1
+                outcome = "TIE"
+            completed = len(rows)
+            print(
+                f"[{phase}] {completed}/{total} "
+                f"seed={result.seed} seat={result.seat} "
+                f"{outcome} margin={result.margin:+.0f} "
+                f"running W/T/L={wins}/{ties}/{losses} "
+                f"win_rate={wins / completed:.1%}",
+                flush=True,
+            )
+        else:
+            print(
+                f"[{phase}] {len(rows)}/{total} "
+                f"seed={result.seed} seat={result.seat} "
+                f"ERROR {result.error}",
+                flush=True,
+            )
+
+    rows.sort(key=lambda row: (int(row.seed), int(row.seat)))
 
     ok = [row for row in rows if row.ok and row.margin is not None]
     if not ok:
@@ -837,6 +886,7 @@ def evaluate(
             "losses": 0,
             "win_rate": 0.0,
             "mean_margin": None,
+            "validation_workers": workers,
             "rows": rows,
         }
 
@@ -849,6 +899,7 @@ def evaluate(
         "losses": int((margins < 0).sum()),
         "win_rate": float((margins > 0).mean()),
         "mean_margin": float(margins.mean()),
+        "validation_workers": workers,
         "rows": rows,
     }
 
@@ -872,6 +923,12 @@ def parser():
     p.add_argument("--training-seed", type=int, default=32020)
     p.add_argument("--episodes-per-update", type=int, default=8)
     p.add_argument("--episode-steps", type=int, default=720)
+    p.add_argument(
+        "--validation-workers",
+        type=int,
+        default=4,
+        help="Number of parallel validation game threads; use 1 for serial validation.",
+    )
     p.add_argument("--device", default="auto")
     p.add_argument("--hidden", type=int, default=64)
     p.add_argument("--learning-rate", type=float, default=1e-4)
@@ -912,6 +969,8 @@ def main():
         raise SystemExit("--bootstrap-candidates must be >= 1")
     if args.reward_scale <= 0:
         raise SystemExit("--reward-scale must be > 0")
+    if args.validation_workers < 1:
+        raise SystemExit("--validation-workers must be >= 1")
 
     history_root = args.history_root.expanduser().resolve()
     validation_history_root = args.validation_history_root.expanduser().resolve()
@@ -968,7 +1027,8 @@ def main():
     )
     print(
         f"validation runs {len(val_seeds) * 2} games "
-        "(each loss-case seed from both seats)",
+        f"(each loss-case seed from both seats, "
+        f"{args.validation_workers} thread(s))",
         flush=True,
     )
 
