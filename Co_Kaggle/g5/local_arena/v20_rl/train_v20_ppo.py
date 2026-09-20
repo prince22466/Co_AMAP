@@ -72,7 +72,9 @@ def _load_executor(path:Path,selector):
     source=_extract_notebook_main(path) if path.suffix==".ipynb" else path.read_text(encoding="utf-8")
     if OLD_BLOCK not in source:raise RuntimeError("v19 unit_actions selection block not found; source changed")
     source=source.replace(OLD_BLOCK,NEW_BLOCK,1)
-    module=types.ModuleType(f"v20_executor_{random.randrange(1<<60)}")
+    # The module object is per-controller; using selector identity avoids
+    # touching the process-global RNG during parallel validation construction.
+    module=types.ModuleType(f"v20_executor_{id(selector)}")
     module.__file__=str(path);module.RL_SELECTOR=selector
     exec(compile(source,str(path),"exec"),module.__dict__)
     return module
