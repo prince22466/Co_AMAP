@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import gc
 import json
 import random
 import tempfile
@@ -43,6 +44,7 @@ HERE = Path(__file__).resolve().parent
 G5_ROOT = HERE.parent.parent
 DEFAULT_HISTORY_ROOT = G5_ROOT / "game_history"
 DEFAULT_VALIDATION_HISTORY_ROOT = DEFAULT_HISTORY_ROOT / "v19"
+MAX_SAFE_VALIDATION_WORKERS = 4
 
 
 def normalized_prior(raw_scores: np.ndarray) -> np.ndarray:
@@ -778,9 +780,19 @@ def evaluate(
     rows = []
     total = len(seeds) * 2
     wins = ties = losses = 0
-    workers = max(1, min(int(args.validation_workers), total))
+    requested_workers = int(args.validation_workers)
+    workers = max(
+        1,
+        min(requested_workers, MAX_SAFE_VALIDATION_WORKERS, total),
+    )
     jobs = [(seed, seat) for seed in seeds for seat in (0, 1)]
 
+    if requested_workers > MAX_SAFE_VALIDATION_WORKERS:
+        print(
+            f"[{phase}] requested {requested_workers} validation workers; "
+            f"capped at {MAX_SAFE_VALIDATION_WORKERS} for laptop memory safety",
+            flush=True,
+        )
     print(
         f"[{phase}] starting {total} games with "
         f"{workers} validation thread(s)",
@@ -866,6 +878,11 @@ def evaluate(
                         )
                     )
 
+    # Kaggle environments may contain reference cycles. At this point all
+    # worker-local env/controller objects are out of scope; collect once per
+    # validation batch rather than inside every game/thread.
+    gc.collect()
+
     for result in completed_results:
         rows.append(result)
         if result.ok and result.margin is not None:
@@ -947,8 +964,11 @@ def parser():
     p.add_argument(
         "--validation-workers",
         type=int,
-        default=4,
-        help="Number of parallel validation game threads; use 1 for serial validation.",
+        default=2,
+        help=(
+            "Requested parallel validation threads. For laptop memory safety "
+            "the trainer caps active validation workers at 4; use 1 for serial."
+        ),
     )
     p.add_argument("--device", default="auto")
     p.add_argument("--hidden", type=int, default=64)
