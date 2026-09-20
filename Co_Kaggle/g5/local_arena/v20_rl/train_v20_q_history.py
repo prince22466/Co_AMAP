@@ -13,9 +13,12 @@ import copy
 import gc
 import json
 import multiprocessing as mp
+import os
 import random
+import sys
 import tempfile
 import time
+from contextlib import contextmanager
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -47,6 +50,41 @@ DEFAULT_VALIDATION_HISTORY_ROOT = DEFAULT_HISTORY_ROOT / "v19"
 MAX_SAFE_VALIDATION_WORKERS = 2
 
 _VALIDATION_WORKER_CONTEXT = None
+
+
+@contextmanager
+def _silence_stderr_during_optional_runtime_init():
+    """Suppress noisy optional OpenSpiel probes during Kaggle initialization.
+
+    Some OpenSpiel builds print long "Unknown game ..." diagnostics directly
+    to stderr while Kaggle discovers optional environments. Suppress stderr
+    only for that initialization window, including native/C++ writes to file
+    descriptor 2, then restore the original stream immediately.
+    """
+    original_stderr = sys.stderr
+    devnull = open(os.devnull, "w")
+    saved_fd = None
+    stderr_fd = None
+    try:
+        try:
+            original_stderr.flush()
+            stderr_fd = original_stderr.fileno()
+            saved_fd = os.dup(stderr_fd)
+            os.dup2(devnull.fileno(), stderr_fd)
+        except (AttributeError, OSError, ValueError):
+            stderr_fd = None
+            saved_fd = None
+
+        sys.stderr = devnull
+        yield
+    finally:
+        sys.stderr = original_stderr
+        if saved_fd is not None and stderr_fd is not None:
+            try:
+                os.dup2(saved_fd, stderr_fd)
+            finally:
+                os.close(saved_fd)
+        devnull.close()
 
 
 def normalized_prior(raw_scores: np.ndarray) -> np.ndarray:
@@ -802,17 +840,19 @@ def _init_validation_worker(
     worker_model.load_state_dict(model_state)
     worker_model.eval()
 
-    # Import and initialize Kaggle/OpenSpiel inside this process. No global
-    # stdout/stderr or game registry is shared with another validation worker.
-    from kaggle_environments import make as kaggle_make
-    kaggle_make(
-        "kaggriculture",
-        configuration={
-            "episodeSteps": int(eval_config["episode_steps"]),
-            "seed": 0,
-        },
-        debug=False,
-    )
+    # Import and initialize Kaggle/OpenSpiel inside this process. Suppress only
+    # the known optional-game discovery noise; normal stderr is restored before
+    # any validation game runs so real failures remain visible.
+    with _silence_stderr_during_optional_runtime_init():
+        from kaggle_environments import make as kaggle_make
+        kaggle_make(
+            "kaggriculture",
+            configuration={
+                "episodeSteps": int(eval_config["episode_steps"]),
+                "seed": 0,
+            },
+            debug=False,
+        )
 
     _VALIDATION_WORKER_CONTEXT = {
         "model": worker_model,
