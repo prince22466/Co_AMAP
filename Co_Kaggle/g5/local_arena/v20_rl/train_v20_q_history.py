@@ -12,11 +12,11 @@ import argparse
 import copy
 import gc
 import json
+import multiprocessing as mp
 import random
 import tempfile
-import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -44,7 +44,9 @@ HERE = Path(__file__).resolve().parent
 G5_ROOT = HERE.parent.parent
 DEFAULT_HISTORY_ROOT = G5_ROOT / "game_history"
 DEFAULT_VALIDATION_HISTORY_ROOT = DEFAULT_HISTORY_ROOT / "v19"
-MAX_SAFE_VALIDATION_WORKERS = 4
+MAX_SAFE_VALIDATION_WORKERS = 2
+
+_VALIDATION_WORKER_CONTEXT = None
 
 
 def normalized_prior(raw_scores: np.ndarray) -> np.ndarray:
@@ -768,6 +770,90 @@ def load_q_checkpoint(
     )
 
 
+
+def _init_validation_worker(
+    model_state,
+    hidden,
+    executor_path,
+    opponent,
+    eval_config,
+):
+    """Initialize one isolated validation process.
+
+    Kaggle/OpenSpiel touch process-global registries and I/O streams during
+    environment setup, so validation uses processes rather than threads.
+    Each process owns one frozen Q model and reuses it across its assigned
+    games. Native torch threading is limited to one thread inside each worker
+    to avoid nested CPU oversubscription on laptops.
+    """
+    global _VALIDATION_WORKER_CONTEXT
+
+    torch.set_num_threads(1)
+    try:
+        torch.set_num_interop_threads(1)
+    except RuntimeError:
+        pass
+
+    worker_model = ResidualQ(
+        len(TASK_FEATURE_NAMES),
+        len(GLOBAL_FEATURE_NAMES),
+        int(hidden),
+    ).cpu()
+    worker_model.load_state_dict(model_state)
+    worker_model.eval()
+
+    # Import and initialize Kaggle/OpenSpiel inside this process. No global
+    # stdout/stderr or game registry is shared with another validation worker.
+    from kaggle_environments import make as kaggle_make
+    kaggle_make(
+        "kaggriculture",
+        configuration={
+            "episodeSteps": int(eval_config["episode_steps"]),
+            "seed": 0,
+        },
+        debug=False,
+    )
+
+    _VALIDATION_WORKER_CONTEXT = {
+        "model": worker_model,
+        "executor": Path(executor_path),
+        "opponent": opponent,
+        "config": eval_config,
+    }
+
+
+def _run_validation_game_process(job):
+    """Run one deterministic validation game inside an initialized worker."""
+    seed, seat = job
+    ctx = _VALIDATION_WORKER_CONTEXT
+    if ctx is None:
+        raise RuntimeError("validation worker was not initialized")
+
+    cfg = ctx["config"]
+    eval_rng = random.Random((int(seed) << 1) ^ int(seat))
+    with torch.inference_mode():
+        result, _, _ = run_episode(
+            model=ctx["model"],
+            device=torch.device("cpu"),
+            executor_path=ctx["executor"],
+            opponent=ctx["opponent"],
+            seed=seed,
+            seat=seat,
+            episode_steps=int(cfg["episode_steps"]),
+            prior_scale=float(cfg["prior_scale"]),
+            epsilon=0.0,
+            explore_top_k=int(cfg["explore_top_k"]),
+            gamma=float(cfg["gamma"]),
+            reward_scale=float(cfg["reward_scale"]),
+            reward_clip=float(cfg["reward_clip"]),
+            bootstrap_candidates=int(cfg["bootstrap_candidates"]),
+            explore_rng=eval_rng,
+            deterministic=True,
+            collect=False,
+        )
+    return result
+
+
 def evaluate(
     model,
     device,
@@ -790,71 +876,77 @@ def evaluate(
     if requested_workers > MAX_SAFE_VALIDATION_WORKERS:
         print(
             f"[{phase}] requested {requested_workers} validation workers; "
-            f"capped at {MAX_SAFE_VALIDATION_WORKERS} for laptop memory safety",
+            f"capped at {MAX_SAFE_VALIDATION_WORKERS} isolated processes "
+            "for laptop memory safety",
             flush=True,
         )
     print(
         f"[{phase}] starting {total} games with "
-        f"{workers} validation thread(s)",
+        f"{workers} validation process(es)",
         flush=True,
     )
 
-    # Kaggle environment plugins are lazily registered in a process-global
-    # registry. Resolve kaggriculture once on the caller thread before workers
-    # race to call make() for the first time.
-    from kaggle_environments import make as kaggle_make
-    kaggle_make(
-        "kaggriculture",
-        configuration={"episodeSteps": args.episode_steps, "seed": 0},
-        debug=False,
-    )
-
-    # Give each validation worker its own frozen model copy. This avoids any
-    # dependency on concurrent reads of one nn.Module object and keeps future
-    # stateful layers safe if the architecture changes.
-    worker_state = threading.local()
-
-    def run_validation_game(seed, seat):
-        if not hasattr(worker_state, "model"):
-            worker_state.model = copy.deepcopy(model).to(device)
-            worker_state.model.eval()
-        local_model = worker_state.model
-        eval_rng = random.Random((int(seed) << 1) ^ int(seat))
-        with torch.inference_mode():
-            result, _, _ = run_episode(
-            model=local_model,
-                device=device,
-                executor_path=executor,
-                opponent=opponent,
-                seed=seed,
-                seat=seat,
-                episode_steps=args.episode_steps,
-                prior_scale=args.prior_scale,
-                epsilon=0.0,
-                explore_top_k=args.explore_top_k,
-                gamma=args.gamma,
-                reward_scale=args.reward_scale,
-                reward_clip=args.reward_clip,
-                bootstrap_candidates=args.bootstrap_candidates,
-                explore_rng=eval_rng,
-                deterministic=True,
-                collect=False,
-            )
-        return result
+    eval_config = {
+        "episode_steps": int(args.episode_steps),
+        "prior_scale": float(args.prior_scale),
+        "explore_top_k": int(args.explore_top_k),
+        "gamma": float(args.gamma),
+        "reward_scale": float(args.reward_scale),
+        "reward_clip": float(args.reward_clip),
+        "bootstrap_candidates": int(args.bootstrap_candidates),
+    }
 
     if workers == 1:
-        completed_results = [
-            run_validation_game(seed, seat) for seed, seat in jobs
-        ]
-    else:
+        # Serial mode stays in the main process and is useful as a fallback.
         completed_results = []
-        with ThreadPoolExecutor(
+        eval_rng = random.Random(0)
+        model.eval()
+        for seed, seat in jobs:
+            with torch.inference_mode():
+                result, _, _ = run_episode(
+                    model=model,
+                    device=device,
+                    executor_path=executor,
+                    opponent=opponent,
+                    seed=seed,
+                    seat=seat,
+                    episode_steps=args.episode_steps,
+                    prior_scale=args.prior_scale,
+                    epsilon=0.0,
+                    explore_top_k=args.explore_top_k,
+                    gamma=args.gamma,
+                    reward_scale=args.reward_scale,
+                    reward_clip=args.reward_clip,
+                    bootstrap_candidates=args.bootstrap_candidates,
+                    explore_rng=eval_rng,
+                    deterministic=True,
+                    collect=False,
+                )
+            completed_results.append(result)
+    else:
+        # Copy only the tiny Q state_dict into each worker. Full Kaggle
+        # environments are created only inside the bounded worker processes.
+        cpu_state = {
+            key: value.detach().cpu().clone()
+            for key, value in model.state_dict().items()
+        }
+        completed_results = []
+        spawn_context = mp.get_context("spawn")
+        with ProcessPoolExecutor(
             max_workers=workers,
-            thread_name_prefix="v20-q-val",
+            mp_context=spawn_context,
+            initializer=_init_validation_worker,
+            initargs=(
+                cpu_state,
+                int(args.hidden),
+                str(executor),
+                opponent,
+                eval_config,
+            ),
         ) as pool:
             future_to_job = {
-                pool.submit(run_validation_game, seed, seat): (seed, seat)
-                for seed, seat in jobs
+                pool.submit(_run_validation_game_process, job): job
+                for job in jobs
             }
             for future in as_completed(future_to_job):
                 seed, seat = future_to_job[future]
@@ -878,10 +970,10 @@ def evaluate(
                         )
                     )
 
-    # Kaggle environments may contain reference cycles. At this point all
-    # worker-local env/controller objects are out of scope; collect once per
-    # validation batch rather than inside every game/thread.
-    gc.collect()
+        # Worker processes have exited here, so the OS has reclaimed their
+        # Kaggle/OpenSpiel environments and private model copies.
+        del cpu_state
+        gc.collect()
 
     for result in completed_results:
         rows.append(result)
@@ -925,6 +1017,7 @@ def evaluate(
             "win_rate": 0.0,
             "mean_margin": None,
             "validation_workers": workers,
+            "validation_parallelism": "process",
             "rows": rows,
         }
 
@@ -938,6 +1031,7 @@ def evaluate(
         "win_rate": float((margins > 0).mean()),
         "mean_margin": float(margins.mean()),
         "validation_workers": workers,
+        "validation_parallelism": "process",
         "rows": rows,
     }
 
@@ -966,8 +1060,10 @@ def parser():
         type=int,
         default=2,
         help=(
-            "Requested parallel validation threads. For laptop memory safety "
-            "the trainer caps active validation workers at 4; use 1 for serial."
+            "Requested parallel validation processes. Kaggle/OpenSpiel are "
+            "not thread-safe on Windows, so workers use isolated processes. "
+            "For laptop memory safety active workers are capped at 2; "
+            "use 1 for serial validation."
         ),
     )
     p.add_argument("--device", default="auto")
@@ -1069,7 +1165,8 @@ def main():
     print(
         f"validation runs {len(val_seeds) * 2} games "
         f"(each loss-case seed from both seats, "
-        f"{args.validation_workers} thread(s))",
+        f"{min(args.validation_workers, MAX_SAFE_VALIDATION_WORKERS)} "
+        "process(es))",
         flush=True,
     )
 
