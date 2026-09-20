@@ -77,12 +77,14 @@ class Transition:
 
 
 @dataclass
-class PendingChoice:
+class DecisionRecord:
     state: np.ndarray
+    candidates: np.ndarray
+    prior: np.ndarray
     action_feature: np.ndarray
     action_prior: float
-    accumulated_reward: float = 0.0
-    env_steps: int = 0
+    margin: float
+    turn: int
 
 
 class ReplayBuffer:
@@ -176,23 +178,14 @@ class QSelector:
         self.collect = collect
         self.module = None
 
-        self.transitions: list[Transition] = []
-        self.pending: PendingChoice | None = None
-        self.last_margin: float | None = None
+        self.records: list[DecisionRecord] = []
+        self.current_margin: float | None = None
         self.explorations = 0
         self.decisions = 0
         self.candidate_counts: list[int] = []
 
     def begin_observation(self, obs):
-        current_margin = money_margin(obs)
-        if self.last_margin is not None and self.pending is not None:
-            reward = (current_margin - self.last_margin) / self.reward_scale
-            reward = float(np.clip(reward, -self.reward_clip, self.reward_clip))
-            self.pending.accumulated_reward += (
-                (self.gamma ** self.pending.env_steps) * reward
-            )
-            self.pending.env_steps += 1
-        self.last_margin = current_margin
+        self.current_margin = money_margin(obs)
 
     def _candidate_bundle(self, obs, free, tasks, positions, invs):
         choices = []
@@ -244,56 +237,12 @@ class QSelector:
             np.asarray(prior[ids], dtype=np.float16).copy(),
         )
 
-    def _finalize_pending(
-        self,
-        next_state: np.ndarray | None,
-        next_candidates: np.ndarray | None,
-        next_prior: np.ndarray | None,
-        done: bool,
-    ):
-        if self.pending is None or not self.collect:
-            self.pending = None
-            return
-
-        if done:
-            nc = None
-            np_prior = None
-            ns = None
-            discount = 0.0
-        else:
-            nc, np_prior = self._bootstrap_subset(next_candidates, next_prior)
-            ns = np.asarray(next_state, dtype=np.float32).copy()
-            discount = self.gamma ** self.pending.env_steps
-
-        self.transitions.append(
-            Transition(
-                state=np.asarray(self.pending.state, dtype=np.float32).copy(),
-                action_feature=np.asarray(
-                    self.pending.action_feature, dtype=np.float16
-                ).copy(),
-                action_prior=float(self.pending.action_prior),
-                reward=float(self.pending.accumulated_reward),
-                discount=float(discount),
-                next_state=ns,
-                next_candidates=nc,
-                next_prior=np_prior,
-                done=bool(done),
-            )
-        )
-        self.pending = None
-
     def choose(self, obs, free, tasks, positions, invs):
         choices, candidates, prior, state = self._candidate_bundle(
             obs, free, tasks, positions, invs
         )
         if not choices:
             return None
-
-        # The previous worker-task choice transitions into this reduced
-        # assignment microstate. No environment time passes between these
-        # internal choices, so its discount is 1 unless begin_observation()
-        # recorded an actual hour transition.
-        self._finalize_pending(state, candidates, prior, done=False)
 
         ct = torch.as_tensor(candidates, dtype=torch.float32, device=self.device)
         pt = torch.as_tensor(prior, dtype=torch.float32, device=self.device)
@@ -335,36 +284,92 @@ class QSelector:
         self.candidate_counts.append(len(choices))
 
         if self.collect:
-            self.pending = PendingChoice(
-                state=np.asarray(state, dtype=np.float32).copy(),
-                action_feature=np.asarray(
-                    candidates[selected], dtype=np.float32
-                ).copy(),
-                action_prior=float(prior[selected]),
+            bootstrap_candidates, bootstrap_prior = self._bootstrap_subset(
+                candidates, prior
+            )
+            self.records.append(
+                DecisionRecord(
+                    state=np.asarray(state, dtype=np.float32).copy(),
+                    candidates=bootstrap_candidates,
+                    prior=bootstrap_prior,
+                    action_feature=np.asarray(
+                        candidates[selected], dtype=np.float16
+                    ).copy(),
+                    action_prior=float(prior[selected]),
+                    margin=float(
+                        self.current_margin
+                        if self.current_margin is not None
+                        else money_margin(obs)
+                    ),
+                    turn=int(obs["day"]) * 24 + int(obs["hour"]),
+                )
             )
 
         return choices[selected][0], choices[selected][1]
 
-    def finish(self, final_margin: float):
-        if self.pending is None:
-            return
 
-        dense = 0.0
-        if self.last_margin is not None:
-            dense = (float(final_margin) - self.last_margin) / self.reward_scale
-            dense = float(np.clip(dense, -self.reward_clip, self.reward_clip))
+def build_transitions(
+    records: list[DecisionRecord],
+    final_margin: float,
+    gamma: float,
+    reward_scale: float,
+    reward_clip: float,
+) -> list[Transition]:
+    """Convert recorded decisions into TD transitions after the episode.
 
+    Internal worker assignments in the same Kaggriculture hour receive zero
+    immediate reward and discount 1. When the environment advances, reward is
+    the clipped change in money margin and discount reflects elapsed hours.
+    The final decision also receives the terminal win/tie/loss reward.
+    """
+    if not records:
+        return []
+
+    transitions: list[Transition] = []
+    for idx, record in enumerate(records):
+        if idx + 1 < len(records):
+            nxt = records[idx + 1]
+            env_steps = max(0, int(nxt.turn) - int(record.turn))
+            dense = 0.0
+            if env_steps > 0:
+                dense = (float(nxt.margin) - float(record.margin)) / reward_scale
+                dense = float(np.clip(dense, -reward_clip, reward_clip))
+            transitions.append(
+                Transition(
+                    state=record.state,
+                    action_feature=record.action_feature,
+                    action_prior=record.action_prior,
+                    reward=dense,
+                    discount=float(gamma ** env_steps),
+                    next_state=nxt.state,
+                    next_candidates=nxt.candidates,
+                    next_prior=nxt.prior,
+                    done=False,
+                )
+            )
+            continue
+
+        dense = (float(final_margin) - float(record.margin)) / reward_scale
+        dense = float(np.clip(dense, -reward_clip, reward_clip))
         terminal = (
             1.0 if final_margin > 0
             else -1.0 if final_margin < 0
             else 0.0
         )
-        reward = dense + terminal
-        self.pending.accumulated_reward += (
-            (self.gamma ** self.pending.env_steps) * reward
+        transitions.append(
+            Transition(
+                state=record.state,
+                action_feature=record.action_feature,
+                action_prior=record.action_prior,
+                reward=dense + terminal,
+                discount=0.0,
+                next_state=None,
+                next_candidates=None,
+                next_prior=None,
+                done=True,
+            )
         )
-        self.pending.env_steps += 1
-        self._finalize_pending(None, None, None, done=True)
+    return transitions
 
 
 class QController:
@@ -468,8 +473,17 @@ def run_episode(
         reward_theirs = float(reward_theirs)
         margin = reward_ours - reward_theirs
         ok = status_ours == "DONE" and status_theirs == "DONE"
-        if ok and collect:
-            ctrl.selector.finish(margin)
+        transitions = (
+            build_transitions(
+                ctrl.selector.records,
+                margin,
+                gamma,
+                reward_scale,
+                reward_clip,
+            )
+            if ok and collect
+            else []
+        )
 
         result = EpisodeResult(
             ok=ok,
@@ -498,7 +512,7 @@ def run_episode(
                 if ctrl.selector.candidate_counts else 0
             ),
         }
-        return result, ctrl.selector.transitions, info
+        return result, transitions, info
     except Exception as exc:
         result = EpisodeResult(
             ok=False,
@@ -1219,10 +1233,28 @@ def main():
                     },
                 )
 
-                if not result.ok or result.margin is None or not transitions:
+                if not result.ok:
                     print(
                         f"[Q u{update_no}] attempt={attempts} seed={seed} "
-                        f"seat={seat} ERROR {result.error}",
+                        f"seat={seat} GAME_ERROR status="
+                        f"{result.status_ours}/{result.status_opponent} "
+                        f"{result.error}",
+                        flush=True,
+                    )
+                    continue
+                if result.margin is None:
+                    print(
+                        f"[Q u{update_no}] attempt={attempts} seed={seed} "
+                        f"seat={seat} MISSING_MARGIN",
+                        flush=True,
+                    )
+                    continue
+                if not transitions:
+                    print(
+                        f"[Q u{update_no}] attempt={attempts} seed={seed} "
+                        f"seat={seat} NO_TRANSITIONS "
+                        f"decisions={result.decisions} "
+                        f"margin={result.margin:+.0f}",
                         flush=True,
                     )
                     continue
