@@ -449,8 +449,11 @@ def run_episode(
         collect=collect,
     )
 
+    def candidate(obs):
+        return ctrl(obs)
+
     players = [None, None]
-    players[seat] = ctrl
+    players[seat] = candidate
     players[1 - seat] = runner
 
     try:
