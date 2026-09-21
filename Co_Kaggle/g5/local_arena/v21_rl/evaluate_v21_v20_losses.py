@@ -166,7 +166,7 @@ def main():
 
     device = torch.device(args.device)
     v21_model, v21_payload = _load_model(
-        args.v21_checkpoint, "v21_static_pure_q_delivered_value_double_dqn", device, args.hidden
+        args.v21_checkpoint, "v21_static_pure_q_dense_worker_value_double_dqn", device, args.hidden
     )
 
     rows = []
