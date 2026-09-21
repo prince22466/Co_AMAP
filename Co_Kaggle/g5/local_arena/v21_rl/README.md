@@ -1,8 +1,9 @@
 # v21 RL: static training on v20 loss histories
 
 v21 keeps the **same residual Double-DQN model structure and constrained
-worker-task action space as v20**. It is warm-started from the selected v20 Q
-checkpoint and trains only the residual action-value network.
+worker-task action space as v20**. It initializes from the exact residual-Q
+weights embedded in `submission_nb/kaggriculture-sub_v20.ipynb` and then trains
+only the residual action-value network.
 
 The change in v21 is the training protocol:
 
@@ -37,11 +38,16 @@ ResidualQ:
 Q(s,a) = normalized_v19_task_score(s,a) + neural_residual(s,a)
 ```
 
-The default initialization checkpoint is:
+The parent/source-of-truth submission is:
 
 ```text
-local_arena/v20_rl/runs/history_q_vs_v19/checkpoints/update_0009.pt
+submission_nb/kaggriculture-sub_v20.ipynb
 ```
+
+`train_v21_static_history.py` extracts the notebook's `main.py`, decodes the
+embedded `_Q_WEIGHTS_B64` tensor payload, and loads those exact 6,721 float32
+parameters into the v20 `ResidualQ` structure (`38 -> 64 -> 64 -> 1`). It does
+not require the old v20 `.pt` checkpoint for initialization.
 
 ## Safety/parity gates
 
@@ -49,8 +55,10 @@ Before any optimizer step, `train_v21_static_history.py` checks every selected
 v20 history:
 
 1. replaying both recorded action streams must reproduce the saved replay;
-2. the selected v20 checkpoint + frozen v19 executor must reproduce the
-   recorded v20 action stream and terminal rewards exactly.
+2. the checked-in `kaggriculture-sub_v20.ipynb` must reproduce the recorded v20
+   action stream and terminal rewards exactly;
+3. the `ResidualQ` reconstructed from that notebook's embedded weights must also
+   reproduce the recorded v20 trajectory exactly.
 
 ## Train
 
@@ -64,7 +72,7 @@ python local_arena/v21_rl/train_v21_static_history.py
 Defaults:
 
 - histories: `game_history/v20/*.json`
-- parent: v20 `update_0009.pt`
+- parent/source of truth: `submission_nb/kaggriculture-sub_v20.ipynb`
 - deterministic 80/20 replay-file train/validation split
 - same v20 residual Double-DQN hyperparameters
 - 8 replay episodes per update
