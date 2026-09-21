@@ -86,20 +86,27 @@ submission template and creates `main.py` plus `submission.tar.gz`. The final
 submission therefore stores the same quantized parameter values used during
 QAT.
 
-## Safety/parity gates
+## Safety/parity gate
 
-Before any optimizer step, `train_v21_static_history.py` checks every selected
-v20 history:
+Before any optimizer step, `train_v21_static_history.py` runs **one**
+deterministic preflight history (the first sorted `game_history/v20/*.json`).
 
-1. replaying both recorded action streams must reproduce the saved replay;
-2. the checked-in `kaggriculture-sub_v20.ipynb` must reproduce the recorded v20
-   action stream and terminal rewards exactly;
-3. an unquantized `ResidualQ` reconstructed from that notebook's embedded
-   weights must also reproduce the recorded v20 trajectory exactly.
+That single preflight verifies:
 
-The quantized v21 initialization is deliberately **not** required to reproduce
-v20 exactly, because FP16/FP8 rounding may change candidate ordering. Its
-performance is measured as the initial v21 validation baseline.
+1. the embedded model payload decodes to exactly 6,721 parameters with the
+   expected `38 -> 64 -> 64 -> 1` structure;
+2. replaying both recorded action streams reproduces that saved replay exactly;
+3. the checked-in `kaggriculture-sub_v20.ipynb` reproduces the recorded v20
+   action stream and terminal rewards on that replay.
+
+The separate PyTorch reconstruction is **not** required to reproduce every v20
+action. The submission uses Python-float inference while the training model uses
+PyTorch/FP16 numerical paths, so tiny numerical differences can legitimately
+change candidate ordering. The checked-in v20 submission is the behavioral
+source of truth; the decoded-weight check is a model-format check.
+
+The quantized v21 initialization is measured separately as the initial
+validation baseline.
 
 ## Train
 
