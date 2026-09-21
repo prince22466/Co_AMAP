@@ -61,6 +61,7 @@ from train_v20_q_history import (
     build_transitions,
     epsilon_for_update,
     q_update,
+    _silence_stderr_during_optional_runtime_init,
 )
 from quantization import (
     QUANTIZATION_CHOICES,
@@ -135,7 +136,8 @@ def run_static_episode(
         collect=collect,
     )
 
-    env = _environment_from_history(history)
+    with _silence_stderr_during_optional_runtime_init():
+        env = _environment_from_history(history)
     action_divergences = 0
     first_divergence = None
 
@@ -687,7 +689,7 @@ def build_parser():
     p.add_argument("--validate-every-updates", type=int, default=1)
     p.add_argument("--checkpoint-every-updates", type=int, default=1)
     p.add_argument("--target-win-rate", type=float, default=0.70)
-    p.add_argument("--max-training-hours", type=float, default=8.0)
+    p.add_argument("--max-training-hours", type=float, default=4.0)
     p.add_argument("--preflight-only", action="store_true")
     p.add_argument("--skip-v20-policy-parity", action="store_true")
     p.add_argument("--device", default="auto")
@@ -838,7 +840,7 @@ def main():
         **{k: v for k, v in initial_validation.items() if k != "rows"},
     })
 
-    if initial_validation["games_valid"] > 0 and initial_validation["win_rate"] > args.target_win_rate:
+    if initial_validation["games_valid"] > 0 and initial_validation["win_rate"] >= args.target_win_rate:
         _save_checkpoint(
             checkpoints / "target.pt", online, target, optimizer, start_update - 1,
             optimizer_steps, args, sample_rng, explore_rng, replay_rng,
