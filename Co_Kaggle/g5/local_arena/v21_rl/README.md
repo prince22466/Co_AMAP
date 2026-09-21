@@ -173,3 +173,16 @@ then runs deterministic v21 while replaying the historical opponent actions.
 Static replay is intentionally non-adaptive. Use it as failure-scenario
 training/regression; dynamic rematches should remain a separate final
 validation step.
+
+
+## Delivered-value reward
+
+v21 training now optimizes worker logistics/production using cumulative delivered product value rather than money margin or terminal win/loss.
+
+At each environment step, newly produced goods that are physically deposited into the shed are valued using the live market price from that turn. The resulting increment is used as the TD reward after scaling/clipping. Same-hour internal worker assignments keep zero immediate reward and discount 1, preserving the existing transition structure.
+
+Only cargo originating from production actions such as `HARVEST` and `COLLECT_FERTILIZER` is reward-eligible. Goods picked up from the shed are never marked eligible, so a `PICKUP -> DROP` loop cannot manufacture reward. The terminal game win/loss bonus is removed from worker-Q training.
+
+Checkpoint algorithm tag:
+
+`v21_static_pure_q_delivered_value_double_dqn`
