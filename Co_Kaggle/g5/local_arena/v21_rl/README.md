@@ -175,7 +175,7 @@ training/regression; dynamic rematches should remain a separate final
 validation step.
 
 
-## Delivered-value reward
+## Delivered-value reward (superseded by dense worker reward)
 
 v21 training now optimizes worker logistics/production using cumulative delivered product value rather than money margin or terminal win/loss.
 
@@ -185,7 +185,7 @@ Only cargo originating from production actions such as `HARVEST` and `COLLECT_FE
 
 Checkpoint algorithm tag:
 
-`v21_static_pure_q_delivered_value_double_dqn`
+`v21_static_pure_q_dense_worker_value_double_dqn`
 
 
 ## Dense worker reward
