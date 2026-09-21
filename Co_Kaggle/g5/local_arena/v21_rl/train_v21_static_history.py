@@ -4,7 +4,7 @@
 The model architecture and constrained worker-task action space are unchanged
 from v20. The only training-protocol change is the environment opponent:
 
-* candidate: v21 policy (warm-started from the selected v20 checkpoint)
+* candidate: v21 policy initialized from the embedded weights in the checked-in v20 submission notebook
 * opponent: recorded opponent actions from each game_history/v20 replay
 
 Because the opponent action stream is replayed verbatim, this is STATIC
@@ -14,8 +14,12 @@ trajectories, but it is not a live rematch against an adaptive opponent.
 from __future__ import annotations
 
 import argparse
+import ast
+import base64
+import hashlib
 import json
 import random
+import struct
 import sys
 import time
 from pathlib import Path
@@ -38,11 +42,13 @@ from evaluate_v20_v19_losses import (
     _recorded_step_actions,
     _saved_final_rewards,
     _seed_hint,
+    _run_submission_replacement,
     recorded_action_parity,
 )
 from train_v20_ppo import (
     GLOBAL_FEATURE_NAMES,
     TASK_FEATURE_NAMES,
+    _extract_notebook_main,
     choose_device,
     write_jsonl,
 )
@@ -57,9 +63,7 @@ from train_v20_q_history import (
 
 DEFAULT_HISTORY_DIR = G5_ROOT / "game_history" / "v20"
 DEFAULT_BASE_EXECUTOR = G5_ROOT / "submission_nb" / "kaggriculture-sub_v19.ipynb"
-DEFAULT_V20_CHECKPOINT = (
-    V20_DIR / "runs" / "history_q_vs_v19" / "checkpoints" / "update_0009.pt"
-)
+DEFAULT_V20_SUBMISSION = G5_ROOT / "submission_nb" / "kaggriculture-sub_v20.ipynb"
 DEFAULT_OUTPUT_DIR = HERE / "runs" / "static_v20_history"
 
 
@@ -236,16 +240,79 @@ def _split_histories(paths, validation_fraction, split_seed):
     return sorted(shuffled[validation_count:]), sorted(shuffled[:validation_count])
 
 
-def _load_v20_initial_weights(checkpoint, online, target, device):
-    payload = torch.load(checkpoint, map_location=device, weights_only=False)
-    if payload.get("algorithm") != "v20_residual_double_dqn":
+def _sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def _literal_assignment(source: str, name: str):
+    tree = ast.parse(source)
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if any(isinstance(target, ast.Name) and target.id == name for target in node.targets):
+            return ast.literal_eval(node.value)
+    raise ValueError(f"submission main.py does not define {name}")
+
+
+def _load_v20_submission_weights(
+    submission: Path,
+    online: ResidualQ,
+    target: ResidualQ,
+    device: torch.device,
+    hidden: int,
+):
+    """Decode the exact residual-Q parameters embedded in kaggriculture-sub_v20.ipynb."""
+    if hidden != 64:
         raise ValueError(
-            f"{checkpoint}: expected v20_residual_double_dqn, "
-            f"got {payload.get('algorithm')!r}"
+            "the checked-in v20 submission embeds a 38->64->64->1 network; "
+            "--hidden must remain 64 when initializing v21 from that submission"
         )
-    online.load_state_dict(payload["online_state_dict"])
-    target.load_state_dict(payload.get("target_state_dict", payload["online_state_dict"]))
-    return payload
+
+    source = _extract_notebook_main(submission)
+    encoded = _literal_assignment(source, "_Q_WEIGHTS_B64")
+    raw = base64.b64decode(encoded)
+    values = np.frombuffer(raw, dtype="<f4").astype(np.float32, copy=True)
+    if values.size != 6721:
+        raise ValueError(
+            f"{submission}: expected 6721 embedded Q parameters, got {values.size}"
+        )
+
+    expected_input = len(GLOBAL_FEATURE_NAMES) + len(TASK_FEATURE_NAMES)
+    if expected_input != 38:
+        raise ValueError(f"unexpected v20 Q input dimension: {expected_input}")
+
+    with torch.no_grad():
+        online.net[0].weight.copy_(
+            torch.from_numpy(values[0:2432].reshape(64, 38)).to(device)
+        )
+        online.net[0].bias.copy_(
+            torch.from_numpy(values[2432:2496]).to(device)
+        )
+        online.net[2].weight.copy_(
+            torch.from_numpy(values[2496:6592].reshape(64, 64)).to(device)
+        )
+        online.net[2].bias.copy_(
+            torch.from_numpy(values[6592:6656]).to(device)
+        )
+        online.net[4].weight.copy_(
+            torch.from_numpy(values[6656:6720].reshape(1, 64)).to(device)
+        )
+        online.net[4].bias.copy_(
+            torch.from_numpy(values[6720:6721]).to(device)
+        )
+
+    target.load_state_dict(online.state_dict())
+    return {
+        "source": str(submission),
+        "sha256": _sha256(submission),
+        "weight_count": int(values.size),
+        "architecture": "38->64->64->1",
+        "embedded_symbol": "_Q_WEIGHTS_B64",
+    }
 
 
 def _save_checkpoint(
@@ -261,7 +328,8 @@ def _save_checkpoint(
         "optimizer_state_dict": optimizer.state_dict(),
         "task_feature_names": TASK_FEATURE_NAMES,
         "global_feature_names": GLOBAL_FEATURE_NAMES,
-        "parent_v20_checkpoint": str(args.init_checkpoint),
+        "parent_v20_submission": str(args.v20_submission),
+        "parent_v20_submission_sha256": args.parent_v20_submission_sha256,
         "training_protocol": "static recorded-opponent reply from game_history/v20",
         "args": vars(args),
         "sample_rng_state": sample_rng.getstate(),
@@ -304,7 +372,7 @@ def _load_v21_checkpoint(
     return int(payload.get("update", -1)) + 1, int(payload.get("optimizer_steps", 0)), payload
 
 
-def _preflight(paths, v20_model, device, base_executor, args):
+def _preflight(paths, v20_submission, v20_model, device, base_executor, args):
     rows = []
     for index, path in enumerate(paths, 1):
         history = _load_history(path)
@@ -325,25 +393,56 @@ def _preflight(paths, v20_model, device, base_executor, args):
             print(f"[preflight {index}/{len(paths)}] {path.stem}: replay parity OK", flush=True)
             continue
 
+        original = _saved_final_rewards(history)
+        candidate_seat = _infer_v20_seat(history)
+
+        submitted_v20 = _run_submission_replacement(
+            history=history,
+            candidate_seat=candidate_seat,
+            notebook=v20_submission,
+            label="v20",
+            compare_to_recorded_candidate=True,
+        )
+        submission_exact = (
+            submitted_v20["statuses"] == ["DONE", "DONE"]
+            and submitted_v20["rewards"] == original
+            and submitted_v20["action_divergences"] == 0
+        )
+
         args.current_epsilon = 0.0
-        result, _ = run_static_episode(
+        reconstructed, _ = run_static_episode(
             path, v20_model, device, base_executor, args, random.Random(0),
             deterministic=True, collect=False, compare_to_recorded_candidate=True,
         )
-        original = result["original_rewards"]
-        exact = result["ok"] and result["action_divergences"] == 0 and result["rewards"] == original
+        reconstructed_exact = (
+            reconstructed["ok"]
+            and reconstructed["action_divergences"] == 0
+            and reconstructed["rewards"] == original
+        )
+        exact = submission_exact and reconstructed_exact
         row.update(
             v20_policy_parity=exact,
-            action_divergences=result["action_divergences"],
-            first_action_divergence=result["first_action_divergence"],
-            generated_rewards=result["rewards"],
+            v20_submission_parity=submission_exact,
+            reconstructed_v20_parity=reconstructed_exact,
+            submission_rewards=submitted_v20["rewards"],
+            submission_action_divergences=submitted_v20["action_divergences"],
+            reconstructed_rewards=reconstructed["rewards"],
+            reconstructed_action_divergences=reconstructed["action_divergences"],
+            first_action_divergence=(
+                submitted_v20["first_action_divergence"]
+                or reconstructed["first_action_divergence"]
+            ),
             original_rewards=original,
-            error="" if exact else result["error"],
+            error="" if exact else (
+                "checked-in v20 submission or its decoded ResidualQ reconstruction "
+                "does not reproduce the recorded v20 trajectory"
+            ),
         )
         rows.append(row)
         print(
             f"[preflight {index}/{len(paths)}] {path.stem}: "
-            f"v20 policy parity {'OK' if exact else 'FAILED'}",
+            f"submission={'OK' if submission_exact else 'FAILED'} "
+            f"decoded_model={'OK' if reconstructed_exact else 'FAILED'}",
             flush=True,
         )
 
@@ -356,8 +455,8 @@ def _preflight(paths, v20_model, device, base_executor, args):
         raise RuntimeError(
             f"preflight failed for {len(failed)} histories ({examples}). "
             "Refusing to train on mismatched static histories. "
-            "Use --skip-v20-policy-parity only if the recorded v20 submission "
-            "intentionally differs from update_0009.pt."
+            "Use --skip-v20-policy-parity only if the recorded v20 histories "
+            "intentionally differ from the checked-in kaggriculture-sub_v20.ipynb."
         )
     return rows
 
@@ -404,7 +503,7 @@ def build_parser():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--history-dir", type=Path, default=DEFAULT_HISTORY_DIR)
     p.add_argument("--base-executor", type=Path, default=DEFAULT_BASE_EXECUTOR)
-    p.add_argument("--init-checkpoint", type=Path, default=DEFAULT_V20_CHECKPOINT)
+    p.add_argument("--v20-submission", type=Path, default=DEFAULT_V20_SUBMISSION)
     p.add_argument("--resume", type=Path, default=None)
     p.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     p.add_argument("--validation-fraction", type=float, default=0.20)
@@ -443,19 +542,19 @@ def main():
     args = build_parser().parse_args()
     history_dir = args.history_dir.expanduser().resolve()
     base_executor = args.base_executor.expanduser().resolve()
-    init_checkpoint = args.init_checkpoint.expanduser().resolve()
+    v20_submission = args.v20_submission.expanduser().resolve()
     output_dir = args.output_dir.expanduser().resolve()
     args.history_dir = history_dir
     args.base_executor = base_executor
-    args.init_checkpoint = init_checkpoint
+    args.v20_submission = v20_submission
     args.output_dir = output_dir
 
     if not history_dir.is_dir():
         raise SystemExit(f"history directory not found: {history_dir}")
     if not base_executor.is_file():
         raise SystemExit(f"base executor not found: {base_executor}")
-    if not init_checkpoint.is_file():
-        raise SystemExit(f"v20 checkpoint not found: {init_checkpoint}")
+    if not v20_submission.is_file():
+        raise SystemExit(f"v20 submission notebook not found: {v20_submission}")
 
     paths = _history_paths(history_dir)
     train_paths, validation_paths = _split_histories(paths, args.validation_fraction, args.split_seed)
@@ -471,10 +570,15 @@ def main():
 
     online = ResidualQ(len(TASK_FEATURE_NAMES), len(GLOBAL_FEATURE_NAMES), args.hidden).to(device)
     target = ResidualQ(len(TASK_FEATURE_NAMES), len(GLOBAL_FEATURE_NAMES), args.hidden).to(device)
-    parent_payload = _load_v20_initial_weights(init_checkpoint, online, target, device)
+    parent_payload = _load_v20_submission_weights(
+        v20_submission, online, target, device, args.hidden
+    )
+    args.parent_v20_submission_sha256 = parent_payload["sha256"]
     online.train(); target.eval()
 
-    preflight_rows = _preflight(paths, online, device, base_executor, args)
+    preflight_rows = _preflight(
+        paths, v20_submission, online, device, base_executor, args
+    )
     if args.preflight_only:
         print("preflight-only: all selected histories passed", flush=True)
         return 0
@@ -497,8 +601,10 @@ def main():
         **vars(args),
         "algorithm": "v21 static residual Double-DQN",
         "device_resolved": str(device),
-        "parent_v20_algorithm": parent_payload.get("algorithm"),
-        "parent_v20_update": parent_payload.get("update"),
+        "parent_v20_submission": parent_payload["source"],
+        "parent_v20_submission_sha256": parent_payload["sha256"],
+        "parent_v20_embedded_weight_count": parent_payload["weight_count"],
+        "parent_v20_architecture": parent_payload["architecture"],
         "training_protocol": "candidate actions from v21; opponent actions replayed verbatim from v20 loss histories",
         "validation_protocol": "held-out v20 loss histories with the same static recorded-opponent protocol",
         "model_structure": "same ResidualQ(task_features + global_state, hidden=64) as v20",
