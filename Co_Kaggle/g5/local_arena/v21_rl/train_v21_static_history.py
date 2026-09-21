@@ -55,11 +55,17 @@ from train_v20_ppo import (
     write_jsonl,
 )
 from train_v20_q_history import (
+    DecisionRecord,
     QController,
+    QSelector,
     ReplayBuffer,
     ResidualQ,
+    _load_executor,
     build_transitions,
     epsilon_for_update,
+    global_state,
+    money_margin,
+    norm_task,
     q_update,
     _silence_stderr_during_optional_runtime_init,
 )
@@ -73,6 +79,162 @@ DEFAULT_HISTORY_DIR = G5_ROOT / "game_history" / "v20"
 DEFAULT_BASE_EXECUTOR = G5_ROOT / "submission_nb" / "kaggriculture-sub_v19.ipynb"
 DEFAULT_V20_SUBMISSION = G5_ROOT / "submission_nb" / "kaggriculture-sub_v20.ipynb"
 DEFAULT_OUTPUT_DIR = HERE / "runs" / "static_v20_history"
+
+
+class TreeFreeQSelector(QSelector):
+    """v21 selector: legal candidate generation + neural Q only.
+
+    The v18/v19 tree ensemble is not evaluated and contributes no score,
+    tie-breaker, bootstrap ranking, or Bellman target.
+    """
+
+    def _candidate_bundle(self, obs, free, tasks, positions, invs):
+        choices = []
+        for i in free:
+            for k, (p, op, weight, resource) in enumerate(tasks):
+                if resource == "NO_WHEAT":
+                    if invs[i].get("WHEAT", 0):
+                        continue
+                elif resource == "NO_FERTILIZER":
+                    if invs[i].get("FERTILIZER", 0):
+                        continue
+                elif resource and not invs[i].get(resource, 0):
+                    continue
+
+                distance = self.module.dist(positions[i], p)
+                if distance >= 24 - obs["hour"]:
+                    continue
+
+                features = self.module.task_features(
+                    obs, i, (p, op, weight, resource)
+                )
+                choices.append((i, k, distance, features))
+
+        if not choices:
+            return choices, None, None, None
+
+        candidates = np.stack(
+            [norm_task(choice[3]) for choice in choices]
+        ).astype(np.float32)
+        state = global_state(self.module, obs, len(choices), len(free))
+        # Keep the shared replay schema unchanged. Prior is always zero and is
+        # ignored by QuantizedResidualQ.q_values().
+        prior = np.zeros(len(choices), dtype=np.float32)
+        return choices, candidates, prior, state
+
+    def _q_scores(self, state, candidates):
+        dtype = getattr(self.model, "compute_dtype", torch.float32)
+        ct = torch.as_tensor(candidates, dtype=dtype, device=self.device)
+        st = torch.as_tensor(state, dtype=dtype, device=self.device)
+        with torch.no_grad():
+            return (
+                self.model.q_values(st, ct, None, 0.0)
+                .detach()
+                .to(torch.float32)
+                .cpu()
+                .numpy()
+            )
+
+    def _bootstrap_subset(self, state, candidates, q):
+        if len(candidates) <= self.bootstrap_candidates:
+            ids = np.arange(len(candidates))
+        else:
+            ids = np.argsort(-q, kind="stable")[: self.bootstrap_candidates]
+        subset = np.asarray(candidates[ids], dtype=np.float16).copy()
+        zeros = np.zeros(len(ids), dtype=np.float16)
+        return subset, zeros
+
+    def choose(self, obs, free, tasks, positions, invs):
+        choices, candidates, prior, state = self._candidate_bundle(
+            obs, free, tasks, positions, invs
+        )
+        if not choices:
+            return None
+
+        q = self._q_scores(state, candidates)
+        order = sorted(
+            range(len(choices)),
+            key=lambda z: (
+                float(q[z]),
+                -choices[z][2],
+                -choices[z][0],
+                -choices[z][1],
+            ),
+            reverse=True,
+        )
+
+        selected = order[0]
+        if (
+            not self.deterministic
+            and len(order) > 1
+            and self.rng.random() < self.epsilon
+        ):
+            pool = order[: min(self.explore_top_k, len(order))]
+            selected = self.rng.choice(pool)
+            if selected != order[0]:
+                self.explorations += 1
+
+        self.decisions += 1
+        self.candidate_counts.append(len(choices))
+
+        if self.collect:
+            bootstrap_candidates, bootstrap_prior = self._bootstrap_subset(
+                state, candidates, q
+            )
+            self.records.append(
+                DecisionRecord(
+                    state=np.asarray(state, dtype=np.float32).copy(),
+                    candidates=bootstrap_candidates,
+                    prior=bootstrap_prior,
+                    action_feature=np.asarray(
+                        candidates[selected], dtype=np.float16
+                    ).copy(),
+                    action_prior=0.0,
+                    margin=float(
+                        self.current_margin
+                        if self.current_margin is not None
+                        else money_margin(obs)
+                    ),
+                    turn=int(obs["day"]) * 24 + int(obs["hour"]),
+                )
+            )
+
+        return choices[selected][0], choices[selected][1]
+
+
+class TreeFreeQController(QController):
+    def __init__(
+        self,
+        path: Path,
+        model: ResidualQ,
+        device,
+        prior_scale: float,
+        epsilon: float,
+        explore_top_k: int,
+        gamma: float,
+        reward_scale: float,
+        reward_clip: float,
+        bootstrap_candidates: int,
+        rng: random.Random,
+        deterministic: bool,
+        collect: bool,
+    ):
+        self.selector = TreeFreeQSelector(
+            model=model,
+            device=device,
+            prior_scale=0.0,
+            epsilon=epsilon,
+            explore_top_k=explore_top_k,
+            gamma=gamma,
+            reward_scale=reward_scale,
+            reward_clip=reward_clip,
+            bootstrap_candidates=bootstrap_candidates,
+            rng=rng,
+            deterministic=deterministic,
+            collect=collect,
+        )
+        self.executor = _load_executor(path, self.selector)
+        self.selector.module = self.executor
 
 
 def _infer_v20_seat(history: dict[str, Any]) -> int:
@@ -119,11 +281,11 @@ def run_static_episode(
     opponent_seat = 1 - candidate_seat
     original_rewards = _saved_final_rewards(history)
 
-    controller = QController(
+    controller = TreeFreeQController(
         path=base_executor,
         model=model,
         device=device,
-        prior_scale=args.prior_scale,
+        prior_scale=0.0,
         epsilon=0.0 if deterministic else args.current_epsilon,
         explore_top_k=args.explore_top_k,
         gamma=args.gamma,
@@ -486,7 +648,7 @@ def _save_checkpoint(
     sample_rng, explore_rng, replay_rng,
 ):
     payload = {
-        "algorithm": "v21_static_residual_double_dqn",
+        "algorithm": "v21_static_pure_q_double_dqn",
         "update": int(update),
         "optimizer_steps": int(optimizer_steps),
         "online_state_dict": online.state_dict(),
@@ -517,7 +679,7 @@ def _load_v21_checkpoint(
     path, online, target, optimizer, device, sample_rng, explore_rng, replay_rng,
 ):
     payload = torch.load(path, map_location=device, weights_only=False)
-    if payload.get("algorithm") != "v21_static_residual_double_dqn":
+    if payload.get("algorithm") != "v21_static_pure_q_double_dqn":
         raise ValueError(
             f"{path}: expected v21_static_residual_double_dqn, "
             f"got {payload.get('algorithm')!r}"
@@ -701,7 +863,12 @@ def build_parser():
     p.add_argument("--replay-warmup", type=int, default=4000)
     p.add_argument("--target-sync-steps", type=int, default=500)
     p.add_argument("--max-grad-norm", type=float, default=1.0)
-    p.add_argument("--prior-scale", type=float, default=1.0)
+    p.add_argument(
+        "--prior-scale",
+        type=float,
+        default=0.0,
+        help="compatibility field only; v21 pure-Q always ignores the tree prior",
+    )
     p.add_argument("--epsilon-start", type=float, default=0.02)
     p.add_argument("--epsilon-end", type=float, default=0.005)
     p.add_argument("--epsilon-decay-updates", type=int, default=40)
@@ -800,11 +967,11 @@ def main():
         "parent_v20_architecture": parent_payload["architecture"],
         "training_protocol": "candidate actions from v21; opponent actions replayed verbatim from v20 loss histories",
         "validation_protocol": "held-out v20 loss histories with the same static recorded-opponent protocol",
-        "model_structure": "same ResidualQ(task_features + global_state, hidden=64) as v20",
+        "model_structure": "QNetwork(concat(global_state, task_features), hidden=64); tree-free action scoring",
         "quantization": args.quantization,
         "precision_policy": "fp16 => true FP16 parameters/activations/Q/targets/gradients; SGD without momentum; fp8_e4m3fn => experimental weight QAT",
         "optimizer_name": "sgd",
-        "action_value": "normalized v19 learned_task_score prior + neural residual",
+        "action_value": "neural Q(state, task) only; no learned_task_score/tree prior",
         "reward": "delta money margin / reward_scale + terminal win/tie/loss",
         "replay_checkpointed": False,
     }, indent=2, default=str) + "\n", encoding="utf-8")
