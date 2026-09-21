@@ -18,6 +18,7 @@ from train_v21_static_history import (
     GLOBAL_FEATURE_NAMES,
     TASK_FEATURE_NAMES,
     ResidualQ,
+    QuantizedResidualQ,
     _infer_v20_seat,
     _load_history,
     _load_v20_submission_weights,
@@ -36,7 +37,13 @@ def _load_model(checkpoint, expected_algorithm, device, hidden):
         raise ValueError(
             f"{checkpoint}: expected {expected_algorithm}, got {payload.get('algorithm')!r}"
         )
-    model = ResidualQ(len(TASK_FEATURE_NAMES), len(GLOBAL_FEATURE_NAMES), hidden).to(device)
+    quantization = payload.get("quantization", "fp16")
+    model = QuantizedResidualQ(
+        len(TASK_FEATURE_NAMES),
+        len(GLOBAL_FEATURE_NAMES),
+        hidden,
+        quantization,
+    ).to(device)
     model.load_state_dict(payload["online_state_dict"])
     model.eval()
     return model, payload
