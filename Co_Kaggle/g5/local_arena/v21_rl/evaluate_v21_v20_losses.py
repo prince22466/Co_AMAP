@@ -14,12 +14,13 @@ import torch
 from train_v21_static_history import (
     DEFAULT_BASE_EXECUTOR,
     DEFAULT_HISTORY_DIR,
-    DEFAULT_V20_CHECKPOINT,
+    DEFAULT_V20_SUBMISSION,
     GLOBAL_FEATURE_NAMES,
     TASK_FEATURE_NAMES,
     ResidualQ,
     _infer_v20_seat,
     _load_history,
+    _load_v20_submission_weights,
     recorded_action_parity,
     run_static_episode,
 )
@@ -74,7 +75,7 @@ def evaluate_one(path, v20_model, v21_model, device, args):
         "first_action_divergence": v20["first_action_divergence"],
     }
     if not v20["ok"] or v20["action_divergences"] != 0 or v20["rewards"] != original_rewards:
-        row["error"] = "v20 checkpoint/base-executor pair does not reproduce recorded v20"
+        row["error"] = "decoded checked-in v20 submission does not reproduce recorded v20"
         return row
 
     v21, _ = run_static_episode(
@@ -140,7 +141,7 @@ def build_parser():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--history-dir", type=Path, default=DEFAULT_HISTORY_DIR)
     p.add_argument("--base-executor", type=Path, default=DEFAULT_BASE_EXECUTOR)
-    p.add_argument("--v20-checkpoint", type=Path, default=DEFAULT_V20_CHECKPOINT)
+    p.add_argument("--v20-submission", type=Path, default=DEFAULT_V20_SUBMISSION)
     p.add_argument("--v21-checkpoint", type=Path, default=DEFAULT_V21_CHECKPOINT)
     p.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     p.add_argument("--episodes", default="")
@@ -160,7 +161,7 @@ def main():
     args.current_epsilon = 0.0
     args.history_dir = args.history_dir.expanduser().resolve()
     args.base_executor = args.base_executor.expanduser().resolve()
-    args.v20_checkpoint = args.v20_checkpoint.expanduser().resolve()
+    args.v20_submission = args.v20_submission.expanduser().resolve()
     args.v21_checkpoint = args.v21_checkpoint.expanduser().resolve()
     args.output = args.output.expanduser().resolve()
 
@@ -172,9 +173,12 @@ def main():
         raise SystemExit("no matching histories")
 
     device = torch.device(args.device)
-    v20_model, v20_payload = _load_model(
-        args.v20_checkpoint, "v20_residual_double_dqn", device, args.hidden
+    v20_model = ResidualQ(len(TASK_FEATURE_NAMES), len(GLOBAL_FEATURE_NAMES), args.hidden).to(device)
+    v20_target = ResidualQ(len(TASK_FEATURE_NAMES), len(GLOBAL_FEATURE_NAMES), args.hidden).to(device)
+    v20_payload = _load_v20_submission_weights(
+        args.v20_submission, v20_model, v20_target, device, args.hidden
     )
+    v20_model.eval()
     v21_model, v21_payload = _load_model(
         args.v21_checkpoint, "v21_static_residual_double_dqn", device, args.hidden
     )
@@ -201,8 +205,8 @@ def main():
             "mode": "v21_static_replacement_replay_on_v20_losses",
             "history_dir": str(args.history_dir),
             "base_executor": str(args.base_executor),
-            "v20_checkpoint": str(args.v20_checkpoint),
-            "v20_checkpoint_update": v20_payload.get("update"),
+            "v20_submission": str(args.v20_submission),
+            "v20_submission_sha256": v20_payload.get("sha256"),
             "v21_checkpoint": str(args.v21_checkpoint),
             "v21_checkpoint_update": v21_payload.get("update"),
             "recorded_action_parity_required": True,
