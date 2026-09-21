@@ -60,6 +60,11 @@ from train_v20_q_history import (
     epsilon_for_update,
     q_update,
 )
+from quantization import (
+    QUANTIZATION_CHOICES,
+    QuantizedResidualQ,
+    quantized_state_dict,
+)
 
 DEFAULT_HISTORY_DIR = G5_ROOT / "game_history" / "v20"
 DEFAULT_BASE_EXECUTOR = G5_ROOT / "submission_nb" / "kaggriculture-sub_v19.ipynb"
@@ -325,6 +330,8 @@ def _save_checkpoint(
         "optimizer_steps": int(optimizer_steps),
         "online_state_dict": online.state_dict(),
         "target_state_dict": target.state_dict(),
+        "deployment_state_dict": quantized_state_dict(online, args.quantization),
+        "quantization": args.quantization,
         "optimizer_state_dict": optimizer.state_dict(),
         "task_feature_names": TASK_FEATURE_NAMES,
         "global_feature_names": GLOBAL_FEATURE_NAMES,
@@ -518,6 +525,12 @@ def build_parser():
     p.add_argument("--preflight-only", action="store_true")
     p.add_argument("--skip-v20-policy-parity", action="store_true")
     p.add_argument("--device", default="auto")
+    p.add_argument(
+        "--quantization",
+        choices=QUANTIZATION_CHOICES,
+        default="fp16",
+        help="QAT/deployment weight format; FP16 is the default, FP8 E4M3FN is experimental",
+    )
     p.add_argument("--hidden", type=int, default=64)
     p.add_argument("--learning-rate", type=float, default=1e-5)
     p.add_argument("--gamma", type=float, default=0.999)
@@ -568,8 +581,12 @@ def main():
     explore_rng = random.Random(args.training_seed ^ 0x21)
     replay_rng = random.Random(args.training_seed ^ 0xD0D1)
 
-    online = ResidualQ(len(TASK_FEATURE_NAMES), len(GLOBAL_FEATURE_NAMES), args.hidden).to(device)
-    target = ResidualQ(len(TASK_FEATURE_NAMES), len(GLOBAL_FEATURE_NAMES), args.hidden).to(device)
+    online = QuantizedResidualQ(
+        len(TASK_FEATURE_NAMES), len(GLOBAL_FEATURE_NAMES), args.hidden, args.quantization
+    ).to(device)
+    target = QuantizedResidualQ(
+        len(TASK_FEATURE_NAMES), len(GLOBAL_FEATURE_NAMES), args.hidden, args.quantization
+    ).to(device)
     parent_payload = _load_v20_submission_weights(
         v20_submission, online, target, device, args.hidden
     )
@@ -608,6 +625,8 @@ def main():
         "training_protocol": "candidate actions from v21; opponent actions replayed verbatim from v20 loss histories",
         "validation_protocol": "held-out v20 loss histories with the same static recorded-opponent protocol",
         "model_structure": "same ResidualQ(task_features + global_state, hidden=64) as v20",
+        "quantization": args.quantization,
+        "qat": "FP32 master parameters with straight-through fake-quantized weights/biases on every forward pass",
         "action_value": "normalized v19 learned_task_score prior + neural residual",
         "reward": "delta money margin / reward_scale + terminal win/tie/loss",
         "replay_checkpointed": False,
