@@ -185,7 +185,7 @@ Only cargo originating from production actions such as `HARVEST` and `COLLECT_FE
 
 Checkpoint algorithm tag:
 
-`v21_static_pure_q_dense_worker_value_double_dqn`
+`v21_static_pure_q_worker_credit_balanced_double_dqn`
 
 
 ## Dense worker reward
@@ -215,4 +215,34 @@ Training logs now expose production, delivery, positive-reward fraction, mean re
 
 Checkpoint algorithm tag:
 
-`v21_static_pure_q_dense_worker_value_double_dqn`
+`v21_static_pure_q_worker_credit_balanced_double_dqn`
+
+
+## Per-worker credit assignment and balanced replay
+
+The dense worker reward is now credited to the exact worker Q-decision that caused it.
+
+For one environment hour, v21 records the worker assignments selected by the Q-network, runs the environment step, computes production/transport/delivery value per worker, and writes each worker's realized reward back to that worker's DecisionRecord before building replay transitions.
+
+This removes the previous same-hour credit bug where the entire hour's reward landed on whichever assignment happened to be last in the record sequence.
+
+Training replay is also stratified. By default:
+
+```text
+--rewarded-replay-fraction 0.50
+```
+
+Each SGD batch targets up to 50% non-zero-reward transitions and fills the remainder from neutral transitions. If there are not enough rewarded samples, the neutral pool fills the shortage.
+
+Training output now includes:
+
+```text
+replay_rewarded=...
+batch_rewarded=...
+```
+
+alongside the existing reward and TD diagnostics.
+
+Checkpoint algorithm tag:
+
+`v21_static_pure_q_worker_credit_balanced_double_dqn`
