@@ -86,7 +86,15 @@ DELIVERED_PRODUCTS = (
     "TOMATO", "CARROT", "FERTILIZER", "WHEAT",
 )
 PRODUCTION_ACTIONS = {"HARVEST", "COLLECT_FERTILIZER"}
-CHECKPOINT_ALGORITHM = "v21_static_pure_q_delivered_value_double_dqn"
+MOVE_ACTIONS = {"NORTH", "SOUTH", "EAST", "WEST"}
+
+# Dense worker-objective shaping. Values remain in live-market-value units
+# until build_dense_worker_transitions() applies --reward-scale.
+PRODUCTION_REWARD_WEIGHT = 1.00
+TRANSPORT_REWARD_WEIGHT = 0.05
+DELIVERY_REWARD_WEIGHT = 0.25
+
+CHECKPOINT_ALGORITHM = "v21_static_pure_q_dense_worker_value_double_dqn"
 
 
 def _strip_tree_code(source: str) -> str:
@@ -141,12 +149,12 @@ class TreeFreeQSelector(QSelector):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.cumulative_delivery_value = 0.0
+        self.cumulative_reward_value = 0.0
 
     def begin_observation(self, obs):
         # DecisionRecord.margin is reused as the cumulative worker objective.
         # It intentionally no longer stores money margin.
-        self.current_margin = float(self.cumulative_delivery_value)
+        self.current_margin = float(self.cumulative_reward_value)
 
     def _candidate_bundle(self, obs, free, tasks, positions, invs):
         choices = []
@@ -253,7 +261,7 @@ class TreeFreeQSelector(QSelector):
                     margin=float(
                         self.current_margin
                         if self.current_margin is not None
-                        else self.cumulative_delivery_value
+                        else self.cumulative_reward_value
                     ),
                     turn=int(obs["day"]) * 24 + int(obs["hour"]),
                 )
@@ -297,19 +305,38 @@ class TreeFreeQController(QController):
         self.selector.module = self.executor
 
 
-class DeliveredProductTracker:
-    """Track newly produced cargo until it is actually deposited in the shed.
+class DenseWorkerRewardTracker:
+    """Dense reward for the decisions the worker-allocation Q-network controls.
 
-    Only cargo created by HARVEST/COLLECT_FERTILIZER is reward-eligible.
-    Goods picked up from the shed are never made eligible, which prevents a
-    PICKUP -> DROP loop from manufacturing reward.
+    Reward is generated at three worker-controlled milestones:
+      1. production: HARVEST/COLLECT_FERTILIZER creates product;
+      2. transport: eligible produced cargo moves closer to the shed;
+      3. delivery: eligible produced cargo reaches shed inventory.
+
+    Only production-origin cargo becomes reward-eligible, so shed
+    PICKUP -> DROP cycles cannot manufacture production/delivery reward.
     """
 
-    def __init__(self):
+    def __init__(self, executor):
+        self.executor = executor
         self.eligible: list[dict[str, float]] = []
-        self.total_value = 0.0
-        self.total_units = 0.0
-        self.by_product = {product: 0.0 for product in DELIVERED_PRODUCTS}
+
+        self.total_reward_value = 0.0
+        self.produced_value = 0.0
+        self.transport_progress_value = 0.0
+        self.delivered_value = 0.0
+        self.produced_units = 0.0
+        self.delivered_units = 0.0
+
+        self.produced_value_by_product = {
+            product: 0.0 for product in DELIVERED_PRODUCTS
+        }
+        self.delivered_value_by_product = {
+            product: 0.0 for product in DELIVERED_PRODUCTS
+        }
+        self.reward_steps = 0
+        self.positive_reward_steps = 0
+        self.negative_reward_steps = 0
 
     def _ensure_workers(self, count: int) -> None:
         while len(self.eligible) < count:
@@ -323,36 +350,156 @@ class DeliveredProductTracker:
         hands = candidate_action.get("hands") or []
         return [farmer] + list(hands)
 
-    def observe_step(self, obs_before, candidate_action, obs_after, shed_points) -> float:
+    @staticmethod
+    def _positions(obs) -> list[Any]:
+        player = int(obs["player"])
+        farm = obs["farms"][player]
+        return [farm["farmer"]] + list(farm["hands"])
+
+    @staticmethod
+    def _tile(obs, position):
+        if position is None:
+            return None
+        player = int(obs["player"])
+        farm = obs["farms"][player]
+        x, y = int(position[0]), int(position[1])
+        return farm["tiles"][y][x]
+
+    @staticmethod
+    def _nearest_shed_distance(position, shed) -> int:
+        if position is None:
+            return 0
+        x, y = int(position[0]), int(position[1])
+        return min(abs(x - sx) + abs(y - sy) for sx, sy in shed)
+
+    def _produced_from_action(self, obs, position, action) -> dict[str, float]:
+        if not action:
+            return {}
+        op = action[0]
+        tile = self._tile(obs, position)
+
+        if op == "HARVEST" and isinstance(tile, dict):
+            units = float(tile.get("yield_units", 0))
+            if units <= 0:
+                return {}
+            if tile.get("kind") == "PLANT":
+                product = tile.get("crop")
+            elif tile.get("animal"):
+                animal = tile.get("animal")
+                animal_spec = self.executor.ANIMALS.get(animal)
+                product = animal_spec[1] if animal_spec else None
+            else:
+                product = None
+            if product in DELIVERED_PRODUCTS:
+                return {product: units}
+
+        if (
+            op == "COLLECT_FERTILIZER"
+            and isinstance(tile, dict)
+            and tile.get("fertilizer_available")
+        ):
+            return {"FERTILIZER": 1.0}
+        return {}
+
+    def observe_step(self, obs_before, candidate_action, obs_after, shed_points) -> dict[str, float]:
         before_invs = list(obs_before["private"]["inventories"])
         after_invs = list(obs_after["private"]["inventories"])
         worker_actions = self._worker_actions(candidate_action)
+        before_positions = self._positions(obs_before)
+        after_positions = self._positions(obs_after)
 
-        player = int(obs_before["player"])
-        farm = obs_before["farms"][player]
-        positions = [farm["farmer"]] + list(farm["hands"])
         shed = {tuple(point) for point in shed_points}
         prices = obs_before["market"]["prices"]
+        day_rolled = int(obs_after["day"]) != int(obs_before["day"])
 
-        self._ensure_workers(max(len(before_invs), len(after_invs)))
-        step_value = 0.0
-        step_units = 0.0
+        worker_count = max(len(before_invs), len(before_positions))
+        self._ensure_workers(worker_count)
 
-        for i, before_inv in enumerate(before_invs):
+        produced_value = 0.0
+        transport_progress_value = 0.0
+        delivered_value = 0.0
+        produced_units = 0.0
+        delivered_units = 0.0
+
+        for i in range(worker_count):
+            before_inv = before_invs[i] if i < len(before_invs) else {}
             after_inv = after_invs[i] if i < len(after_invs) else {}
             action = worker_actions[i] if i < len(worker_actions) else ["PASS"]
             op = action[0] if action else "PASS"
-            at_shed = i < len(positions) and tuple(positions[i]) in shed
-            old_eligible = dict(self.eligible[i])
+            before_pos = before_positions[i] if i < len(before_positions) else None
+            after_pos = (
+                after_positions[i]
+                if (not day_rolled and i < len(after_positions))
+                else None
+            )
 
-            delivered = {product: 0.0 for product in DELIVERED_PRODUCTS}
+            old_eligible = dict(self.eligible[i])
+            produced = self._produced_from_action(obs_before, before_pos, action)
+
+            # On ordinary turns, confirm production by the actual inventory gain.
+            # At day rollover inventories are auto-dropped/reset after the action,
+            # so the pre-action tile state is the reliable production source.
+            if not day_rolled:
+                confirmed = {}
+                for product, units in produced.items():
+                    inventory_gain = max(
+                        0.0,
+                        float(after_inv.get(product, 0))
+                        - float(before_inv.get(product, 0)),
+                    )
+                    if inventory_gain > 0:
+                        confirmed[product] = min(float(units), inventory_gain)
+                produced = confirmed
+
+            for product, units in produced.items():
+                price_now = float(prices.get(product, 0.0))
+                value = float(units) * price_now
+                produced_units += float(units)
+                produced_value += value
+                self.produced_value_by_product[product] += value
+
+            # Transport shaping is signed: moving one tile toward the shed is
+            # positive; moving one tile away is negative. Only already-produced,
+            # reward-eligible cargo contributes.
+            if op in MOVE_ACTIONS and before_pos is not None and after_pos is not None:
+                before_distance = self._nearest_shed_distance(before_pos, shed)
+                after_distance = self._nearest_shed_distance(after_pos, shed)
+                distance_progress = before_distance - after_distance
+                if distance_progress:
+                    carried_value = sum(
+                        float(qty) * float(prices.get(product, 0.0))
+                        for product, qty in old_eligible.items()
+                    )
+                    transport_progress_value += carried_value * distance_progress
+
+            # Track reward-eligible quantities after production, then remove
+            # quantities consumed for farm work or deposited into the shed.
+            eligible_pool = dict(old_eligible)
+            for product, units in produced.items():
+                eligible_pool[product] = eligible_pool.get(product, 0.0) + float(units)
+
+            consumed = {}
+            if op == "FEED":
+                consumed["WHEAT"] = 1.0
+            elif op == "FERTILIZE":
+                consumed["FERTILIZER"] = 1.0
+
+            for product, units in consumed.items():
+                eligible_pool[product] = max(
+                    0.0, eligible_pool.get(product, 0.0) - float(units)
+                )
+
+            manual_delivered: dict[str, float] = {}
+            at_shed = before_pos is not None and tuple(before_pos) in shed
             if at_shed and op == "DROP":
                 for product in DELIVERED_PRODUCTS:
-                    delivered[product] = max(
+                    removed = max(
                         0.0,
                         float(before_inv.get(product, 0))
                         - float(after_inv.get(product, 0)),
                     )
+                    if removed > 0:
+                        manual_delivered[product] = removed
             elif (
                 at_shed
                 and op == "PLACE"
@@ -360,59 +507,92 @@ class DeliveredProductTracker:
                 and action[1] in DELIVERED_PRODUCTS
             ):
                 product = action[1]
-                delivered[product] = max(
+                removed = max(
                     0.0,
                     float(before_inv.get(product, 0))
                     - float(after_inv.get(product, 0)),
                 )
+                if removed > 0:
+                    manual_delivered[product] = removed
+
+            delivered: dict[str, float] = {}
+            for product, removed in manual_delivered.items():
+                qty = min(float(removed), float(eligible_pool.get(product, 0.0)))
+                if qty > 0:
+                    delivered[product] = qty
+                    eligible_pool[product] = max(
+                        0.0, eligible_pool.get(product, 0.0) - qty
+                    )
+
+            # The environment automatically drops carried inventory into the
+            # shed at day rollover. Count remaining eligible cargo as delivery.
+            if day_rolled:
+                for product, qty in list(eligible_pool.items()):
+                    if qty > 0:
+                        delivered[product] = delivered.get(product, 0.0) + float(qty)
+                eligible_pool = {}
+
+            for product, units in delivered.items():
+                price_now = float(prices.get(product, 0.0))
+                value = float(units) * price_now
+                delivered_units += float(units)
+                delivered_value += value
+                self.delivered_value_by_product[product] += value
 
             next_eligible: dict[str, float] = {}
-            for product in DELIVERED_PRODUCTS:
-                before_qty = float(before_inv.get(product, 0))
-                after_qty = float(after_inv.get(product, 0))
-                eligible_before = float(old_eligible.get(product, 0))
-
-                eligible_delivered = min(
-                    eligible_before, float(delivered.get(product, 0))
-                )
-                if eligible_delivered > 0:
-                    price_now = float(prices.get(product, 0.0))
-                    value = eligible_delivered * price_now
-                    step_units += eligible_delivered
-                    step_value += value
-                    self.by_product[product] += value
-
-                remaining = max(0.0, eligible_before - eligible_delivered)
-                remaining = min(remaining, after_qty)
-
-                produced = 0.0
-                if op in PRODUCTION_ACTIONS:
-                    produced = max(0.0, after_qty - before_qty)
-
-                eligible_next = min(after_qty, remaining + produced)
-                if eligible_next > 0:
-                    next_eligible[product] = eligible_next
-
+            if not day_rolled:
+                for product, qty in eligible_pool.items():
+                    qty = min(float(qty), float(after_inv.get(product, 0)))
+                    if qty > 0:
+                        next_eligible[product] = qty
             self.eligible[i] = next_eligible
 
-        self.total_units += step_units
-        self.total_value += step_value
-        return step_value
+        raw_reward_value = (
+            PRODUCTION_REWARD_WEIGHT * produced_value
+            + TRANSPORT_REWARD_WEIGHT * transport_progress_value
+            + DELIVERY_REWARD_WEIGHT * delivered_value
+        )
+
+        self.produced_value += produced_value
+        self.transport_progress_value += transport_progress_value
+        self.delivered_value += delivered_value
+        self.produced_units += produced_units
+        self.delivered_units += delivered_units
+        self.total_reward_value += raw_reward_value
+
+        self.reward_steps += 1
+        if raw_reward_value > 0:
+            self.positive_reward_steps += 1
+        elif raw_reward_value < 0:
+            self.negative_reward_steps += 1
+
+        return {
+            "produced_value": produced_value,
+            "transport_progress_value": transport_progress_value,
+            "delivered_value": delivered_value,
+            "raw_reward_value": raw_reward_value,
+        }
 
 
-def build_delivery_value_transitions(
+def build_dense_worker_transitions(
     records: list[DecisionRecord],
-    final_delivery_value: float,
+    final_reward_value: float,
     gamma: float,
     reward_scale: float,
     reward_clip: float,
 ) -> list[Transition]:
-    """Build TD transitions from cumulative delivered-product market value.
+    """Build TD transitions from cumulative dense worker-controlled value.
 
-    Same-hour worker assignments retain zero immediate reward and discount 1.
-    When the environment advances, reward is the increase in cumulative value
-    of newly produced goods deposited into the shed, valued at that turn's live
-    market price. There is deliberately no terminal win/loss bonus.
+    Same-hour worker assignments receive zero immediate reward and discount 1.
+    When the environment advances, reward is the increase in cumulative shaped
+    objective:
+
+        produced_value
+        + 0.05 * transport_progress_value
+        + 0.25 * delivered_value
+
+    All components use live market prices from that environment step. There is
+    deliberately no terminal win/loss reward and no reward for SELL itself.
     """
     if not records:
         return []
@@ -444,7 +624,7 @@ def build_delivery_value_transitions(
             continue
 
         dense = (
-            float(final_delivery_value) - float(record.margin)
+            float(final_reward_value) - float(record.margin)
         ) / reward_scale
         dense = float(np.clip(dense, -reward_clip, reward_clip))
         transitions.append(
@@ -461,7 +641,6 @@ def build_delivery_value_transitions(
             )
         )
     return transitions
-
 
 def _infer_v20_seat(history: dict[str, Any]) -> int:
     rewards = _saved_final_rewards(history)
@@ -527,12 +706,12 @@ def run_static_episode(
         env = _environment_from_history(history)
     action_divergences = 0
     first_divergence = None
-    delivery_tracker = DeliveredProductTracker()
+    reward_tracker = DenseWorkerRewardTracker(controller.executor)
 
     try:
         for replay_step in range(1, len(history["steps"])):
             obs = _agent_observation(env, candidate_seat)
-            controller.selector.cumulative_delivery_value = delivery_tracker.total_value
+            controller.selector.cumulative_reward_value = reward_tracker.total_reward_value
             candidate_action = controller(obs)
             recorded_actions = _recorded_step_actions(history, replay_step)
             opponent_action = recorded_actions[opponent_seat]
@@ -560,14 +739,14 @@ def run_static_episode(
             env.step(actions)
 
             post_obs = _agent_observation(env, candidate_seat)
-            delivery_tracker.observe_step(
+            reward_tracker.observe_step(
                 obs,
                 candidate_action,
                 post_obs,
                 controller.executor.SHED,
             )
-            controller.selector.cumulative_delivery_value = (
-                delivery_tracker.total_value
+            controller.selector.cumulative_reward_value = (
+                reward_tracker.total_reward_value
             )
 
         final_states = env.steps[-1]
@@ -577,9 +756,9 @@ def run_static_episode(
         ok = statuses == ["DONE", "DONE"]
 
         transitions = (
-            build_delivery_value_transitions(
+            build_dense_worker_transitions(
                 controller.selector.records,
-                delivery_tracker.total_value,
+                reward_tracker.total_reward_value,
                 args.gamma,
                 args.reward_scale,
                 args.reward_clip,
@@ -597,9 +776,17 @@ def run_static_episode(
             "rewards": rewards,
             "margin": margin,
             "result": "WIN" if margin > 0 else "LOSS" if margin < 0 else "TIE",
-            "delivered_value": float(delivery_tracker.total_value),
-            "delivered_units": float(delivery_tracker.total_units),
-            "delivered_value_by_product": dict(delivery_tracker.by_product),
+            "produced_value": float(reward_tracker.produced_value),
+            "transport_progress_value": float(reward_tracker.transport_progress_value),
+            "delivered_value": float(reward_tracker.delivered_value),
+            "worker_reward_value": float(reward_tracker.total_reward_value),
+            "produced_units": float(reward_tracker.produced_units),
+            "delivered_units": float(reward_tracker.delivered_units),
+            "positive_reward_steps": int(reward_tracker.positive_reward_steps),
+            "negative_reward_steps": int(reward_tracker.negative_reward_steps),
+            "reward_steps": int(reward_tracker.reward_steps),
+            "produced_value_by_product": dict(reward_tracker.produced_value_by_product),
+            "delivered_value_by_product": dict(reward_tracker.delivered_value_by_product),
             "decisions": controller.selector.decisions,
             "explorations": controller.selector.explorations,
             "candidate_mean": (
@@ -624,9 +811,17 @@ def run_static_episode(
             "rewards": None,
             "margin": None,
             "result": "ERROR",
-            "delivered_value": float(delivery_tracker.total_value),
-            "delivered_units": float(delivery_tracker.total_units),
-            "delivered_value_by_product": dict(delivery_tracker.by_product),
+            "produced_value": float(reward_tracker.produced_value),
+            "transport_progress_value": float(reward_tracker.transport_progress_value),
+            "delivered_value": float(reward_tracker.delivered_value),
+            "worker_reward_value": float(reward_tracker.total_reward_value),
+            "produced_units": float(reward_tracker.produced_units),
+            "delivered_units": float(reward_tracker.delivered_units),
+            "positive_reward_steps": int(reward_tracker.positive_reward_steps),
+            "negative_reward_steps": int(reward_tracker.negative_reward_steps),
+            "reward_steps": int(reward_tracker.reward_steps),
+            "produced_value_by_product": dict(reward_tracker.produced_value_by_product),
+            "delivered_value_by_product": dict(reward_tracker.delivered_value_by_product),
             "decisions": controller.selector.decisions,
             "explorations": controller.selector.explorations,
             "candidate_mean": 0.0,
@@ -893,7 +1088,7 @@ def _save_checkpoint(
     sample_rng, explore_rng, replay_rng,
 ):
     payload = {
-        "algorithm": "v21_static_pure_q_delivered_value_double_dqn",
+        "algorithm": "v21_static_pure_q_dense_worker_value_double_dqn",
         "update": int(update),
         "optimizer_steps": int(optimizer_steps),
         "online_state_dict": online.state_dict(),
@@ -924,7 +1119,7 @@ def _load_v21_checkpoint(
     path, online, target, optimizer, device, sample_rng, explore_rng, replay_rng,
 ):
     payload = torch.load(path, map_location=device, weights_only=False)
-    if payload.get("algorithm") != "v21_static_pure_q_delivered_value_double_dqn":
+    if payload.get("algorithm") != "v21_static_pure_q_dense_worker_value_double_dqn":
         raise ValueError(
             f"{path}: expected v21_static_residual_double_dqn, "
             f"got {payload.get('algorithm')!r}"
@@ -1042,7 +1237,9 @@ def evaluate_histories(paths, model, device, base_executor, args, phase):
     rows = []
     wins = ties = losses = errors = 0
     margins = []
+    produced_values = []
     delivered_values = []
+    worker_reward_values = []
     with torch.inference_mode():
         for index, path in enumerate(paths, 1):
             args.current_epsilon = 0.0
@@ -1054,7 +1251,9 @@ def evaluate_histories(paths, model, device, base_executor, args, phase):
             if not result["ok"]:
                 errors += 1
             else:
+                produced_values.append(float(result["produced_value"]))
                 delivered_values.append(float(result["delivered_value"]))
+                worker_reward_values.append(float(result["worker_reward_value"]))
             if not result["ok"]:
                 continue
             elif result["margin"] > 0:
@@ -1069,15 +1268,23 @@ def evaluate_histories(paths, model, device, base_executor, args, phase):
         "errors": errors, "wins": wins, "ties": ties, "losses": losses,
         "win_rate": wins / valid if valid else 0.0,
         "mean_margin": float(np.mean(margins)) if margins else None,
+        "mean_produced_value": (
+            float(np.mean(produced_values)) if produced_values else None
+        ),
         "mean_delivered_value": (
             float(np.mean(delivered_values)) if delivered_values else None
+        ),
+        "mean_worker_reward_value": (
+            float(np.mean(worker_reward_values)) if worker_reward_values else None
         ),
         "rows": rows,
     }
     print(
         f"[{phase}] W/T/L/E={wins}/{ties}/{losses}/{errors} "
         f"win_rate={summary['win_rate']:.3f} mean_margin={summary['mean_margin']} "
-        f"mean_delivered_value={summary['mean_delivered_value']}",
+        f"mean_produced_value={summary['mean_produced_value']} "
+        f"mean_delivered_value={summary['mean_delivered_value']} "
+        f"mean_worker_reward_value={summary['mean_worker_reward_value']}",
         flush=True,
     )
     model.train()
@@ -1128,7 +1335,7 @@ def build_parser():
     p.add_argument("--epsilon-decay-updates", type=int, default=40)
     p.add_argument("--explore-top-k", type=int, default=3)
     p.add_argument("--bootstrap-candidates", type=int, default=32)
-    p.add_argument("--reward-scale", type=float, default=10000.0)
+    p.add_argument("--reward-scale", type=float, default=1000.0)
     p.add_argument("--reward-clip", type=float, default=2.0)
     return p
 
@@ -1227,8 +1434,10 @@ def main():
         "optimizer_name": "sgd",
         "action_value": "neural Q(state, task) only; no learned_task_score/tree prior",
         "reward": (
-            "incremental live-price value of newly produced goods delivered "
-            "to the shed / reward_scale; no terminal win/loss bonus"
+            "dense worker objective: 1.00*produced_value + "
+            "0.05*transport_progress_value + 0.25*delivered_value, "
+            "all at live market prices, divided by reward_scale; "
+            "no SELL or terminal win/loss reward"
         ),
         "replay_checkpointed": False,
     }, indent=2, default=str) + "\n", encoding="utf-8")
@@ -1277,6 +1486,7 @@ def main():
         args.current_epsilon = epsilon
         episode_rows = []
         added_transitions = 0
+        new_transition_rewards = []
         for episode_index in range(args.episodes_per_update):
             path = sample_rng.choice(train_paths)
             result, transitions = run_static_episode(
@@ -1285,6 +1495,7 @@ def main():
             )
             replay.extend(transitions)
             added_transitions += len(transitions)
+            new_transition_rewards.extend(float(t.reward) for t in transitions)
             row = {
                 "update": update, "episode_index": episode_index,
                 "epsilon": epsilon, **result, "transitions": len(transitions),
@@ -1306,6 +1517,33 @@ def main():
             "mean_training_margin": (
                 float(np.mean([row["margin"] for row in train_ok])) if train_ok else None
             ),
+            "mean_training_produced_value": (
+                float(np.mean([row["produced_value"] for row in train_ok]))
+                if train_ok else None
+            ),
+            "mean_training_delivered_value": (
+                float(np.mean([row["delivered_value"] for row in train_ok]))
+                if train_ok else None
+            ),
+            "mean_training_worker_reward_value": (
+                float(np.mean([row["worker_reward_value"] for row in train_ok]))
+                if train_ok else None
+            ),
+            "positive_reward_transitions": sum(r > 0 for r in new_transition_rewards),
+            "negative_reward_transitions": sum(r < 0 for r in new_transition_rewards),
+            "positive_reward_fraction": (
+                sum(r > 0 for r in new_transition_rewards) / len(new_transition_rewards)
+                if new_transition_rewards else 0.0
+            ),
+            "mean_reward": (
+                float(np.mean(new_transition_rewards)) if new_transition_rewards else 0.0
+            ),
+            "mean_abs_reward": (
+                float(np.mean(np.abs(new_transition_rewards)))
+                if new_transition_rewards else 0.0
+            ),
+            "max_reward": max(new_transition_rewards) if new_transition_rewards else 0.0,
+            "min_reward": min(new_transition_rewards) if new_transition_rewards else 0.0,
             "new_transitions": added_transitions,
             "replay_size": len(replay),
             "optimizer_steps": optimizer_steps,
@@ -1316,7 +1554,11 @@ def main():
         print(
             f"[update {update:04d}] train_ok={len(train_ok)}/{len(episode_rows)} "
             f"win_rate={metrics['training_win_rate']:.3f} replay={len(replay)} "
-            f"td_loss={metrics['td_loss']}",
+            f"produced={metrics['mean_training_produced_value']} "
+            f"delivered={metrics['mean_training_delivered_value']} "
+            f"reward_pos={metrics['positive_reward_fraction']:.3f} "
+            f"mean_reward={metrics['mean_reward']:.6f} "
+            f"td_loss={metrics['td_loss']} mean_abs_td={metrics['mean_abs_td']}",
             flush=True,
         )
 

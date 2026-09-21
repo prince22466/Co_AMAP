@@ -175,7 +175,7 @@ training/regression; dynamic rematches should remain a separate final
 validation step.
 
 
-## Delivered-value reward
+## Delivered-value reward (superseded by dense worker reward)
 
 v21 training now optimizes worker logistics/production using cumulative delivered product value rather than money margin or terminal win/loss.
 
@@ -185,4 +185,34 @@ Only cargo originating from production actions such as `HARVEST` and `COLLECT_FE
 
 Checkpoint algorithm tag:
 
-`v21_static_pure_q_delivered_value_double_dqn`
+`v21_static_pure_q_dense_worker_value_double_dqn`
+
+
+## Dense worker reward
+
+The worker-allocation Q-network now receives a dense reward aligned with the actions it controls:
+
+```text
+raw_reward_value =
+    1.00 * produced_value
+  + 0.05 * transport_progress_value
+  + 0.25 * delivered_value
+
+reward = clip(raw_reward_value / reward_scale)
+```
+
+Default `--reward-scale` is now `1000`.
+
+- **Production:** `HARVEST` and `COLLECT_FERTILIZER` receive immediate live-price product value.
+- **Transport:** reward-eligible produced cargo receives signed shaping for moving closer to/farther from the shed.
+- **Delivery:** reward-eligible cargo deposited into the shed receives an additional completion bonus.
+- **No SELL reward:** market selling remains outside the worker-Q action space.
+- **No terminal win/loss bonus:** terminal game outcome is still reported for evaluation but does not train worker allocation.
+- **Anti-loop guard:** only production-origin cargo is reward-eligible, so shed `PICKUP -> DROP` cycles do not create product reward.
+- **Day rollover:** automatic end-of-day shed deposit of eligible carried cargo is counted as delivery.
+
+Training logs now expose production, delivery, positive-reward fraction, mean reward, and mean absolute TD error so reward flow is immediately visible.
+
+Checkpoint algorithm tag:
+
+`v21_static_pure_q_dense_worker_value_double_dqn`
