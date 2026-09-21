@@ -94,7 +94,7 @@ PRODUCTION_REWARD_WEIGHT = 1.00
 TRANSPORT_REWARD_WEIGHT = 0.05
 DELIVERY_REWARD_WEIGHT = 0.25
 
-CHECKPOINT_ALGORITHM = "v21_static_pure_q_dense_worker_value_double_dqn"
+CHECKPOINT_ALGORITHM = "v21_static_pure_q_worker_credit_balanced_double_dqn"
 
 
 def _strip_tree_code(source: str) -> str:
@@ -249,23 +249,28 @@ class TreeFreeQSelector(QSelector):
             bootstrap_candidates, bootstrap_prior = self._bootstrap_subset(
                 state, candidates, q
             )
-            self.records.append(
-                DecisionRecord(
-                    state=np.asarray(state, dtype=np.float32).copy(),
-                    candidates=bootstrap_candidates,
-                    prior=bootstrap_prior,
-                    action_feature=np.asarray(
-                        candidates[selected], dtype=np.float16
-                    ).copy(),
-                    action_prior=0.0,
-                    margin=float(
-                        self.current_margin
-                        if self.current_margin is not None
-                        else self.cumulative_reward_value
-                    ),
-                    turn=int(obs["day"]) * 24 + int(obs["hour"]),
-                )
+            record = DecisionRecord(
+                state=np.asarray(state, dtype=np.float32).copy(),
+                candidates=bootstrap_candidates,
+                prior=bootstrap_prior,
+                action_feature=np.asarray(
+                    candidates[selected], dtype=np.float16
+                ).copy(),
+                action_prior=0.0,
+                margin=float(
+                    self.current_margin
+                    if self.current_margin is not None
+                    else self.cumulative_reward_value
+                ),
+                turn=int(obs["day"]) * 24 + int(obs["hour"]),
             )
+            # DecisionRecord comes from v20 and intentionally stays wire-compatible.
+            # v21 attaches worker-credit metadata dynamically (the dataclass is not
+            # slotted), so the shared replay Transition schema remains unchanged.
+            record.worker_index = int(choices[selected][0])
+            record.task_index = int(choices[selected][1])
+            record.worker_reward_value = 0.0
+            self.records.append(record)
 
         return choices[selected][0], choices[selected][1]
 
@@ -401,7 +406,7 @@ class DenseWorkerRewardTracker:
             return {"FERTILIZER": 1.0}
         return {}
 
-    def observe_step(self, obs_before, candidate_action, obs_after, shed_points) -> dict[str, float]:
+    def observe_step(self, obs_before, candidate_action, obs_after, shed_points) -> dict[str, Any]:
         before_invs = list(obs_before["private"]["inventories"])
         after_invs = list(obs_after["private"]["inventories"])
         worker_actions = self._worker_actions(candidate_action)
@@ -420,6 +425,8 @@ class DenseWorkerRewardTracker:
         delivered_value = 0.0
         produced_units = 0.0
         delivered_units = 0.0
+        per_worker_reward_values: dict[int, float] = {}
+        per_worker_components: dict[int, dict[str, float]] = {}
 
         for i in range(worker_count):
             before_inv = before_invs[i] if i < len(before_invs) else {}
@@ -432,6 +439,10 @@ class DenseWorkerRewardTracker:
                 if (not day_rolled and i < len(after_positions))
                 else None
             )
+
+            worker_produced_value = 0.0
+            worker_transport_value = 0.0
+            worker_delivered_value = 0.0
 
             old_eligible = dict(self.eligible[i])
             produced = self._produced_from_action(obs_before, before_pos, action)
@@ -456,6 +467,7 @@ class DenseWorkerRewardTracker:
                 value = float(units) * price_now
                 produced_units += float(units)
                 produced_value += value
+                worker_produced_value += value
                 self.produced_value_by_product[product] += value
 
             # Transport shaping is signed: moving one tile toward the shed is
@@ -470,7 +482,8 @@ class DenseWorkerRewardTracker:
                         float(qty) * float(prices.get(product, 0.0))
                         for product, qty in old_eligible.items()
                     )
-                    transport_progress_value += carried_value * distance_progress
+                    worker_transport_value = carried_value * distance_progress
+                    transport_progress_value += worker_transport_value
 
             # Track reward-eligible quantities after production, then remove
             # quantities consumed for farm work or deposited into the shed.
@@ -537,6 +550,7 @@ class DenseWorkerRewardTracker:
                 value = float(units) * price_now
                 delivered_units += float(units)
                 delivered_value += value
+                worker_delivered_value += value
                 self.delivered_value_by_product[product] += value
 
             next_eligible: dict[str, float] = {}
@@ -547,11 +561,20 @@ class DenseWorkerRewardTracker:
                         next_eligible[product] = qty
             self.eligible[i] = next_eligible
 
-        raw_reward_value = (
-            PRODUCTION_REWARD_WEIGHT * produced_value
-            + TRANSPORT_REWARD_WEIGHT * transport_progress_value
-            + DELIVERY_REWARD_WEIGHT * delivered_value
-        )
+            worker_reward_value = (
+                PRODUCTION_REWARD_WEIGHT * worker_produced_value
+                + TRANSPORT_REWARD_WEIGHT * worker_transport_value
+                + DELIVERY_REWARD_WEIGHT * worker_delivered_value
+            )
+            per_worker_reward_values[i] = worker_reward_value
+            per_worker_components[i] = {
+                "produced_value": worker_produced_value,
+                "transport_progress_value": worker_transport_value,
+                "delivered_value": worker_delivered_value,
+                "raw_reward_value": worker_reward_value,
+            }
+
+        raw_reward_value = sum(per_worker_reward_values.values())
 
         self.produced_value += produced_value
         self.transport_progress_value += transport_progress_value
@@ -571,49 +594,44 @@ class DenseWorkerRewardTracker:
             "transport_progress_value": transport_progress_value,
             "delivered_value": delivered_value,
             "raw_reward_value": raw_reward_value,
+            "per_worker_reward_values": per_worker_reward_values,
+            "per_worker_components": per_worker_components,
         }
 
-
-def build_dense_worker_transitions(
+def build_worker_credit_transitions(
     records: list[DecisionRecord],
-    final_reward_value: float,
     gamma: float,
     reward_scale: float,
     reward_clip: float,
 ) -> list[Transition]:
-    """Build TD transitions from cumulative dense worker-controlled value.
+    """Build TD transitions with reward credited to the worker decision that caused it.
 
-    Same-hour worker assignments receive zero immediate reward and discount 1.
-    When the environment advances, reward is the increase in cumulative shaped
-    objective:
-
-        produced_value
-        + 0.05 * transport_progress_value
-        + 0.25 * delivered_value
-
-    All components use live market prices from that environment step. There is
-    deliberately no terminal win/loss reward and no reward for SELL itself.
+    Worker assignments inside one environment hour remain a sequential Q-decision
+    chain, but each record carries its own realized worker reward. This avoids the
+    old behavior where the entire hour's production/logistics reward landed on the
+    final assignment merely because it was last in the same-turn record sequence.
     """
     if not records:
         return []
 
     transitions: list[Transition] = []
     for idx, record in enumerate(records):
+        worker_reward_value = float(getattr(record, "worker_reward_value", 0.0))
+        reward = float(np.clip(
+            worker_reward_value / reward_scale,
+            -reward_clip,
+            reward_clip,
+        ))
+
         if idx + 1 < len(records):
             nxt = records[idx + 1]
             env_steps = max(0, int(nxt.turn) - int(record.turn))
-            dense = 0.0
-            if env_steps > 0:
-                dense = (
-                    float(nxt.margin) - float(record.margin)
-                ) / reward_scale
-                dense = float(np.clip(dense, -reward_clip, reward_clip))
             transitions.append(
                 Transition(
                     state=record.state,
                     action_feature=record.action_feature,
                     action_prior=record.action_prior,
-                    reward=dense,
+                    reward=reward,
                     discount=float(gamma ** env_steps),
                     next_state=nxt.state,
                     next_candidates=nxt.candidates,
@@ -623,16 +641,12 @@ def build_dense_worker_transitions(
             )
             continue
 
-        dense = (
-            float(final_reward_value) - float(record.margin)
-        ) / reward_scale
-        dense = float(np.clip(dense, -reward_clip, reward_clip))
         transitions.append(
             Transition(
                 state=record.state,
                 action_feature=record.action_feature,
                 action_prior=record.action_prior,
-                reward=dense,
+                reward=reward,
                 discount=0.0,
                 next_state=None,
                 next_candidates=None,
@@ -641,6 +655,52 @@ def build_dense_worker_transitions(
             )
         )
     return transitions
+
+
+def _split_replay_by_reward(replay: ReplayBuffer):
+    rewarded = []
+    neutral = []
+    for transition in replay.data:
+        if abs(float(transition.reward)) > 1e-12:
+            rewarded.append(transition)
+        else:
+            neutral.append(transition)
+    return rewarded, neutral
+
+
+def _sample_stratified_replay(
+    rewarded,
+    neutral,
+    n: int,
+    rng: random.Random,
+    rewarded_fraction: float,
+):
+    """Sample up to rewarded_fraction non-zero-reward transitions per batch.
+
+    Sampling is without replacement within a batch. If either pool is too small,
+    the other pool fills the remainder, so training still works during warmup.
+    """
+    target_rewarded = int(round(n * rewarded_fraction))
+    rewarded_count = min(target_rewarded, len(rewarded))
+    neutral_count = min(n - rewarded_count, len(neutral))
+
+    if rewarded_count + neutral_count < n:
+        rewarded_count = min(len(rewarded), n - neutral_count)
+    if rewarded_count + neutral_count < n:
+        neutral_count = min(len(neutral), n - rewarded_count)
+    if rewarded_count + neutral_count != n:
+        raise RuntimeError(
+            f"cannot form replay batch of {n}: "
+            f"rewarded={len(rewarded)} neutral={len(neutral)}"
+        )
+
+    batch = (
+        rng.sample(rewarded, rewarded_count)
+        + rng.sample(neutral, neutral_count)
+    )
+    rng.shuffle(batch)
+    return batch, rewarded_count
+
 
 def _infer_v20_seat(history: dict[str, Any]) -> int:
     rewards = _saved_final_rewards(history)
@@ -712,6 +772,7 @@ def run_static_episode(
         for replay_step in range(1, len(history["steps"])):
             obs = _agent_observation(env, candidate_seat)
             controller.selector.cumulative_reward_value = reward_tracker.total_reward_value
+            record_start = len(controller.selector.records)
             candidate_action = controller(obs)
             recorded_actions = _recorded_step_actions(history, replay_step)
             opponent_action = recorded_actions[opponent_seat]
@@ -739,12 +800,24 @@ def run_static_episode(
             env.step(actions)
 
             post_obs = _agent_observation(env, candidate_seat)
-            reward_tracker.observe_step(
+            step_reward = reward_tracker.observe_step(
                 obs,
                 candidate_action,
                 post_obs,
                 controller.executor.SHED,
             )
+            new_records = controller.selector.records[record_start:]
+            by_worker: dict[int, list[Any]] = {}
+            for record in new_records:
+                by_worker.setdefault(int(record.worker_index), []).append(record)
+            for worker_index, worker_records in by_worker.items():
+                # A worker is normally selected once per hour. If future executor
+                # changes ever create multiple records, credit the final decision
+                # that determines the worker's actual emitted unit action.
+                worker_records[-1].worker_reward_value = float(
+                    step_reward["per_worker_reward_values"].get(worker_index, 0.0)
+                )
+
             controller.selector.cumulative_reward_value = (
                 reward_tracker.total_reward_value
             )
@@ -756,9 +829,8 @@ def run_static_episode(
         ok = statuses == ["DONE", "DONE"]
 
         transitions = (
-            build_dense_worker_transitions(
+            build_worker_credit_transitions(
                 controller.selector.records,
-                reward_tracker.total_reward_value,
                 args.gamma,
                 args.reward_scale,
                 args.reward_clip,
@@ -950,6 +1022,8 @@ def q_update_v21(
             "q_mean": None,
             "target_mean": None,
             "mean_abs_td": None,
+            "replay_rewarded_fraction": None,
+            "sampled_rewarded_fraction": None,
         }, optimizer_steps
 
     dtype = online.compute_dtype
@@ -957,9 +1031,22 @@ def q_update_v21(
     q_means = []
     target_means = []
     abs_tds = []
+    sampled_rewarded_fractions = []
+
+    rewarded_pool, neutral_pool = _split_replay_by_reward(replay)
+    replay_rewarded_fraction = (
+        len(rewarded_pool) / len(replay) if len(replay) else 0.0
+    )
 
     for _ in range(args.gradient_steps_per_update):
-        batch = replay.sample(args.batch_size, replay_rng)
+        batch, rewarded_count = _sample_stratified_replay(
+            rewarded_pool,
+            neutral_pool,
+            args.batch_size,
+            replay_rng,
+            args.rewarded_replay_fraction,
+        )
+        sampled_rewarded_fractions.append(rewarded_count / args.batch_size)
 
         states = torch.as_tensor(
             np.stack([t.state for t in batch]),
@@ -1081,6 +1168,8 @@ def q_update_v21(
         "q_mean": float(np.mean(q_means)),
         "target_mean": float(np.mean(target_means)),
         "mean_abs_td": float(np.mean(abs_tds)),
+        "replay_rewarded_fraction": float(replay_rewarded_fraction),
+        "sampled_rewarded_fraction": float(np.mean(sampled_rewarded_fractions)),
     }, optimizer_steps
 
 def _save_checkpoint(
@@ -1088,7 +1177,7 @@ def _save_checkpoint(
     sample_rng, explore_rng, replay_rng,
 ):
     payload = {
-        "algorithm": "v21_static_pure_q_dense_worker_value_double_dqn",
+        "algorithm": "v21_static_pure_q_worker_credit_balanced_double_dqn",
         "update": int(update),
         "optimizer_steps": int(optimizer_steps),
         "online_state_dict": online.state_dict(),
@@ -1119,7 +1208,7 @@ def _load_v21_checkpoint(
     path, online, target, optimizer, device, sample_rng, explore_rng, replay_rng,
 ):
     payload = torch.load(path, map_location=device, weights_only=False)
-    if payload.get("algorithm") != "v21_static_pure_q_dense_worker_value_double_dqn":
+    if payload.get("algorithm") != "v21_static_pure_q_worker_credit_balanced_double_dqn":
         raise ValueError(
             f"{path}: expected v21_static_residual_double_dqn, "
             f"got {payload.get('algorithm')!r}"
@@ -1337,6 +1426,15 @@ def build_parser():
     p.add_argument("--bootstrap-candidates", type=int, default=32)
     p.add_argument("--reward-scale", type=float, default=1000.0)
     p.add_argument("--reward-clip", type=float, default=2.0)
+    p.add_argument(
+        "--rewarded-replay-fraction",
+        type=float,
+        default=0.50,
+        help=(
+            "target fraction of non-zero-reward transitions in each SGD batch; "
+            "the neutral pool fills any shortage"
+        ),
+    )
     return p
 
 
@@ -1357,6 +1455,8 @@ def main():
         raise SystemExit(f"base executor not found: {base_executor}")
     if not v20_submission.is_file():
         raise SystemExit(f"v20 submission notebook not found: {v20_submission}")
+    if not (0.0 <= args.rewarded_replay_fraction <= 1.0):
+        raise SystemExit("--rewarded-replay-fraction must be between 0 and 1")
 
     paths = _history_paths(history_dir)
     train_paths, validation_paths = _split_histories(paths, args.validation_fraction, args.split_seed)
@@ -1434,10 +1534,14 @@ def main():
         "optimizer_name": "sgd",
         "action_value": "neural Q(state, task) only; no learned_task_score/tree prior",
         "reward": (
-            "dense worker objective: 1.00*produced_value + "
-            "0.05*transport_progress_value + 0.25*delivered_value, "
-            "all at live market prices, divided by reward_scale; "
+            "per-worker dense objective: each Q decision receives its own "
+            "1.00*produced_value + 0.05*transport_progress_value + "
+            "0.25*delivered_value at live prices, divided by reward_scale; "
             "no SELL or terminal win/loss reward"
+        ),
+        "replay_sampling": (
+            "stratified non-zero-reward/neutral replay, target rewarded fraction "
+            "configured by --rewarded-replay-fraction"
         ),
         "replay_checkpointed": False,
     }, indent=2, default=str) + "\n", encoding="utf-8")
@@ -1558,6 +1662,8 @@ def main():
             f"delivered={metrics['mean_training_delivered_value']} "
             f"reward_pos={metrics['positive_reward_fraction']:.3f} "
             f"mean_reward={metrics['mean_reward']:.6f} "
+            f"replay_rewarded={metrics['replay_rewarded_fraction']} "
+            f"batch_rewarded={metrics['sampled_rewarded_fraction']} "
             f"td_loss={metrics['td_loss']} mean_abs_td={metrics['mean_abs_td']}",
             flush=True,
         )
