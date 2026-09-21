@@ -9,8 +9,8 @@ Storage formats:
 - fp16: 2 bytes/parameter, decoded by struct.unpack("<6721e", ...)
 - fp8_e4m3fn: 1 byte/parameter, decoded by a small stdlib E4M3FN decoder
 
-Arithmetic after decoding is still Python float arithmetic; the model parameters
-themselves are restricted to the selected quantized representable values.
+FP16 export also emulates FP16 network arithmetic in stdlib Python by rounding
+network inputs, multiply-add accumulations and tanh outputs back to binary16.
 """
 from __future__ import annotations
 
@@ -99,6 +99,100 @@ def _encode_fp8_e4m3fn(values: np.ndarray) -> bytes:
     return bytes(output)
 
 
+def _replace_function(source: str, name: str, replacement: str) -> str:
+    tree = ast.parse(source)
+    node = next(
+        (n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == name),
+        None,
+    )
+    if node is None:
+        raise ValueError(f"submission main.py does not define function {name}")
+    lines = source.splitlines()
+    return "\n".join(
+        lines[: node.lineno - 1]
+        + replacement.strip("\n").splitlines()
+        + lines[node.end_lineno :]
+    ) + "\n"
+
+
+def _install_fp16_network_arithmetic(source: str) -> str:
+    helper = """def _q_f16(v):
+    return struct.unpack("<e",struct.pack("<e",float(v)))[0]"""
+    marker = '_Q_ALL=struct.unpack("<6721e",base64.b64decode(_Q_WEIGHTS_B64))'
+    if marker not in source:
+        raise ValueError("FP16 weight decoder marker not found")
+    source = source.replace(marker, marker + "\n\n" + helper, 1)
+
+    source = _replace_function(
+        source,
+        "q_norm_task",
+        """def q_norm_task(features):
+    return tuple(_q_f16(_q_clip(_q_f16(float(v))/s)) for v,s in zip(features,_Q_TASK_SCALES))""",
+    )
+    source = _replace_function(
+        source,
+        "q_normalized_prior",
+        """def q_normalized_prior(raw_scores):
+    n=len(raw_scores)
+    if not n:return ()
+    vals=[_q_f16(x) for x in raw_scores]
+    top=max(vals)
+    mean=_q_f16(sum(vals)/n)
+    variance=_q_f16(sum(_q_f16(_q_f16(x-mean)*_q_f16(x-mean)) for x in vals)/n)
+    scale=max(_q_f16(math.sqrt(max(0.0,variance))),1.0)
+    return tuple(_q_f16(_q_clip(_q_f16(_q_f16(x-top)/scale))) for x in vals)""",
+    )
+    source = _replace_function(
+        source,
+        "q_global_state",
+        """def q_global_state(obs,candidate_count,free_workers):
+    p=int(obs['player']);o=1-p;own=obs['farms'][p];opp=obs['farms'][o]
+    private=obs['private'];total=totals(private);prices=obs['market']['prices']
+    x=(
+        obs['day']/29.,obs['hour']/23.,own['money']/100000.,opp['money']/100000.,(own['money']-opp['money'])/100000.,
+        len(own['hands'])/12.,len(opp['hands'])/12.,len(own['unlocked_quadrants'])/4.,len(opp['unlocked_quadrants'])/4.,
+        total.get('WHEAT',0)/300.,total.get('FERTILIZER',0)/200.,
+        prices['WHEAT']/25.,prices['MILK']/160.,prices['WOOL']/200.,prices['EGG']/50.,
+        candidate_count/128.,free_workers/16.)
+    return tuple(_q_f16(_q_clip(v)) for v in x)""",
+    )
+    source = _replace_function(
+        source,
+        "q_state_bias",
+        """def q_state_bias(state):
+    out=[]
+    for j in range(64):
+        row=j*38
+        v=_q_f16(_Q_B0[j])
+        for k in range(17):
+            v=_q_f16(v+_q_f16(_Q_W0[row+k]*state[k]))
+        out.append(v)
+    return out""",
+    )
+    source = _replace_function(
+        source,
+        "q_residual_score",
+        """def q_residual_score(state_bias,candidate):
+    h1=[]
+    for j in range(64):
+        row=j*38;v=_q_f16(state_bias[j])
+        for k in range(21):
+            v=_q_f16(v+_q_f16(_Q_W0[row+17+k]*candidate[k]))
+        h1.append(_q_f16(math.tanh(v)))
+    h2=[]
+    for j in range(64):
+        row=j*64;v=_q_f16(_Q_B2[j])
+        for k in range(64):
+            v=_q_f16(v+_q_f16(_Q_W2[row+k]*h1[k]))
+        h2.append(_q_f16(math.tanh(v)))
+    v=_q_f16(_Q_B4)
+    for k in range(64):
+        v=_q_f16(v+_q_f16(_Q_W4[k]*h2[k]))
+    return v""",
+    )
+    return source
+
+
 def _replace_quantized_weights(source: str, blob: bytes, quantization: str) -> str:
     weights_node = _assignment_node(source, "_Q_WEIGHTS_B64")
     all_node = _assignment_node(source, "_Q_ALL")
@@ -135,7 +229,10 @@ _Q_ALL=_q_decode_fp8_e4m3fn(base64.b64decode(_Q_WEIGHTS_B64))"""
 
     if updated and updated[0].startswith('"""Kaggriculture v20'):
         updated[0] = updated[0].replace("Kaggriculture v20", "Kaggriculture v21", 1)
-    return "\n".join(updated) + "\n"
+    result = "\n".join(updated) + "\n"
+    if quantization == "fp16":
+        result = _install_fp16_network_arithmetic(result)
+    return result
 
 
 def _load_checkpoint(path: Path, device: torch.device):
@@ -219,8 +316,8 @@ def main():
         "archive": str(archive_path),
         "template": str(v20_submission),
         "note": (
-            "Weights/biases are stored in the selected quantized format; "
-            "stdlib submission arithmetic after decoding uses Python floats."
+            "FP16 export stores binary16 weights and explicitly rounds residual-Q "
+            "inputs/accumulations/tanh outputs to binary16; FP8 uses its software decoder."
         ),
     }
     (output_dir / "export_metadata.json").write_text(
