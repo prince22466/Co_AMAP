@@ -360,6 +360,12 @@ def _load_v21_checkpoint(
             f"{path}: expected v21_static_residual_double_dqn, "
             f"got {payload.get('algorithm')!r}"
         )
+    saved_quantization = payload.get("quantization", "fp16")
+    if getattr(online, "quantization", saved_quantization) != saved_quantization:
+        raise ValueError(
+            f"checkpoint quantization {saved_quantization!r} does not match "
+            f"requested {getattr(online, 'quantization', None)!r}"
+        )
     online.load_state_dict(payload["online_state_dict"])
     target.load_state_dict(payload.get("target_state_dict", payload["online_state_dict"]))
     if payload.get("optimizer_state_dict"):
