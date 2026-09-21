@@ -17,11 +17,9 @@ from train_v21_static_history import (
     DEFAULT_V20_SUBMISSION,
     GLOBAL_FEATURE_NAMES,
     TASK_FEATURE_NAMES,
-    ResidualQ,
     QuantizedResidualQ,
     _infer_v20_seat,
     _load_history,
-    _load_v20_submission_weights,
     recorded_action_parity,
     run_static_episode,
 )
@@ -49,7 +47,7 @@ def _load_model(checkpoint, expected_algorithm, device, hidden):
     return model, payload
 
 
-def evaluate_one(path, v20_model, v21_model, device, args):
+def evaluate_one(path, v21_model, device, args):
     history = _load_history(path)
     original_rewards = [
         float(history["steps"][-1][0]["reward"]),
@@ -70,19 +68,6 @@ def evaluate_one(path, v20_model, v21_model, device, args):
     row["recorded_action_control"] = control
     if not control.get("exact"):
         row["error"] = "recorded-action parity failed"
-        return row
-
-    v20, _ = run_static_episode(
-        path, v20_model, device, args.base_executor, args, random.Random(0),
-        deterministic=True, collect=False, compare_to_recorded_candidate=True,
-    )
-    row["v20_executor_parity"] = {
-        "rewards": v20["rewards"],
-        "action_divergences": v20["action_divergences"],
-        "first_action_divergence": v20["first_action_divergence"],
-    }
-    if not v20["ok"] or v20["action_divergences"] != 0 or v20["rewards"] != original_rewards:
-        row["error"] = "decoded checked-in v20 submission does not reproduce recorded v20"
         return row
 
     v21, _ = run_static_episode(
@@ -180,20 +165,14 @@ def main():
         raise SystemExit("no matching histories")
 
     device = torch.device(args.device)
-    v20_model = ResidualQ(len(TASK_FEATURE_NAMES), len(GLOBAL_FEATURE_NAMES), args.hidden).to(device)
-    v20_target = ResidualQ(len(TASK_FEATURE_NAMES), len(GLOBAL_FEATURE_NAMES), args.hidden).to(device)
-    v20_payload = _load_v20_submission_weights(
-        args.v20_submission, v20_model, v20_target, device, args.hidden
-    )
-    v20_model.eval()
     v21_model, v21_payload = _load_model(
-        args.v21_checkpoint, "v21_static_residual_double_dqn", device, args.hidden
+        args.v21_checkpoint, "v21_static_pure_q_double_dqn", device, args.hidden
     )
 
     rows = []
     for index, path in enumerate(paths, 1):
         try:
-            row = evaluate_one(path, v20_model, v21_model, device, args)
+            row = evaluate_one(path, v21_model, device, args)
         except Exception as exc:
             row = {"episode": path.stem, "valid": False, "error": f"{type(exc).__name__}: {exc}"}
         rows.append(row)
@@ -213,11 +192,11 @@ def main():
             "history_dir": str(args.history_dir),
             "base_executor": str(args.base_executor),
             "v20_submission": str(args.v20_submission),
-            "v20_submission_sha256": v20_payload.get("sha256"),
+            "v20_reference": "recorded game_history/v20 terminal rewards and action stream",
             "v21_checkpoint": str(args.v21_checkpoint),
             "v21_checkpoint_update": v21_payload.get("update"),
             "recorded_action_parity_required": True,
-            "v20_policy_parity_required": True,
+            "v20_policy_parity_required": False,
             "opponent_behavior": "recorded action stream; non-adaptive",
         },
         "summary": summarize(rows),
