@@ -53,9 +53,9 @@ not require the old v20 `.pt` checkpoint for initialization.
 ## Quantization
 
 Quantization is part of training and deployment, not a post-training-only step.
-The trainer keeps FP32 master parameters for stable Adam updates, but **every Q
-forward pass fake-quantizes all three Linear layers' weights and biases** with a
-straight-through estimator (STE).
+By default, v21 uses **true FP16 end-to-end network training**: model parameters,
+forward activations, Q values, TD targets, gradients, and Adam moment tensors are
+all FP16. There is no FP32 master-weight copy in default FP16 mode.
 
 Default:
 
@@ -69,17 +69,16 @@ Experimental FP8:
 --quantization fp8_e4m3fn
 ```
 
-The current implementation is **weight/bias QAT**. Global-state features, task
-features, tanh activations, Bellman targets, gradients, and Adam optimizer state
-remain FP32. This avoids unstable low-precision optimizer updates while making
-the learned policy adapt to the exact low-precision parameter grid used at
-deployment.
+FP8 remains experimental and uses weight/bias QAT. In contrast, the default FP16
+path converts the actual trainable network and Double-DQN tensors to FP16 and uses
+a pure-FP16 Adam implementation. The only non-FP16 pieces are non-floating-point
+bookkeeping such as Python step counters and external environment/replay metadata.
 
-The checkpoint stores both FP32 master weights and a quantized
+The checkpoint stores the actual FP16 model state in default mode plus a matching
 `deployment_state_dict`. The final exporter writes the deployment weights in
 the selected representation:
 
-- FP16: 2 bytes/parameter using IEEE-754 binary16.
+- FP16: 2 bytes/parameter using IEEE-754 binary16; exported residual-Q inference also rounds inputs, accumulations, and tanh outputs to FP16.
 - FP8: 1 byte/parameter using E4M3FN-style finite FP8.
 
 `export_v21_submission.py` replaces the residual-Q tensor inside the v20
