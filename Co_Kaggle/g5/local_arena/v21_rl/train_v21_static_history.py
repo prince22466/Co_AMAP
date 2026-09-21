@@ -587,20 +587,30 @@ def main():
     explore_rng = random.Random(args.training_seed ^ 0x21)
     replay_rng = random.Random(args.training_seed ^ 0xD0D1)
 
+    v20_reference = ResidualQ(
+        len(TASK_FEATURE_NAMES), len(GLOBAL_FEATURE_NAMES), args.hidden
+    ).to(device)
+    v20_reference_target = ResidualQ(
+        len(TASK_FEATURE_NAMES), len(GLOBAL_FEATURE_NAMES), args.hidden
+    ).to(device)
+    parent_payload = _load_v20_submission_weights(
+        v20_submission, v20_reference, v20_reference_target, device, args.hidden
+    )
+    args.parent_v20_submission_sha256 = parent_payload["sha256"]
+    v20_reference.eval()
+
     online = QuantizedResidualQ(
         len(TASK_FEATURE_NAMES), len(GLOBAL_FEATURE_NAMES), args.hidden, args.quantization
     ).to(device)
     target = QuantizedResidualQ(
         len(TASK_FEATURE_NAMES), len(GLOBAL_FEATURE_NAMES), args.hidden, args.quantization
     ).to(device)
-    parent_payload = _load_v20_submission_weights(
-        v20_submission, online, target, device, args.hidden
-    )
-    args.parent_v20_submission_sha256 = parent_payload["sha256"]
+    online.load_state_dict(v20_reference.state_dict())
+    target.load_state_dict(v20_reference.state_dict())
     online.train(); target.eval()
 
     preflight_rows = _preflight(
-        paths, v20_submission, online, device, base_executor, args
+        paths, v20_submission, v20_reference, device, base_executor, args
     )
     if args.preflight_only:
         print("preflight-only: all selected histories passed", flush=True)
