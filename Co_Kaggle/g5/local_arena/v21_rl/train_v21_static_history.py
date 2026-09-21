@@ -65,7 +65,6 @@ from train_v20_q_history import (
 )
 from quantization import (
     QUANTIZATION_CHOICES,
-    PureFP16Adam,
     QuantizedResidualQ,
     quantized_state_dict,
 )
@@ -340,7 +339,7 @@ def q_update_v21(
 
     In default FP16 mode, states, candidate features, priors, rewards,
     discounts, bootstrap values, Bellman targets, Q predictions, loss inputs,
-    gradients and optimizer moments are all float16.
+    and gradients are all float16. Plain SGD has no optimizer moments.
     """
     if len(replay) < max(args.replay_warmup, args.batch_size):
         return {
@@ -495,6 +494,7 @@ def _save_checkpoint(
         "deployment_state_dict": quantized_state_dict(online, args.quantization),
         "quantization": args.quantization,
         "optimizer_state_dict": optimizer.state_dict(),
+        "optimizer_name": "sgd",
         "task_feature_names": TASK_FEATURE_NAMES,
         "global_feature_names": GLOBAL_FEATURE_NAMES,
         "parent_v20_submission": str(args.v20_submission),
@@ -531,7 +531,13 @@ def _load_v21_checkpoint(
     online.load_state_dict(payload["online_state_dict"])
     target.load_state_dict(payload.get("target_state_dict", payload["online_state_dict"]))
     if payload.get("optimizer_state_dict"):
-        optimizer.load_state_dict(payload["optimizer_state_dict"])
+        if payload.get("optimizer_name") == "sgd":
+            requested_lrs = [group["lr"] for group in optimizer.param_groups]
+            optimizer.load_state_dict(payload["optimizer_state_dict"])
+            for group, lr in zip(optimizer.param_groups, requested_lrs):
+                group["lr"] = lr
+        else:
+            print("Resuming model with fresh SGD; discarding legacy Adam state.", flush=True)
     if payload.get("sample_rng_state") is not None:
         sample_rng.setstate(payload["sample_rng_state"])
     if payload.get("explore_rng_state") is not None:
@@ -677,7 +683,7 @@ def build_parser():
     p.add_argument("--validate-every-updates", type=int, default=1)
     p.add_argument("--checkpoint-every-updates", type=int, default=1)
     p.add_argument("--target-win-rate", type=float, default=0.70)
-    p.add_argument("--max-training-hours", type=float, default=4.0)
+    p.add_argument("--max-training-hours", type=float, default=2.0)
     p.add_argument("--preflight-only", action="store_true")
     p.add_argument("--device", default="auto")
     p.add_argument(
@@ -687,8 +693,7 @@ def build_parser():
         help="QAT/deployment weight format; FP16 is the default, FP8 E4M3FN is experimental",
     )
     p.add_argument("--hidden", type=int, default=64)
-    p.add_argument("--learning-rate", type=float, default=1e-5)
-    p.add_argument("--fp16-adam-eps", type=float, default=1e-4)
+    p.add_argument("--learning-rate", type=float, default=1e-3)
     p.add_argument("--gamma", type=float, default=0.999)
     p.add_argument("--batch-size", type=int, default=256)
     p.add_argument("--gradient-steps-per-update", type=int, default=64)
@@ -797,20 +802,14 @@ def main():
         "validation_protocol": "held-out v20 loss histories with the same static recorded-opponent protocol",
         "model_structure": "same ResidualQ(task_features + global_state, hidden=64) as v20",
         "quantization": args.quantization,
-        "precision_policy": "fp16 => true FP16 parameters/activations/Q/targets/gradients/Adam moments; fp8_e4m3fn => experimental weight QAT",
+        "precision_policy": "fp16 => true FP16 parameters/activations/Q/targets/gradients; SGD without momentum; fp8_e4m3fn => experimental weight QAT",
+        "optimizer_name": "sgd",
         "action_value": "normalized v19 learned_task_score prior + neural residual",
         "reward": "delta money margin / reward_scale + terminal win/tie/loss",
         "replay_checkpointed": False,
     }, indent=2, default=str) + "\n", encoding="utf-8")
 
-    if args.quantization == "fp16":
-        optimizer = PureFP16Adam(
-            online.parameters(),
-            lr=args.learning_rate,
-            eps=args.fp16_adam_eps,
-        )
-    else:
-        optimizer = torch.optim.Adam(online.parameters(), lr=args.learning_rate)
+    optimizer = torch.optim.SGD(online.parameters(), lr=args.learning_rate, momentum=0.0)
     start_update = 0
     optimizer_steps = 0
     if args.resume is not None:
