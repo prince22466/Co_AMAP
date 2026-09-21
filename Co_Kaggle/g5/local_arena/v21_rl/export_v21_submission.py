@@ -131,19 +131,6 @@ def _install_fp16_network_arithmetic(source: str) -> str:
     )
     source = _replace_function(
         source,
-        "q_normalized_prior",
-        """def q_normalized_prior(raw_scores):
-    n=len(raw_scores)
-    if not n:return ()
-    vals=[_q_f16(x) for x in raw_scores]
-    top=max(vals)
-    mean=_q_f16(sum(vals)/n)
-    variance=_q_f16(sum(_q_f16(_q_f16(x-mean)*_q_f16(x-mean)) for x in vals)/n)
-    scale=max(_q_f16(math.sqrt(max(0.0,variance))),1.0)
-    return tuple(_q_f16(_q_clip(_q_f16(_q_f16(x-top)/scale))) for x in vals)""",
-    )
-    source = _replace_function(
-        source,
         "q_global_state",
         """def q_global_state(obs,candidate_count,free_workers):
     p=int(obs['player']);o=1-p;own=obs['farms'][p];opp=obs['farms'][o]
@@ -193,6 +180,81 @@ def _install_fp16_network_arithmetic(source: str) -> str:
     return source
 
 
+def _strip_tree_scorer(source: str) -> str:
+    """Remove the v18/v19 task-tree ensemble from the exported v21 agent."""
+    tree = ast.parse(source)
+    remove_ranges = []
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and (
+            node.name.startswith("_tree_") or node.name == "learned_task_score"
+        ):
+            remove_ranges.append((node.lineno - 1, node.end_lineno))
+        elif isinstance(node, ast.Assign):
+            if any(
+                isinstance(target, ast.Name) and target.id == "_TREE_FUNCTIONS"
+                for target in node.targets
+            ):
+                remove_ranges.append((node.lineno - 1, node.end_lineno))
+
+    lines = source.splitlines()
+    for start, end in sorted(remove_ranges, reverse=True):
+        del lines[start:end]
+    return "\n".join(lines) + "\n"
+
+
+def _install_pure_q_policy(source: str) -> str:
+    old = """                features=task_features(obs,i,(p,op,weight,resource))
+                baseline=learned_task_score(features)
+                choices.append((i,k,distance,features,baseline))
+        if not choices:break
+
+        raw=[c[4] for c in choices]
+        prior=q_normalized_prior(raw)
+        candidates=[q_norm_task(c[3]) for c in choices]
+        state=q_global_state(obs,len(choices),len(free))
+        state_bias=q_state_bias(state)
+
+        # Exact safe pruning: candidate residual <= _Q_RESIDUAL_MAX. Start with
+        # the best v19-prior candidate, then only evaluate another candidate if
+        # its best theoretically possible Q can still reach the current best.
+        order=sorted(range(len(choices)),key=lambda z:(prior[z],choices[z][4],-choices[z][2],-choices[z][0],-choices[z][1]),reverse=True)
+        j=order[0]
+        best_q=prior[j]+q_residual_score(state_bias,candidates[j])
+        best_key=(best_q,choices[j][4],-choices[j][2],-choices[j][0],-choices[j][1])
+        for z in order[1:]:
+            if prior[z]+_Q_RESIDUAL_MAX<best_q:break
+            q=prior[z]+q_residual_score(state_bias,candidates[z])
+            key=(q,choices[z][4],-choices[z][2],-choices[z][0],-choices[z][1])
+            if key>best_key:
+                j=z;best_q=q;best_key=key
+"""
+    new = """                features=task_features(obs,i,(p,op,weight,resource))
+                choices.append((i,k,distance,features))
+        if not choices:break
+
+        candidates=[q_norm_task(c[3]) for c in choices]
+        state=q_global_state(obs,len(choices),len(free))
+        state_bias=q_state_bias(state)
+
+        # v21: no tree prior. The neural network is the complete Q scorer.
+        order=sorted(
+            range(len(choices)),
+            key=lambda z:(
+                q_residual_score(state_bias,candidates[z]),
+                -choices[z][2],
+                -choices[z][0],
+                -choices[z][1],
+            ),
+            reverse=True,
+        )
+        j=order[0]
+"""
+    if old not in source:
+        raise ValueError("v20 unit_actions Q/tree block not found; template changed")
+    source = source.replace(old, new, 1)
+    return _strip_tree_scorer(source)
+
+
 def _replace_quantized_weights(source: str, blob: bytes, quantization: str) -> str:
     weights_node = _assignment_node(source, "_Q_WEIGHTS_B64")
     all_node = _assignment_node(source, "_Q_ALL")
@@ -230,6 +292,7 @@ _Q_ALL=_q_decode_fp8_e4m3fn(base64.b64decode(_Q_WEIGHTS_B64))"""
     if updated and updated[0].startswith('"""Kaggriculture v20'):
         updated[0] = updated[0].replace("Kaggriculture v20", "Kaggriculture v21", 1)
     result = "\n".join(updated) + "\n"
+    result = _install_pure_q_policy(result)
     if quantization == "fp16":
         result = _install_fp16_network_arithmetic(result)
     return result
@@ -237,9 +300,9 @@ _Q_ALL=_q_decode_fp8_e4m3fn(base64.b64decode(_Q_WEIGHTS_B64))"""
 
 def _load_checkpoint(path: Path, device: torch.device):
     payload = torch.load(path, map_location=device, weights_only=False)
-    if payload.get("algorithm") != "v21_static_residual_double_dqn":
+    if payload.get("algorithm") != "v21_static_pure_q_double_dqn":
         raise ValueError(
-            f"{path}: expected v21_static_residual_double_dqn, "
+            f"{path}: expected v21_static_pure_q_double_dqn, "
             f"got {payload.get('algorithm')!r}"
         )
     quantization = payload.get("quantization", "fp16")
@@ -316,8 +379,8 @@ def main():
         "archive": str(archive_path),
         "template": str(v20_submission),
         "note": (
-            "FP16 export stores binary16 weights and explicitly rounds residual-Q "
-            "inputs/accumulations/tanh outputs to binary16; FP8 uses its software decoder."
+            "Tree-free pure-Q export: no _tree_* functions or learned_task_score; "
+            "FP16 stores binary16 weights and rounds Q-network arithmetic to binary16."
         ),
     }
     (output_dir / "export_metadata.json").write_text(
