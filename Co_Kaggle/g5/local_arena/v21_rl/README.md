@@ -1,9 +1,13 @@
 # v21 RL: static training on v20 loss histories
 
-v21 keeps the **same residual Double-DQN model structure and constrained
-worker-task action space as v20**. It initializes from the exact residual-Q
-weights embedded in `submission_nb/kaggriculture-sub_v20.ipynb` and then trains
-the residual action-value network with quantization-aware forward passes.
+v21 keeps the same constrained worker-task candidate space and Double-DQN
+training loop, but **removes the legacy task-tree scorer completely**. The
+neural network is now the full action-value function used for candidate ranking,
+bootstrap selection, Bellman targets, validation, and final inference.
+
+It still initializes the 38 -> 64 -> 64 -> 1 network from the weights embedded
+in `submission_nb/kaggriculture-sub_v20.ipynb`, then continues training on v20
+loss histories.
 
 The change in v21 is the training protocol:
 
@@ -27,7 +31,7 @@ policy after v21 changes the trajectory. This follows the project definition in
 The model is imported directly from `v20_rl/train_v20_q_history.py`:
 
 ```text
-ResidualQ:
+QNetwork:
     concat(global_state, task_features)
       -> Linear(hidden=64)
       -> Tanh
@@ -35,10 +39,13 @@ ResidualQ:
       -> Tanh
       -> Linear(1)
 
-Q(s,a) = normalized_v19_task_score(s,a) + neural_residual(s,a)
+Q(s,a) = neural_network(global_state, task_features)
+
+There is no `learned_task_score()`, no normalized tree prior, and no
+tree-based tie-breaking or bootstrap ranking in v21.
 ```
 
-The parent/source-of-truth submission is:
+The parent weight source is:
 
 ```text
 submission_nb/kaggriculture-sub_v20.ipynb
@@ -49,6 +56,21 @@ embedded `_Q_WEIGHTS_B64` tensor payload, and loads those exact 6,721 float32
 parameters into the v20 `ResidualQ` structure (`38 -> 64 -> 64 -> 1`). It does
 not require the old v20 `.pt` checkpoint for initialization.
 
+
+
+## Tree removal
+
+Training uses a tree-free executor. The v19 notebook is still used as the base
+strategy/executor for non-ranking game logic and legal task generation, but
+before execution v21 replaces the old task-selection block and removes:
+
+- all `_tree_*` functions;
+- `_TREE_FUNCTIONS`;
+- `learned_task_score()`.
+
+The final exporter performs the same cleanup and additionally removes the old
+normalized-prior helper and residual-pruning bound. The exported v21 `main.py`
+therefore ranks legal candidates directly with the neural Q-network.
 
 ## Quantization
 
@@ -100,10 +122,9 @@ That single preflight verifies:
    action stream and terminal rewards on that replay.
 
 The separate PyTorch reconstruction is **not** required to reproduce every v20
-action. The submission uses Python-float inference while the training model uses
-PyTorch/FP16 numerical paths, so tiny numerical differences can legitimately
-change candidate ordering. The checked-in v20 submission is the behavioral
-source of truth; the decoded-weight check is a model-format check.
+action. v21 deliberately changes the action scorer from tree-prior-plus-residual
+to neural-Q-only, so exact v20 action parity is neither expected nor required.
+The decoded-weight check is a model-format check.
 
 The quantized v21 initialization is measured separately as the initial
 validation baseline.
@@ -122,11 +143,12 @@ Defaults:
 - histories: `game_history/v20/*.json`
 - parent/source of truth: `submission_nb/kaggriculture-sub_v20.ipynb`
 - deterministic 80/20 replay-file train/validation split
-- same v20 residual Double-DQN hyperparameters
+- same Double-DQN training machinery and candidate-generation rules
+- neural Q-network is the only action scorer; tree ensemble is removed
 - FP16 weight/bias QAT by default; FP8 E4M3FN available with `--quantization fp8_e4m3fn`
 - 8 replay episodes per update
 - held-out static validation every update
-- target validation win rate: >70%
+- target validation win rate: configured by `--target-win-rate`
 - maximum training time: 8 hours
 
 Useful commands:
