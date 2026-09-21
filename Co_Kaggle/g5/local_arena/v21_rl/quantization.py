@@ -74,7 +74,7 @@ def fake_quantize_tensor(tensor: torch.Tensor, quantization: str) -> torch.Tenso
 
 
 class QuantizedResidualQ(ResidualQ):
-    """v20 ResidualQ with true FP16 or FP8-aware execution."""
+    """Tree-free v21 Q network with true FP16 or FP8-aware execution."""
 
     def __init__(
         self,
@@ -135,19 +135,23 @@ class QuantizedResidualQ(ResidualQ):
         self,
         state: torch.Tensor,
         candidates: torch.Tensor,
-        prior: torch.Tensor,
-        prior_scale: float,
+        prior: torch.Tensor | None = None,
+        prior_scale: float = 0.0,
     ) -> torch.Tensor:
+        """Return the neural Q value only.
+
+        v21 is tree-free: the old learned_task_score/tree prior is ignored.
+        The prior arguments remain only for compatibility with the shared
+        replay/Double-DQN call sites.
+        """
         dtype = self.compute_dtype
         state = state.to(dtype=dtype)
         candidates = candidates.to(dtype=dtype)
-        prior = prior.to(dtype=dtype)
         if state.ndim == 1:
             state = state.unsqueeze(0).expand(candidates.shape[0], -1)
         elif state.shape[0] == 1 and candidates.shape[0] != 1:
             state = state.expand(candidates.shape[0], -1)
-        scale = torch.tensor(prior_scale, dtype=dtype, device=prior.device)
-        return scale * prior + self.residual(state, candidates)
+        return self.residual(state, candidates)
 
 
 def quantized_state_dict(model: ResidualQ, quantization: str) -> dict[str, torch.Tensor]:
