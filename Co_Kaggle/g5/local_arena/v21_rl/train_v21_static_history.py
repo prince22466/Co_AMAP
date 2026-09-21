@@ -27,6 +27,8 @@ from typing import Any
 
 import numpy as np
 import torch
+from torch import nn
+from torch.nn import functional as F
 
 HERE = Path(__file__).resolve().parent
 LOCAL_ARENA = HERE.parent
@@ -62,6 +64,7 @@ from train_v20_q_history import (
 )
 from quantization import (
     QUANTIZATION_CHOICES,
+    PureFP16Adam,
     QuantizedResidualQ,
     quantized_state_dict,
 )
@@ -320,6 +323,163 @@ def _load_v20_submission_weights(
     }
 
 
+
+def q_update_v21(
+    online: QuantizedResidualQ,
+    target: QuantizedResidualQ,
+    optimizer,
+    replay: ReplayBuffer,
+    device,
+    args,
+    replay_rng: random.Random,
+    optimizer_steps: int,
+):
+    """Double-DQN update using the model's actual compute dtype.
+
+    In default FP16 mode, states, candidate features, priors, rewards,
+    discounts, bootstrap values, Bellman targets, Q predictions, loss inputs,
+    gradients and optimizer moments are all float16.
+    """
+    if len(replay) < max(args.replay_warmup, args.batch_size):
+        return {
+            "q_updates": 0,
+            "td_loss": None,
+            "q_mean": None,
+            "target_mean": None,
+            "mean_abs_td": None,
+        }, optimizer_steps
+
+    dtype = online.compute_dtype
+    losses = []
+    q_means = []
+    target_means = []
+    abs_tds = []
+
+    for _ in range(args.gradient_steps_per_update):
+        batch = replay.sample(args.batch_size, replay_rng)
+
+        states = torch.as_tensor(
+            np.stack([t.state for t in batch]),
+            dtype=dtype,
+            device=device,
+        )
+        action_features = torch.as_tensor(
+            np.stack([t.action_feature for t in batch]),
+            dtype=dtype,
+            device=device,
+        )
+        action_prior = torch.as_tensor(
+            [t.action_prior for t in batch],
+            dtype=dtype,
+            device=device,
+        )
+        rewards = torch.as_tensor(
+            [t.reward for t in batch],
+            dtype=dtype,
+            device=device,
+        )
+        discounts = torch.as_tensor(
+            [t.discount for t in batch],
+            dtype=dtype,
+            device=device,
+        )
+
+        q_pred = online.q_values(
+            states, action_features, action_prior, args.prior_scale
+        )
+
+        next_values = torch.zeros(len(batch), dtype=dtype, device=device)
+        flat_states = []
+        flat_candidates = []
+        flat_prior = []
+        slices = []
+        cursor = 0
+
+        np_dtype = np.float16 if dtype == torch.float16 else np.float32
+        for batch_index, transition in enumerate(batch):
+            if (
+                transition.done
+                or transition.next_state is None
+                or transition.next_candidates is None
+                or len(transition.next_candidates) == 0
+            ):
+                continue
+
+            count = len(transition.next_candidates)
+            flat_states.append(
+                np.repeat(
+                    transition.next_state[None, :], count, axis=0
+                ).astype(np_dtype)
+            )
+            flat_candidates.append(
+                transition.next_candidates.astype(np_dtype)
+            )
+            flat_prior.append(transition.next_prior.astype(np_dtype))
+            slices.append((batch_index, cursor, cursor + count))
+            cursor += count
+
+        if cursor:
+            next_states_t = torch.as_tensor(
+                np.concatenate(flat_states, axis=0),
+                dtype=dtype,
+                device=device,
+            )
+            next_candidates_t = torch.as_tensor(
+                np.concatenate(flat_candidates, axis=0),
+                dtype=dtype,
+                device=device,
+            )
+            next_prior_t = torch.as_tensor(
+                np.concatenate(flat_prior, axis=0),
+                dtype=dtype,
+                device=device,
+            )
+            with torch.no_grad():
+                online_next = online.q_values(
+                    next_states_t,
+                    next_candidates_t,
+                    next_prior_t,
+                    args.prior_scale,
+                )
+                target_next = target.q_values(
+                    next_states_t,
+                    next_candidates_t,
+                    next_prior_t,
+                    args.prior_scale,
+                )
+                for batch_index, start, end in slices:
+                    local = online_next[start:end]
+                    best = int(torch.argmax(local).item())
+                    next_values[batch_index] = target_next[start + best]
+
+        bellman_target = rewards + discounts * next_values
+        loss = F.smooth_l1_loss(q_pred, bellman_target)
+
+        optimizer.zero_grad(set_to_none=True)
+        loss.backward()
+        nn.utils.clip_grad_norm_(online.parameters(), args.max_grad_norm)
+        optimizer.step()
+
+        optimizer_steps += 1
+        if optimizer_steps % args.target_sync_steps == 0:
+            target.load_state_dict(online.state_dict())
+
+        td = (bellman_target - q_pred).detach()
+        losses.append(float(loss.detach().to(torch.float32).item()))
+        q_means.append(float(q_pred.detach().to(torch.float32).mean().item()))
+        target_means.append(
+            float(bellman_target.detach().to(torch.float32).mean().item())
+        )
+        abs_tds.append(float(td.abs().to(torch.float32).mean().item()))
+
+    return {
+        "q_updates": len(losses),
+        "td_loss": float(np.mean(losses)),
+        "q_mean": float(np.mean(q_means)),
+        "target_mean": float(np.mean(target_means)),
+        "mean_abs_td": float(np.mean(abs_tds)),
+    }, optimizer_steps
+
 def _save_checkpoint(
     path, online, target, optimizer, update, optimizer_steps, args,
     sample_rng, explore_rng, replay_rng,
@@ -539,6 +699,7 @@ def build_parser():
     )
     p.add_argument("--hidden", type=int, default=64)
     p.add_argument("--learning-rate", type=float, default=1e-5)
+    p.add_argument("--fp16-adam-eps", type=float, default=1e-4)
     p.add_argument("--gamma", type=float, default=0.999)
     p.add_argument("--batch-size", type=int, default=256)
     p.add_argument("--gradient-steps-per-update", type=int, default=64)
@@ -642,13 +803,20 @@ def main():
         "validation_protocol": "held-out v20 loss histories with the same static recorded-opponent protocol",
         "model_structure": "same ResidualQ(task_features + global_state, hidden=64) as v20",
         "quantization": args.quantization,
-        "qat": "FP32 master parameters with straight-through fake-quantized weights/biases on every forward pass",
+        "precision_policy": "fp16 => true FP16 parameters/activations/Q/targets/gradients/Adam moments; fp8_e4m3fn => experimental weight QAT",
         "action_value": "normalized v19 learned_task_score prior + neural residual",
         "reward": "delta money margin / reward_scale + terminal win/tie/loss",
         "replay_checkpointed": False,
     }, indent=2, default=str) + "\n", encoding="utf-8")
 
-    optimizer = torch.optim.Adam(online.parameters(), lr=args.learning_rate)
+    if args.quantization == "fp16":
+        optimizer = PureFP16Adam(
+            online.parameters(),
+            lr=args.learning_rate,
+            eps=args.fp16_adam_eps,
+        )
+    else:
+        optimizer = torch.optim.Adam(online.parameters(), lr=args.learning_rate)
     start_update = 0
     optimizer_steps = 0
     if args.resume is not None:
@@ -709,7 +877,7 @@ def main():
 
         train_ok = [row for row in episode_rows if row["ok"]]
         train_wins = sum(row["margin"] > 0 for row in train_ok)
-        q_stats, optimizer_steps = q_update(
+        q_stats, optimizer_steps = q_update_v21(
             online, target, optimizer, replay, device, args, replay_rng, optimizer_steps
         )
         metrics = {
