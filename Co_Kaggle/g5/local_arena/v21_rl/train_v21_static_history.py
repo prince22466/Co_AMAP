@@ -63,10 +63,9 @@ from train_v20_q_history import (
     QSelector,
     ReplayBuffer,
     ResidualQ,
-    build_transitions,
+    Transition,
     epsilon_for_update,
     global_state,
-    money_margin,
     norm_task,
     q_update,
     _silence_stderr_during_optional_runtime_init,
@@ -81,6 +80,13 @@ DEFAULT_HISTORY_DIR = G5_ROOT / "game_history" / "v20"
 DEFAULT_BASE_EXECUTOR = G5_ROOT / "submission_nb" / "kaggriculture-sub_v19.ipynb"
 DEFAULT_V20_SUBMISSION = G5_ROOT / "submission_nb" / "kaggriculture-sub_v20.ipynb"
 DEFAULT_OUTPUT_DIR = HERE / "runs" / "static_v20_history"
+
+DELIVERED_PRODUCTS = (
+    "MILK", "WOOL", "STRAWBERRY", "MELON", "EGG",
+    "TOMATO", "CARROT", "FERTILIZER", "WHEAT",
+)
+PRODUCTION_ACTIONS = {"HARVEST", "COLLECT_FERTILIZER"}
+CHECKPOINT_ALGORITHM = "v21_static_pure_q_delivered_value_double_dqn"
 
 
 def _strip_tree_code(source: str) -> str:
@@ -132,6 +138,15 @@ class TreeFreeQSelector(QSelector):
     The v18/v19 tree ensemble is not evaluated and contributes no score,
     tie-breaker, bootstrap ranking, or Bellman target.
     """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.cumulative_delivery_value = 0.0
+
+    def begin_observation(self, obs):
+        # DecisionRecord.margin is reused as the cumulative worker objective.
+        # It intentionally no longer stores money margin.
+        self.current_margin = float(self.cumulative_delivery_value)
 
     def _candidate_bundle(self, obs, free, tasks, positions, invs):
         choices = []
@@ -238,7 +253,7 @@ class TreeFreeQSelector(QSelector):
                     margin=float(
                         self.current_margin
                         if self.current_margin is not None
-                        else money_margin(obs)
+                        else self.cumulative_delivery_value
                     ),
                     turn=int(obs["day"]) * 24 + int(obs["hour"]),
                 )
@@ -280,6 +295,172 @@ class TreeFreeQController(QController):
         )
         self.executor = _load_tree_free_executor(path, self.selector)
         self.selector.module = self.executor
+
+
+class DeliveredProductTracker:
+    """Track newly produced cargo until it is actually deposited in the shed.
+
+    Only cargo created by HARVEST/COLLECT_FERTILIZER is reward-eligible.
+    Goods picked up from the shed are never made eligible, which prevents a
+    PICKUP -> DROP loop from manufacturing reward.
+    """
+
+    def __init__(self):
+        self.eligible: list[dict[str, float]] = []
+        self.total_value = 0.0
+        self.total_units = 0.0
+        self.by_product = {product: 0.0 for product in DELIVERED_PRODUCTS}
+
+    def _ensure_workers(self, count: int) -> None:
+        while len(self.eligible) < count:
+            self.eligible.append({})
+
+    @staticmethod
+    def _worker_actions(candidate_action) -> list[Any]:
+        if not isinstance(candidate_action, dict):
+            return []
+        farmer = candidate_action.get("farmer") or ["PASS"]
+        hands = candidate_action.get("hands") or []
+        return [farmer] + list(hands)
+
+    def observe_step(self, obs_before, candidate_action, obs_after, shed_points) -> float:
+        before_invs = list(obs_before["private"]["inventories"])
+        after_invs = list(obs_after["private"]["inventories"])
+        worker_actions = self._worker_actions(candidate_action)
+
+        player = int(obs_before["player"])
+        farm = obs_before["farms"][player]
+        positions = [farm["farmer"]] + list(farm["hands"])
+        shed = {tuple(point) for point in shed_points}
+        prices = obs_before["market"]["prices"]
+
+        self._ensure_workers(max(len(before_invs), len(after_invs)))
+        step_value = 0.0
+        step_units = 0.0
+
+        for i, before_inv in enumerate(before_invs):
+            after_inv = after_invs[i] if i < len(after_invs) else {}
+            action = worker_actions[i] if i < len(worker_actions) else ["PASS"]
+            op = action[0] if action else "PASS"
+            at_shed = i < len(positions) and tuple(positions[i]) in shed
+            old_eligible = dict(self.eligible[i])
+
+            delivered = {product: 0.0 for product in DELIVERED_PRODUCTS}
+            if at_shed and op == "DROP":
+                for product in DELIVERED_PRODUCTS:
+                    delivered[product] = max(
+                        0.0,
+                        float(before_inv.get(product, 0))
+                        - float(after_inv.get(product, 0)),
+                    )
+            elif (
+                at_shed
+                and op == "PLACE"
+                and len(action) >= 2
+                and action[1] in DELIVERED_PRODUCTS
+            ):
+                product = action[1]
+                delivered[product] = max(
+                    0.0,
+                    float(before_inv.get(product, 0))
+                    - float(after_inv.get(product, 0)),
+                )
+
+            next_eligible: dict[str, float] = {}
+            for product in DELIVERED_PRODUCTS:
+                before_qty = float(before_inv.get(product, 0))
+                after_qty = float(after_inv.get(product, 0))
+                eligible_before = float(old_eligible.get(product, 0))
+
+                eligible_delivered = min(
+                    eligible_before, float(delivered.get(product, 0))
+                )
+                if eligible_delivered > 0:
+                    price_now = float(prices.get(product, 0.0))
+                    value = eligible_delivered * price_now
+                    step_units += eligible_delivered
+                    step_value += value
+                    self.by_product[product] += value
+
+                remaining = max(0.0, eligible_before - eligible_delivered)
+                remaining = min(remaining, after_qty)
+
+                produced = 0.0
+                if op in PRODUCTION_ACTIONS:
+                    produced = max(0.0, after_qty - before_qty)
+
+                eligible_next = min(after_qty, remaining + produced)
+                if eligible_next > 0:
+                    next_eligible[product] = eligible_next
+
+            self.eligible[i] = next_eligible
+
+        self.total_units += step_units
+        self.total_value += step_value
+        return step_value
+
+
+def build_delivery_value_transitions(
+    records: list[DecisionRecord],
+    final_delivery_value: float,
+    gamma: float,
+    reward_scale: float,
+    reward_clip: float,
+) -> list[Transition]:
+    """Build TD transitions from cumulative delivered-product market value.
+
+    Same-hour worker assignments retain zero immediate reward and discount 1.
+    When the environment advances, reward is the increase in cumulative value
+    of newly produced goods deposited into the shed, valued at that turn's live
+    market price. There is deliberately no terminal win/loss bonus.
+    """
+    if not records:
+        return []
+
+    transitions: list[Transition] = []
+    for idx, record in enumerate(records):
+        if idx + 1 < len(records):
+            nxt = records[idx + 1]
+            env_steps = max(0, int(nxt.turn) - int(record.turn))
+            dense = 0.0
+            if env_steps > 0:
+                dense = (
+                    float(nxt.margin) - float(record.margin)
+                ) / reward_scale
+                dense = float(np.clip(dense, -reward_clip, reward_clip))
+            transitions.append(
+                Transition(
+                    state=record.state,
+                    action_feature=record.action_feature,
+                    action_prior=record.action_prior,
+                    reward=dense,
+                    discount=float(gamma ** env_steps),
+                    next_state=nxt.state,
+                    next_candidates=nxt.candidates,
+                    next_prior=nxt.prior,
+                    done=False,
+                )
+            )
+            continue
+
+        dense = (
+            float(final_delivery_value) - float(record.margin)
+        ) / reward_scale
+        dense = float(np.clip(dense, -reward_clip, reward_clip))
+        transitions.append(
+            Transition(
+                state=record.state,
+                action_feature=record.action_feature,
+                action_prior=record.action_prior,
+                reward=dense,
+                discount=0.0,
+                next_state=None,
+                next_candidates=None,
+                next_prior=None,
+                done=True,
+            )
+        )
+    return transitions
 
 
 def _infer_v20_seat(history: dict[str, Any]) -> int:
@@ -346,10 +527,12 @@ def run_static_episode(
         env = _environment_from_history(history)
     action_divergences = 0
     first_divergence = None
+    delivery_tracker = DeliveredProductTracker()
 
     try:
         for replay_step in range(1, len(history["steps"])):
             obs = _agent_observation(env, candidate_seat)
+            controller.selector.cumulative_delivery_value = delivery_tracker.total_value
             candidate_action = controller(obs)
             recorded_actions = _recorded_step_actions(history, replay_step)
             opponent_action = recorded_actions[opponent_seat]
@@ -376,6 +559,17 @@ def run_static_episode(
             actions[opponent_seat] = opponent_action
             env.step(actions)
 
+            post_obs = _agent_observation(env, candidate_seat)
+            delivery_tracker.observe_step(
+                obs,
+                candidate_action,
+                post_obs,
+                controller.executor.SHED,
+            )
+            controller.selector.cumulative_delivery_value = (
+                delivery_tracker.total_value
+            )
+
         final_states = env.steps[-1]
         rewards = _final_rewards(final_states)
         statuses = [str(_field(s, "status", "")) for s in final_states]
@@ -383,9 +577,9 @@ def run_static_episode(
         ok = statuses == ["DONE", "DONE"]
 
         transitions = (
-            build_transitions(
+            build_delivery_value_transitions(
                 controller.selector.records,
-                margin,
+                delivery_tracker.total_value,
                 args.gamma,
                 args.reward_scale,
                 args.reward_clip,
@@ -403,6 +597,9 @@ def run_static_episode(
             "rewards": rewards,
             "margin": margin,
             "result": "WIN" if margin > 0 else "LOSS" if margin < 0 else "TIE",
+            "delivered_value": float(delivery_tracker.total_value),
+            "delivered_units": float(delivery_tracker.total_units),
+            "delivered_value_by_product": dict(delivery_tracker.by_product),
             "decisions": controller.selector.decisions,
             "explorations": controller.selector.explorations,
             "candidate_mean": (
@@ -427,6 +624,9 @@ def run_static_episode(
             "rewards": None,
             "margin": None,
             "result": "ERROR",
+            "delivered_value": float(delivery_tracker.total_value),
+            "delivered_units": float(delivery_tracker.total_units),
+            "delivered_value_by_product": dict(delivery_tracker.by_product),
             "decisions": controller.selector.decisions,
             "explorations": controller.selector.explorations,
             "candidate_mean": 0.0,
@@ -693,7 +893,7 @@ def _save_checkpoint(
     sample_rng, explore_rng, replay_rng,
 ):
     payload = {
-        "algorithm": "v21_static_pure_q_double_dqn",
+        "algorithm": "v21_static_pure_q_delivered_value_double_dqn",
         "update": int(update),
         "optimizer_steps": int(optimizer_steps),
         "online_state_dict": online.state_dict(),
@@ -724,7 +924,7 @@ def _load_v21_checkpoint(
     path, online, target, optimizer, device, sample_rng, explore_rng, replay_rng,
 ):
     payload = torch.load(path, map_location=device, weights_only=False)
-    if payload.get("algorithm") != "v21_static_pure_q_double_dqn":
+    if payload.get("algorithm") != "v21_static_pure_q_delivered_value_double_dqn":
         raise ValueError(
             f"{path}: expected v21_static_residual_double_dqn, "
             f"got {payload.get('algorithm')!r}"
@@ -842,6 +1042,7 @@ def evaluate_histories(paths, model, device, base_executor, args, phase):
     rows = []
     wins = ties = losses = errors = 0
     margins = []
+    delivered_values = []
     with torch.inference_mode():
         for index, path in enumerate(paths, 1):
             args.current_epsilon = 0.0
@@ -852,6 +1053,10 @@ def evaluate_histories(paths, model, device, base_executor, args, phase):
             rows.append(result)
             if not result["ok"]:
                 errors += 1
+            else:
+                delivered_values.append(float(result["delivered_value"]))
+            if not result["ok"]:
+                continue
             elif result["margin"] > 0:
                 wins += 1; margins.append(float(result["margin"]))
             elif result["margin"] < 0:
@@ -864,11 +1069,15 @@ def evaluate_histories(paths, model, device, base_executor, args, phase):
         "errors": errors, "wins": wins, "ties": ties, "losses": losses,
         "win_rate": wins / valid if valid else 0.0,
         "mean_margin": float(np.mean(margins)) if margins else None,
+        "mean_delivered_value": (
+            float(np.mean(delivered_values)) if delivered_values else None
+        ),
         "rows": rows,
     }
     print(
         f"[{phase}] W/T/L/E={wins}/{ties}/{losses}/{errors} "
-        f"win_rate={summary['win_rate']:.3f} mean_margin={summary['mean_margin']}",
+        f"win_rate={summary['win_rate']:.3f} mean_margin={summary['mean_margin']} "
+        f"mean_delivered_value={summary['mean_delivered_value']}",
         flush=True,
     )
     model.train()
@@ -1017,7 +1226,10 @@ def main():
         "precision_policy": "fp16 => true FP16 parameters/activations/Q/targets/gradients; SGD without momentum; fp8_e4m3fn => experimental weight QAT",
         "optimizer_name": "sgd",
         "action_value": "neural Q(state, task) only; no learned_task_score/tree prior",
-        "reward": "delta money margin / reward_scale + terminal win/tie/loss",
+        "reward": (
+            "incremental live-price value of newly produced goods delivered "
+            "to the shed / reward_scale; no terminal win/loss bonus"
+        ),
         "replay_checkpointed": False,
     }, indent=2, default=str) + "\n", encoding="utf-8")
 
