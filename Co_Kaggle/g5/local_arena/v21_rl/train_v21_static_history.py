@@ -22,6 +22,7 @@ import random
 import struct
 import sys
 import time
+import types
 from pathlib import Path
 from typing import Any
 
@@ -49,6 +50,8 @@ from evaluate_v20_v19_losses import (
 )
 from train_v20_ppo import (
     GLOBAL_FEATURE_NAMES,
+    NEW_BLOCK,
+    OLD_BLOCK,
     TASK_FEATURE_NAMES,
     _extract_notebook_main,
     choose_device,
@@ -60,7 +63,6 @@ from train_v20_q_history import (
     QSelector,
     ReplayBuffer,
     ResidualQ,
-    _load_executor,
     build_transitions,
     epsilon_for_update,
     global_state,
@@ -79,6 +81,49 @@ DEFAULT_HISTORY_DIR = G5_ROOT / "game_history" / "v20"
 DEFAULT_BASE_EXECUTOR = G5_ROOT / "submission_nb" / "kaggriculture-sub_v19.ipynb"
 DEFAULT_V20_SUBMISSION = G5_ROOT / "submission_nb" / "kaggriculture-sub_v20.ipynb"
 DEFAULT_OUTPUT_DIR = HERE / "runs" / "static_v20_history"
+
+
+def _strip_tree_code(source: str) -> str:
+    """Remove the legacy task-tree ensemble from an executor source string."""
+    tree = ast.parse(source)
+    ranges = []
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and (
+            node.name.startswith("_tree_") or node.name == "learned_task_score"
+        ):
+            ranges.append((node.lineno - 1, node.end_lineno))
+        elif isinstance(node, ast.Assign):
+            if any(
+                isinstance(target, ast.Name) and target.id == "_TREE_FUNCTIONS"
+                for target in node.targets
+            ):
+                ranges.append((node.lineno - 1, node.end_lineno))
+
+    lines = source.splitlines()
+    for start, end in sorted(ranges, reverse=True):
+        del lines[start:end]
+    return "\n".join(lines) + "\n"
+
+
+def _load_tree_free_executor(path: Path, selector):
+    path = path.expanduser().resolve()
+    source = (
+        _extract_notebook_main(path)
+        if path.suffix == ".ipynb"
+        else path.read_text(encoding="utf-8")
+    )
+    if OLD_BLOCK not in source:
+        raise RuntimeError(
+            "v19 unit_actions selection block not found; source changed"
+        )
+    source = source.replace(OLD_BLOCK, NEW_BLOCK, 1)
+    source = _strip_tree_code(source)
+
+    module = types.ModuleType(f"v21_tree_free_executor_{id(selector)}")
+    module.__file__ = str(path)
+    module.RL_SELECTOR = selector
+    exec(compile(source, str(path), "exec"), module.__dict__)
+    return module
 
 
 class TreeFreeQSelector(QSelector):
@@ -233,7 +278,7 @@ class TreeFreeQController(QController):
             deterministic=deterministic,
             collect=collect,
         )
-        self.executor = _load_executor(path, self.selector)
+        self.executor = _load_tree_free_executor(path, self.selector)
         self.selector.module = self.executor
 
 
@@ -965,7 +1010,7 @@ def main():
         "parent_v20_submission_sha256": parent_payload["sha256"],
         "parent_v20_embedded_weight_count": parent_payload["weight_count"],
         "parent_v20_architecture": parent_payload["architecture"],
-        "training_protocol": "candidate actions from v21; opponent actions replayed verbatim from v20 loss histories",
+        "training_protocol": "tree-free candidate scoring by v21 Q-network; opponent actions replayed verbatim from v20 loss histories",
         "validation_protocol": "held-out v20 loss histories with the same static recorded-opponent protocol",
         "model_structure": "QNetwork(concat(global_state, task_features), hidden=64); tree-free action scoring",
         "quantization": args.quantization,
