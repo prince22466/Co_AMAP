@@ -35,14 +35,14 @@ import csv
 import hashlib
 import json
 import math
+import os
 import re
 import statistics
+import sys
 import types
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
-
-import kaggle_environments
-from kaggle_environments import make
 
 
 HERE = Path(__file__).resolve().parent
@@ -53,6 +53,52 @@ DEFAULT_HISTORY_DIR = G5_ROOT / "game_history" / "v19"
 DEFAULT_V19 = SUBMISSION_DIR / "kaggriculture-sub_v19.ipynb"
 DEFAULT_V20 = SUBMISSION_DIR / "kaggriculture-sub_v20.ipynb"
 DEFAULT_OUTPUT = HERE / "runs" / "v20_v19_static_replay.json"
+
+_KAGGLE_ENVIRONMENTS = None
+
+
+@contextmanager
+def _silence_stderr_during_kaggle_init():
+    """Suppress noisy optional OpenSpiel probes from Kaggle initialization.
+
+    Some OpenSpiel builds write long "Unknown game ..." diagnostics directly
+    to native stderr (file descriptor 2), so redirect both Python stderr and
+    fd 2 only while Kaggle imports/creates an environment.
+    """
+    original_stderr = sys.stderr
+    devnull = open(os.devnull, "w")
+    saved_fd = None
+    stderr_fd = None
+    try:
+        try:
+            original_stderr.flush()
+            stderr_fd = original_stderr.fileno()
+            saved_fd = os.dup(stderr_fd)
+            os.dup2(devnull.fileno(), stderr_fd)
+        except (AttributeError, OSError, ValueError):
+            stderr_fd = None
+            saved_fd = None
+
+        sys.stderr = devnull
+        yield
+    finally:
+        sys.stderr = original_stderr
+        if saved_fd is not None and stderr_fd is not None:
+            try:
+                os.dup2(saved_fd, stderr_fd)
+            finally:
+                os.close(saved_fd)
+        devnull.close()
+
+
+def _get_kaggle_environments():
+    """Import kaggle_environments lazily without OpenSpiel discovery noise."""
+    global _KAGGLE_ENVIRONMENTS
+    if _KAGGLE_ENVIRONMENTS is None:
+        with _silence_stderr_during_kaggle_init():
+            import kaggle_environments as module
+        _KAGGLE_ENVIRONMENTS = module
+    return _KAGGLE_ENVIRONMENTS
 
 
 # ---------- generic helpers ----------
@@ -100,12 +146,14 @@ def _saved_final_rewards(history: dict[str, Any]) -> list[float]:
 
 
 def _environment_from_history(history: dict[str, Any]):
-    return make(
-        history.get("name") or "kaggriculture",
-        configuration=copy.deepcopy(history.get("configuration") or {}),
-        info=copy.deepcopy(history.get("info") or {}),
-        debug=False,
-    )
+    kaggle_environments = _get_kaggle_environments()
+    with _silence_stderr_during_kaggle_init():
+        return kaggle_environments.make(
+            history.get("name") or "kaggriculture",
+            configuration=copy.deepcopy(history.get("configuration") or {}),
+            info=copy.deepcopy(history.get("info") or {}),
+            debug=False,
+        )
 
 
 def _recorded_step_actions(history: dict[str, Any], replay_step: int) -> list[Any]:
@@ -520,6 +568,7 @@ def main() -> int:
     if not v20_notebook.is_file():
         raise SystemExit(f"v20 notebook not found: {v20_notebook}")
 
+    kaggle_environments = _get_kaggle_environments()
     print(
         "engine=kaggle-environments "
         f"{getattr(kaggle_environments, '__version__', 'unknown')}"
