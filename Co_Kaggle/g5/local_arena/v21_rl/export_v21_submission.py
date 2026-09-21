@@ -186,12 +186,15 @@ def _strip_tree_scorer(source: str) -> str:
     remove_ranges = []
     for node in tree.body:
         if isinstance(node, ast.FunctionDef) and (
-            node.name.startswith("_tree_") or node.name == "learned_task_score"
+            node.name.startswith("_tree_")
+            or node.name == "learned_task_score"
+            or node.name == "q_normalized_prior"
         ):
             remove_ranges.append((node.lineno - 1, node.end_lineno))
         elif isinstance(node, ast.Assign):
             if any(
-                isinstance(target, ast.Name) and target.id == "_TREE_FUNCTIONS"
+                isinstance(target, ast.Name)
+                and target.id in {"_TREE_FUNCTIONS", "_Q_RESIDUAL_MAX"}
                 for target in node.targets
             ):
                 remove_ranges.append((node.lineno - 1, node.end_lineno))
