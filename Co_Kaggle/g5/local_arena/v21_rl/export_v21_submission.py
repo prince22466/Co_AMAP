@@ -303,9 +303,9 @@ _Q_ALL=_q_decode_fp8_e4m3fn(base64.b64decode(_Q_WEIGHTS_B64))"""
 
 def _load_checkpoint(path: Path, device: torch.device):
     payload = torch.load(path, map_location=device, weights_only=False)
-    if payload.get("algorithm") != "v21_static_pure_q_dense_worker_value_double_dqn":
+    if payload.get("algorithm") != "v21_static_pure_q_worker_credit_balanced_double_dqn":
         raise ValueError(
-            f"{path}: expected v21_static_pure_q_dense_worker_value_double_dqn, "
+            f"{path}: expected v21_static_pure_q_worker_credit_balanced_double_dqn, "
             f"got {payload.get('algorithm')!r}"
         )
     quantization = payload.get("quantization", "fp16")
