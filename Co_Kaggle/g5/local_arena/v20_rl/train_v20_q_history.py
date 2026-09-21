@@ -1108,10 +1108,10 @@ def parser():
     )
     p.add_argument("--device", default="auto")
     p.add_argument("--hidden", type=int, default=64)
-    p.add_argument("--learning-rate", type=float, default=1e-4)
+    p.add_argument("--learning-rate", type=float, default=1e-5)
     p.add_argument("--gamma", type=float, default=0.999)
     p.add_argument("--batch-size", type=int, default=256)
-    p.add_argument("--gradient-steps-per-update", type=int, default=256)
+    p.add_argument("--gradient-steps-per-update", type=int, default=64)
     p.add_argument("--replay-capacity", type=int, default=50000)
     p.add_argument("--replay-warmup", type=int, default=4000)
     p.add_argument("--target-sync-steps", type=int, default=500)
@@ -1134,7 +1134,7 @@ def main():
     # Training stops when EITHER condition becomes true.
     # ------------------------------------------------------------------
     TARGET_WIN_RATE = 0.70
-    MAX_TRAINING_HOURS = 2.0
+    MAX_TRAINING_HOURS = 8.0
     VALIDATE_EVERY_UPDATES = 1
 
     args = parser().parse_args()
