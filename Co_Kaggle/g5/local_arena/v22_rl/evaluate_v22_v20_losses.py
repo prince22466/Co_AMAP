@@ -51,6 +51,8 @@ def _args_from_checkpoint(payload, cli):
     cli.gamma = float(saved.get("gamma", cli.gamma))
     cli.margin_bonus = float(saved.get("margin_bonus", cli.margin_bonus))
     cli.margin_scale = float(saved.get("margin_scale", cli.margin_scale))
+    cli.improvement_bonus = float(saved.get("improvement_bonus", cli.improvement_bonus))
+    cli.improvement_scale = float(saved.get("improvement_scale", cli.improvement_scale))
     cli.price_shaping = float(saved.get("price_shaping", cli.price_shaping))
     cli.overflow_penalty = float(saved.get("overflow_penalty", cli.overflow_penalty))
     return cli
@@ -168,6 +170,8 @@ def build_parser():
     p.add_argument("--gamma", type=float, default=0.999)
     p.add_argument("--margin-bonus", type=float, default=0.25)
     p.add_argument("--margin-scale", type=float, default=10000.0)
+    p.add_argument("--improvement-bonus", type=float, default=0.50)
+    p.add_argument("--improvement-scale", type=float, default=5000.0)
     p.add_argument("--price-shaping", type=float, default=0.0005)
     p.add_argument("--overflow-penalty", type=float, default=0.01)
     return p
