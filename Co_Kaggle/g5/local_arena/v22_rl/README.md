@@ -191,6 +191,27 @@ This is diagnostics only. The v21 Q-network, worker selector, worker replay,
 Double-DQN updates and v21 weights are not used by v22.
 
 
+
+## Neutral actor initialization
+
+The PPO actor no longer starts with a +2 logit bias toward `SELL 100%`.
+
+Instead:
+
+```text
+actor weights: orthogonal initialization, gain = 0.01
+actor biases:  0
+```
+
+This makes the initial learned policy approximately neutral across legal sell
+fractions while retaining small state-dependent differences. The existing
+forced-v20-baseline preflight remains responsible for verifying that the
+surgically replaced SELL loop can reproduce v20 exactly.
+
+Because the checkpoint algorithm ID changed, checkpoints from the older
+SELL-100-biased initialization are intentionally incompatible. Start a fresh
+training run after merging this change.
+
 ## Learning diagnostics
 
 Each PPO update now records behavior-change diagnostics in `metrics.jsonl`:
