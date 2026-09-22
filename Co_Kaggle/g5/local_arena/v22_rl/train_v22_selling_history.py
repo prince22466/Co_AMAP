@@ -79,7 +79,7 @@ PRODUCT_FEATURE_NAMES = (
     "ema_1d", "ema_5d", "ema_spread", "percentile_5d",
 )
 STATE_DIM = len(GLOBAL_FEATURE_NAMES) + len(PRODUCTS) * len(PRODUCT_FEATURE_NAMES)
-CHECKPOINT_ALGORITHM = "v22_fp16_sell_only_ppo_static_v20"
+CHECKPOINT_ALGORITHM = "v22_fp16_sell_only_ppo_sgd_static_v20"
 
 
 @dataclass
@@ -1153,7 +1153,10 @@ def build_parser():
     p.add_argument("--preflight-only", action="store_true")
     p.add_argument("--device", default="auto")
     p.add_argument("--hidden", type=int, default=128)
-    p.add_argument("--learning-rate", type=float, default=3e-4)
+    p.add_argument(
+        "--learning-rate", type=float, default=1e-2,
+        help="plain-SGD learning rate; intentionally larger than the old Adam default for FP16 updates",
+    )
     p.add_argument("--gamma", type=float, default=0.999)
     p.add_argument("--ppo-epochs", type=int, default=4)
     p.add_argument("--minibatch-size", type=int, default=128)
@@ -1201,7 +1204,7 @@ def main():
     sample_rng = random.Random(args.training_seed)
 
     model = SellActorCritic(STATE_DIM, args.hidden).to(device).half()
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate, eps=1e-4)
+    optimizer = torch.optim.SGD(model.parameters(), lr=args.learning_rate)
     args.parent_v20_submission_sha256 = _sha256(args.v20_submission)
 
     pf = preflight(paths[0], model, device, args.v20_submission, args)
@@ -1225,7 +1228,7 @@ def main():
         **vars(args),
         "algorithm": CHECKPOINT_ALGORITHM,
         "precision": "fp16 parameters/activations/logits/values/returns/advantages/losses/gradients",
-        "optimizer": "Adam(fp16 parameter states; eps=1e-4)",
+        "optimizer": "plain SGD (no momentum; no optimizer moment buffers)",
         "control_scope": "SELL orders only; all other v20 policy logic frozen",
         "training_protocol": "static recorded-opponent replay from game_history/v20",
         "primary_reward": "terminal win/loss plus bounded terminal margin and per-history improvement-over-v20 bonuses",
