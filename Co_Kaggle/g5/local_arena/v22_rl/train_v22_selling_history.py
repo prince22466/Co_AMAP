@@ -871,7 +871,8 @@ def ppo_update(model, optimizer, device, steps, returns, args):
         return {
             "ppo_updates": 0, "policy_loss": None, "value_loss": None,
             "entropy": None, "policy_entropy": None, "approx_kl": None,
-            "clip_fraction": None, "actor_parameter_delta_l2": None,
+            "clip_fraction": None, "kl_guard_triggered": False,
+            "kl_guard_value": None, "actor_parameter_delta_l2": None,
             "actor_parameter_delta_relative": None, "loss": None,
             "return_mean": None,
         }
@@ -891,6 +892,8 @@ def ppo_update(model, optimizer, device, steps, returns, args):
         )
 
     stats = []
+    stop_early = False
+    kl_guard_value = None
     for _ in range(args.ppo_epochs):
         order = np.random.permutation(len(steps))
         for start in range(0, len(order), args.minibatch_size):
@@ -917,6 +920,12 @@ def ppo_update(model, optimizer, device, steps, returns, args):
             log_ratio = new_log_prob - old_log_prob
             ratio = torch.exp(log_ratio)
             approx_kl = ((ratio - 1.0) - log_ratio).mean()
+            approx_kl_value = float(approx_kl.detach().float().item())
+            if args.target_kl > 0.0 and approx_kl_value > args.target_kl:
+                stop_early = True
+                kl_guard_value = approx_kl_value
+                break
+
             clip_fraction = ((ratio - 1.0).abs() > args.clip_ratio).to(torch.float16).mean()
             clipped = torch.clamp(ratio, 1.0 - args.clip_ratio, 1.0 + args.clip_ratio)
             policy_loss = -torch.minimum(ratio * adv, clipped * adv).mean()
@@ -935,10 +944,13 @@ def ppo_update(model, optimizer, device, steps, returns, args):
                 float(value_loss.detach().float().item()),
                 float(entropy.detach().float().item()),
                 float(loss.detach().float().item()),
-                float(approx_kl.detach().float().item()),
+                approx_kl_value,
                 float(clip_fraction.detach().float().item()),
             ))
-    arr = np.asarray(stats, dtype=np.float64)
+        if stop_early:
+            break
+
+    arr = np.asarray(stats, dtype=np.float64) if stats else None
     actor_after = torch.cat([
         parameter.detach().float().cpu().reshape(-1)
         for parameter in model.actor.parameters()
@@ -947,13 +959,15 @@ def ppo_update(model, optimizer, device, steps, returns, args):
     actor_norm = float(torch.linalg.vector_norm(actor_before).item())
     return {
         "ppo_updates": len(stats),
-        "policy_loss": float(arr[:, 0].mean()),
-        "value_loss": float(arr[:, 1].mean()),
-        "entropy": float(arr[:, 2].mean()),
-        "policy_entropy": float(arr[:, 2].mean()),
-        "loss": float(arr[:, 3].mean()),
-        "approx_kl": float(arr[:, 4].mean()),
-        "clip_fraction": float(arr[:, 5].mean()),
+        "policy_loss": float(arr[:, 0].mean()) if arr is not None else None,
+        "value_loss": float(arr[:, 1].mean()) if arr is not None else None,
+        "entropy": float(arr[:, 2].mean()) if arr is not None else None,
+        "policy_entropy": float(arr[:, 2].mean()) if arr is not None else None,
+        "loss": float(arr[:, 3].mean()) if arr is not None else None,
+        "approx_kl": float(arr[:, 4].mean()) if arr is not None else kl_guard_value,
+        "clip_fraction": float(arr[:, 5].mean()) if arr is not None else None,
+        "kl_guard_triggered": bool(stop_early),
+        "kl_guard_value": kl_guard_value,
         "actor_parameter_delta_l2": actor_delta,
         "actor_parameter_delta_relative": actor_delta / max(actor_norm, 1e-12),
         "return_mean": float(np.asarray(returns, dtype=np.float32).mean()),
@@ -1178,6 +1192,10 @@ def build_parser():
     p.add_argument("--ppo-epochs", type=int, default=4)
     p.add_argument("--minibatch-size", type=int, default=128)
     p.add_argument("--clip-ratio", type=float, default=0.2)
+    p.add_argument(
+        "--target-kl", type=float, default=0.01,
+        help="stop the remaining PPO minibatches/epochs before an optimizer step when approximate KL exceeds this value; <=0 disables",
+    )
     p.add_argument("--value-coef", type=float, default=0.5)
     p.add_argument("--entropy-coef", type=float, default=0.01)
     p.add_argument(
@@ -1339,6 +1357,7 @@ def main():
             f"delivered={metrics['mean_delivered_value']:.1f} sale_value={metrics['mean_quoted_sale_value']:.1f} "
             f"sell100={metrics['sell_100_pct']:.2f} greedy100={metrics['greedy_sell_100_pct']:.2f} "
             f"entropy={metrics['policy_entropy']:.3f} kl={metrics['approx_kl']:.6f} "
+            f"kl_stop={metrics['kl_guard_triggered']} "
             f"actor_delta={metrics['actor_parameter_delta_relative']:.6f} loss={metrics['loss']}",
             flush=True,
         )
