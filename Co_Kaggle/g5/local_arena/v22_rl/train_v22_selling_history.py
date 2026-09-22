@@ -214,6 +214,21 @@ class SellActorCritic(nn.Module):
         uniform_alt = torch.where(counts > 0, uniform_alt, base)
         return (1.0 - epsilon) * base + epsilon * uniform_alt
 
+    @staticmethod
+    def exploration_logits(logits: torch.Tensor, mask: torch.Tensor, exploration_rate: float):
+        """Return exploration-mixture logits robustly for FP16 Categorical.
+
+        Passing FP16 probabilities directly to Categorical(probs=...) can fail
+        the Simplex validation because vectorized half-precision rows may sum to
+        0.9995 or 1.0005 after rounding. Converting the same mixture to logits
+        lets Categorical normalize internally and avoids that false failure.
+        """
+        probs = SellActorCritic.exploration_probs(logits, mask, exploration_rate)
+        floor = torch.tensor(-60000.0, dtype=torch.float16, device=logits.device)
+        tiny = torch.tensor(torch.finfo(torch.float16).tiny, dtype=torch.float16, device=logits.device)
+        safe = torch.clamp(probs, min=tiny)
+        return torch.where(mask, torch.log(safe), floor)
+
 
 class SellingPolicy:
     def __init__(
@@ -410,8 +425,10 @@ class SellingPolicy:
                 dist = Categorical(logits=masked_logits)
                 actions = masked_logits.argmax(dim=-1)
             else:
-                probs = self.model.exploration_probs(logits, mt, self.exploration_rate)
-                dist = Categorical(probs=probs)
+                behavior_logits = self.model.exploration_logits(
+                    logits, mt, self.exploration_rate
+                )
+                dist = Categorical(logits=behavior_logits)
                 actions = dist.sample()
             log_prob = dist.log_prob(actions).sum(dim=-1)
         action_np = actions[0].detach().cpu().numpy().astype(np.int64)
@@ -891,8 +908,10 @@ def ppo_update(model, optimizer, device, steps, returns, args):
             targets = returns_t.index_select(0, idx)
 
             logits, values = model(states)
-            probs = model.exploration_probs(logits, masks, args.exploration_rate)
-            dist = Categorical(probs=probs)
+            behavior_logits = model.exploration_logits(
+                logits, masks, args.exploration_rate
+            )
+            dist = Categorical(logits=behavior_logits)
             new_log_prob = dist.log_prob(actions).sum(dim=-1)
             entropy = dist.entropy().sum(dim=-1).mean()
             log_ratio = new_log_prob - old_log_prob
