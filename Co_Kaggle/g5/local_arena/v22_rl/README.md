@@ -99,6 +99,24 @@ short/long EMA spread
 
 Early in an episode each statistic uses the price history available so far.
 
+## Exploration
+
+Training uses an explicit PPO-compatible exploration mixture:
+
+```text
+70% learned policy
+30% forced legal non-greedy alternatives
+```
+
+The 30% exploration mass is distributed only across legal actions that differ
+from the policy's current greedy action. Deterministic validation does not use
+this exploration mixture.
+
+This is implemented inside the behavior distribution itself, so stored PPO
+log-probabilities and later PPO probability ratios remain mathematically
+consistent. It is configurable with `--exploration-rate` and defaults to
+`0.30`.
+
 ## Reward
 
 The reward is dominated by the final game result:
@@ -113,8 +131,17 @@ Defaults:
 win  = +1
 loss = -1
 tie  =  0
-margin bonus = 0.25 * tanh(final_margin / 10000)
+
+margin bonus
+  = 0.25 * tanh(final_margin / 10000)
+
+improvement bonus
+  = 0.50 * tanh((final_margin - original_v20_margin) / 5000)
 ```
+
+The per-history improvement term gives PPO a useful signal when a v22 selling
+policy is still losing but has repaired a substantial part of the original v20
+loss. Win/loss remains the dominant objective.
 
 Intermediate shaping is intentionally tiny relative to the terminal objective:
 
@@ -132,10 +159,14 @@ The learnable v22 path is FP16 end to end:
 - actor logits and critic values;
 - stored/optimized returns and advantages;
 - PPO losses and gradients;
-- Adam parameter moments (FP16 because the parameters are FP16).
+- SGD updates and gradients.
 
-Adam uses `eps=1e-4` to avoid the FP16 underflow problem of very small epsilon
-values. There is no FP32 master-weight copy.
+v22 now uses **plain SGD with no momentum**. This avoids Adam's FP16 first/second
+moment buffers and keeps the optimizer state minimal. The default learning rate
+is `1e-2`, intentionally larger than the previous Adam `3e-4` because direct
+FP16 SGD updates otherwise risk becoming too small to change parameters.
+
+There is no FP32 master-weight copy.
 
 FP16 is expected to be useful primarily on hardware with fast half-precision
 execution; CPU FP16 is supported as a correctness path but is not guaranteed to
@@ -158,6 +189,49 @@ delivered_value_by_product
 
 This is diagnostics only. The v21 Q-network, worker selector, worker replay,
 Double-DQN updates and v21 weights are not used by v22.
+
+
+## Learning diagnostics
+
+Each PPO update now records behavior-change diagnostics in `metrics.jsonl`:
+
+```text
+sell_0_pct
+sell_25_pct
+sell_50_pct
+sell_75_pct
+sell_100_pct
+
+greedy_sell_0_pct
+greedy_sell_25_pct
+greedy_sell_50_pct
+greedy_sell_75_pct
+greedy_sell_100_pct
+
+policy_entropy
+approx_kl
+clip_fraction
+actor_parameter_delta_l2
+actor_parameter_delta_relative
+
+mean_margin_improvement_vs_v20
+margin_improved_cases
+margin_worsened_cases
+```
+
+The `sell_*_pct` fields describe the actual sampled training behavior, including
+the configured 30% exploration mixture. The `greedy_sell_*_pct` fields rerun
+the collected states through the **post-update deterministic policy**, so they
+show whether the learned model itself is changing independently of exploration.
+
+Validation logs also include deterministic sell-action percentages. If
+`greedy_sell_100_pct` and validation `sell_100_pct` remain near 1.0 for many
+updates, the actor has not meaningfully escaped the original v20 sell-all policy.
+
+`approx_kl` measures policy movement during PPO optimization,
+`clip_fraction` shows how often PPO ratios hit the clipping region, and
+`actor_parameter_delta_relative` measures the relative L2 movement of the
+actor parameters during one update.
 
 ## Safety/parity gate
 
@@ -201,6 +275,7 @@ Defaults:
 - parent/source of truth: `submission_nb/kaggriculture-sub_v20.ipynb`;
 - deterministic 80/20 replay-file train/validation split;
 - FP16 PPO, hidden size 128;
+- plain SGD, learning rate `1e-2`;
 - 8 static replay episodes/update;
 - validation every update;
 - target validation win rate 0.60;

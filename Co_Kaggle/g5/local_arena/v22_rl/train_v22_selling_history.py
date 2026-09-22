@@ -79,7 +79,7 @@ PRODUCT_FEATURE_NAMES = (
     "ema_1d", "ema_5d", "ema_spread", "percentile_5d",
 )
 STATE_DIM = len(GLOBAL_FEATURE_NAMES) + len(PRODUCTS) * len(PRODUCT_FEATURE_NAMES)
-CHECKPOINT_ALGORITHM = "v22_fp16_sell_only_ppo_static_v20"
+CHECKPOINT_ALGORITHM = "v22_fp16_sell_only_ppo_sgd_static_v20"
 
 
 @dataclass
@@ -194,12 +194,34 @@ class SellActorCritic(nn.Module):
         floor = torch.tensor(-60000.0, dtype=torch.float16, device=logits.device)
         return torch.where(mask, logits, floor)
 
+    @staticmethod
+    def exploration_probs(logits: torch.Tensor, mask: torch.Tensor, exploration_rate: float):
+        """PPO-compatible exploration mixture.
+
+        (1-epsilon) follows the learned categorical policy. epsilon probability
+        mass is spread uniformly across legal non-greedy actions. The greedy
+        index is detached only for constructing the exploration component; the
+        learned-policy component remains differentiable, so PPO log-probability
+        ratios stay consistent with the behavior distribution.
+        """
+        base = torch.softmax(SellActorCritic.masked_logits(logits, mask), dim=-1)
+        epsilon = float(max(0.0, min(1.0, exploration_rate)))
+        if epsilon <= 0.0:
+            return base
+        greedy = base.detach().argmax(dim=-1, keepdim=True)
+        alternatives = mask.to(dtype=base.dtype).clone()
+        alternatives.scatter_(-1, greedy, 0.0)
+        counts = alternatives.sum(dim=-1, keepdim=True)
+        uniform_alt = alternatives / counts.clamp_min(torch.tensor(1.0, dtype=base.dtype, device=base.device))
+        uniform_alt = torch.where(counts > 0, uniform_alt, base)
+        return (1.0 - epsilon) * base + epsilon * uniform_alt
+
 
 class SellingPolicy:
     def __init__(
         self, model, device, episode_steps, *,
         deterministic, collect, forced_v20_baseline,
-        price_shaping, overflow_penalty,
+        price_shaping, overflow_penalty, exploration_rate,
     ):
         self.model = model
         self.device = device
@@ -209,6 +231,7 @@ class SellingPolicy:
         self.forced_v20_baseline = forced_v20_baseline
         self.price_shaping = float(price_shaping)
         self.overflow_penalty = float(overflow_penalty)
+        self.exploration_rate = float(exploration_rate)
         self.price_history = []
         self.steps = []
         self.decisions = 0
@@ -216,6 +239,8 @@ class SellingPolicy:
         self.quoted_units_sold = 0
         self.quoted_sale_value = 0.0
         self.expected_overflow_units = 0
+        self.action_counts = np.zeros(NUM_ACTIONS, dtype=np.int64)
+        self.action_opportunities = 0
         self.sold_units_by_product = {p: 0 for p in PRODUCTS}
         self.quoted_value_by_product = {p: 0.0 for p in PRODUCTS}
 
@@ -382,11 +407,23 @@ class SellingPolicy:
         mt = torch.as_tensor(mask, dtype=torch.bool, device=self.device).unsqueeze(0)
         with torch.no_grad():
             logits, value = self.model(st)
-            logits = self.model.masked_logits(logits, mt)
-            dist = Categorical(logits=logits)
-            actions = logits.argmax(dim=-1) if self.deterministic else dist.sample()
+            masked_logits = self.model.masked_logits(logits, mt)
+            if self.deterministic:
+                dist = Categorical(logits=masked_logits)
+                actions = masked_logits.argmax(dim=-1)
+            else:
+                probs = self.model.exploration_probs(logits, mt, self.exploration_rate)
+                dist = Categorical(probs=probs)
+                actions = dist.sample()
             log_prob = dist.log_prob(actions).sum(dim=-1)
         action_np = actions[0].detach().cpu().numpy().astype(np.int64)
+        active_products = mask.sum(axis=-1) > 1
+        if np.any(active_products):
+            self.action_opportunities += int(active_products.sum())
+            for action_index in range(NUM_ACTIONS):
+                self.action_counts[action_index] += int(
+                    np.sum(action_np[active_products] == action_index)
+                )
 
         orders = []
         sold_units = 0
@@ -641,6 +678,7 @@ class SellingController:
             forced_v20_baseline=forced_v20_baseline,
             price_shaping=args.price_shaping,
             overflow_penalty=args.overflow_penalty,
+            exploration_rate=getattr(args, "exploration_rate", 0.30),
         )
         self.executor = _load_v20_executor(path, self.policy)
 
@@ -648,9 +686,19 @@ class SellingController:
         return self.executor.agent(obs)
 
 
-def terminal_reward(margin, margin_bonus, margin_scale):
+def terminal_reward(
+    margin, original_v20_margin,
+    margin_bonus, margin_scale,
+    improvement_bonus, improvement_scale,
+):
+    """Terminal objective: game result first, then bounded margin/improvement signals."""
     outcome = 1.0 if margin > 0 else -1.0 if margin < 0 else 0.0
-    return outcome + float(margin_bonus) * math.tanh(float(margin) / float(margin_scale))
+    margin_term = float(margin_bonus) * math.tanh(float(margin) / float(margin_scale))
+    improvement = float(margin) - float(original_v20_margin)
+    improvement_term = float(improvement_bonus) * math.tanh(
+        improvement / float(improvement_scale)
+    )
+    return outcome + margin_term + improvement_term
 
 
 def build_discounted_returns(steps, terminal, gamma, terminal_turn):
@@ -674,6 +722,9 @@ def run_static_episode(history_path, model, device, v20_submission, args, *, det
     candidate_seat = _infer_v20_seat(history)
     opponent_seat = 1 - candidate_seat
     original_rewards = _saved_final_rewards(history)
+    original_v20_margin = (
+        float(original_rewards[candidate_seat]) - float(original_rewards[opponent_seat])
+    )
     episode_steps = len(history["steps"]) - 1
     controller = SellingController(
         v20_submission, model, device, episode_steps, args,
@@ -716,15 +767,24 @@ def run_static_episode(history_path, model, device, v20_submission, args, *, det
         statuses = [str(_field(s, "status", "")) for s in final_states]
         margin = rewards[candidate_seat] - rewards[opponent_seat]
         ok = statuses == ["DONE", "DONE"]
-        tr = terminal_reward(margin, args.margin_bonus, args.margin_scale) if ok else None
+        tr = terminal_reward(
+            margin,
+            original_v20_margin,
+            args.margin_bonus,
+            args.margin_scale,
+            args.improvement_bonus,
+            args.improvement_scale,
+        ) if ok else None
         result = {
             "episode": history_path.stem,
             "seed": _seed_hint(history),
             "ok": ok,
             "v20_seat": candidate_seat,
             "original_rewards": original_rewards,
+            "original_v20_margin": original_v20_margin,
             "rewards": rewards,
             "margin": margin,
+            "margin_improvement": float(margin) - original_v20_margin,
             "terminal_reward": tr,
             "result": "WIN" if margin > 0 else "LOSS" if margin < 0 else "TIE",
             "sell_decisions": controller.policy.decisions,
@@ -732,6 +792,16 @@ def run_static_episode(history_path, model, device, v20_submission, args, *, det
             "quoted_units_sold": controller.policy.quoted_units_sold,
             "quoted_sale_value": controller.policy.quoted_sale_value,
             "expected_overflow_units": controller.policy.expected_overflow_units,
+            "sell_action_counts": controller.policy.action_counts.tolist(),
+            "sell_action_opportunities": int(controller.policy.action_opportunities),
+            "sell_action_pct": {
+                str(int(fraction * 100)): (
+                    float(controller.policy.action_counts[index])
+                    / float(controller.policy.action_opportunities)
+                    if controller.policy.action_opportunities else 0.0
+                )
+                for index, fraction in enumerate(ACTION_FRACTIONS)
+            },
             "sold_units_by_product": dict(controller.policy.sold_units_by_product),
             "quoted_value_by_product": dict(controller.policy.quoted_value_by_product),
             "action_divergences": divergences,
@@ -751,8 +821,10 @@ def run_static_episode(history_path, model, device, v20_submission, args, *, det
             "ok": False,
             "v20_seat": candidate_seat,
             "original_rewards": original_rewards,
+            "original_v20_margin": original_v20_margin,
             "rewards": None,
             "margin": None,
+            "margin_improvement": None,
             "terminal_reward": None,
             "result": "ERROR",
             "sell_decisions": controller.policy.decisions,
@@ -760,6 +832,16 @@ def run_static_episode(history_path, model, device, v20_submission, args, *, det
             "quoted_units_sold": controller.policy.quoted_units_sold,
             "quoted_sale_value": controller.policy.quoted_sale_value,
             "expected_overflow_units": controller.policy.expected_overflow_units,
+            "sell_action_counts": controller.policy.action_counts.tolist(),
+            "sell_action_opportunities": int(controller.policy.action_opportunities),
+            "sell_action_pct": {
+                str(int(fraction * 100)): (
+                    float(controller.policy.action_counts[index])
+                    / float(controller.policy.action_opportunities)
+                    if controller.policy.action_opportunities else 0.0
+                )
+                for index, fraction in enumerate(ACTION_FRACTIONS)
+            },
             "sold_units_by_product": dict(controller.policy.sold_units_by_product),
             "quoted_value_by_product": dict(controller.policy.quoted_value_by_product),
             "action_divergences": divergences,
@@ -771,7 +853,17 @@ def run_static_episode(history_path, model, device, v20_submission, args, *, det
 
 def ppo_update(model, optimizer, device, steps, returns, args):
     if not steps:
-        return {"ppo_updates": 0, "policy_loss": None, "value_loss": None, "entropy": None, "loss": None, "return_mean": None}
+        return {
+            "ppo_updates": 0, "policy_loss": None, "value_loss": None,
+            "entropy": None, "policy_entropy": None, "approx_kl": None,
+            "clip_fraction": None, "actor_parameter_delta_l2": None,
+            "actor_parameter_delta_relative": None, "loss": None,
+            "return_mean": None,
+        }
+    actor_before = torch.cat([
+        parameter.detach().float().cpu().reshape(-1)
+        for parameter in model.actor.parameters()
+    ])
     old_values = torch.as_tensor(
         np.asarray([s.old_value for s in steps], dtype=np.float16),
         dtype=torch.float16, device=device,
@@ -801,11 +893,14 @@ def ppo_update(model, optimizer, device, steps, returns, args):
             targets = returns_t.index_select(0, idx)
 
             logits, values = model(states)
-            logits = model.masked_logits(logits, masks)
-            dist = Categorical(logits=logits)
+            probs = model.exploration_probs(logits, masks, args.exploration_rate)
+            dist = Categorical(probs=probs)
             new_log_prob = dist.log_prob(actions).sum(dim=-1)
             entropy = dist.entropy().sum(dim=-1).mean()
-            ratio = torch.exp(new_log_prob - old_log_prob)
+            log_ratio = new_log_prob - old_log_prob
+            ratio = torch.exp(log_ratio)
+            approx_kl = ((ratio - 1.0) - log_ratio).mean()
+            clip_fraction = ((ratio - 1.0).abs() > args.clip_ratio).to(torch.float16).mean()
             clipped = torch.clamp(ratio, 1.0 - args.clip_ratio, 1.0 + args.clip_ratio)
             policy_loss = -torch.minimum(ratio * adv, clipped * adv).mean()
             value_loss = torch.tensor(0.5, dtype=torch.float16, device=device) * ((values - targets) ** 2).mean()
@@ -823,16 +918,74 @@ def ppo_update(model, optimizer, device, steps, returns, args):
                 float(value_loss.detach().float().item()),
                 float(entropy.detach().float().item()),
                 float(loss.detach().float().item()),
+                float(approx_kl.detach().float().item()),
+                float(clip_fraction.detach().float().item()),
             ))
     arr = np.asarray(stats, dtype=np.float64)
+    actor_after = torch.cat([
+        parameter.detach().float().cpu().reshape(-1)
+        for parameter in model.actor.parameters()
+    ])
+    actor_delta = float(torch.linalg.vector_norm(actor_after - actor_before).item())
+    actor_norm = float(torch.linalg.vector_norm(actor_before).item())
     return {
         "ppo_updates": len(stats),
         "policy_loss": float(arr[:, 0].mean()),
         "value_loss": float(arr[:, 1].mean()),
         "entropy": float(arr[:, 2].mean()),
+        "policy_entropy": float(arr[:, 2].mean()),
         "loss": float(arr[:, 3].mean()),
+        "approx_kl": float(arr[:, 4].mean()),
+        "clip_fraction": float(arr[:, 5].mean()),
+        "actor_parameter_delta_l2": actor_delta,
+        "actor_parameter_delta_relative": actor_delta / max(actor_norm, 1e-12),
         "return_mean": float(np.asarray(returns, dtype=np.float32).mean()),
     }
+
+
+
+def action_distribution_diagnostics(model, device, steps):
+    """Compare collected behavior actions with the post-update greedy policy."""
+    sampled = np.zeros(NUM_ACTIONS, dtype=np.int64)
+    greedy = np.zeros(NUM_ACTIONS, dtype=np.int64)
+    opportunities = 0
+    if not steps:
+        return {
+            **{f"sell_{int(f * 100)}_pct": 0.0 for f in ACTION_FRACTIONS},
+            **{f"greedy_sell_{int(f * 100)}_pct": 0.0 for f in ACTION_FRACTIONS},
+            "sell_action_opportunities": 0,
+        }
+
+    model.eval()
+    with torch.inference_mode():
+        for start in range(0, len(steps), 512):
+            batch = steps[start:start + 512]
+            states = torch.as_tensor(
+                np.stack([step.state for step in batch]),
+                dtype=torch.float16, device=device,
+            )
+            masks = torch.as_tensor(
+                np.stack([step.mask for step in batch]),
+                dtype=torch.bool, device=device,
+            )
+            actions = np.stack([step.actions for step in batch])
+            logits, _ = model(states)
+            masked = model.masked_logits(logits, masks)
+            greedy_actions = masked.argmax(dim=-1).detach().cpu().numpy()
+            mask_np = masks.detach().cpu().numpy()
+            active = mask_np.sum(axis=-1) > 1
+            opportunities += int(active.sum())
+            for action_index in range(NUM_ACTIONS):
+                sampled[action_index] += int(np.sum(actions[active] == action_index))
+                greedy[action_index] += int(np.sum(greedy_actions[active] == action_index))
+    model.train()
+    denominator = max(1, opportunities)
+    out = {"sell_action_opportunities": opportunities}
+    for index, fraction in enumerate(ACTION_FRACTIONS):
+        label = int(fraction * 100)
+        out[f"sell_{label}_pct"] = float(sampled[index]) / denominator
+        out[f"greedy_sell_{label}_pct"] = float(greedy[index]) / denominator
+    return out
 
 
 def _save_checkpoint(path, model, optimizer, update, args):
@@ -919,6 +1072,8 @@ def evaluate_histories(paths, model, device, v20_submission, args, phase):
     rows = []
     wins = ties = losses = errors = 0
     margins, produced, delivered, sale_values, overflows = [], [], [], [], []
+    action_counts = np.zeros(NUM_ACTIONS, dtype=np.int64)
+    action_opportunities = 0
     with torch.inference_mode():
         for path in paths:
             result, _, _ = run_static_episode(
@@ -934,6 +1089,8 @@ def evaluate_histories(paths, model, device, v20_submission, args, phase):
             delivered.append(float(result["delivered_value"]))
             sale_values.append(float(result["quoted_sale_value"]))
             overflows.append(float(result["expected_overflow_units"]))
+            action_counts += np.asarray(result["sell_action_counts"], dtype=np.int64)
+            action_opportunities += int(result["sell_action_opportunities"])
             if result["margin"] > 0:
                 wins += 1
             elif result["margin"] < 0:
@@ -955,13 +1112,23 @@ def evaluate_histories(paths, model, device, v20_submission, args, phase):
         "mean_delivered_value": float(np.mean(delivered)) if delivered else None,
         "mean_quoted_sale_value": float(np.mean(sale_values)) if sale_values else None,
         "mean_expected_overflow_units": float(np.mean(overflows)) if overflows else None,
+        "sell_action_opportunities": int(action_opportunities),
+        **{
+            f"sell_{int(fraction * 100)}_pct": (
+                float(action_counts[index]) / float(action_opportunities)
+                if action_opportunities else 0.0
+            )
+            for index, fraction in enumerate(ACTION_FRACTIONS)
+        },
         "rows": rows,
     }
     print(
         f"[{phase}] W/T/L/E={wins}/{ties}/{losses}/{errors} "
         f"win_rate={summary['win_rate']:.3f} margin={summary['mean_margin']} "
         f"produced={summary['mean_produced_value']} delivered={summary['mean_delivered_value']} "
-        f"sale_value={summary['mean_quoted_sale_value']} overflow={summary['mean_expected_overflow_units']}",
+        f"sale_value={summary['mean_quoted_sale_value']} overflow={summary['mean_expected_overflow_units']} "
+        f"sell%=[0:{summary['sell_0_pct']:.2f},25:{summary['sell_25_pct']:.2f},"
+        f"50:{summary['sell_50_pct']:.2f},75:{summary['sell_75_pct']:.2f},100:{summary['sell_100_pct']:.2f}]",
         flush=True,
     )
     model.train()
@@ -986,16 +1153,31 @@ def build_parser():
     p.add_argument("--preflight-only", action="store_true")
     p.add_argument("--device", default="auto")
     p.add_argument("--hidden", type=int, default=128)
-    p.add_argument("--learning-rate", type=float, default=3e-4)
+    p.add_argument(
+        "--learning-rate", type=float, default=1e-2,
+        help="plain-SGD learning rate; intentionally larger than the old Adam default for FP16 updates",
+    )
     p.add_argument("--gamma", type=float, default=0.999)
     p.add_argument("--ppo-epochs", type=int, default=4)
     p.add_argument("--minibatch-size", type=int, default=128)
     p.add_argument("--clip-ratio", type=float, default=0.2)
     p.add_argument("--value-coef", type=float, default=0.5)
     p.add_argument("--entropy-coef", type=float, default=0.01)
+    p.add_argument(
+        "--exploration-rate", type=float, default=0.30,
+        help="forced legal non-greedy exploration mixture used during training only",
+    )
     p.add_argument("--max-grad-norm", type=float, default=0.5)
     p.add_argument("--margin-bonus", type=float, default=0.25)
     p.add_argument("--margin-scale", type=float, default=10000.0)
+    p.add_argument(
+        "--improvement-bonus", type=float, default=0.50,
+        help="bounded reward weight for v22 margin improvement over this history's original v20 margin",
+    )
+    p.add_argument(
+        "--improvement-scale", type=float, default=5000.0,
+        help="margin-improvement scale inside tanh",
+    )
     p.add_argument("--price-shaping", type=float, default=0.0005)
     p.add_argument("--overflow-penalty", type=float, default=0.01)
     return p
@@ -1022,7 +1204,7 @@ def main():
     sample_rng = random.Random(args.training_seed)
 
     model = SellActorCritic(STATE_DIM, args.hidden).to(device).half()
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate, eps=1e-4)
+    optimizer = torch.optim.SGD(model.parameters(), lr=args.learning_rate)
     args.parent_v20_submission_sha256 = _sha256(args.v20_submission)
 
     pf = preflight(paths[0], model, device, args.v20_submission, args)
@@ -1046,11 +1228,12 @@ def main():
         **vars(args),
         "algorithm": CHECKPOINT_ALGORITHM,
         "precision": "fp16 parameters/activations/logits/values/returns/advantages/losses/gradients",
-        "optimizer": "Adam(fp16 parameter states; eps=1e-4)",
+        "optimizer": "plain SGD (no momentum; no optimizer moment buffers)",
         "control_scope": "SELL orders only; all other v20 policy logic frozen",
         "training_protocol": "static recorded-opponent replay from game_history/v20",
-        "primary_reward": "terminal win/loss plus bounded terminal margin bonus",
+        "primary_reward": "terminal win/loss plus bounded terminal margin and per-history improvement-over-v20 bonuses",
         "secondary_reward": "tiny sale-price percentile shaping and overflow-risk penalty",
+        "exploration": "PPO-compatible 70% learned policy + 30% forced legal non-greedy mixture by default",
         "worker_telemetry": "v21-equivalent production/transport/delivery metrics; diagnostics only, never PPO reward",
         "reserve_rule": "WHEAT max(4, live+2), FERTILIZER 4 from day 10; both released only for final 5 turns",
         "capacity_rule": 100,
@@ -1104,7 +1287,11 @@ def main():
 
         returns = np.concatenate(all_returns).astype(np.float16, copy=False)
         ppo_stats = ppo_update(model, optimizer, device, all_steps, returns, args)
+        action_stats = action_distribution_diagnostics(model, device, all_steps)
         margins = np.asarray([row["margin"] for row in episode_rows], dtype=np.float64)
+        improvements = np.asarray(
+            [row["margin_improvement"] for row in episode_rows], dtype=np.float64
+        )
         metrics = {
             "update": update,
             "episodes": len(episode_rows),
@@ -1114,21 +1301,29 @@ def main():
             "losses": int((margins < 0).sum()),
             "training_win_rate": float((margins > 0).mean()),
             "mean_margin": float(margins.mean()),
+            "mean_margin_improvement_vs_v20": float(improvements.mean()),
+            "margin_improved_cases": int((improvements > 0).sum()),
+            "margin_worsened_cases": int((improvements < 0).sum()),
             "mean_produced_value": float(np.mean([r["produced_value"] for r in episode_rows])),
             "mean_delivered_value": float(np.mean([r["delivered_value"] for r in episode_rows])),
             "mean_transport_progress_value": float(np.mean([r["transport_progress_value"] for r in episode_rows])),
             "mean_quoted_sale_value": float(np.mean([r["quoted_sale_value"] for r in episode_rows])),
             "mean_expected_overflow_units": float(np.mean([r["expected_overflow_units"] for r in episode_rows])),
             "elapsed_hours": (time.monotonic() - started) / 3600.0,
+            **action_stats,
             **ppo_stats,
         }
         write_jsonl(out / "metrics.jsonl", metrics)
         print(
             f"[update {update:04d}] W/T/L={metrics['wins']}/{metrics['ties']}/{metrics['losses']} "
             f"win_rate={metrics['training_win_rate']:.3f} margin={metrics['mean_margin']:.1f} "
+            f"improvement={metrics['mean_margin_improvement_vs_v20']:+.1f} "
             f"decisions={metrics['sell_decisions']} produced={metrics['mean_produced_value']:.1f} "
             f"delivered={metrics['mean_delivered_value']:.1f} sale_value={metrics['mean_quoted_sale_value']:.1f} "
-            f"loss={metrics['loss']}", flush=True,
+            f"sell100={metrics['sell_100_pct']:.2f} greedy100={metrics['greedy_sell_100_pct']:.2f} "
+            f"entropy={metrics['policy_entropy']:.3f} kl={metrics['approx_kl']:.6f} "
+            f"actor_delta={metrics['actor_parameter_delta_relative']:.6f} loss={metrics['loss']}",
+            flush=True,
         )
 
         _save_checkpoint(checkpoints / "latest.pt", model, optimizer, update, args)
