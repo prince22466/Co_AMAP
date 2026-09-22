@@ -1394,7 +1394,7 @@ def build_parser():
     p.add_argument("--episodes-per-update", type=int, default=8)
     p.add_argument("--validate-every-updates", type=int, default=1)
     p.add_argument("--checkpoint-every-updates", type=int, default=1)
-    p.add_argument("--target-win-rate", type=float, default=0.70)
+    p.add_argument("--target-win-rate", type=float, default=0.60)
     p.add_argument("--max-training-hours", type=float, default=2.0)
     p.add_argument("--preflight-only", action="store_true")
     p.add_argument("--device", default="auto")
@@ -1419,10 +1419,10 @@ def build_parser():
         default=0.0,
         help="compatibility field only; v21 pure-Q always ignores the tree prior",
     )
-    p.add_argument("--epsilon-start", type=float, default=0.02)
-    p.add_argument("--epsilon-end", type=float, default=0.005)
+    p.add_argument("--epsilon-start", type=float, default=0.2)
+    p.add_argument("--epsilon-end", type=float, default=0.1)
     p.add_argument("--epsilon-decay-updates", type=int, default=40)
-    p.add_argument("--explore-top-k", type=int, default=3)
+    p.add_argument("--explore-top-k", type=int, default=20)
     p.add_argument("--bootstrap-candidates", type=int, default=32)
     p.add_argument("--reward-scale", type=float, default=1000.0)
     p.add_argument("--reward-clip", type=float, default=2.0)
