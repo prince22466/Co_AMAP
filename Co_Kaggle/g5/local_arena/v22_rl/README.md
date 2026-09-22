@@ -1,0 +1,218 @@
+# v22 RL: FP16 PPO for selling only
+
+v22 trains **only the `SELL` part of the v20 `market_orders()` function**. The
+checked-in `submission_nb/kaggriculture-sub_v20.ipynb` remains the source of
+truth for every other game decision.
+
+Frozen v20 behavior includes worker/task allocation, production, crop and animal
+planning, movement, hiring, seed/product/animal purchases, land purchases and all
+non-SELL market logic. v22 does not import or use the v21 Q-network.
+
+## Training protocol
+
+Training uses the same static counterfactual replay idea as v21:
+
+```text
+game_history/v20 replay
+    -> v22 runs the v20 agent
+    -> only the SELL loop is replaced by v22 PPO
+    -> historical opponent action is replayed verbatim
+    -> Kaggriculture environment advances
+```
+
+The recorded opponent is non-adaptive after v22 changes the trajectory. This is
+failure-scenario training/regression, not a live rematch.
+
+## PPO action
+
+The policy produces one factorized categorical decision for each product:
+
+```text
+0 = hold
+1 = sell 25%
+2 = sell 50%
+3 = sell 75%
+4 = sell 100%
+```
+
+Products:
+
+```text
+MILK, WOOL, STRAWBERRY, MELON, EGG,
+TOMATO, CARROT, FERTILIZER, WHEAT
+```
+
+Duplicate quantities are masked for small inventories, so a product with one
+sellable unit has only the distinct `hold` and `sell 100%` actions available.
+
+## Hard selling constraints
+
+PPO acts only on legally sellable inventory.
+
+- WHEAT reserve: `max(4, live_animals + 2)`.
+- FERTILIZER reserve: v20 behavior before day 10; reserve 4 from day 10 onward.
+- Both WHEAT and FERTILIZER reserves are released **only in the final 5 turns of
+  the complete episode**.
+- Shed capacity is treated as 100 units. Effective stock and overflow pressure
+  are explicit observations; expected overflow after the selected sale is also
+  logged and receives a small shaping penalty because excess inventory is
+  discarded without sale revenue.
+
+The reserve constraints are outside PPO, so the policy cannot sell protected
+WHEAT/FERTILIZER.
+
+## Observation state
+
+The PPO state contains global game/economic state plus per-product inventory and
+price history.
+
+Global features include:
+
+```text
+day, hour, turn, remaining turns,
+own money, opponent money, money margin,
+effective shed stock, capacity remaining, overflow,
+current sellable inventory value, final-5-turn flag
+```
+
+For every product the state includes:
+
+```text
+sellable quantity
+held quantity
+total quantity
+reserve quantity
+current price
+1-day moving average (24 turns)
+3-day moving average (72 turns)
+5-day moving average (120 turns)
+5-day minimum / maximum
+current price vs 5-day mean
+current price vs 5-day maximum
+1-turn price change
+1-day price change
+1-day EMA
+5-day EMA
+short/long EMA spread
+5-day price percentile
+```
+
+Early in an episode each statistic uses the price history available so far.
+
+## Reward
+
+The reward is dominated by the final game result:
+
+```text
+terminal = win/loss/tie + bounded final-margin bonus
+```
+
+Defaults:
+
+```text
+win  = +1
+loss = -1
+tie  =  0
+margin bonus = 0.25 * tanh(final_margin / 10000)
+```
+
+Intermediate shaping is intentionally tiny relative to the terminal objective:
+
+- sale-price quality based on recent price percentile;
+- expected 100-unit-capacity overflow penalty.
+
+Worker production/delivery values are **not** PPO rewards.
+
+## FP16
+
+The learnable v22 path is FP16 end to end:
+
+- PPO model parameters;
+- forward activations;
+- actor logits and critic values;
+- stored/optimized returns and advantages;
+- PPO losses and gradients;
+- Adam parameter moments (FP16 because the parameters are FP16).
+
+Adam uses `eps=1e-4` to avoid the FP16 underflow problem of very small epsilon
+values. There is no FP32 master-weight copy.
+
+FP16 is expected to be useful primarily on hardware with fast half-precision
+execution; CPU FP16 is supported as a correctness path but is not guaranteed to
+be faster than FP32.
+
+## v21-style worker telemetry, without the v21 model
+
+v22 reproduces the data-collection logic used in v21 so training/evaluation logs
+continue to expose:
+
+```text
+produced_value
+produced_units
+transport_progress_value
+delivered_value
+delivered_units
+produced_value_by_product
+delivered_value_by_product
+```
+
+This is diagnostics only. The v21 Q-network, worker selector, worker replay,
+Double-DQN updates and v21 weights are not used by v22.
+
+## Safety/parity gate
+
+Before training, one v20 history must pass three checks:
+
+1. feeding both recorded action streams back into Kaggriculture reproduces the
+   saved replay exactly;
+2. the checked-in v20 notebook reproduces the recorded v20 action stream and
+   final rewards exactly;
+3. the surgically modified v22 executor in `forced_v20_baseline` mode reproduces
+   the same action stream and rewards exactly.
+
+The third gate verifies that replacing the SELL loop does not alter any other
+v20 behavior.
+
+## Train
+
+From `Co_Kaggle/g5`:
+
+```bash
+python -m pip install -r local_arena/v22_rl/requirements.txt
+python local_arena/v22_rl/train_v22_selling_history.py
+```
+
+Preflight only:
+
+```bash
+python local_arena/v22_rl/train_v22_selling_history.py --preflight-only
+```
+
+Resume:
+
+```bash
+python local_arena/v22_rl/train_v22_selling_history.py \
+  --resume local_arena/v22_rl/runs/static_v20_history/checkpoints/latest.pt
+```
+
+Defaults:
+
+- histories: `game_history/v20/*.json`;
+- parent/source of truth: `submission_nb/kaggriculture-sub_v20.ipynb`;
+- deterministic 80/20 replay-file train/validation split;
+- FP16 PPO, hidden size 128;
+- 8 static replay episodes/update;
+- validation every update;
+- target validation win rate 0.60;
+- maximum training time 2 hours.
+
+## Evaluate
+
+```bash
+python local_arena/v22_rl/evaluate_v22_v20_losses.py \
+  --checkpoint local_arena/v22_rl/runs/static_v20_history/checkpoints/latest.pt
+```
+
+The evaluator reports the v20 and v22 terminal margins, margin improvement,
+selling activity, expected overflow, and the same production/delivery telemetry
+for every replay.
