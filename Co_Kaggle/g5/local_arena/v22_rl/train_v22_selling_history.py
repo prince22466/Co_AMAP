@@ -239,6 +239,8 @@ class SellingPolicy:
         self.quoted_units_sold = 0
         self.quoted_sale_value = 0.0
         self.expected_overflow_units = 0
+        self.action_counts = np.zeros(NUM_ACTIONS, dtype=np.int64)
+        self.action_opportunities = 0
         self.sold_units_by_product = {p: 0 for p in PRODUCTS}
         self.quoted_value_by_product = {p: 0.0 for p in PRODUCTS}
 
@@ -415,6 +417,13 @@ class SellingPolicy:
                 actions = dist.sample()
             log_prob = dist.log_prob(actions).sum(dim=-1)
         action_np = actions[0].detach().cpu().numpy().astype(np.int64)
+        active_products = mask.sum(axis=-1) > 1
+        if np.any(active_products):
+            self.action_opportunities += int(active_products.sum())
+            for action_index in range(NUM_ACTIONS):
+                self.action_counts[action_index] += int(
+                    np.sum(action_np[active_products] == action_index)
+                )
 
         orders = []
         sold_units = 0
@@ -783,6 +792,16 @@ def run_static_episode(history_path, model, device, v20_submission, args, *, det
             "quoted_units_sold": controller.policy.quoted_units_sold,
             "quoted_sale_value": controller.policy.quoted_sale_value,
             "expected_overflow_units": controller.policy.expected_overflow_units,
+            "sell_action_counts": controller.policy.action_counts.tolist(),
+            "sell_action_opportunities": int(controller.policy.action_opportunities),
+            "sell_action_pct": {
+                str(int(fraction * 100)): (
+                    float(controller.policy.action_counts[index])
+                    / float(controller.policy.action_opportunities)
+                    if controller.policy.action_opportunities else 0.0
+                )
+                for index, fraction in enumerate(ACTION_FRACTIONS)
+            },
             "sold_units_by_product": dict(controller.policy.sold_units_by_product),
             "quoted_value_by_product": dict(controller.policy.quoted_value_by_product),
             "action_divergences": divergences,
@@ -813,6 +832,16 @@ def run_static_episode(history_path, model, device, v20_submission, args, *, det
             "quoted_units_sold": controller.policy.quoted_units_sold,
             "quoted_sale_value": controller.policy.quoted_sale_value,
             "expected_overflow_units": controller.policy.expected_overflow_units,
+            "sell_action_counts": controller.policy.action_counts.tolist(),
+            "sell_action_opportunities": int(controller.policy.action_opportunities),
+            "sell_action_pct": {
+                str(int(fraction * 100)): (
+                    float(controller.policy.action_counts[index])
+                    / float(controller.policy.action_opportunities)
+                    if controller.policy.action_opportunities else 0.0
+                )
+                for index, fraction in enumerate(ACTION_FRACTIONS)
+            },
             "sold_units_by_product": dict(controller.policy.sold_units_by_product),
             "quoted_value_by_product": dict(controller.policy.quoted_value_by_product),
             "action_divergences": divergences,
@@ -824,7 +853,17 @@ def run_static_episode(history_path, model, device, v20_submission, args, *, det
 
 def ppo_update(model, optimizer, device, steps, returns, args):
     if not steps:
-        return {"ppo_updates": 0, "policy_loss": None, "value_loss": None, "entropy": None, "loss": None, "return_mean": None}
+        return {
+            "ppo_updates": 0, "policy_loss": None, "value_loss": None,
+            "entropy": None, "policy_entropy": None, "approx_kl": None,
+            "clip_fraction": None, "actor_parameter_delta_l2": None,
+            "actor_parameter_delta_relative": None, "loss": None,
+            "return_mean": None,
+        }
+    actor_before = torch.cat([
+        parameter.detach().float().cpu().reshape(-1)
+        for parameter in model.actor.parameters()
+    ])
     old_values = torch.as_tensor(
         np.asarray([s.old_value for s in steps], dtype=np.float16),
         dtype=torch.float16, device=device,
@@ -858,7 +897,10 @@ def ppo_update(model, optimizer, device, steps, returns, args):
             dist = Categorical(probs=probs)
             new_log_prob = dist.log_prob(actions).sum(dim=-1)
             entropy = dist.entropy().sum(dim=-1).mean()
-            ratio = torch.exp(new_log_prob - old_log_prob)
+            log_ratio = new_log_prob - old_log_prob
+            ratio = torch.exp(log_ratio)
+            approx_kl = ((ratio - 1.0) - log_ratio).mean()
+            clip_fraction = ((ratio - 1.0).abs() > args.clip_ratio).to(torch.float16).mean()
             clipped = torch.clamp(ratio, 1.0 - args.clip_ratio, 1.0 + args.clip_ratio)
             policy_loss = -torch.minimum(ratio * adv, clipped * adv).mean()
             value_loss = torch.tensor(0.5, dtype=torch.float16, device=device) * ((values - targets) ** 2).mean()
@@ -876,16 +918,74 @@ def ppo_update(model, optimizer, device, steps, returns, args):
                 float(value_loss.detach().float().item()),
                 float(entropy.detach().float().item()),
                 float(loss.detach().float().item()),
+                float(approx_kl.detach().float().item()),
+                float(clip_fraction.detach().float().item()),
             ))
     arr = np.asarray(stats, dtype=np.float64)
+    actor_after = torch.cat([
+        parameter.detach().float().cpu().reshape(-1)
+        for parameter in model.actor.parameters()
+    ])
+    actor_delta = float(torch.linalg.vector_norm(actor_after - actor_before).item())
+    actor_norm = float(torch.linalg.vector_norm(actor_before).item())
     return {
         "ppo_updates": len(stats),
         "policy_loss": float(arr[:, 0].mean()),
         "value_loss": float(arr[:, 1].mean()),
         "entropy": float(arr[:, 2].mean()),
+        "policy_entropy": float(arr[:, 2].mean()),
         "loss": float(arr[:, 3].mean()),
+        "approx_kl": float(arr[:, 4].mean()),
+        "clip_fraction": float(arr[:, 5].mean()),
+        "actor_parameter_delta_l2": actor_delta,
+        "actor_parameter_delta_relative": actor_delta / max(actor_norm, 1e-12),
         "return_mean": float(np.asarray(returns, dtype=np.float32).mean()),
     }
+
+
+
+def action_distribution_diagnostics(model, device, steps):
+    """Compare collected behavior actions with the post-update greedy policy."""
+    sampled = np.zeros(NUM_ACTIONS, dtype=np.int64)
+    greedy = np.zeros(NUM_ACTIONS, dtype=np.int64)
+    opportunities = 0
+    if not steps:
+        return {
+            **{f"sell_{int(f * 100)}_pct": 0.0 for f in ACTION_FRACTIONS},
+            **{f"greedy_sell_{int(f * 100)}_pct": 0.0 for f in ACTION_FRACTIONS},
+            "sell_action_opportunities": 0,
+        }
+
+    model.eval()
+    with torch.inference_mode():
+        for start in range(0, len(steps), 512):
+            batch = steps[start:start + 512]
+            states = torch.as_tensor(
+                np.stack([step.state for step in batch]),
+                dtype=torch.float16, device=device,
+            )
+            masks = torch.as_tensor(
+                np.stack([step.mask for step in batch]),
+                dtype=torch.bool, device=device,
+            )
+            actions = np.stack([step.actions for step in batch])
+            logits, _ = model(states)
+            masked = model.masked_logits(logits, masks)
+            greedy_actions = masked.argmax(dim=-1).detach().cpu().numpy()
+            mask_np = masks.detach().cpu().numpy()
+            active = mask_np.sum(axis=-1) > 1
+            opportunities += int(active.sum())
+            for action_index in range(NUM_ACTIONS):
+                sampled[action_index] += int(np.sum(actions[active] == action_index))
+                greedy[action_index] += int(np.sum(greedy_actions[active] == action_index))
+    model.train()
+    denominator = max(1, opportunities)
+    out = {"sell_action_opportunities": opportunities}
+    for index, fraction in enumerate(ACTION_FRACTIONS):
+        label = int(fraction * 100)
+        out[f"sell_{label}_pct"] = float(sampled[index]) / denominator
+        out[f"greedy_sell_{label}_pct"] = float(greedy[index]) / denominator
+    return out
 
 
 def _save_checkpoint(path, model, optimizer, update, args):
@@ -972,6 +1072,8 @@ def evaluate_histories(paths, model, device, v20_submission, args, phase):
     rows = []
     wins = ties = losses = errors = 0
     margins, produced, delivered, sale_values, overflows = [], [], [], [], []
+    action_counts = np.zeros(NUM_ACTIONS, dtype=np.int64)
+    action_opportunities = 0
     with torch.inference_mode():
         for path in paths:
             result, _, _ = run_static_episode(
@@ -987,6 +1089,8 @@ def evaluate_histories(paths, model, device, v20_submission, args, phase):
             delivered.append(float(result["delivered_value"]))
             sale_values.append(float(result["quoted_sale_value"]))
             overflows.append(float(result["expected_overflow_units"]))
+            action_counts += np.asarray(result["sell_action_counts"], dtype=np.int64)
+            action_opportunities += int(result["sell_action_opportunities"])
             if result["margin"] > 0:
                 wins += 1
             elif result["margin"] < 0:
@@ -1008,13 +1112,23 @@ def evaluate_histories(paths, model, device, v20_submission, args, phase):
         "mean_delivered_value": float(np.mean(delivered)) if delivered else None,
         "mean_quoted_sale_value": float(np.mean(sale_values)) if sale_values else None,
         "mean_expected_overflow_units": float(np.mean(overflows)) if overflows else None,
+        "sell_action_opportunities": int(action_opportunities),
+        **{
+            f"sell_{int(fraction * 100)}_pct": (
+                float(action_counts[index]) / float(action_opportunities)
+                if action_opportunities else 0.0
+            )
+            for index, fraction in enumerate(ACTION_FRACTIONS)
+        },
         "rows": rows,
     }
     print(
         f"[{phase}] W/T/L/E={wins}/{ties}/{losses}/{errors} "
         f"win_rate={summary['win_rate']:.3f} margin={summary['mean_margin']} "
         f"produced={summary['mean_produced_value']} delivered={summary['mean_delivered_value']} "
-        f"sale_value={summary['mean_quoted_sale_value']} overflow={summary['mean_expected_overflow_units']}",
+        f"sale_value={summary['mean_quoted_sale_value']} overflow={summary['mean_expected_overflow_units']} "
+        f"sell%=[0:{summary['sell_0_pct']:.2f},25:{summary['sell_25_pct']:.2f},"
+        f"50:{summary['sell_50_pct']:.2f},75:{summary['sell_75_pct']:.2f},100:{summary['sell_100_pct']:.2f}]",
         flush=True,
     )
     model.train()
@@ -1170,6 +1284,7 @@ def main():
 
         returns = np.concatenate(all_returns).astype(np.float16, copy=False)
         ppo_stats = ppo_update(model, optimizer, device, all_steps, returns, args)
+        action_stats = action_distribution_diagnostics(model, device, all_steps)
         margins = np.asarray([row["margin"] for row in episode_rows], dtype=np.float64)
         improvements = np.asarray(
             [row["margin_improvement"] for row in episode_rows], dtype=np.float64
@@ -1192,6 +1307,7 @@ def main():
             "mean_quoted_sale_value": float(np.mean([r["quoted_sale_value"] for r in episode_rows])),
             "mean_expected_overflow_units": float(np.mean([r["expected_overflow_units"] for r in episode_rows])),
             "elapsed_hours": (time.monotonic() - started) / 3600.0,
+            **action_stats,
             **ppo_stats,
         }
         write_jsonl(out / "metrics.jsonl", metrics)
@@ -1201,7 +1317,10 @@ def main():
             f"improvement={metrics['mean_margin_improvement_vs_v20']:+.1f} "
             f"decisions={metrics['sell_decisions']} produced={metrics['mean_produced_value']:.1f} "
             f"delivered={metrics['mean_delivered_value']:.1f} sale_value={metrics['mean_quoted_sale_value']:.1f} "
-            f"loss={metrics['loss']}", flush=True,
+            f"sell100={metrics['sell_100_pct']:.2f} greedy100={metrics['greedy_sell_100_pct']:.2f} "
+            f"entropy={metrics['policy_entropy']:.3f} kl={metrics['approx_kl']:.6f} "
+            f"actor_delta={metrics['actor_parameter_delta_relative']:.6f} loss={metrics['loss']}",
+            flush=True,
         )
 
         _save_checkpoint(checkpoints / "latest.pt", model, optimizer, update, args)
