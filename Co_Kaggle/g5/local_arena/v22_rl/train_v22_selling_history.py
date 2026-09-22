@@ -677,9 +677,19 @@ class SellingController:
         return self.executor.agent(obs)
 
 
-def terminal_reward(margin, margin_bonus, margin_scale):
+def terminal_reward(
+    margin, original_v20_margin,
+    margin_bonus, margin_scale,
+    improvement_bonus, improvement_scale,
+):
+    """Terminal objective: game result first, then bounded margin/improvement signals."""
     outcome = 1.0 if margin > 0 else -1.0 if margin < 0 else 0.0
-    return outcome + float(margin_bonus) * math.tanh(float(margin) / float(margin_scale))
+    margin_term = float(margin_bonus) * math.tanh(float(margin) / float(margin_scale))
+    improvement = float(margin) - float(original_v20_margin)
+    improvement_term = float(improvement_bonus) * math.tanh(
+        improvement / float(improvement_scale)
+    )
+    return outcome + margin_term + improvement_term
 
 
 def build_discounted_returns(steps, terminal, gamma, terminal_turn):
@@ -703,6 +713,9 @@ def run_static_episode(history_path, model, device, v20_submission, args, *, det
     candidate_seat = _infer_v20_seat(history)
     opponent_seat = 1 - candidate_seat
     original_rewards = _saved_final_rewards(history)
+    original_v20_margin = (
+        float(original_rewards[candidate_seat]) - float(original_rewards[opponent_seat])
+    )
     episode_steps = len(history["steps"]) - 1
     controller = SellingController(
         v20_submission, model, device, episode_steps, args,
@@ -745,15 +758,24 @@ def run_static_episode(history_path, model, device, v20_submission, args, *, det
         statuses = [str(_field(s, "status", "")) for s in final_states]
         margin = rewards[candidate_seat] - rewards[opponent_seat]
         ok = statuses == ["DONE", "DONE"]
-        tr = terminal_reward(margin, args.margin_bonus, args.margin_scale) if ok else None
+        tr = terminal_reward(
+            margin,
+            original_v20_margin,
+            args.margin_bonus,
+            args.margin_scale,
+            args.improvement_bonus,
+            args.improvement_scale,
+        ) if ok else None
         result = {
             "episode": history_path.stem,
             "seed": _seed_hint(history),
             "ok": ok,
             "v20_seat": candidate_seat,
             "original_rewards": original_rewards,
+            "original_v20_margin": original_v20_margin,
             "rewards": rewards,
             "margin": margin,
+            "margin_improvement": float(margin) - original_v20_margin,
             "terminal_reward": tr,
             "result": "WIN" if margin > 0 else "LOSS" if margin < 0 else "TIE",
             "sell_decisions": controller.policy.decisions,
@@ -780,8 +802,10 @@ def run_static_episode(history_path, model, device, v20_submission, args, *, det
             "ok": False,
             "v20_seat": candidate_seat,
             "original_rewards": original_rewards,
+            "original_v20_margin": original_v20_margin,
             "rewards": None,
             "margin": None,
+            "margin_improvement": None,
             "terminal_reward": None,
             "result": "ERROR",
             "sell_decisions": controller.policy.decisions,
@@ -1029,6 +1053,14 @@ def build_parser():
     p.add_argument("--max-grad-norm", type=float, default=0.5)
     p.add_argument("--margin-bonus", type=float, default=0.25)
     p.add_argument("--margin-scale", type=float, default=10000.0)
+    p.add_argument(
+        "--improvement-bonus", type=float, default=0.50,
+        help="bounded reward weight for v22 margin improvement over this history's original v20 margin",
+    )
+    p.add_argument(
+        "--improvement-scale", type=float, default=5000.0,
+        help="margin-improvement scale inside tanh",
+    )
     p.add_argument("--price-shaping", type=float, default=0.0005)
     p.add_argument("--overflow-penalty", type=float, default=0.01)
     return p
@@ -1082,7 +1114,7 @@ def main():
         "optimizer": "Adam(fp16 parameter states; eps=1e-4)",
         "control_scope": "SELL orders only; all other v20 policy logic frozen",
         "training_protocol": "static recorded-opponent replay from game_history/v20",
-        "primary_reward": "terminal win/loss plus bounded terminal margin bonus",
+        "primary_reward": "terminal win/loss plus bounded terminal margin and per-history improvement-over-v20 bonuses",
         "secondary_reward": "tiny sale-price percentile shaping and overflow-risk penalty",
         "exploration": "PPO-compatible 70% learned policy + 30% forced legal non-greedy mixture by default",
         "worker_telemetry": "v21-equivalent production/transport/delivery metrics; diagnostics only, never PPO reward",
@@ -1139,6 +1171,9 @@ def main():
         returns = np.concatenate(all_returns).astype(np.float16, copy=False)
         ppo_stats = ppo_update(model, optimizer, device, all_steps, returns, args)
         margins = np.asarray([row["margin"] for row in episode_rows], dtype=np.float64)
+        improvements = np.asarray(
+            [row["margin_improvement"] for row in episode_rows], dtype=np.float64
+        )
         metrics = {
             "update": update,
             "episodes": len(episode_rows),
@@ -1148,6 +1183,9 @@ def main():
             "losses": int((margins < 0).sum()),
             "training_win_rate": float((margins > 0).mean()),
             "mean_margin": float(margins.mean()),
+            "mean_margin_improvement_vs_v20": float(improvements.mean()),
+            "margin_improved_cases": int((improvements > 0).sum()),
+            "margin_worsened_cases": int((improvements < 0).sum()),
             "mean_produced_value": float(np.mean([r["produced_value"] for r in episode_rows])),
             "mean_delivered_value": float(np.mean([r["delivered_value"] for r in episode_rows])),
             "mean_transport_progress_value": float(np.mean([r["transport_progress_value"] for r in episode_rows])),
@@ -1160,6 +1198,7 @@ def main():
         print(
             f"[update {update:04d}] W/T/L={metrics['wins']}/{metrics['ties']}/{metrics['losses']} "
             f"win_rate={metrics['training_win_rate']:.3f} margin={metrics['mean_margin']:.1f} "
+            f"improvement={metrics['mean_margin_improvement_vs_v20']:+.1f} "
             f"decisions={metrics['sell_decisions']} produced={metrics['mean_produced_value']:.1f} "
             f"delivered={metrics['mean_delivered_value']:.1f} sale_value={metrics['mean_quoted_sale_value']:.1f} "
             f"loss={metrics['loss']}", flush=True,
