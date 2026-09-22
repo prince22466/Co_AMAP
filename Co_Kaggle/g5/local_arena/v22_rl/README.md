@@ -312,3 +312,29 @@ python local_arena/v22_rl/evaluate_v22_v20_losses.py \
 The evaluator reports the v20 and v22 terminal margins, margin improvement,
 selling activity, expected overflow, and the same production/delivery telemetry
 for every replay.
+
+
+## PPO target-KL guard
+
+The trainer supports:
+
+```text
+--target-kl 0.01
+```
+
+During PPO optimization, the current minibatch approximate KL is measured before
+the optimizer step. If it exceeds the target, the current step is skipped and
+the remaining minibatches/epochs for that PPO update are stopped.
+
+Set `--target-kl <= 0` to disable the guard.
+
+Diagnostics include:
+
+```text
+kl_guard_triggered
+kl_guard_value
+```
+
+This is intended to prevent a single rollout batch from driving an excessively
+large policy shift when using FP16 + SGD.
+
