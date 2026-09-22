@@ -159,10 +159,14 @@ The learnable v22 path is FP16 end to end:
 - actor logits and critic values;
 - stored/optimized returns and advantages;
 - PPO losses and gradients;
-- Adam parameter moments (FP16 because the parameters are FP16).
+- SGD updates and gradients.
 
-Adam uses `eps=1e-4` to avoid the FP16 underflow problem of very small epsilon
-values. There is no FP32 master-weight copy.
+v22 now uses **plain SGD with no momentum**. This avoids Adam's FP16 first/second
+moment buffers and keeps the optimizer state minimal. The default learning rate
+is `1e-2`, intentionally larger than the previous Adam `3e-4` because direct
+FP16 SGD updates otherwise risk becoming too small to change parameters.
+
+There is no FP32 master-weight copy.
 
 FP16 is expected to be useful primarily on hardware with fast half-precision
 execution; CPU FP16 is supported as a correctness path but is not guaranteed to
@@ -271,6 +275,7 @@ Defaults:
 - parent/source of truth: `submission_nb/kaggriculture-sub_v20.ipynb`;
 - deterministic 80/20 replay-file train/validation split;
 - FP16 PPO, hidden size 128;
+- plain SGD, learning rate `1e-2`;
 - 8 static replay episodes/update;
 - validation every update;
 - target validation win rate 0.60;
