@@ -99,6 +99,24 @@ short/long EMA spread
 
 Early in an episode each statistic uses the price history available so far.
 
+## Exploration
+
+Training uses an explicit PPO-compatible exploration mixture:
+
+```text
+70% learned policy
+30% forced legal non-greedy alternatives
+```
+
+The 30% exploration mass is distributed only across legal actions that differ
+from the policy's current greedy action. Deterministic validation does not use
+this exploration mixture.
+
+This is implemented inside the behavior distribution itself, so stored PPO
+log-probabilities and later PPO probability ratios remain mathematically
+consistent. It is configurable with `--exploration-rate` and defaults to
+`0.30`.
+
 ## Reward
 
 The reward is dominated by the final game result:
