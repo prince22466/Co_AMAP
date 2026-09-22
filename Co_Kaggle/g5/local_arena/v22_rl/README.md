@@ -186,6 +186,49 @@ delivered_value_by_product
 This is diagnostics only. The v21 Q-network, worker selector, worker replay,
 Double-DQN updates and v21 weights are not used by v22.
 
+
+## Learning diagnostics
+
+Each PPO update now records behavior-change diagnostics in `metrics.jsonl`:
+
+```text
+sell_0_pct
+sell_25_pct
+sell_50_pct
+sell_75_pct
+sell_100_pct
+
+greedy_sell_0_pct
+greedy_sell_25_pct
+greedy_sell_50_pct
+greedy_sell_75_pct
+greedy_sell_100_pct
+
+policy_entropy
+approx_kl
+clip_fraction
+actor_parameter_delta_l2
+actor_parameter_delta_relative
+
+mean_margin_improvement_vs_v20
+margin_improved_cases
+margin_worsened_cases
+```
+
+The `sell_*_pct` fields describe the actual sampled training behavior, including
+the configured 30% exploration mixture. The `greedy_sell_*_pct` fields rerun
+the collected states through the **post-update deterministic policy**, so they
+show whether the learned model itself is changing independently of exploration.
+
+Validation logs also include deterministic sell-action percentages. If
+`greedy_sell_100_pct` and validation `sell_100_pct` remain near 1.0 for many
+updates, the actor has not meaningfully escaped the original v20 sell-all policy.
+
+`approx_kl` measures policy movement during PPO optimization,
+`clip_fraction` shows how often PPO ratios hit the clipping region, and
+`actor_parameter_delta_relative` measures the relative L2 movement of the
+actor parameters during one update.
+
 ## Safety/parity gate
 
 Before training, one v20 history must pass three checks:
