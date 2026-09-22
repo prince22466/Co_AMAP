@@ -194,12 +194,34 @@ class SellActorCritic(nn.Module):
         floor = torch.tensor(-60000.0, dtype=torch.float16, device=logits.device)
         return torch.where(mask, logits, floor)
 
+    @staticmethod
+    def exploration_probs(logits: torch.Tensor, mask: torch.Tensor, exploration_rate: float):
+        """PPO-compatible exploration mixture.
+
+        (1-epsilon) follows the learned categorical policy. epsilon probability
+        mass is spread uniformly across legal non-greedy actions. The greedy
+        index is detached only for constructing the exploration component; the
+        learned-policy component remains differentiable, so PPO log-probability
+        ratios stay consistent with the behavior distribution.
+        """
+        base = torch.softmax(SellActorCritic.masked_logits(logits, mask), dim=-1)
+        epsilon = float(max(0.0, min(1.0, exploration_rate)))
+        if epsilon <= 0.0:
+            return base
+        greedy = base.detach().argmax(dim=-1, keepdim=True)
+        alternatives = mask.to(dtype=base.dtype).clone()
+        alternatives.scatter_(-1, greedy, 0.0)
+        counts = alternatives.sum(dim=-1, keepdim=True)
+        uniform_alt = alternatives / counts.clamp_min(torch.tensor(1.0, dtype=base.dtype, device=base.device))
+        uniform_alt = torch.where(counts > 0, uniform_alt, base)
+        return (1.0 - epsilon) * base + epsilon * uniform_alt
+
 
 class SellingPolicy:
     def __init__(
         self, model, device, episode_steps, *,
         deterministic, collect, forced_v20_baseline,
-        price_shaping, overflow_penalty,
+        price_shaping, overflow_penalty, exploration_rate,
     ):
         self.model = model
         self.device = device
@@ -209,6 +231,7 @@ class SellingPolicy:
         self.forced_v20_baseline = forced_v20_baseline
         self.price_shaping = float(price_shaping)
         self.overflow_penalty = float(overflow_penalty)
+        self.exploration_rate = float(exploration_rate)
         self.price_history = []
         self.steps = []
         self.decisions = 0
@@ -382,9 +405,14 @@ class SellingPolicy:
         mt = torch.as_tensor(mask, dtype=torch.bool, device=self.device).unsqueeze(0)
         with torch.no_grad():
             logits, value = self.model(st)
-            logits = self.model.masked_logits(logits, mt)
-            dist = Categorical(logits=logits)
-            actions = logits.argmax(dim=-1) if self.deterministic else dist.sample()
+            masked_logits = self.model.masked_logits(logits, mt)
+            if self.deterministic:
+                dist = Categorical(logits=masked_logits)
+                actions = masked_logits.argmax(dim=-1)
+            else:
+                probs = self.model.exploration_probs(logits, mt, self.exploration_rate)
+                dist = Categorical(probs=probs)
+                actions = dist.sample()
             log_prob = dist.log_prob(actions).sum(dim=-1)
         action_np = actions[0].detach().cpu().numpy().astype(np.int64)
 
@@ -641,6 +669,7 @@ class SellingController:
             forced_v20_baseline=forced_v20_baseline,
             price_shaping=args.price_shaping,
             overflow_penalty=args.overflow_penalty,
+            exploration_rate=getattr(args, "exploration_rate", 0.30),
         )
         self.executor = _load_v20_executor(path, self.policy)
 
@@ -801,8 +830,8 @@ def ppo_update(model, optimizer, device, steps, returns, args):
             targets = returns_t.index_select(0, idx)
 
             logits, values = model(states)
-            logits = model.masked_logits(logits, masks)
-            dist = Categorical(logits=logits)
+            probs = model.exploration_probs(logits, masks, args.exploration_rate)
+            dist = Categorical(probs=probs)
             new_log_prob = dist.log_prob(actions).sum(dim=-1)
             entropy = dist.entropy().sum(dim=-1).mean()
             ratio = torch.exp(new_log_prob - old_log_prob)
@@ -993,6 +1022,10 @@ def build_parser():
     p.add_argument("--clip-ratio", type=float, default=0.2)
     p.add_argument("--value-coef", type=float, default=0.5)
     p.add_argument("--entropy-coef", type=float, default=0.01)
+    p.add_argument(
+        "--exploration-rate", type=float, default=0.30,
+        help="forced legal non-greedy exploration mixture used during training only",
+    )
     p.add_argument("--max-grad-norm", type=float, default=0.5)
     p.add_argument("--margin-bonus", type=float, default=0.25)
     p.add_argument("--margin-scale", type=float, default=10000.0)
@@ -1051,6 +1084,7 @@ def main():
         "training_protocol": "static recorded-opponent replay from game_history/v20",
         "primary_reward": "terminal win/loss plus bounded terminal margin bonus",
         "secondary_reward": "tiny sale-price percentile shaping and overflow-risk penalty",
+        "exploration": "PPO-compatible 70% learned policy + 30% forced legal non-greedy mixture by default",
         "worker_telemetry": "v21-equivalent production/transport/delivery metrics; diagnostics only, never PPO reward",
         "reserve_rule": "WHEAT max(4, live+2), FERTILIZER 4 from day 10; both released only for final 5 turns",
         "capacity_rule": 100,
