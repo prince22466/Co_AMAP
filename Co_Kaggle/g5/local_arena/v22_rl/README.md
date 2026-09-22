@@ -131,8 +131,17 @@ Defaults:
 win  = +1
 loss = -1
 tie  =  0
-margin bonus = 0.25 * tanh(final_margin / 10000)
+
+margin bonus
+  = 0.25 * tanh(final_margin / 10000)
+
+improvement bonus
+  = 0.50 * tanh((final_margin - original_v20_margin) / 5000)
 ```
+
+The per-history improvement term gives PPO a useful signal when a v22 selling
+policy is still losing but has repaired a substantial part of the original v20
+loss. Win/loss remains the dominant objective.
 
 Intermediate shaping is intentionally tiny relative to the terminal objective:
 
