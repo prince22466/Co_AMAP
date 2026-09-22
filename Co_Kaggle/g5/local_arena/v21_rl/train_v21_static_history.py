@@ -119,6 +119,97 @@ def _strip_tree_code(source: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+class InventorySellingPolicy:
+    """Per-episode selling rules for the existing 30-day, 24-turn/day game.
+
+    Reserve quantities are calculated by the unchanged v19 market planner.
+    Capacity sales maximize revenue at the currently quoted unit prices;
+    actual execution prices may change as the shared market processes orders.
+    """
+
+    def __init__(self):
+        self.price_history: list[tuple[int, dict[str, float]]] = []
+
+    def orders(self, obs, held, total, reserve_wheat, reserve_fert):
+        day = int(obs["day"])
+        turn = day * 24 + int(obs["hour"])
+        prices = obs["market"]["prices"]
+        if self.price_history and turn < self.price_history[-1][0]:
+            self.price_history.clear()
+        # Keep the current turn and the preceding 71 turns. Replace duplicate
+        # observations, and use available history during the first three days.
+        self.price_history = [
+            (t, p) for t, p in self.price_history if turn - 72 < t < turn
+        ]
+        self.price_history.append((turn, {c: float(prices[c]) for c in DELIVERED_PRODUCTS}))
+
+        available = {c: max(0, int(held.get(c, 0))) for c in DELIVERED_PRODUCTS}
+        reserves = {"WHEAT": 0 if day == 29 else reserve_wheat,
+                    "FERTILIZER": reserve_fert}
+        for product, reserve in reserves.items():
+            available[product] = min(
+                available[product], max(0, int(total.get(product, 0)) - reserve)
+            )
+
+        # Final five days: retain v19's sell-all-eligible-stock behavior/order.
+        if day >= 25:
+            return [["SELL", c, n] for c, n in available.items() if n]
+
+        stock = sum(max(0, int(n)) for n in held.values())
+        # Days are zero-indexed: days 20-24 (game days 21-25) target 25
+        # shed units. Earlier, stock strictly above 90 triggers a sale toward
+        # 60; otherwise there is no forced sale. Days 25-29 returned above.
+        limit = 25 if day >= 20 else 60 if stock > 90 else None
+        quantities = dict.fromkeys(DELIVERED_PRODUCTS, 0)
+        # Sell the most valuable units at current quoted prices first, taking
+        # only the quantity needed to reach the limit, subject to reserves.
+        # This does not simulate price changes caused by executing the sales.
+        ranked = sorted(DELIVERED_PRODUCTS, key=lambda c: -float(prices[c]))
+        if limit is not None:
+            excess = max(0, stock - limit)
+            for product in ranked:
+                n = min(available[product], excess)
+                quantities[product] = n
+                excess -= n
+                if excess == 0:
+                    break
+
+        # BAU sales remain eligible even below a stock limit. Reserves always
+        # take precedence if protected/unsellable stock alone exceeds a limit.
+        for product in DELIVERED_PRODUCTS:
+            window_high = max(p[product] for _, p in self.price_history)
+            if float(prices[product]) >= window_high:
+                quantities[product] = available[product]
+        return [["SELL", c, quantities[c]] for c in ranked if quantities[c]]
+
+
+def _install_inventory_selling_policy(source: str) -> str:
+    """Replace only the selling loop; retain v19 buying/hiring/cash planning."""
+    tree = ast.parse(source)
+    market_orders = next(
+        (node for node in tree.body
+         if isinstance(node, ast.FunctionDef) and node.name == "market_orders"),
+        None,
+    )
+    loops = [] if market_orders is None else [
+        node for node in market_orders.body
+        if isinstance(node, ast.For) and any(
+            isinstance(child, ast.Constant) and child.value == "SELL"
+            for child in ast.walk(node)
+        )
+    ]
+    if len(loops) != 1:
+        raise RuntimeError("expected exactly one v19 market_orders selling loop")
+    loop = loops[0]
+    replacement = [
+        "    for sale in INVENTORY_SELLING_POLICY.orders(obs, held, total, reserve_wheat, reserve_fert):",
+        "        orders.append(sale)",
+        "        cash += sale[2] * max(1, prices[sale[1]] * .8)",
+    ]
+    lines = source.splitlines()
+    return "\n".join(lines[:loop.lineno - 1] + replacement + lines[loop.end_lineno:]) + "\n"
+
+
 def _load_tree_free_executor(path: Path, selector):
     path = path.expanduser().resolve()
     source = (
@@ -132,10 +223,12 @@ def _load_tree_free_executor(path: Path, selector):
         )
     source = source.replace(OLD_BLOCK, NEW_BLOCK, 1)
     source = _strip_tree_code(source)
+    source = _install_inventory_selling_policy(source)
 
     module = types.ModuleType(f"v21_tree_free_executor_{id(selector)}")
     module.__file__ = str(path)
     module.RL_SELECTOR = selector
+    module.INVENTORY_SELLING_POLICY = InventorySellingPolicy()
     exec(compile(source, str(path), "exec"), module.__dict__)
     return module
 
