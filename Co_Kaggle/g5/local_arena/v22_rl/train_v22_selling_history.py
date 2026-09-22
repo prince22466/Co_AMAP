@@ -79,7 +79,7 @@ PRODUCT_FEATURE_NAMES = (
     "ema_1d", "ema_5d", "ema_spread", "percentile_5d",
 )
 STATE_DIM = len(GLOBAL_FEATURE_NAMES) + len(PRODUCTS) * len(PRODUCT_FEATURE_NAMES)
-CHECKPOINT_ALGORITHM = "v22_fp16_sell_only_ppo_sgd_static_v20"
+CHECKPOINT_ALGORITHM = "v22_fp16_sell_only_ppo_sgd_neutral_actor_static_v20"
 
 
 @dataclass
@@ -177,10 +177,8 @@ class SellActorCritic(nn.Module):
             if isinstance(module, nn.Linear):
                 nn.init.orthogonal_(module.weight, gain=math.sqrt(2.0))
                 nn.init.zeros_(module.bias)
-        nn.init.zeros_(self.actor.weight)
+        nn.init.orthogonal_(self.actor.weight, gain=0.01)
         nn.init.zeros_(self.actor.bias)
-        with torch.no_grad():
-            self.actor.bias.view(len(PRODUCTS), NUM_ACTIONS)[:, -1] = 2.0
         nn.init.orthogonal_(self.critic.weight, gain=1.0)
         self.half()
 
