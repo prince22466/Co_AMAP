@@ -28,11 +28,9 @@ failure-scenario training/regression, not a live rematch.
 The policy produces one factorized categorical decision for each product:
 
 ```text
-0 = hold
-1 = sell 25%
-2 = sell 50%
-3 = sell 75%
-4 = sell 100%
+0 = hold / sell 0%
+1 = sell 50%
+2 = sell 100%
 ```
 
 Products:
@@ -192,24 +190,39 @@ Double-DQN updates and v21 weights are not used by v22.
 
 
 
-## Neutral actor initialization
+## Three-action sell space and initial prior
 
-The PPO actor no longer starts with a +2 logit bias toward `SELL 100%`.
-
-Instead:
+The PPO sell action space is:
 
 ```text
-actor weights: orthogonal initialization, gain = 0.01
-actor biases:  0
+0%   hold
+50%  sell half of the legally sellable quantity
+100% sell all of the legally sellable quantity
 ```
 
-This makes the initial learned policy approximately neutral across legal sell
-fractions while retaining small state-dependent differences. The existing
-forced-v20-baseline preflight remains responsible for verifying that the
-surgically replaced SELL loop can reproduce v20 exactly.
+When all three actions are distinct and legal, the learned policy starts with
+the exact prior:
 
-Because the checkpoint algorithm ID changed, checkpoints from the older
-SELL-100-biased initialization are intentionally incompatible. Start a fresh
+```text
+P(0%)   = 0.25
+P(50%)  = 0.25
+P(100%) = 0.50
+```
+
+The actor output weights start at zero and the actor biases are initialized to
+the log-probabilities above. This gives the requested exact initial prior; the
+actor becomes state-dependent after its first weight update.
+
+For very small quantities, integer rounding can make two fraction actions map
+to the same actual sell quantity. Duplicate actions are masked, and the
+remaining legal probabilities are renormalized.
+
+The existing 30% forced exploration is applied on top of this learned-policy
+prior during stochastic training. Deterministic validation still uses the
+learned policy argmax.
+
+The checkpoint algorithm ID changed because the actor output dimension changed,
+so older five-action checkpoints are intentionally incompatible. Start a fresh
 training run after merging this change.
 
 ## Learning diagnostics
