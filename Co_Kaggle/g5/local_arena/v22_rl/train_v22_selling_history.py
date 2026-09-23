@@ -1180,7 +1180,7 @@ def build_parser():
     p.add_argument("--validate-every-updates", type=int, default=1)
     p.add_argument("--checkpoint-every-updates", type=int, default=1)
     p.add_argument("--target-win-rate", type=float, default=0.60)
-    p.add_argument("--max-training-hours", type=float, default=2.0)
+    p.add_argument("--max-training-hours", type=float, default=8.0)
     p.add_argument("--preflight-only", action="store_true")
     p.add_argument("--device", default="auto")
     p.add_argument("--hidden", type=int, default=128)
