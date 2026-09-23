@@ -123,8 +123,10 @@ class InventorySellingPolicy:
     """Per-episode selling rules for the existing 30-day, 24-turn/day game.
 
     Reserve quantities are calculated by the unchanged v19 market planner.
-    Capacity sales maximize revenue at the currently quoted unit prices;
-    actual execution prices may change as the shared market processes orders.
+    Each product chooses hold, sell half (rounded up), or sell all eligible
+    units. Rising prices favor holding; near-high prices favor selling all.
+    The final ten days forbid holding, and the final day sells all.
+    Revenue estimates use current quotes; execution prices can change per unit.
     """
 
     def __init__(self):
@@ -151,36 +153,98 @@ class InventorySellingPolicy:
                 available[product], max(0, int(total.get(product, 0)) - reserve)
             )
 
-        # Final five days: retain v19's sell-all-eligible-stock behavior/order.
-        if day >= 25:
-            return [["SELL", c, n] for c, n in available.items() if n]
+        stock = sum(max(0, int(n)) for n in held.values())
+        cash = float(obs["farms"][obs["player"]]["money"])
+        cash_target = 2500 if day < 16 else 300
+        # Compare with one day ago, or the earliest available quote during
+        # warm-up. A duplicate observation replaces its quote above.
+        reference = next(p for t, p in self.price_history if t >= turn - 24)
+        quantities = {}
+        for product, amount in available.items():
+            price = float(prices[product])
+            high = max(p[product] for _, p in self.price_history)
+            if day == 29 or stock > 90 or price >= 0.95 * high:
+                quantity = amount
+            elif price > reference[product]:
+                quantity = 0
+            else:
+                quantity = (amount + 1) // 2
+            # Days 21-30 (zero-based 20-29) permit half or all only. Low
+            # cash also requires at least half, without arbitrary top-ups.
+            if day >= 20 or cash < cash_target:
+                quantity = max(quantity, (amount + 1) // 2)
+            quantities[product] = quantity
+
+        # Every quantity stays in {0, ceil(eligible / 2), eligible}; reserves
+        # are excluded before choosing. Quotes determine order only, since
+        # actual execution prices can change after each unit is sold.
+        ranked = sorted(DELIVERED_PRODUCTS, key=lambda c: -float(prices[c]))
+        return [["SELL", c, quantities[c]] for c in ranked if quantities[c]]
+
+
+
+class InventoryBinarySellingPolicy:
+    """Per-episode selling rules for the existing 30-day, 24-turn/day game.
+
+    Reserve quantities are calculated by the unchanged v19 market planner.
+    Each product chooses hold, or sell all eligible
+    units. Rising prices favor holding; near-high prices favor selling all.
+    The final ten days forbid holding, and the final day sells all.
+    Revenue estimates use current quotes; execution prices can change per unit.
+    """
+
+    def __init__(self):
+        self.price_history: list[tuple[int, dict[str, float]]] = []
+
+    def orders(self, obs, held, total, reserve_wheat, reserve_fert):
+        day = int(obs["day"])
+        turn = day * 24 + int(obs["hour"])
+        prices = obs["market"]["prices"]
+        if self.price_history and turn < self.price_history[-1][0]:
+            self.price_history.clear()
+        # Keep the current turn and the preceding 71 turns. Replace duplicate
+        # observations, and use available history during the first three days.
+        self.price_history = [
+            (t, p) for t, p in self.price_history if turn - 72 < t < turn
+        ]
+        self.price_history.append((turn, {c: float(prices[c]) for c in DELIVERED_PRODUCTS}))
+
+        available = {c: max(0, int(held.get(c, 0))) for c in DELIVERED_PRODUCTS}
+        reserves = {"WHEAT": 0 if day == 29 else reserve_wheat,
+                    "FERTILIZER": reserve_fert}
+        for product, reserve in reserves.items():
+            available[product] = min(
+                available[product], max(0, int(total.get(product, 0)) - reserve)
+            )
 
         stock = sum(max(0, int(n)) for n in held.values())
-        # Days are zero-indexed: days 20-24 (game days 21-25) target 25
-        # shed units. Earlier, stock strictly above 90 triggers a sale toward
-        # 60; otherwise there is no forced sale. Days 25-29 returned above.
-        limit = 25 if day >= 20 else 60 if stock > 90 else None
-        quantities = dict.fromkeys(DELIVERED_PRODUCTS, 0)
-        # Sell the most valuable units at current quoted prices first, taking
-        # only the quantity needed to reach the limit, subject to reserves.
-        # This does not simulate price changes caused by executing the sales.
-        ranked = sorted(DELIVERED_PRODUCTS, key=lambda c: -float(prices[c]))
-        if limit is not None:
-            excess = max(0, stock - limit)
-            for product in ranked:
-                n = min(available[product], excess)
-                quantities[product] = n
-                excess -= n
-                if excess == 0:
-                    break
+        cash = float(obs["farms"][obs["player"]]["money"])
+        cash_target = 2500 if day < 16 else 300
+        # Compare with one day ago, or the earliest available quote during
+        # warm-up. A duplicate observation replaces its quote above.
+        reference = next(p for t, p in self.price_history if t >= turn - 24)
+        quantities = {}
+        for product, amount in available.items():
+            price = float(prices[product])
+            high = max(p[product] for _, p in self.price_history)
+            if day == 29 or stock > 90 or price >= 0.95 * high:
+                quantity = amount
+            elif price > reference[product]:
+                quantity = 0
+            else:
+                quantity = amount
+            # Days 21-30 (zero-based 20-29) permit half or all only. Low
+            # cash also requires at least half, without arbitrary top-ups.
+            if day >= 20 or cash < cash_target:
+                quantity = amount
+            quantities[product] = quantity
 
-        # BAU sales remain eligible even below a stock limit. Reserves always
-        # take precedence if protected/unsellable stock alone exceeds a limit.
-        for product in DELIVERED_PRODUCTS:
-            window_high = max(p[product] for _, p in self.price_history)
-            if float(prices[product]) >= window_high:
-                quantities[product] = available[product]
+        # Every quantity stays in {0, ceil(eligible / 2), eligible}; reserves
+        # are excluded before choosing. Quotes determine order only, since
+        # actual execution prices can change after each unit is sold.
+        ranked = sorted(DELIVERED_PRODUCTS, key=lambda c: -float(prices[c]))
         return [["SELL", c, quantities[c]] for c in ranked if quantities[c]]
+
 
 
 def _install_inventory_selling_policy(source: str) -> str:
@@ -228,7 +292,8 @@ def _load_tree_free_executor(path: Path, selector):
     module = types.ModuleType(f"v21_tree_free_executor_{id(selector)}")
     module.__file__ = str(path)
     module.RL_SELECTOR = selector
-    module.INVENTORY_SELLING_POLICY = InventorySellingPolicy()
+    #module.INVENTORY_SELLING_POLICY = InventorySellingPolicy()
+    module.INVENTORY_SELLING_POLICY = InventoryBinarySellingPolicy()
     exec(compile(source, str(path), "exec"), module.__dict__)
     return module
 
@@ -1488,7 +1553,7 @@ def build_parser():
     p.add_argument("--validate-every-updates", type=int, default=1)
     p.add_argument("--checkpoint-every-updates", type=int, default=1)
     p.add_argument("--target-win-rate", type=float, default=0.60)
-    p.add_argument("--max-training-hours", type=float, default=2.0)
+    p.add_argument("--max-training-hours", type=float, default=2)
     p.add_argument("--preflight-only", action="store_true")
     p.add_argument("--device", default="auto")
     p.add_argument(
