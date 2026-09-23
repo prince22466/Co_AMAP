@@ -62,7 +62,8 @@ PRICE_SCALES = {
     "STRAWBERRY": 120.0, "MELON": 250.0, "EGG": 50.0,
     "MILK": 160.0, "WOOL": 200.0, "FERTILIZER": 100.0,
 }
-ACTION_FRACTIONS = (0.0, 0.25, 0.50, 0.75, 1.0)
+ACTION_FRACTIONS = (0.0, 0.50, 1.0)
+INITIAL_ACTION_PROBS = (0.25, 0.25, 0.50)
 NUM_ACTIONS = len(ACTION_FRACTIONS)
 SHED_CAPACITY = 100
 MOVE_ACTIONS = {"NORTH", "SOUTH", "EAST", "WEST"}
@@ -79,7 +80,7 @@ PRODUCT_FEATURE_NAMES = (
     "ema_1d", "ema_5d", "ema_spread", "percentile_5d",
 )
 STATE_DIM = len(GLOBAL_FEATURE_NAMES) + len(PRODUCTS) * len(PRODUCT_FEATURE_NAMES)
-CHECKPOINT_ALGORITHM = "v22_fp16_sell_only_ppo_sgd_neutral_actor_static_v20"
+CHECKPOINT_ALGORITHM = "v22_fp16_sell_only_ppo_sgd_three_action_static_v20"
 
 
 @dataclass
@@ -177,8 +178,17 @@ class SellActorCritic(nn.Module):
             if isinstance(module, nn.Linear):
                 nn.init.orthogonal_(module.weight, gain=math.sqrt(2.0))
                 nn.init.zeros_(module.bias)
-        nn.init.orthogonal_(self.actor.weight, gain=0.01)
-        nn.init.zeros_(self.actor.bias)
+        # Exact initial learned-policy prior when all three sell actions are legal:
+        # 0% -> 25%, 50% -> 25%, 100% -> 50%.
+        # State dependence begins after the first actor update.
+        nn.init.zeros_(self.actor.weight)
+        with torch.no_grad():
+            initial_logits = torch.log(torch.tensor(
+                INITIAL_ACTION_PROBS, dtype=self.actor.bias.dtype
+            ))
+            self.actor.bias.view(len(PRODUCTS), NUM_ACTIONS).copy_(
+                initial_logits.unsqueeze(0).expand(len(PRODUCTS), -1)
+            )
         nn.init.orthogonal_(self.critic.weight, gain=1.0)
         self.half()
 
@@ -1030,6 +1040,7 @@ def _save_checkpoint(path, model, optimizer, update, args):
         "hidden": args.hidden,
         "products": PRODUCTS,
         "action_fractions": ACTION_FRACTIONS,
+        "initial_action_probs": INITIAL_ACTION_PROBS,
         "global_feature_names": GLOBAL_FEATURE_NAMES,
         "product_feature_names": PRODUCT_FEATURE_NAMES,
         "parent_v20_submission": str(args.v20_submission),
@@ -1158,8 +1169,12 @@ def evaluate_histories(paths, model, device, v20_submission, args, phase):
         f"win_rate={summary['win_rate']:.3f} margin={summary['mean_margin']} "
         f"produced={summary['mean_produced_value']} delivered={summary['mean_delivered_value']} "
         f"sale_value={summary['mean_quoted_sale_value']} overflow={summary['mean_expected_overflow_units']} "
-        f"sell%=[0:{summary['sell_0_pct']:.2f},25:{summary['sell_25_pct']:.2f},"
-        f"50:{summary['sell_50_pct']:.2f},75:{summary['sell_75_pct']:.2f},100:{summary['sell_100_pct']:.2f}]",
+        + "sell%=["
+        + ",".join(
+            f"{int(fraction * 100)}:{summary[f'sell_{int(fraction * 100)}_pct']:.2f}"
+            for fraction in ACTION_FRACTIONS
+        )
+        + "]",
         flush=True,
     )
     model.train()
@@ -1277,6 +1292,7 @@ def main():
         "product_feature_names": PRODUCT_FEATURE_NAMES,
         "products": PRODUCTS,
         "action_fractions": ACTION_FRACTIONS,
+        "initial_action_probs": INITIAL_ACTION_PROBS,
     }, indent=2, default=str) + "\n", encoding="utf-8")
 
     start_update = 0
