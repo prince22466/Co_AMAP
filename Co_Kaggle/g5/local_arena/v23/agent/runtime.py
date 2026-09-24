@@ -46,6 +46,34 @@ v2 research-memory contract:
 - FP16 is mandatory for candidate floating-point model weights, activations, tensors, and learned numeric compute. Integer/boolean/schema-mandated types are exempt. Do not emit float32, float64, double, or bfloat16 candidate model/tensor code unless a backend operation is provably unsupported in FP16; any such exception must be narrowly scoped, documented, and converted back to FP16 immediately.
 """
 
+PERFORMANCE_ANALYST_PROMPT = """You are the independent v23 Performance Analyst.
+
+You are read-only. You do not write candidate code and you do not execute replay.
+Your job is to diagnose why research is or is not improving and give the Experiment
+Engineer a higher-information direction.
+
+Use the available read-only tools selectively:
+- call project_status first;
+- inspect recent experiment/replay evidence;
+- inspect v20 model structure and raw loss histories only where needed;
+- distinguish worker/task-ranking, movement/logistics, crop/animal planning,
+  inventory/capacity, market/selling, hiring/purchases, and other causal layers;
+- treat rejected hypotheses as negative evidence;
+- if recent search is stagnant, explicitly move away from the repeated hypothesis
+  family instead of proposing another parameter tweak.
+
+Return a concise review with:
+1. PERFORMANCE EVIDENCE: what the measurements actually show.
+2. FAILURE MECHANISMS: 1-3 likely causal bottlenecks, with evidence.
+3. DO-NOT-REPEAT: recent idea families that evidence argues against.
+4. IMPROVEMENT OPTIONS: up to 3 structurally distinct ideas.
+5. NEXT EXPERIMENT: select exactly one idea, state a falsifiable prediction, the
+   smallest useful replay screen, and what result would justify expansion to 5/25
+   and then all 25 histories.
+
+Do not claim improvement without measured replay evidence. Keep the output compact.
+"""
+
 
 def utcnow() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -86,6 +114,10 @@ class ResearchDB:
           created_at TEXT, reached_at TEXT,
           reached_run_id TEXT, reached_experiment_id TEXT, reached_value REAL,
           reached_observability_json TEXT, active INTEGER DEFAULT 1);
+        CREATE TABLE IF NOT EXISTS strategy_reviews(
+          review_id TEXT PRIMARY KEY, run_id TEXT, created_at TEXT, trigger TEXT,
+          experiments_seen INTEGER, replay_cases_seen INTEGER,
+          analyst_output TEXT, usage_json TEXT, conservative_cost_usd REAL);
         """)
         goal_columns = {row[1] for row in self.db.execute("PRAGMA table_info(goals)").fetchall()}
         if "reached_observability_json" not in goal_columns:
@@ -230,6 +262,51 @@ class ResearchDB:
         self.db.commit()
         return summary
 
+    def record_strategy_review(self, run_id, trigger, analyst_output,
+                               usage=None, conservative_cost_usd=0.0):
+        rid = "review_" + uuid.uuid4().hex[:10]
+        experiments_seen = int(
+            self.db.execute("SELECT COUNT(*) FROM experiments").fetchone()[0]
+        )
+        replay_cases_seen = int(
+            self.db.execute("SELECT COUNT(*) FROM replays").fetchone()[0]
+        )
+        self.db.execute(
+            """INSERT INTO strategy_reviews(
+                 review_id,run_id,created_at,trigger,experiments_seen,
+                 replay_cases_seen,analyst_output,usage_json,conservative_cost_usd)
+               VALUES(?,?,?,?,?,?,?,?,?)""",
+            (
+                rid, run_id, utcnow(), trigger, experiments_seen,
+                replay_cases_seen, analyst_output,
+                json.dumps(usage or {}, sort_keys=True),
+                float(conservative_cost_usd),
+            ),
+        )
+        self.db.commit()
+        return rid
+
+    def latest_strategy_review(self):
+        row = self.db.execute(
+            """SELECT * FROM strategy_reviews
+               ORDER BY created_at DESC LIMIT 1"""
+        ).fetchone()
+        return dict(row) if row is not None else None
+
+    def strategy_review_trigger(self):
+        latest = self.latest_strategy_review()
+        signal = self.research_signal()
+        experiments_total = int(
+            self.db.execute("SELECT COUNT(*) FROM experiments").fetchone()[0]
+        )
+        if latest is None:
+            return "initial_diagnosis"
+        if signal["stagnating"]:
+            return "stagnation"
+        if experiments_total - int(latest["experiments_seen"] or 0) >= 3:
+            return "periodic_after_3_experiments"
+        return None
+
     def research_signal(self, recent_limit=6):
         recent_limit = max(4, min(int(recent_limit), 20))
         rows = [dict(x) for x in self.db.execute(
@@ -308,6 +385,20 @@ class ResearchDB:
                    if goal else None),
           "recent_experiments": recent,
           "research_signal": self.research_signal(),
+          "latest_strategy_review": (
+              {
+                  "review_id": self.latest_strategy_review()["review_id"],
+                  "created_at": self.latest_strategy_review()["created_at"],
+                  "trigger": self.latest_strategy_review()["trigger"],
+                  "experiments_seen": self.latest_strategy_review()["experiments_seen"],
+                  "replay_cases_seen": self.latest_strategy_review()["replay_cases_seen"],
+                  "analyst_output": (
+                      self.latest_strategy_review()["analyst_output"][:3000]
+                      if self.latest_strategy_review()["analyst_output"] else ""
+                  ),
+              }
+              if self.latest_strategy_review() else None
+          ),
         }
 
 
