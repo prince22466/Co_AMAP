@@ -60,7 +60,7 @@ max output / turn      2500 tokens
 
 The project cap intentionally leaves roughly $1 of a $6 credit balance outside this autonomous agent. Usage is written to `local_arena/v23/.agent_usage.json`.
 
-The estimate conservatively prices all input tokens at the uncached rate. Known GPT-6 prices are built in; an unknown model requires explicit CLI token prices so the budget guard cannot silently undercount.
+The v2 estimate distinguishes uncached input, cached input, cache-write tokens, and output. Cache reads use 0.10× input price, cache writes use 1.25× input price, then a 10% safety multiplier is applied. Known GPT-6 Standard-tier prices are built in; an unknown model requires explicit CLI token prices.
 
 The ledger only tracks this program. It cannot know API spend made by other programs or projects.
 
@@ -96,7 +96,7 @@ The Agents SDK tracing exporter is enabled by default, but trace payloads are co
 
 Conversation history is persisted in `workspace/agent_sessions.sqlite3`. By default only the most recent 80 session items are retrieved for a run; change this with `--session-history-limit`.
 
-The model path explicitly enables OpenAI implicit prompt caching with a 30-minute TTL. Stable instructions/tool definitions and repeated session prefixes can therefore be reused by the API. `cached_tokens` and `cache_write_tokens` are recorded separately; the local budget guard still prices all input at the uncached rate so caching can only make the real bill lower than the guard estimate.
+The model path explicitly enables OpenAI implicit prompt caching with a 30-minute TTL. Stable instructions/tool definitions and repeated session prefixes can therefore be reused by the API. `cached_tokens` and `cache_write_tokens` are recorded separately and included in the budget estimate using their distinct Standard-tier multipliers.
 
 Negative experiment conclusions are stored in the experiment DB so the agent can avoid re-testing rejected ideas.
 
