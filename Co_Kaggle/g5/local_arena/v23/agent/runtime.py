@@ -301,9 +301,16 @@ class ResearchDB:
         )
         if latest is None:
             return "initial_diagnosis"
-        if signal["stagnating"]:
-            return "stagnation"
-        if experiments_total - int(latest["experiments_seen"] or 0) >= 3:
+
+        experiments_since_review = (
+            experiments_total - int(latest["experiments_seen"] or 0)
+        )
+        if experiments_since_review <= 0:
+            return None
+
+        if signal["stagnating"] and experiments_since_review >= 2:
+            return "stagnation_with_new_evidence"
+        if experiments_since_review >= 3:
             return "periodic_after_3_experiments"
         return None
 
@@ -699,11 +706,12 @@ def persist_budget_ledger(budget: BudgetLedger, model: str, usage: dict[str, int
             "cache_write_tokens_observed_last_run": usage["cache_write_tokens"],
             "reasoning_tokens_observed_last_run": usage["reasoning_tokens"],
             "pricing_assumption": {
-                "input_usd_per_m": input_price,
-                "output_usd_per_m": output_price,
+                "executor_input_usd_per_m": input_price,
+                "executor_output_usd_per_m": output_price,
                 "cached_input_multiplier": 0.10,
                 "cache_write_multiplier": 1.25,
                 "safety_multiplier": 1.10,
+                "mixed_model_costs_may_be_accumulated": True,
             },
         }, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
