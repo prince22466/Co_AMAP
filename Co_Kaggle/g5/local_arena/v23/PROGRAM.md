@@ -57,3 +57,33 @@ Only after that behavior is reliable should v23 gain source-patching and automat
 ## Filesystem boundary
 
 v23 is self-contained. The research agent must not inspect or depend on sibling directories. Its complete input surface is `working_files/`, and its generated research surface is `workspace/`. All tool paths are resolved against the v23 directory and traversal outside that root is rejected.
+
+
+## v2 agent infrastructure contract
+
+The production research harness should make progress measurable. Every run records:
+- wall-clock duration;
+- model request count;
+- input/output/total tokens;
+- cached-input and cache-write tokens when available;
+- reasoning tokens when available;
+- conservative API-cost estimate;
+- experiment count;
+- replay call count and replay-case count.
+
+Every experiment has a durable ID and records:
+- hypothesis;
+- candidate and optional parent candidate;
+- start/end time;
+- static replay cases;
+- mean/best margin improvement;
+- wins/losses/regressions;
+- conclusion status: SUPPORTED, REJECTED, UNRESOLVED, or ERROR.
+
+Explicit numeric goals are stored separately. When a replay summary satisfies the active goal (and any regression guard), the system records the exact run and experiment that first reached it. This supports direct calculation of time-to-goal, experiments-to-goal, replay-cases-to-goal, tokens-to-goal, and cost-to-goal.
+
+Conversation memory and research memory are separate:
+- OpenAI Agents SDK SQLiteSession stores conversational/tool context across invocations.
+- experiments.sqlite3 stores compact scientific evidence and negative results so the model does not need to replay the entire conversation history.
+
+Tracing is provided by the OpenAI Agents SDK. Domain-specific research semantics remain in the local SQLite database.
