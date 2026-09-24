@@ -102,10 +102,11 @@ def build_analyst_context(
     lineage = db.batch_lineage_summary()
     pack = {
         "role": "performance_analyst",
-        "progress": progress,
-        "current_batch_evidence": experiments,
-        "component_effects": effects,
-        "batch_lineage": lineage,
+        "context_budget_chars": int(max_chars),
+        "progress": _clip(progress, 2500),
+        "current_batch_evidence": _clip(experiments, 4200),
+        "component_effects": _clip(effects, 2200),
+        "batch_lineage": _clip(lineage, 2200),
         "selection_policy": {
             "purpose": "Reason from durable measured evidence, not conversation history.",
             "included": [
@@ -126,7 +127,7 @@ def build_analyst_context(
             ),
         },
     }
-    return _clip(pack, max_chars)
+    return pack
 
 
 def build_engineer_context(
@@ -145,9 +146,32 @@ def build_engineer_context(
             max_chars,
         )
     dossier = db.idea_dossier(str(idea["idea_id"]))
+    compact_lineage = None
+    if dossier is not None:
+        compact_lineage = {
+            "experiments": dossier.get("experiments", [])[-2:],
+            "replay_calls": [
+                {
+                    "replay_call_id": call.get("replay_call_id"),
+                    "candidate": call.get("candidate"),
+                    "games": [
+                        {
+                            "episode": game.get("episode"),
+                            "valid": game.get("valid"),
+                            "result": game.get("result"),
+                            "margin_improvement": game.get("margin_improvement"),
+                            "game_record_path": game.get("game_record_path"),
+                        }
+                        for game in call.get("games", [])
+                    ],
+                }
+                for call in dossier.get("replay_calls", [])[-3:]
+            ],
+        }
     pack = {
         "role": "experiment_engineer",
-        "progress": progress,
+        "context_budget_chars": int(max_chars),
+        "progress": _clip(progress, 2200),
         "assigned_idea": {
             "idea_id": idea.get("idea_id"),
             "batch_index": idea.get("batch_index"),
@@ -163,7 +187,7 @@ def build_engineer_context(
             "resume_existing": bool(idea.get("resume_existing")),
             "existing_experiment_id": idea.get("experiment_id"),
         },
-        "existing_lineage": dossier,
+        "existing_lineage": _clip(compact_lineage, 3200),
         "execution_policy": {
             "scope": "Implement only the assigned idea.",
             "resume": (
@@ -175,4 +199,4 @@ def build_engineer_context(
             ),
         },
     }
-    return _clip(pack, max_chars)
+    return pack
