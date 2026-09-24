@@ -7,7 +7,7 @@ Build an autonomous, evidence-driven research loop for improving the Kaggricultu
 v23 should first understand the existing chain:
 
 ```text
-v20 notebook + game_history/v20 losses
+v20 notebook + working_files/loss_games_v20
     -> diagnose a concrete failure
     -> candidate replacement policy
     -> static replay with recorded opponent actions
@@ -41,17 +41,17 @@ Negative results are first-class results.
 - Distinguish static-history counterfactual performance from live/adaptive-opponent performance.
 - Preserve commands, seeds, configs, and metric paths in the run record.
 - Never infer hidden-score improvement from local proxy metrics alone.
-- Avoid external/public solution lookup in v1; use our own code, histories, and measurements.
+- Avoid external/public solution lookup in v23; use our own code, histories, and measurements.
 
 ## Cost policy
 
-Available OpenAI API credit is approximately $6. v1 uses `gpt-6-luna` with low reasoning effort and a persistent local ledger. The default project ceiling is $5.00 with a $0.25 per-run ceiling. There is no automatic escalation to Sol/Astra.
+Available OpenAI API credit is approximately $6. v23 uses `gpt-6-luna` with low reasoning effort and a persistent local ledger. The default project ceiling is $5.00 with a $0.25 per-run ceiling. There is no automatic escalation to Sol/Astra.
 
-## v1 success criteria
+## Success criteria
 
 A bounded run should locate relevant prior evidence without dumping the repository into context, state a concrete hypothesis, identify or execute a small experiment, separate evidence from conjecture, write a concise research record, and stay well below budget.
 
-Only after that behavior is reliable should v23 gain source-patching and automatic A/B candidate promotion.
+Candidate changes are accepted only through measured static-replay evidence and recorded experiment conclusions.
 
 
 ## Filesystem boundary
