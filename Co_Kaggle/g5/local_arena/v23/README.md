@@ -110,6 +110,6 @@ Research inputs are under `working_files/`:
 - `competition_material/*` — rules/domain material
 - `example_train_v21_static_history.py` — local static-replay implementation reference
 
-The static replay implementation must remain inside the v23 boundary. `working_files/example_train_v21_static_history.py` is a reference implementation; any legacy sibling imports it still contains must not become runtime dependencies of the final self-contained replay harness.
+Runtime replay now uses the self-contained `static_replay.py` helper inside v23. `working_files/example_train_v21_static_history.py` remains reference-only; its legacy sibling imports are never runtime dependencies.
 
 Generated research artifacts remain confined to `workspace/`.
