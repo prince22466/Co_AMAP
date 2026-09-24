@@ -107,6 +107,21 @@ OpenAI orchestration and Kaggriculture replay are independent systems.
 
 This separation is architectural, not optional dependency management.
 
+## Autonomous goal loop
+
+v23 follows a cheap Karpathy-style autoresearch loop: the model chooses hypotheses and candidate changes, while local Python owns execution, replay, scoring, persistence, and termination.
+
+For an execution-enabled run with a durable numeric goal, model-generated final prose is only a cycle boundary. After every Agents SDK cycle, Python checks the durable goal and resumes the same SQLite session when the goal remains unmet.
+
+The controller stops only when:
+- measured replay evidence marks the durable goal reached;
+- the configured per-run or project API budget is exhausted;
+- a concrete runtime/environment blocker is recorded through `report_blocker`.
+
+A rejected candidate, completed experiment, next-step recommendation, or ordinary final answer is not a stop condition.
+
+`--max-turns` limits one Agents SDK cycle, not the total autonomous research horizon.
+
 ## Mandatory execution contract
 
 When the agent is launched with `--allow-exec`, planning-only completion is not acceptable.
