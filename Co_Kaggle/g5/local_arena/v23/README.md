@@ -159,6 +159,39 @@ A read-only run does not require Kaggle imports in the agent process.
 
 The agent process launches `.venv-replay/bin/python replay/runner.py ...` and exchanges only JSON-compatible arguments/results.
 
+## Specialist analysis model
+
+v23 can use a stronger reasoning model only for performance diagnosis and improvement ideation while keeping the execution agent cheap.
+
+Recommended pattern:
+
+```text
+Performance Analyst (stronger reasoning, read-only)
+    -> diagnose evidence + propose next experiment
+
+Experiment Engineer (cheaper model)
+    -> write candidate code
+    -> execute static replay
+    -> record measured result
+
+Python supervisor
+    -> goal / budget / stagnation / review cadence
+```
+
+Example:
+
+```bash
+.venv-agent/bin/python research_agent.py \
+  --model gpt-6-luna \
+  --reasoning-effort low \
+  --analyst-model gpt-6-sol \
+  --analyst-reasoning-effort medium \
+  --allow-exec \
+  --task "Reach at least 13 wins across all 25 v20 loss histories."
+```
+
+The analyst has read-only tools and cannot write candidate code or execute replay. It runs initially and then only when enough new experiment evidence has accumulated, including stagnation. Its reviews are persisted in `workspace/experiments.sqlite3`.
+
 ## Autonomous execution until goal
 
 v23 uses a low-cost autoresearch pattern:
