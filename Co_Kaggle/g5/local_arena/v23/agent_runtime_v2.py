@@ -411,6 +411,7 @@ def main():
     args=parse_args()
     if not os.getenv("OPENAI_API_KEY"): raise SystemExit("OPENAI_API_KEY is not set")
     if not 1<=args.max_turns<=50: raise SystemExit("--max-turns must be 1..50")
+    if not 256<=args.max_output_tokens<=20000: raise SystemExit("--max-output-tokens must be 256..20000")
     if not 1<=args.session_history_limit<=500: raise SystemExit("--session-history-limit must be 1..500")
     if not 0<args.session_budget_usd<=args.total_budget_usd: raise SystemExit("invalid budget ceilings")
     inp_price,out_price=pricing_for(args)
@@ -429,7 +430,8 @@ def main():
 
     agent=Agent[AppContext](name="v23 Kaggriculture Research Agent",instructions=SYSTEM_PROMPT,
       model=args.model,model_settings=ModelSettings(reasoning=Reasoning(effort=args.reasoning_effort),
-      max_tokens=args.max_output_tokens,verbosity="low",parallel_tool_calls=False),
+      max_tokens=args.max_output_tokens,verbosity="low",parallel_tool_calls=False,
+      store=False,prompt_cache_options={"mode":"implicit","ttl":"30m"}),
       tools=[list_tree,read_text,search_text,summarize_jsonl,write_workspace_file,run_python,
              start_experiment,finish_experiment,set_goal,project_status,static_replay_candidate])
     session=SQLiteSession(args.session_id,str(SESSION_DB))
