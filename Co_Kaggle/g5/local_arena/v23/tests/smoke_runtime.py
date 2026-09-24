@@ -61,6 +61,11 @@ def main() -> int:
         )
 
         goal_id = db.set_goal("repair_rate", ">=", 1.0, 0)
+        active_goal = runtime.latest_goal_state(db)
+        assert active_goal is not None
+        assert active_goal["goal_id"] == goal_id
+        assert active_goal["reached_at"] is None
+
         reached = db.maybe_reach_goal(
             run_id,
             experiment_id,
@@ -78,6 +83,10 @@ def main() -> int:
             0.50,
         )
         assert reached and reached["goal_id"] == goal_id
+        reached_goal = runtime.latest_goal_state(db)
+        assert reached_goal is not None
+        assert reached_goal["goal_id"] == goal_id
+        assert reached_goal["reached_at"] is not None
 
         finished = db.finish_experiment(
             experiment_id, "SUPPORTED", "smoke experiment completed"
