@@ -412,9 +412,9 @@ class LocalTools:
         import importlib.util
         import types
 
-        helper_path = self.root / "working_files" / "example_train_v21_static_history.py"
+        helper_path = self.root / "static_replay.py"
         if not helper_path.is_file():
-            return {"error": "missing working_files/example_train_v21_static_history.py"}
+            return {"error": "missing static_replay.py"}
         spec = importlib.util.spec_from_file_location("v23_static_replay_helpers", helper_path)
         if spec is None or spec.loader is None:
             return {"error": "could not load local static replay helper"}
@@ -433,7 +433,7 @@ class LocalTools:
         missing = [name for name in required if not hasattr(helper, name)]
         if missing:
             return {
-                "error": "local static replay reference is missing required helpers",
+                "error": "self-contained static replay helper is missing required helpers",
                 "missing": missing,
             }
         _agent_observation = helper._agent_observation
