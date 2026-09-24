@@ -265,6 +265,92 @@ def main() -> int:
         review_db.finish_experiment(eid, "REJECTED", "no progress")
         assert review_db.strategy_review_trigger() == "periodic_after_3_experiments"
 
+        # Analyst idea batch queue smoke: exactly 10 ideas, deterministic order,
+        # idea -> experiment linkage, then batch exhaustion -> analyst review.
+        batch_db = runtime.ResearchDB(Path(tmp) / "idea_batch.sqlite3")
+        batch_run = "run_idea_batch"
+        batch_db.start_run(
+            batch_run, "idea-batch-session", "idea batch smoke", "smoke-model"
+        )
+        analyst_json = {
+            "performance_evidence": "smoke evidence",
+            "failure_mechanisms": ["smoke failure"],
+            "do_not_repeat": ["old smoke idea"],
+            "ideas": [
+                {
+                    "title": f"Idea {i}",
+                    "hypothesis": f"Hypothesis {i}",
+                    "causal_layer": "worker" if i % 2 else "market",
+                    "rationale": f"Rationale {i}",
+                    "smallest_test": "1 case",
+                    "promotion_rule": "positive margin -> expand",
+                }
+                for i in range(1, 11)
+            ],
+        }
+        parsed_batch = runtime.parse_analyst_batch(
+            runtime.json.dumps(analyst_json)
+        )
+        assert len(parsed_batch["ideas"]) == 10
+        try:
+            runtime.parse_analyst_batch(
+                runtime.json.dumps({**analyst_json, "ideas": analyst_json["ideas"][:9]})
+            )
+            raise AssertionError("9-idea analyst batch should fail")
+        except ValueError:
+            pass
+
+        review_id = batch_db.record_strategy_review(
+            batch_run, "initial_diagnosis",
+            runtime.json.dumps(analyst_json), {}, 0.0
+        )
+        queued = batch_db.add_idea_batch(review_id, parsed_batch["ideas"])
+        assert queued["count"] == 10
+        queue_status = batch_db.idea_batch_status()
+        assert queue_status["pending"] == 10
+        assert batch_db.strategy_review_trigger() is None
+
+        for expected_index in range(1, 11):
+            idea = batch_db.next_pending_idea()
+            assert idea is not None
+            assert idea["batch_index"] == expected_index
+            eid = batch_db.start_experiment(
+                batch_run,
+                idea["hypothesis"],
+                "",
+                "",
+                "idea batch smoke",
+                idea["idea_id"],
+            )
+            assert isinstance(eid, str)
+            exp_row = batch_db.db.execute(
+                "SELECT idea_id FROM experiments WHERE experiment_id=?",
+                (eid,),
+            ).fetchone()
+            assert exp_row["idea_id"] == idea["idea_id"]
+            batch_db.db.execute(
+                """UPDATE experiments
+                   SET wins=0,losses=1,replay_cases=1,
+                       mean_margin_improvement=0.0,
+                       best_margin_improvement=0.0
+                   WHERE experiment_id=?""",
+                (eid,),
+            )
+            batch_db.db.commit()
+            batch_db.finish_experiment(
+                eid, "REJECTED", "smoke idea rejected"
+            )
+
+        exhausted = batch_db.idea_batch_status()
+        assert exhausted["pending"] == 0
+        assert exhausted["running"] == 0
+        assert exhausted["completed"] == 10
+        assert batch_db.next_pending_idea() is None
+        assert batch_db.strategy_review_trigger() == "idea_batch_exhausted"
+        results = batch_db.recent_idea_results(review_id)
+        assert len(results) == 10
+        assert all(row["experiment_id"] for row in results)
+
         status = db.project_status()
         assert status["runs_completed"] == 1
         assert status["experiments_total"] == 1
