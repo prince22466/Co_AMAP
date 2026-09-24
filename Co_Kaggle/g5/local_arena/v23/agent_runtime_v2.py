@@ -14,7 +14,6 @@ from pathlib import Path
 from typing import Any
 
 from agents import Agent, ModelSettings, RunConfig, RunContextWrapper, RunHooks, Runner, SQLiteSession, SessionSettings, function_tool
-from agents.decorators import tool
 from openai.types.shared import Reasoning
 
 from research_agent_v1 import (
@@ -198,7 +197,8 @@ class ResearchDB:
               elapsed_seconds,valid,original_v20_margin,candidate_margin,
               margin_improvement,result,action_divergences,error)
               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-              (run_id, eid, call_id, candidate, row.get("episode",""), started_at, each,
+              (run_id, eid, call_id, candidate, row.get("episode",""), started_at,
+               float(row.get("elapsed_seconds", each)),
                int(bool(row.get("valid"))), row.get("original_v20_margin"),
                row.get("candidate_margin"), row.get("margin_improvement"), row.get("result"),
                row.get("action_divergences"), row.get("error","")))
@@ -291,37 +291,37 @@ class BudgetHooks(RunHooks[AppContext]):
                                    "session_conservative_cost_usd": self._cost(usage)})
 
 
-@tool
+@function_tool
 def list_tree(ctx: RunContextWrapper[AppContext], path: str, max_depth: int = 2, max_entries: int = 200) -> str:
     """List a bounded v23 subtree."""
     return j(ctx.context.local.list_tree(path, max_depth, max_entries))
 
-@tool
+@function_tool
 def read_text(ctx: RunContextWrapper[AppContext], path: str, start_line: int = 1, max_lines: int = 200) -> str:
     """Read a narrow UTF-8 range from a v23 file."""
     return j(ctx.context.local.read_text(path, start_line, max_lines))
 
-@tool
+@function_tool
 def search_text(ctx: RunContextWrapper[AppContext], query: str, path: str = ".", max_matches: int = 40) -> str:
     """Search bounded v23 text files."""
     return j(ctx.context.local.search_text(query, path, max_matches))
 
-@tool
+@function_tool
 def summarize_jsonl(ctx: RunContextWrapper[AppContext], path: str, tail_rows: int = 20) -> str:
     """Summarize local JSONL without sending the full log."""
     return j(ctx.context.local.summarize_jsonl(path, tail_rows))
 
-@tool
+@function_tool
 def write_workspace_file(ctx: RunContextWrapper[AppContext], path: str, content: str, overwrite: bool = False) -> str:
     """Write only under v23/workspace."""
     return j(ctx.context.local.write_workspace_file(path, content, overwrite))
 
-@tool
+@function_tool
 def run_python(ctx: RunContextWrapper[AppContext], script: str, args: list[str] | None = None, timeout_seconds: int = 120) -> str:
     """Run an existing non-workspace v23 Python file with a bounded timeout."""
     return j(ctx.context.local.run_python(script, args, timeout_seconds))
 
-@tool
+@function_tool
 def start_experiment(ctx: RunContextWrapper[AppContext], hypothesis: str, candidate: str = "",
                      parent_candidate: str = "", notes: str = "") -> str:
     """Create a durable experiment record before candidate evaluation."""
@@ -329,7 +329,7 @@ def start_experiment(ctx: RunContextWrapper[AppContext], hypothesis: str, candid
     ctx.context.log.event("experiment_start", {"experiment_id": eid, "hypothesis": hypothesis})
     return j({"experiment_id": eid})
 
-@tool
+@function_tool
 def finish_experiment(ctx: RunContextWrapper[AppContext], experiment_id: str, status: str, conclusion: str) -> str:
     """Finish an experiment: SUPPORTED, REJECTED, UNRESOLVED, or ERROR."""
     status = status.upper()
@@ -339,7 +339,7 @@ def finish_experiment(ctx: RunContextWrapper[AppContext], experiment_id: str, st
     ctx.context.log.event("experiment_finish", out)
     return j(out)
 
-@tool
+@function_tool
 def set_goal(ctx: RunContextWrapper[AppContext], metric: str, operator: str, target: float,
              max_regressions: int | None = None) -> str:
     """Set a numeric goal for automatic time/tests/tokens-to-goal accounting."""
@@ -348,12 +348,12 @@ def set_goal(ctx: RunContextWrapper[AppContext], metric: str, operator: str, tar
     gid = ctx.context.db.set_goal(metric, operator, target, max_regressions)
     return j({"goal_id":gid,"metric":metric,"operator":operator,"target":target})
 
-@tool
+@function_tool
 def project_status(ctx: RunContextWrapper[AppContext]) -> str:
     """Return durable project usage, experiment, replay, and goal status."""
     return j(ctx.context.db.project_status())
 
-@tool
+@function_tool
 def static_replay_candidate(ctx: RunContextWrapper[AppContext], candidate: str, experiment_id: str,
                             episodes: list[str] | None = None, max_episodes: int = 25) -> str:
     """Run static replay and persist timing and per-case metrics for an experiment."""
