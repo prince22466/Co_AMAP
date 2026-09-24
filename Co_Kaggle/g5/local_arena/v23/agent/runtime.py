@@ -1700,6 +1700,15 @@ def main():
             "used_new_strategy_review":bool(new_strategy_review),
         })
 
+        try:
+            progress_snapshot = build_progress_snapshot(db)
+            append_progress_files(local.root, progress_snapshot, utcnow())
+            log.event("progress_snapshot", progress_snapshot)
+        except Exception as exc:
+            log.event("progress_snapshot_error", {
+                "error": type(exc).__name__ + ": " + str(exc)
+            })
+
         stop_reason=autonomous_stop_reason(goal, app.blocker_reason, args.allow_exec)
         if stop_reason == "goal_reached":
             status="DONE"
@@ -1772,6 +1781,14 @@ def main():
             })
     cost=conservative_cost_usd(usage,inp_price,out_price)
     db.finish_run(run_id,status,usage,cost,output,elapsed)
+    try:
+        final_progress = build_progress_snapshot(db)
+        append_progress_files(local.root, final_progress, utcnow())
+        log.event("progress_snapshot_final", final_progress)
+    except Exception as exc:
+        log.event("progress_snapshot_error", {
+            "error": type(exc).__name__ + ": " + str(exc)
+        })
     log.event("run_summary",{"run_id":run_id,"elapsed_seconds":round(elapsed,3),
               "usage":usage,"conservative_cost_usd":cost,"project_status":db.project_status()})
     log.final(output)
