@@ -719,6 +719,17 @@ def parse_args():
         help="OpenAI API key for this agent run. Falls back to OPENAI_API_KEY.",
     )
     p.add_argument("--reasoning-effort",default="low",choices=["none","low","medium","high","xhigh","max"])
+    p.add_argument(
+        "--analyst-model",
+        default=None,
+        help="Model for the independent Performance Analyst. Defaults to --model.",
+    )
+    p.add_argument(
+        "--analyst-reasoning-effort",
+        default="medium",
+        choices=["none","low","medium","high","xhigh","max"],
+        help="Reasoning effort for performance analysis / improvement ideation.",
+    )
     p.add_argument("--max-turns",type=int,default=12); p.add_argument("--max-output-tokens",type=int,default=2500)
     p.add_argument("--allow-exec",action="store_true"); p.add_argument("--session-id",default=DEFAULT_SESSION_ID)
     p.add_argument("--session-history-limit",type=int,default=80)
@@ -762,14 +773,23 @@ def resolve_replay_python(value: str | None) -> str:
     )
 
 
-def pricing_for(args):
-    if (args.input_usd_per_m is None)!=(args.output_usd_per_m is None):
+def model_pricing(model: str, explicit_input=None, explicit_output=None):
+    if (explicit_input is None) != (explicit_output is None):
         raise SystemExit("pass both explicit token prices")
-    if args.input_usd_per_m is not None:
-        return float(args.input_usd_per_m),float(args.output_usd_per_m)
-    if args.model not in MODEL_PRICING_USD_PER_M:
-        raise SystemExit("unknown model pricing; pass explicit token prices")
-    return MODEL_PRICING_USD_PER_M[args.model]
+    if explicit_input is not None:
+        return float(explicit_input), float(explicit_output)
+    if model not in MODEL_PRICING_USD_PER_M:
+        raise SystemExit(
+            "unknown model pricing for " + model
+            + "; use a known model or explicit token prices"
+        )
+    return MODEL_PRICING_USD_PER_M[model]
+
+
+def pricing_for(args):
+    return model_pricing(
+        args.model, args.input_usd_per_m, args.output_usd_per_m
+    )
 
 
 def main():
@@ -787,12 +807,19 @@ def main():
     if not 1<=args.session_history_limit<=500: raise SystemExit("--session-history-limit must be 1..500")
     if not 0<args.session_budget_usd<=args.total_budget_usd: raise SystemExit("invalid budget ceilings")
     inp_price,out_price=pricing_for(args)
+    analyst_model=args.analyst_model or args.model
+    if analyst_model == args.model:
+        analyst_inp_price,analyst_out_price=inp_price,out_price
+    else:
+        analyst_inp_price,analyst_out_price=model_pricing(analyst_model)
     replay_python=resolve_replay_python(args.replay_python) if args.allow_exec else ""
     WORKSPACE.mkdir(parents=True,exist_ok=True)
     run_id="run_"+datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")+"_"+uuid.uuid4().hex[:8]
     config={"version":2,"run_id":run_id,"task":args.task,"model":args.model,
             "api_key_source":api_key_source,
             "session_id":args.session_id,"max_turns":args.max_turns,
+            "analyst_model":analyst_model,
+            "analyst_reasoning_effort":args.analyst_reasoning_effort,
             "replay_python":replay_python or None,
             "tracing_enabled":not args.disable_tracing,"trace_sensitive_data":False}
     log=RunLog(WORKSPACE,config); local=LocalTools(allow_exec=args.allow_exec,log=log)
@@ -813,9 +840,9 @@ def main():
     analyst_agent=Agent[AppContext](
       name="v23 Performance Analyst",
       instructions=PERFORMANCE_ANALYST_PROMPT,
-      model=args.model,
+      model=analyst_model,
       model_settings=ModelSettings(
-        reasoning=Reasoning(effort=args.reasoning_effort),
+        reasoning=Reasoning(effort=args.analyst_reasoning_effort),
         max_tokens=min(args.max_output_tokens,1200),
         verbosity="low",
         parallel_tool_calls=False,
@@ -878,8 +905,8 @@ def main():
                 budget.total.estimated_cost_usd,
                 remaining_session_budget,
                 args.total_budget_usd,
-                inp_price,
-                out_price,
+                analyst_inp_price,
+                analyst_out_price,
             )
             analyst_usage={
                 "requests":0,"input_tokens":0,"cached_tokens":0,
@@ -909,7 +936,7 @@ def main():
                         trace_include_sensitive_data=False,
                         tracing_disabled=args.disable_tracing,
                         trace_metadata={
-                            "run_id":run_id,"model":args.model,
+                            "run_id":run_id,"model":analyst_model,
                             "role":"performance_analyst",
                             "trigger":review_trigger,
                         },
@@ -923,7 +950,7 @@ def main():
 
             add_usage(usage, analyst_usage)
             analyst_cost=conservative_cost_usd(
-                analyst_usage,inp_price,out_price
+                analyst_usage,analyst_inp_price,analyst_out_price
             )
             analyst_delta=LegacyUsage(
                 analyst_usage["input_tokens"],analyst_usage["output_tokens"],
@@ -956,6 +983,8 @@ def main():
                 new_strategy_review=analyst_output
                 log.event("specialist_review_finish", {
                     "role":"performance_analyst",
+                    "model":analyst_model,
+                    "reasoning_effort":args.analyst_reasoning_effort,
                     "review_id":review_id,
                     "trigger":review_trigger,
                     "usage":analyst_usage,
@@ -1179,6 +1208,8 @@ def main():
     print(j({"run_id":run_id,"elapsed_seconds":round(elapsed,3),"usage":usage,
              "conservative_cost_usd":round(cost,8),"session_id":args.session_id,
              "autonomous_cycles":cycle,"goal":latest_goal_state(db),
+             "analyst_model":analyst_model,
+             "analyst_reasoning_effort":args.analyst_reasoning_effort,
              "experiments_db":str(STATE_DB),"session_db":str(SESSION_DB),
              "trace_enabled":not args.disable_tracing}))
     print("[v23 run] "+str(log.dir))
