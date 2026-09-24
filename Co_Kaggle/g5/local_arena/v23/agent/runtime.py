@@ -1611,39 +1611,18 @@ def main():
                 "\n\nINDEPENDENT PERFORMANCE ANALYST REVIEW:\n"
                 + new_strategy_review
             )
+        engineer_context = build_engineer_context(
+            db, next_idea, max_chars=8000
+        )
+        cycle_prompt += (
+            "\n\nENGINEER CONTEXT PACK:\n" + j(engineer_context)
+        )
         if next_idea:
             cycle_prompt += (
-                "\n\nASSIGNED IDEA TO IMPLEMENT NOW:\n"
-                + j({
-                    "idea_id":next_idea["idea_id"],
-                    "batch_index":next_idea["batch_index"],
-                    "title":next_idea["title"],
-                    "hypothesis":next_idea["hypothesis"],
-                    "causal_layer":next_idea["causal_layer"],
-                    "components":json.loads(next_idea["components_json"] or "[]"),
-                    "interaction_hypothesis":next_idea["interaction_hypothesis"],
-                    "system_prediction":next_idea["system_prediction"],
-                    "rationale":next_idea["rationale"],
-                    "smallest_test":next_idea["smallest_test"],
-                    "promotion_rule":next_idea["promotion_rule"],
-                    "resume_existing":bool(next_idea.get("resume_existing")),
-                    "existing_experiment_id":next_idea.get("experiment_id"),
-                })
-                + (
-                    "\nRESUME the existing RUNNING experiment using existing_experiment_id; "
-                    "do not create a second experiment. Continue from durable state and "
-                    "complete replay/analysis. "
-                    if next_idea.get("resume_existing") else
-                    "\nImplement this specific systems hypothesis. "
-                  )
-                + "If it spans multiple "
-                  "components, make the coordinated changes together because the interaction "
-                  "is the experimental variable; do not reduce it to one component and lose "
-                  "the hypothesis. Call start_experiment once, run the smallest useful static "
-                  "replay, expand only when its promotion rule is met, record the result, and "
-                  "after replay call idea_dossier for this idea_id to verify the exact code "
-                  "version and recorded game lineage, then finish the experiment. Do not skip "
-                  "ahead to another analyst idea in the same cycle."
+                "\nImplement only the assigned idea in the context pack. Preserve "
+                "multi-component interactions, run the smallest useful replay, expand "
+                "only when its promotion rule is met, verify idea_dossier after replay, "
+                "and finish the experiment before moving to another idea."
             )
         try:
             result=Runner.run_sync(
