@@ -19,6 +19,12 @@ from typing import Any
 from agents import Agent, ModelSettings, RunConfig, RunContextWrapper, RunHooks, Runner, SQLiteSession, SessionSettings, function_tool, set_default_openai_key
 from openai.types.shared import Reasoning
 
+from .context import (
+    append_progress_files,
+    build_analyst_context,
+    build_engineer_context,
+    build_progress_snapshot,
+)
 from .analysis import (
     analyze_cash_flow as analyze_cash_flow_data,
     analyze_experiment_records,
@@ -53,6 +59,7 @@ v2 research-memory contract:
 - Model-written candidate policies may execute only through static_replay_candidate.
 - When execution is enabled, do not stop at analysis or planning. You must create/select a concrete candidate, start an experiment, execute at least one static replay, analyze the measured result, and finish the experiment unless a concrete runtime error or budget stop blocks execution.
 - A rejected candidate is evidence, not a blocker. If the durable goal is unmet, continue with the next justified experiment.
+- The supplied ENGINEER CONTEXT PACK is the canonical starting context for assigned work.
 - Idea/experiment/replay lineage is authoritative. For assigned ideas, keep the supplied idea_id, let start_experiment link the experiment automatically, and use idea_dossier after replay to verify the candidate path/hash, replay_call_id, episode records, and metrics before concluding the experiment.
 - After four consecutive rejected experiments with no wins and no positive mean margin improvement, treat the search as stagnant: abandon the current tweak family, re-inspect raw loss evidence, and move to a different causal layer (for example worker actions/task ranking/logistics/planning/inventory/market). Do not keep making parameter variants of the same idea.
 - Do not use one fixed 5-game screen forever. Rotate or stratify screening histories when a screen repeatedly rejects candidates, and periodically run the strongest candidate family on all 25 histories because local replay is cheaper than additional model reasoning.
@@ -67,7 +74,8 @@ Your job is to diagnose why research is or is not improving and give the Experim
 Engineer a higher-information direction.
 
 Use the available read-only tools selectively:
-- call project_status first;
+- Start from the supplied ANALYST CONTEXT PACK and call research_progress if you need a fresh compact status snapshot.
+- Call project_status only when you need fields not already present in the context pack;
 - use analyze_experiments and analyze_component_effects before manually reading experiment rows;
 - use cluster_loss_histories to diversify representative replay cases when useful;
 - use analyze_history_game(episode) to locate suspicious windows in recorded v20 losses, then use analyze_cash_flow, analyze_inventory_flow, analyze_worker_utilization, or analyze_history_window to diagnose the relevant subsystem;
@@ -881,6 +889,14 @@ def project_status(ctx: RunContextWrapper[AppContext]) -> str:
     return j(ctx.context.db.project_status())
 
 @function_tool
+def research_progress(ctx: RunContextWrapper[AppContext]) -> str:
+    """Return the canonical compact research progress snapshot."""
+    try:
+        return j(build_progress_snapshot(ctx.context.db))
+    except Exception as exc:
+        return j({"error":f"{type(exc).__name__}: {exc}"})
+
+@function_tool
 def analyze_history_game(ctx: RunContextWrapper[AppContext], episode: str, window_size: int = 24, top_windows: int = 8) -> str:
     """Deterministically summarize one v20 loss history and identify high-activity windows."""
     try:
@@ -1355,7 +1371,7 @@ def main():
         prompt_cache_options={"mode":"implicit","ttl":"30m"},
       ),
       tools=[
-        list_tree,read_text,search_text,summarize_jsonl,project_status,
+        list_tree,read_text,search_text,summarize_jsonl,project_status,research_progress,
         analyze_history_game,analyze_history_window,analyze_experiments,
         compare_candidate_v20,analyze_cash_flow,analyze_inventory_flow,
         analyze_worker_utilization,analyze_component_effects,
