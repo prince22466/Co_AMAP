@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from agents import Agent, ModelSettings, RunConfig, RunContextWrapper, Runner, SQLiteSession, SessionSettings
+from agents import Agent, ModelSettings, RunConfig, RunContextWrapper, RunHooks, Runner, SQLiteSession, SessionSettings
 from agents.decorators import tool
 from openai.types.shared import Reasoning
 
@@ -250,6 +250,40 @@ def j(x):
     return json.dumps(x, sort_keys=True, default=str)
 
 
+class BudgetHooks(RunHooks[AppContext]):
+    """Per-model-call usage logging and conservative hard-stop before the next call."""
+
+    def __init__(self, log, starting_project_cost, session_limit, total_limit, input_price, output_price):
+        self.log = log
+        self.starting_project_cost = float(starting_project_cost)
+        self.session_limit = float(session_limit)
+        self.total_limit = float(total_limit)
+        self.input_price = float(input_price)
+        self.output_price = float(output_price)
+        self.last_usage = {"requests":0,"input_tokens":0,"cached_tokens":0,"cache_write_tokens":0,
+                           "output_tokens":0,"reasoning_tokens":0,"total_tokens":0}
+
+    def _cost(self, usage):
+        return (usage["input_tokens"] * self.input_price +
+                usage["output_tokens"] * self.output_price) / 1_000_000
+
+    async def on_llm_start(self, context, agent, system_prompt, input_items):
+        usage = usage_dict(context.usage)
+        session_cost = self._cost(usage)
+        if session_cost >= self.session_limit:
+            raise RuntimeError("session budget ceiling reached before next model call")
+        if self.starting_project_cost + session_cost >= self.total_limit:
+            raise RuntimeError("project budget ceiling reached before next model call")
+        self.log.event("llm_start", {"usage_before_call": usage,
+                                     "session_conservative_cost_usd": session_cost})
+
+    async def on_llm_end(self, context, agent, response):
+        usage = usage_dict(context.usage)
+        self.last_usage = usage
+        self.log.event("llm_end", {"usage_after_call": usage,
+                                   "session_conservative_cost_usd": self._cost(usage)})
+
+
 @tool
 def list_tree(ctx: RunContextWrapper[AppContext], path: str, max_depth: int = 2, max_entries: int = 200) -> str:
     """List a bounded v23 subtree."""
@@ -403,9 +437,12 @@ def main():
             ". Conservative per-run ceiling: USD "+format(args.session_budget_usd,".2f")+
             "; remaining project ledger: USD "+format(budget.remaining_total(),".4f")+
             ". Use durable experiment records and minimize model turns.")
+    hooks=BudgetHooks(log,budget.total.estimated_cost_usd,args.session_budget_usd,
+                      args.total_budget_usd,inp_price,out_price)
     started=time.monotonic(); status="DONE"; output=""
     try:
         result=Runner.run_sync(agent,prompt,context=app,session=session,max_turns=args.max_turns,
+          hooks=hooks,
           run_config=RunConfig(workflow_name="v23 autonomous research",group_id=args.session_id,
           trace_include_sensitive_data=False,tracing_disabled=args.disable_tracing,
           trace_metadata={"run_id":run_id,"model":args.model},
@@ -413,8 +450,7 @@ def main():
         output=str(result.final_output or ""); usage=usage_dict(result.context_wrapper.usage)
     except Exception as exc:
         status="ERROR"; output=type(exc).__name__+": "+str(exc)
-        usage={"requests":0,"input_tokens":0,"cached_tokens":0,"cache_write_tokens":0,
-               "output_tokens":0,"reasoning_tokens":0,"total_tokens":0}
+        usage=dict(hooks.last_usage)
     elapsed=time.monotonic()-started
     cost=(usage["input_tokens"]*inp_price+usage["output_tokens"]*out_price)/1_000_000
     delta=LegacyUsage(usage["input_tokens"],usage["output_tokens"],usage["requests"],cost)
