@@ -218,9 +218,16 @@ class ResearchDB:
             ).fetchone()
             if idea is None:
                 return {"error":"unknown idea_id: " + idea_id}
+            if idea["status"] == "RUNNING" and idea["experiment_id"]:
+                existing = self.db.execute(
+                    "SELECT experiment_id,status FROM experiments WHERE experiment_id=?",
+                    (idea["experiment_id"],),
+                ).fetchone()
+                if existing is not None and existing["status"] == "RUNNING":
+                    return str(existing["experiment_id"])
             if idea["status"] != "PENDING":
                 return {
-                    "error":"idea is not pending",
+                    "error":"idea is not pending or resumable",
                     "idea_id":idea_id,
                     "status":idea["status"],
                 }
@@ -486,7 +493,35 @@ class ResearchDB:
             "errors":counts.get("ERROR",0),
         }
 
+    def current_work_idea(self):
+        """Resume a RUNNING idea before assigning a new PENDING idea."""
+        latest = self.latest_strategy_review()
+        if latest is None:
+            return None
+        row = self.db.execute(
+            """SELECT * FROM research_ideas
+               WHERE review_id=? AND status='RUNNING'
+               ORDER BY batch_index ASC LIMIT 1""",
+            (latest["review_id"],),
+        ).fetchone()
+        if row is not None:
+            out = dict(row)
+            out["resume_existing"] = True
+            return out
+        row = self.db.execute(
+            """SELECT * FROM research_ideas
+               WHERE review_id=? AND status='PENDING'
+               ORDER BY batch_index ASC LIMIT 1""",
+            (latest["review_id"],),
+        ).fetchone()
+        if row is None:
+            return None
+        out = dict(row)
+        out["resume_existing"] = False
+        return out
+
     def next_pending_idea(self):
+        """Compatibility helper for inspection/tests; returns only PENDING ideas."""
         latest = self.latest_strategy_review()
         if latest is None:
             return None
@@ -1454,7 +1489,7 @@ def main():
                 ).strip()
                 break
 
-        next_idea = db.next_pending_idea() if args.allow_exec else None
+        next_idea = db.current_work_idea() if args.allow_exec else None
         if args.allow_exec and next_idea is None:
             # Invalid/empty analyst output will be retried by the review trigger
             # on the next controller pass instead of letting the engineer improvise.
