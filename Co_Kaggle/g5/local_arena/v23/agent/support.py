@@ -388,6 +388,15 @@ class LocalTools:
         target = self._read_path(script)
         if not target.is_file() or target.suffix != ".py":
             return {"error": "run_python accepts an existing repository .py file only"}
+        replay_root = (self.root / "replay").resolve()
+        try:
+            target.relative_to(replay_root)
+            return {
+                "error": "replay code may only execute through static_replay_candidate "
+                         "using the isolated replay interpreter"
+            }
+        except ValueError:
+            pass
         try:
             target.relative_to(self.workspace)
             return {"error": "v23 generic run_python never executes model-written workspace files"}
