@@ -159,6 +159,33 @@ A read-only run does not require Kaggle imports in the agent process.
 
 The agent process launches `.venv-replay/bin/python replay/runner.py ...` and exchanges only JSON-compatible arguments/results.
 
+## Autonomous execution until goal
+
+v23 uses a low-cost autoresearch pattern:
+
+```text
+LLM chooses next falsifiable hypothesis / candidate change
+        ↓
+local Python writes/loads candidate
+        ↓
+isolated Kaggle static replay
+        ↓
+deterministic metrics + keep/reject evidence
+        ↓
+compact result returned to LLM
+        ↓
+repeat
+```
+
+With `--allow-exec`, a model final answer does not stop an unmet durable goal. Python checks the goal after every Agents SDK cycle and resumes the same session automatically.
+
+The loop stops only on:
+- durable goal reached by measured replay;
+- configured API budget exhausted;
+- explicit `report_blocker` for a genuine runtime/environment blocker.
+
+A rejected candidate automatically leads to another research cycle. `--max-turns` is a per-cycle cap.
+
 ## Budget controls
 
 Defaults:
