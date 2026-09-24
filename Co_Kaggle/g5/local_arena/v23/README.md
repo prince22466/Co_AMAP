@@ -2,7 +2,7 @@
 
 v23 starts as a **research harness**, not another RL algorithm.
 
-The v1 agent lets an OpenAI model inspect the local Kaggriculture codebase, histories, and metrics, choose a small falsifiable experiment, optionally run existing Python experiments, and record what it learned. Python owns execution, filesystem boundaries, and API-budget enforcement.
+The v1 agent starts directly from `submission_nb/kaggriculture-sub_v20.ipynb` and `game_history/v20` loss cases. It diagnoses v20, proposes a candidate, and evaluates that candidate by replacing the losing v20 seat while replaying the recorded opponent actions verbatim. Python owns execution, filesystem boundaries, and API-budget enforcement.
 
 ## Agent loop
 
@@ -15,7 +15,7 @@ OBSERVE local evidence
     -> RECORD result + next action
 ```
 
-Available model tools are intentionally small: bounded tree listing, narrow text reads, local search, JSONL metric reduction, opt-in execution of existing Python files, and writes only under `local_arena/v23/workspace/`.
+Available model tools are intentionally small: bounded tree listing, narrow text reads, local search, JSONL metric reduction, a dedicated `static_replay_candidate` evaluator, opt-in execution of existing Python files, and writes only under `local_arena/v23/workspace/`.
 
 v1 never executes a Python file written by the model and removes `OPENAI_API_KEY` from child-process environments.
 
@@ -34,7 +34,7 @@ Do not commit the key. For a persistent Workbench deployment, inject it through 
 
 ```bash
 python local_arena/v23/research_agent.py \
-  --task "Inspect v21 worker Q-learning and v22 selling PPO evidence. Identify the single highest-information next v23 experiment. Do not run training yet."
+  --task "Inspect the v20 notebook and its recorded loss cases. Diagnose one concrete failure mechanism and design the smallest candidate change to test it with static replay."
 ```
 
 ### Permit existing experiments
@@ -42,7 +42,7 @@ python local_arena/v23/research_agent.py \
 ```bash
 python local_arena/v23/research_agent.py \
   --allow-exec \
-  --task "Inspect existing v21/v22 metrics first. Run only the smallest existing evaluation needed to test the strongest hypothesis, then report the result."
+  --task "Start from v20 and its loss cases. Build or select one candidate agent, evaluate it with static replacement replay on the smallest useful subset, then report repaired, improved, and worsened cases."
 ```
 
 ## Budget controls
