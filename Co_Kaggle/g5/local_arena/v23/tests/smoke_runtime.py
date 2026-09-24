@@ -12,6 +12,11 @@ if str(V23_ROOT) not in sys.path:
     sys.path.insert(0, str(V23_ROOT))
 
 from agent import runtime
+from agent.analysis import (
+    analyze_experiment_records,
+    analyze_loss_history,
+    analyze_loss_window,
+)
 
 
 def main() -> int:
@@ -219,6 +224,25 @@ def main() -> int:
         assert recovered["stagnating"] is False
         assert recovered["positive_recent"] is True
 
+        # Real history deterministic analysis smoke.
+        history_summary = analyze_loss_history(
+            V23_ROOT, "111548564", window_size=24, top_windows=3
+        )
+        assert history_summary["episode"] == "111548564"
+        assert history_summary["turns"] > 0
+        assert history_summary["v20_final_margin"] < 0
+        assert len(history_summary["critical_windows"]) <= 3
+        if history_summary["critical_windows"]:
+            first_window = history_summary["critical_windows"][0]
+            detail = analyze_loss_window(
+                V23_ROOT,
+                "111548564",
+                first_window["start_turn"],
+                min(first_window["start_turn"] + 2, first_window["end_turn"]),
+            )
+            assert detail["rows"]
+            assert detail["episode"] == "111548564"
+
         # Analyst idea batch queue smoke: exactly 10 ideas, deterministic order,
         # idea -> experiment linkage, then batch exhaustion -> analyst review.
         batch_db = runtime.ResearchDB(Path(tmp) / "idea_batch.sqlite3")
@@ -399,6 +423,12 @@ def main() -> int:
         assert lineage[0]["idea_id"]
         assert lineage[0]["experiments"][0]["replay_call_ids"]
         assert lineage[0]["experiments"][0]["game_record_paths"]
+
+        experiment_analysis = analyze_experiment_records(batch_db, review_id)
+        assert experiment_analysis["scope"] == "idea_batch"
+        assert len(experiment_analysis["ideas"]) == 10
+        assert experiment_analysis["by_causal_layer"]
+        assert experiment_analysis["by_component_combination"]
 
         status = db.project_status()
         assert status["runs_completed"] == 1
