@@ -38,6 +38,8 @@ v2 research-memory contract:
 - Call set_goal when the task has an explicit numeric target.
 - Goal completion comes only from structured replay metrics, never prose.
 - Model-written candidate policies may execute only through static_replay_candidate.
+- When execution is enabled, do not stop at analysis or planning. You must create/select a concrete candidate, start an experiment, execute at least one static replay, analyze the measured result, and finish the experiment unless a concrete runtime error or budget stop blocks execution.
+- FP16 is mandatory for candidate floating-point model weights, activations, tensors, and learned numeric compute. Integer/boolean/schema-mandated types are exempt. Do not emit float32, float64, double, or bfloat16 candidate model/tensor code unless a backend operation is provably unsupported in FP16; any such exception must be narrowly scoped, documented, and converted back to FP16 immediately.
 """
 
 
@@ -547,6 +549,25 @@ def main():
         status="ERROR"; output=type(exc).__name__+": "+str(exc)
         usage=dict(hooks.last_usage)
     elapsed=time.monotonic()-started
+    if status=="DONE" and args.allow_exec:
+        progress = db.db.execute(
+            "SELECT replay_calls,replay_cases,experiments_started FROM runs WHERE run_id=?",
+            (run_id,),
+        ).fetchone()
+        if progress and int(progress["replay_calls"] or 0) == 0:
+            status="INCOMPLETE"
+            output = (
+                output.rstrip()
+                + "\n\nExecution contract violation: --allow-exec was enabled, "
+                  "but the agent completed without running static replay. "
+                  "The run is marked INCOMPLETE rather than DONE."
+            )
+            log.event("execution_contract_violation", {
+                "run_id": run_id,
+                "experiments_started": int(progress["experiments_started"] or 0),
+                "replay_calls": int(progress["replay_calls"] or 0),
+                "replay_cases": int(progress["replay_cases"] or 0),
+            })
     cost=conservative_cost_usd(usage,inp_price,out_price)
     delta=LegacyUsage(usage["input_tokens"],usage["output_tokens"],usage["requests"],cost)
     budget.session.add(delta); budget.total.add(delta)
