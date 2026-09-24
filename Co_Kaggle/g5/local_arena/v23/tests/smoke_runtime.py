@@ -314,6 +314,45 @@ def main() -> int:
         assert queue_status["pending"] == 10
         assert batch_db.strategy_review_trigger() is None
 
+        # A partially completed engineer cycle must resume the same RUNNING idea
+        # instead of silently advancing to the next PENDING idea.
+        resume_db = runtime.ResearchDB(Path(tmp) / "resume.sqlite3")
+        resume_run = "run_resume"
+        resume_db.start_run(
+            resume_run, "resume-session", "resume smoke", "smoke-model"
+        )
+        resume_review = resume_db.record_strategy_review(
+            resume_run, "initial_diagnosis",
+            runtime.json.dumps(analyst_json), {}, 0.0
+        )
+        resume_db.add_idea_batch(resume_review, parsed_batch["ideas"])
+        first_work = resume_db.current_work_idea()
+        assert first_work is not None
+        assert first_work["batch_index"] == 1
+        assert first_work["resume_existing"] is False
+        partial_eid = resume_db.start_experiment(
+            resume_run,
+            first_work["hypothesis"],
+            "",
+            "",
+            "partial cycle smoke",
+            first_work["idea_id"],
+        )
+        resumed_work = resume_db.current_work_idea()
+        assert resumed_work is not None
+        assert resumed_work["idea_id"] == first_work["idea_id"]
+        assert resumed_work["experiment_id"] == partial_eid
+        assert resumed_work["resume_existing"] is True
+        same_eid = resume_db.start_experiment(
+            resume_run,
+            first_work["hypothesis"],
+            "",
+            "",
+            "resume smoke",
+            first_work["idea_id"],
+        )
+        assert same_eid == partial_eid
+
         for expected_index in range(1, 11):
             idea = batch_db.next_pending_idea()
             assert idea is not None
