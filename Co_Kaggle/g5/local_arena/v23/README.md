@@ -1,8 +1,8 @@
-# v23: low-cost autonomous research agent
+# v23: low-cost autonomous research agent v2
 
 v23 starts as a **research harness**, not another RL algorithm.
 
-The v1 agent starts directly from `working_files/submission_nb/kaggriculture-sub_v20.ipynb` and `working_files/loss_games_v20`. It diagnoses v20, proposes a candidate, and evaluates that candidate by replacing the losing v20 seat while replaying the recorded opponent actions verbatim. Python owns execution, filesystem boundaries, and API-budget enforcement.
+The agent starts directly from `working_files/submission_nb/kaggriculture-sub_v20.ipynb` and `working_files/loss_games_v20`. It diagnoses v20, proposes a candidate, and evaluates that candidate by replacing the losing v20 seat while replaying the recorded opponent actions verbatim. Python owns execution, filesystem boundaries, and API-budget enforcement.
 
 ## Agent loop
 
@@ -17,7 +17,7 @@ OBSERVE local evidence
 
 Available model tools are intentionally small: bounded tree listing, narrow text reads, local search, JSONL metric reduction, a dedicated `static_replay_candidate` evaluator, opt-in execution of existing Python files, and writes only under `local_arena/v23/workspace/`.
 
-v1 never executes a Python file written by the model and removes `OPENAI_API_KEY` from child-process environments.
+Generic `run_python` still refuses model-written workspace files and strips `OPENAI_API_KEY` from child processes. Candidate code is executable only through the dedicated static-replay path.
 
 ## GCP Vertex AI Workbench
 
@@ -66,11 +66,37 @@ The ledger only tracks this program. It cannot know API spend made by other prog
 
 Each run creates `workspace/runs/<UTC timestamp>-<pid>/config.json`, `events.jsonl`, and `final.md`.
 
-## v1 boundaries
+## v2 infrastructure
 
-v1 intentionally does not modify v20/v21/v22, run model-written code, use external web search, call an expensive fallback model automatically, launch broad training before inspecting metrics, or claim hidden/Kaggle improvement without evidence.
+v2 uses the OpenAI Agents SDK over the Responses API. It keeps one research agent and adds:
+- persistent conversation memory with `SQLiteSession`;
+- built-in SDK tracing for model/tool spans;
+- durable research memory in `workspace/experiments.sqlite3`;
+- run, experiment, and replay-case timing;
+- structured experiment IDs and hypothesis status;
+- explicit numeric goal tracking;
+- request/input/output/total token accounting;
+- cached-input, cache-write, and reasoning-token accounting when returned by the API;
+- conservative local cost accounting that still prices all input as uncached;
+- persistent project summaries through the `project_status` tool.
 
-After reviewing v1 behavior, the natural v2 is a controlled candidate-patch + local A/B evaluation workflow.
+The durable hierarchy is:
+
+```text
+PROJECT
+  -> RUN
+      -> EXPERIMENT
+          -> STATIC REPLAY CALL
+              -> REPLAY CASE
+```
+
+This makes time-to-goal, experiments-to-goal, replay-cases-to-goal, API requests, tokens, cache utilization, and cost queryable instead of inferred from prose.
+
+The Agents SDK tracing exporter is enabled by default, but trace payloads are configured with `trace_include_sensitive_data=False`. Use `--disable-tracing` to disable tracing entirely.
+
+Conversation history is persisted in `workspace/agent_sessions.sqlite3`. By default only the most recent 80 session items are retrieved for a run; change this with `--session-history-limit`.
+
+Negative experiment conclusions are stored in the experiment DB so the agent can avoid re-testing rejected ideas.
 
 
 ## Self-contained v23 boundary
@@ -84,6 +110,6 @@ Research inputs are under `working_files/`:
 - `competition_material/*` — rules/domain material
 - `example_train_v21_static_history.py` — local static-replay implementation reference
 
-The static replay tool loads helpers from the copied `working_files/example_train_v21_static_history.py`; it no longer imports from `v20_rl`, `v21_rl`, `v22_rl`, `game_history`, or any other sibling directory.
+The static replay implementation must remain inside the v23 boundary. `working_files/example_train_v21_static_history.py` is a reference implementation; any legacy sibling imports it still contains must not become runtime dependencies of the final self-contained replay harness.
 
 Generated research artifacts remain confined to `workspace/`.
