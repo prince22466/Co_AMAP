@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import re
 import sys
@@ -65,6 +66,68 @@ def _set_fp16_defaults() -> dict:
     except Exception as exc:
         info["torch"] = f"unavailable: {type(exc).__name__}: {exc}"
     return info
+
+
+@contextlib.contextmanager
+def _numpy_fp16_candidate_defaults():
+    """Force candidate-created NumPy floating arrays to FP16 during agent(obs)."""
+    try:
+        import numpy as np
+    except Exception:
+        yield
+        return
+
+    originals = {}
+    names = ("array", "asarray", "zeros", "ones", "empty", "full")
+    for name in names:
+        originals[name] = getattr(np, name)
+
+    def _cast_float_array(value):
+        try:
+            if isinstance(value, np.ndarray) and np.issubdtype(value.dtype, np.floating):
+                if value.dtype != np.float16:
+                    return value.astype(np.float16, copy=False)
+        except Exception:
+            pass
+        return value
+
+    def array(*args, **kwargs):
+        if kwargs.get("dtype") is not None:
+            return originals["array"](*args, **kwargs)
+        return _cast_float_array(originals["array"](*args, **kwargs))
+
+    def asarray(*args, **kwargs):
+        if kwargs.get("dtype") is not None:
+            return originals["asarray"](*args, **kwargs)
+        return _cast_float_array(originals["asarray"](*args, **kwargs))
+
+    def zeros(*args, **kwargs):
+        if kwargs.get("dtype") is None:
+            kwargs["dtype"] = np.float16
+        return originals["zeros"](*args, **kwargs)
+
+    def ones(*args, **kwargs):
+        if kwargs.get("dtype") is None:
+            kwargs["dtype"] = np.float16
+        return originals["ones"](*args, **kwargs)
+
+    def empty(*args, **kwargs):
+        if kwargs.get("dtype") is None:
+            kwargs["dtype"] = np.float16
+        return originals["empty"](*args, **kwargs)
+
+    def full(*args, **kwargs):
+        if kwargs.get("dtype") is not None:
+            return originals["full"](*args, **kwargs)
+        return _cast_float_array(originals["full"](*args, **kwargs))
+
+    np.array, np.asarray = array, asarray
+    np.zeros, np.ones, np.empty, np.full = zeros, ones, empty, full
+    try:
+        yield
+    finally:
+        for name, fn in originals.items():
+            setattr(np, name, fn)
 
 
 def _audit_runtime_globals(module: types.ModuleType) -> dict:
@@ -180,7 +243,8 @@ def evaluate(candidate: Path, episodes: list[str], max_episodes: int):
         try:
             for replay_step in range(1, len(history["steps"])):
                 obs = _agent_observation(env, candidate_seat)
-                action = candidate_agent(obs)
+                with _numpy_fp16_candidate_defaults():
+                    action = candidate_agent(obs)
                 runtime_audit = _audit_runtime_globals(candidate_module)
                 if not runtime_audit["ok"]:
                     raise RuntimeError(
