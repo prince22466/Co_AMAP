@@ -1443,12 +1443,16 @@ def main():
             analyst_output=""
             analyst_error=""
             prior_batch = db.batch_lineage_summary()
+            analyst_context = build_analyst_context(
+                db, local.root, max_chars=12000
+            )
             analyst_prompt=(
                 "Research task:\n"+args.task+
+                "\n\nANALYST CONTEXT PACK:\n"+j(analyst_context)+
                 "\n\nIndependent performance review trigger: "+review_trigger+
-                "\nCall project_status first. Inspect only the minimum additional v20 "
-                "evidence needed to diagnose performance. Produce exactly 10 structurally "
-                "distinct test ideas in the required JSON schema."
+                "\nInspect only the minimum additional v20 evidence needed to diagnose "
+                "performance. Produce exactly 10 structurally distinct test ideas in the "
+                "required JSON schema."
             )
             if prior_batch:
                 analyst_prompt += (
