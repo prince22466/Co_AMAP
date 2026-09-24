@@ -312,10 +312,16 @@ def analyze_experiment_records(db: Any, review_id: str | None = None) -> dict[st
         idea = dossier["idea"]
         experiments = dossier["experiments"]
         exp = experiments[-1] if experiments else {}
-        wins = int(exp.get("wins") or 0)
-        losses = int(exp.get("losses") or 0)
-        cases = int(exp.get("replay_cases") or 0)
-        mean = float(exp.get("mean_margin_improvement") or 0.0)
+        games = _latest_games_by_episode(dossier, valid_only=True)
+        improvements = [
+            float(game["margin_improvement"])
+            for game in games
+            if isinstance(game.get("margin_improvement"), (int, float))
+        ]
+        wins = sum(1 for game in games if game.get("result") == "WIN")
+        losses = sum(1 for game in games if game.get("result") == "LOSS")
+        cases = len(games)
+        mean = sum(improvements) / len(improvements) if improvements else 0.0
         layer = str(idea.get("causal_layer") or "other")
         components = sorted(idea.get("components") or [])
         comp_key = " + ".join(components) if components else "(unspecified)"
@@ -345,8 +351,8 @@ def analyze_experiment_records(db: Any, review_id: str | None = None) -> dict[st
             "losses":losses,
             "replay_cases":cases,
             "mean_margin_improvement":mean,
-            "best_margin_improvement":exp.get("best_margin_improvement"),
-            "regressions":exp.get("regressions"),
+            "best_margin_improvement":max(improvements) if improvements else None,
+            "regressions":sum(1 for x in improvements if x < 0),
             "game_record_paths":[
                 game["game_record_path"]
                 for call in dossier["replay_calls"]
@@ -406,18 +412,35 @@ def _load_game_record(root: Path, rel_path: str) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _latest_games_by_episode(dossier: dict[str, Any], valid_only: bool = False) -> list[dict[str, Any]]:
+    """Return one canonical replay row per episode, preferring the latest call."""
+    latest: dict[str, dict[str, Any]] = {}
+    for call in dossier.get("replay_calls", []):
+        for game in call.get("games", []):
+            episode = str(game.get("episode") or "")
+            if not episode:
+                continue
+            row = dict(game)
+            row["replay_call_id"] = call.get("replay_call_id")
+            row["candidate"] = call.get("candidate")
+            latest[episode] = row
+    rows = list(latest.values())
+    if valid_only:
+        rows = [row for row in rows if bool(row.get("valid"))]
+    return rows
+
+
 def compare_candidate_to_v20(root: Path, db: Any, idea_id: str, episode: str) -> dict[str, Any]:
     dossier = db.idea_dossier(idea_id)
     if dossier is None:
         raise ValueError("unknown idea_id: " + idea_id)
-    matches = []
-    for call in dossier["replay_calls"]:
-        for game in call["games"]:
-            if str(game.get("episode")) == str(episode):
-                matches.append((call, game))
+    matches = [
+        game for game in _latest_games_by_episode(dossier)
+        if str(game.get("episode")) == str(episode)
+    ]
     if not matches:
         raise ValueError(f"idea {idea_id} has no replay for episode {episode}")
-    call, game = matches[-1]
+    game = matches[-1]
     record_path = game.get("game_record_path")
     trace = _load_game_record(root, record_path) if record_path else None
     divergences = []
@@ -439,7 +462,7 @@ def compare_candidate_to_v20(root: Path, db: Any, idea_id: str, episode: str) ->
         "experiment_id": experiment.get("experiment_id"),
         "candidate": experiment.get("candidate"),
         "candidate_sha256": experiment.get("candidate_sha256"),
-        "replay_call_id": call.get("replay_call_id"),
+        "replay_call_id": game.get("replay_call_id"),
         "game_record_path": record_path,
         "original_v20_margin": game.get("original_v20_margin"),
         "candidate_margin": game.get("candidate_margin"),
@@ -722,11 +745,9 @@ def hypothesis_evidence(root: Path, db: Any, idea_id: str) -> dict[str, Any]:
     idea = dossier["idea"]
     experiments = dossier["experiments"]
     exp = experiments[-1] if experiments else {}
-    games = [
-        game
-        for call in dossier["replay_calls"]
-        for game in call["games"]
-    ]
+    all_latest_games = _latest_games_by_episode(dossier)
+    games = [game for game in all_latest_games if bool(game.get("valid"))]
+    invalid_games = [game for game in all_latest_games if not bool(game.get("valid"))]
     improvements = [
         float(game["margin_improvement"])
         for game in games
@@ -755,6 +776,7 @@ def hypothesis_evidence(root: Path, db: Any, idea_id: str) -> dict[str, Any]:
         "candidate": exp.get("candidate"),
         "candidate_sha256": exp.get("candidate_sha256"),
         "replay_cases": len(games),
+        "invalid_latest_episodes": len(invalid_games),
         "wins": wins,
         "losses": losses,
         "margin_improved_cases": positive,
@@ -776,7 +798,9 @@ def hypothesis_evidence(root: Path, db: Any, idea_id: str) -> dict[str, Any]:
             for game in games
         ],
         "note": (
-            "Verdict is a mechanical summary of current replay evidence, not a proof "
+            "Only the latest replay result per episode is counted, preventing staged "
+            "1->5->25 screens from double-weighting repeated episodes. Verdict is a "
+            "mechanical summary of current replay evidence, not a proof "
             "that the proposed causal mechanism is correct."
         ),
     }
