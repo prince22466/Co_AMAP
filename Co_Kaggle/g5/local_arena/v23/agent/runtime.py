@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from agents import Agent, ModelSettings, RunConfig, RunContextWrapper, RunHooks, Runner, SQLiteSession, SessionSettings, function_tool
+from agents import Agent, ModelSettings, RunConfig, RunContextWrapper, RunHooks, Runner, SQLiteSession, SessionSettings, function_tool, set_default_openai_key
 from openai.types.shared import Reasoning
 
 from .support import (
@@ -483,6 +483,11 @@ def usage_dict(u):
 def parse_args():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument("--task",required=True); p.add_argument("--model",default=DEFAULT_MODEL)
+    p.add_argument(
+        "--api-key",
+        default=None,
+        help="OpenAI API key for this agent run. Falls back to OPENAI_API_KEY.",
+    )
     p.add_argument("--reasoning-effort",default="low",choices=["none","low","medium","high","xhigh","max"])
     p.add_argument("--max-turns",type=int,default=12); p.add_argument("--max-output-tokens",type=int,default=2500)
     p.add_argument("--allow-exec",action="store_true"); p.add_argument("--session-id",default=DEFAULT_SESSION_ID)
@@ -539,7 +544,14 @@ def pricing_for(args):
 
 def main():
     args=parse_args()
-    if not os.getenv("OPENAI_API_KEY"): raise SystemExit("OPENAI_API_KEY is not set")
+    api_key = args.api_key or os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise SystemExit(
+            "OpenAI API key is required: pass --api-key or set OPENAI_API_KEY"
+        )
+    api_key_source = "cli" if args.api_key else "environment"
+    set_default_openai_key(api_key)
+    args.api_key = None
     if not 1<=args.max_turns<=50: raise SystemExit("--max-turns must be 1..50")
     if not 256<=args.max_output_tokens<=20000: raise SystemExit("--max-output-tokens must be 256..20000")
     if not 1<=args.session_history_limit<=500: raise SystemExit("--session-history-limit must be 1..500")
@@ -549,6 +561,7 @@ def main():
     WORKSPACE.mkdir(parents=True,exist_ok=True)
     run_id="run_"+datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")+"_"+uuid.uuid4().hex[:8]
     config={"version":2,"run_id":run_id,"task":args.task,"model":args.model,
+            "api_key_source":api_key_source,
             "session_id":args.session_id,"max_turns":args.max_turns,
             "replay_python":replay_python or None,
             "tracing_enabled":not args.disable_tracing,"trace_sensitive_data":False}
