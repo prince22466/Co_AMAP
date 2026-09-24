@@ -60,7 +60,7 @@ def main() -> int:
             0.001,
         )
 
-        goal_id = db.set_goal("repair_rate", ">=", 1.0, 0)
+        goal_id = db.set_goal("repair_rate", ">=", 1.0, 0, 1)
         active_goal = runtime.latest_goal_state(db)
         assert active_goal is not None
         assert active_goal["goal_id"] == goal_id
@@ -88,6 +88,29 @@ def main() -> int:
         assert reached_goal["goal_id"] == goal_id
         assert reached_goal["reached_at"] is not None
         assert runtime.autonomous_stop_reason(reached_goal, "", True) == "goal_reached"
+
+        subset_goal_id = db.set_goal("wins", ">=", 1.0, 0, 2)
+        subset_not_reached = db.maybe_reach_goal(
+            run_id,
+            experiment_id,
+            summary,
+            {
+                "requests": 0,
+                "input_tokens": 0,
+                "cached_tokens": 0,
+                "cache_write_tokens": 0,
+                "output_tokens": 0,
+                "reasoning_tokens": 0,
+                "total_tokens": 0,
+            },
+            0.10,
+            0.50,
+        )
+        assert subset_not_reached is None
+        subset_goal = runtime.latest_goal_state(db)
+        assert subset_goal is not None
+        assert subset_goal["goal_id"] == subset_goal_id
+        assert subset_goal["reached_at"] is None
         assert runtime.autonomous_stop_reason({"reached_at": None}, "", True) is None
         assert runtime.autonomous_stop_reason({"reached_at": None}, "replay failed", True) == "reported_blocker"
         assert runtime.autonomous_stop_reason({"reached_at": None}, "", False) == "execution_disabled"
