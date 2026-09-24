@@ -822,6 +822,32 @@ def usage_dict(u):
             "reasoning_tokens":reasoning,"total_tokens":int(getattr(u,"total_tokens",0) or 0)}
 
 
+def parse_analyst_batch(text: str) -> dict[str, Any]:
+    raw = text.strip()
+    if raw.startswith("```"):
+        lines = raw.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        raw = "\n".join(lines).strip()
+    data = json.loads(raw)
+    ideas = data.get("ideas")
+    if not isinstance(ideas, list) or len(ideas) != 10:
+        raise ValueError("analyst output must contain exactly 10 ideas")
+    required = {
+        "title","hypothesis","causal_layer","rationale",
+        "smallest_test","promotion_rule"
+    }
+    for i, idea in enumerate(ideas, 1):
+        if not isinstance(idea, dict):
+            raise ValueError(f"idea {i} is not an object")
+        missing = [key for key in required if not str(idea.get(key,"")).strip()]
+        if missing:
+            raise ValueError(f"idea {i} missing fields: {missing}")
+    return data
+
+
 def add_usage(total: dict[str, int], delta: dict[str, int]) -> None:
     for key in total:
         total[key] += int(delta.get(key, 0) or 0)
@@ -1074,14 +1100,22 @@ def main():
             }
             analyst_output=""
             analyst_error=""
+            prior_batch = db.recent_idea_results()
             analyst_prompt=(
                 "Research task:\n"+args.task+
                 "\n\nIndependent performance review trigger: "+review_trigger+
                 "\nCall project_status first. Inspect only the minimum additional v20 "
-                "evidence needed to diagnose performance. Produce a concise independent "
-                "review and one selected next experiment direction for the Experiment "
-                "Engineer."
+                "evidence needed to diagnose performance. Produce exactly 10 structurally "
+                "distinct test ideas in the required JSON schema."
             )
+            if prior_batch:
+                analyst_prompt += (
+                    "\n\nRESULTS FROM THE MOST RECENT IDEA BATCH:\n"
+                    + j(prior_batch)
+                    + "\nUse these measured outcomes as evidence. Do not recycle failed "
+                      "idea families unless the new hypothesis explains why the failure "
+                      "would not apply."
+                )
             try:
                 analyst_result=Runner.run_sync(
                     analyst_agent,
@@ -1134,21 +1168,44 @@ def main():
                     output=analyst_error
                     break
             elif analyst_output:
-                review_id=db.record_strategy_review(
-                    run_id,review_trigger,analyst_output,
-                    analyst_usage,analyst_cost
-                )
-                strategy_guidance=analyst_output
-                new_strategy_review=analyst_output
-                log.event("specialist_review_finish", {
-                    "role":"performance_analyst",
-                    "model":analyst_model,
-                    "reasoning_effort":args.analyst_reasoning_effort,
-                    "review_id":review_id,
-                    "trigger":review_trigger,
-                    "usage":analyst_usage,
-                    "conservative_cost_usd":analyst_cost,
-                })
+                try:
+                    parsed_review=parse_analyst_batch(analyst_output)
+                except Exception as exc:
+                    log.event("specialist_review_error", {
+                        "role":"performance_analyst",
+                        "trigger":review_trigger,
+                        "error":"invalid analyst batch: "+str(exc),
+                        "raw_output":analyst_output[:4000],
+                    })
+                    parsed_review=None
+                if parsed_review is not None:
+                    review_id=db.record_strategy_review(
+                        run_id,review_trigger,analyst_output,
+                        analyst_usage,analyst_cost
+                    )
+                    batch_out=db.add_idea_batch(
+                        review_id,parsed_review["ideas"]
+                    )
+                    if "error" in batch_out:
+                        log.event("specialist_review_error", {
+                            "role":"performance_analyst",
+                            "trigger":review_trigger,
+                            "error":batch_out["error"],
+                        })
+                    else:
+                        strategy_guidance=analyst_output
+                        new_strategy_review=analyst_output
+                        log.event("specialist_review_finish", {
+                            "role":"performance_analyst",
+                            "model":analyst_model,
+                            "reasoning_effort":args.analyst_reasoning_effort,
+                            "review_id":review_id,
+                            "trigger":review_trigger,
+                            "idea_count":batch_out["count"],
+                            "idea_ids":batch_out["idea_ids"],
+                            "usage":analyst_usage,
+                            "conservative_cost_usd":analyst_cost,
+                        })
 
             if not budget.can_call():
                 status="BUDGET_STOP"
@@ -1172,6 +1229,19 @@ def main():
                 ).strip()
                 break
 
+        next_idea = db.next_pending_idea() if args.allow_exec else None
+        if args.allow_exec and next_idea is None:
+            # Invalid/empty analyst output will be retried by the review trigger
+            # on the next controller pass instead of letting the engineer improvise.
+            continuation=(
+                "No pending analyst idea is available. Inspect project_status only; "
+                "do not invent an untracked experiment. The controller will request "
+                "another analyst batch."
+            )
+            app.active_idea_id=""
+        else:
+            app.active_idea_id=next_idea["idea_id"] if next_idea else ""
+
         cycle += 1
         hooks=BudgetHooks(
             log,
@@ -1191,9 +1261,24 @@ def main():
             cycle_prompt += (
                 "\n\nINDEPENDENT PERFORMANCE ANALYST REVIEW:\n"
                 + new_strategy_review
-                + "\n\nUse this as advisory evidence. Convert the selected direction "
-                  "into concrete candidate code and measured replay; do not merely restate "
-                  "the review."
+            )
+        if next_idea:
+            cycle_prompt += (
+                "\n\nASSIGNED IDEA TO IMPLEMENT NOW:\n"
+                + j({
+                    "idea_id":next_idea["idea_id"],
+                    "batch_index":next_idea["batch_index"],
+                    "title":next_idea["title"],
+                    "hypothesis":next_idea["hypothesis"],
+                    "causal_layer":next_idea["causal_layer"],
+                    "rationale":next_idea["rationale"],
+                    "smallest_test":next_idea["smallest_test"],
+                    "promotion_rule":next_idea["promotion_rule"],
+                })
+                + "\nImplement this specific idea, call start_experiment once, run the "
+                  "smallest useful static replay, expand only when its promotion rule is "
+                  "met, record the result, and finish the experiment. Do not skip ahead "
+                  "to another analyst idea in the same cycle."
             )
         try:
             result=Runner.run_sync(
@@ -1255,6 +1340,7 @@ def main():
         persist_budget_ledger(budget,args.model,usage,inp_price,out_price)
         output=cycle_output or output
 
+        app.active_idea_id=""
         goal=latest_goal_state(db)
         goal_reached=bool(goal and goal.get("reached_at"))
         signal=db.research_signal()
@@ -1296,30 +1382,12 @@ def main():
             status="DONE"
             break
 
-        if signal["stagnating"]:
-            continuation=(
-                "STRATEGY RESET REQUIRED. The durable goal is still unmet and the recent "
-                "search is stagnant: at least four consecutive rejected experiments have "
-                "produced neither a win nor positive mean margin improvement. Do NOT make "
-                "another small variant of the recent hypotheses. Re-inspect raw v20 loss "
-                "evidence and v20 policy logic, identify a different causal layer, and run "
-                "a structurally different experiment. Consider worker actions/task ranking/"
-                "logistics/planning/inventory/market rather than staying in one family. "
-                "Rotate or stratify the screening histories if the same small screen has "
-                "been reused. Use project_status and the recent hypotheses as negative "
-                "evidence, then execute the next experiment. Recent hypotheses: "
-                + j(signal["recent_hypotheses"])
-            )
-        else:
-            continuation=(
-                "Continue the SAME research task and session. The durable goal is still "
-                "unmet. Do not stop merely because a candidate was rejected, one experiment "
-                "finished, or you have a recommendation for the next step. Inspect "
-                "project_status, use prior negative results, create the next justified "
-                "candidate/experiment, execute static replay, and continue making measured "
-                "progress. Only a reached durable goal, exhausted configured API budget, or "
-                "a concrete runtime blocker may terminate the autonomous loop."
-            )
+        continuation=(
+            "Continue the SAME research task and session. The durable goal is still "
+            "unmet. The controller will assign the next pending analyst idea. Use prior "
+            "measured results as evidence, implement only the assigned idea, execute "
+            "static replay, and record the conclusion. Do not invent an unqueued idea."
+        )
 
     elapsed=time.monotonic()-started
     if status=="DONE" and args.allow_exec:
