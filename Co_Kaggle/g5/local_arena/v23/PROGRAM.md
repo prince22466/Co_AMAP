@@ -52,3 +52,8 @@ Available OpenAI API credit is approximately $6. v1 uses `gpt-6-luna` with low r
 A bounded run should locate relevant prior evidence without dumping the repository into context, state a concrete hypothesis, identify or execute a small experiment, separate evidence from conjecture, write a concise research record, and stay well below budget.
 
 Only after that behavior is reliable should v23 gain source-patching and automatic A/B candidate promotion.
+
+
+## Filesystem boundary
+
+v23 is self-contained. The research agent must not inspect or depend on sibling directories. Its complete input surface is `working_files/`, and its generated research surface is `workspace/`. All tool paths are resolved against the v23 directory and traversal outside that root is rejected.
