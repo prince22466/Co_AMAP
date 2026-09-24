@@ -74,8 +74,18 @@ From `Co_Kaggle/g5/local_arena/v23`:
 
 ```bash
 python setup_envs.py
-export OPENAI_API_KEY="..."
 ```
+
+You can pass the model and API key directly when starting the agent:
+
+```bash
+.venv-agent/bin/python research_agent.py \
+  --model gpt-6-luna \
+  --api-key "sk-proj-..." \
+  --task "Inspect v20 losses and propose the smallest useful experiment."
+```
+
+`--api-key` takes precedence over `OPENAI_API_KEY`. If you omit it, the existing environment variable is still supported. The key value is not written to run config, logs, the experiment database, or the replay subprocess.
 
 This creates:
 
@@ -98,7 +108,7 @@ export V23_REPLAY_PYTHON=/path/to/replay/python
 
 The runtime rejects using the same interpreter for both roles.
 
-Do not commit the API key. The replay subprocess strips OpenAI/token/secret/password/credential environment variables before executing candidate code.
+Do not commit the API key. If you pass `--api-key`, remember that command-line arguments may be visible in shell history or process listings on some systems. The replay subprocess strips OpenAI/token/secret/password/credential environment variables before executing candidate code.
 
 ### No-API smoke tests
 
@@ -130,6 +140,8 @@ v23 FP16 enforcement smoke test: OK
 
 ```bash
 .venv-agent/bin/python research_agent.py \
+  --model gpt-6-luna \
+  --api-key "sk-proj-..." \
   --task "Inspect the v20 notebook and its recorded loss cases. Diagnose one concrete failure mechanism and design the smallest candidate change to test it with static replay."
 ```
 
@@ -139,6 +151,8 @@ A read-only run does not require Kaggle imports in the agent process.
 
 ```bash
 .venv-agent/bin/python research_agent.py \
+  --model gpt-6-luna \
+  --api-key "sk-proj-..." \
   --allow-exec \
   --task "Start from v20 and its loss cases. Build or select one candidate agent, evaluate it with static replacement replay on the smallest useful subset, then report repaired, improved, and worsened cases."
 ```
