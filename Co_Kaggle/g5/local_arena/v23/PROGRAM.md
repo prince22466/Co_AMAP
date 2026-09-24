@@ -7,13 +7,15 @@ Build an autonomous, evidence-driven research loop for improving the Kaggricultu
 v23 should first understand the existing chain:
 
 ```text
-v20 baseline / game histories
-    -> v21 worker-action Q-learning
-    -> v22 selling-only PPO
-    -> v23 research decisions
+v20 notebook + game_history/v20 losses
+    -> diagnose a concrete failure
+    -> candidate replacement policy
+    -> static replay with recorded opponent actions
+    -> compare candidate vs recorded v20 margins
+    -> next hypothesis
 ```
 
-v23 is initially an orchestration/research layer. A new learning algorithm should be introduced only after existing evidence identifies a concrete bottleneck.
+v23 is an orchestration/research layer built directly on v20. v21/v22 are not research inputs; only their generic replay implementation patterns may be reused where useful.
 
 ## Research contract
 
