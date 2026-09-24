@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
+import re
 import sys
 import time
 import types
@@ -29,6 +31,138 @@ def _inside_v23(path: Path) -> Path:
     return path
 
 
+FORBIDDEN_FLOAT_PATTERNS = (
+    r"torch\.float32\b", r"torch\.float64\b", r"torch\.double\b", r"torch\.bfloat16\b",
+    r"np\.float32\b", r"np\.float64\b", r"numpy\.float32\b", r"numpy\.float64\b",
+    r"dtype\s*=\s*[\"']float32[\"']", r"dtype\s*=\s*[\"']float64[\"']",
+    r"dtype\s*=\s*[\"']double[\"']", r"dtype\s*=\s*[\"']bfloat16[\"']",
+    r"\.float\(\)", r"\.double\(\)",
+)
+
+
+def _candidate_source(path: Path) -> str:
+    if path.suffix == ".ipynb":
+        from static_replay import _extract_notebook_main
+        return _extract_notebook_main(path)
+    return path.read_text(encoding="utf-8")
+
+
+def _audit_fp16_source(path: Path) -> dict:
+    source = _candidate_source(path)
+    violations = []
+    for pattern in FORBIDDEN_FLOAT_PATTERNS:
+        for match in re.finditer(pattern, source):
+            line = source.count("\n", 0, match.start()) + 1
+            violations.append({"line": line, "pattern": pattern, "text": match.group(0)})
+    return {"ok": not violations, "violations": violations[:50]}
+
+
+def _set_fp16_defaults() -> dict:
+    info = {"torch": "not-imported"}
+    try:
+        import torch
+        torch.set_default_dtype(torch.float16)
+        info["torch"] = str(torch.get_default_dtype())
+    except Exception as exc:
+        info["torch"] = f"unavailable: {type(exc).__name__}: {exc}"
+    return info
+
+
+@contextlib.contextmanager
+def _numpy_fp16_candidate_defaults():
+    """Force candidate-created NumPy floating arrays to FP16 during agent(obs)."""
+    try:
+        import numpy as np
+    except Exception:
+        yield
+        return
+
+    originals = {}
+    names = ("array", "asarray", "zeros", "ones", "empty", "full")
+    for name in names:
+        originals[name] = getattr(np, name)
+
+    def _cast_float_array(value):
+        try:
+            if isinstance(value, np.ndarray) and np.issubdtype(value.dtype, np.floating):
+                if value.dtype != np.float16:
+                    return value.astype(np.float16, copy=False)
+        except Exception:
+            pass
+        return value
+
+    def array(*args, **kwargs):
+        if kwargs.get("dtype") is not None:
+            return originals["array"](*args, **kwargs)
+        return _cast_float_array(originals["array"](*args, **kwargs))
+
+    def asarray(*args, **kwargs):
+        if kwargs.get("dtype") is not None:
+            return originals["asarray"](*args, **kwargs)
+        return _cast_float_array(originals["asarray"](*args, **kwargs))
+
+    def zeros(*args, **kwargs):
+        if kwargs.get("dtype") is None:
+            kwargs["dtype"] = np.float16
+        return originals["zeros"](*args, **kwargs)
+
+    def ones(*args, **kwargs):
+        if kwargs.get("dtype") is None:
+            kwargs["dtype"] = np.float16
+        return originals["ones"](*args, **kwargs)
+
+    def empty(*args, **kwargs):
+        if kwargs.get("dtype") is None:
+            kwargs["dtype"] = np.float16
+        return originals["empty"](*args, **kwargs)
+
+    def full(*args, **kwargs):
+        if kwargs.get("dtype") is not None:
+            return originals["full"](*args, **kwargs)
+        return _cast_float_array(originals["full"](*args, **kwargs))
+
+    np.array, np.asarray = array, asarray
+    np.zeros, np.ones, np.empty, np.full = zeros, ones, empty, full
+    try:
+        yield
+    finally:
+        for name, fn in originals.items():
+            setattr(np, name, fn)
+
+
+def _audit_runtime_globals(module: types.ModuleType) -> dict:
+    violations = []
+    try:
+        import torch
+    except Exception:
+        torch = None
+    try:
+        import numpy as np
+    except Exception:
+        np = None
+
+    for name, value in module.__dict__.items():
+        if name.startswith("__"):
+            continue
+        try:
+            if torch is not None and isinstance(value, torch.Tensor):
+                if value.is_floating_point() and value.dtype != torch.float16:
+                    violations.append({"name": name, "kind": "torch_tensor", "dtype": str(value.dtype)})
+            elif torch is not None and isinstance(value, torch.nn.Module):
+                for pname, param in value.named_parameters(recurse=True):
+                    if param.is_floating_point() and param.dtype != torch.float16:
+                        violations.append({"name": f"{name}.{pname}", "kind": "parameter", "dtype": str(param.dtype)})
+                for bname, buf in value.named_buffers(recurse=True):
+                    if buf.is_floating_point() and buf.dtype != torch.float16:
+                        violations.append({"name": f"{name}.{bname}", "kind": "buffer", "dtype": str(buf.dtype)})
+            elif np is not None and isinstance(value, np.ndarray):
+                if np.issubdtype(value.dtype, np.floating) and value.dtype != np.float16:
+                    violations.append({"name": name, "kind": "numpy_array", "dtype": str(value.dtype)})
+        except Exception:
+            continue
+    return {"ok": not violations, "violations": violations[:50]}
+
+
 def _load_python_agent(path: Path):
     source = path.read_text(encoding="utf-8")
     module = types.ModuleType(f"v23_candidate_{id(source)}")
@@ -37,7 +171,7 @@ def _load_python_agent(path: Path):
     agent = getattr(module, "agent", None)
     if not callable(agent):
         raise ValueError(f"{path}: expected callable agent(obs)")
-    return agent
+    return module, agent
 
 
 def evaluate(candidate: Path, episodes: list[str], max_episodes: int):
@@ -51,10 +185,27 @@ def evaluate(candidate: Path, episodes: list[str], max_episodes: int):
     if not paths:
         raise ValueError("no matching v20 loss histories")
 
+    precision_audit = _audit_fp16_source(candidate)
+    if not precision_audit["ok"]:
+        return {
+            "error": "candidate violates FP16 precision contract",
+            "precision_audit": precision_audit,
+        }
+
+    fp16_defaults = _set_fp16_defaults()
     if candidate.suffix == ".ipynb":
-        _, candidate_agent = _load_notebook_agent(candidate, "v23_candidate")
+        candidate_module, candidate_agent = _load_notebook_agent(candidate, "v23_candidate")
     else:
-        candidate_agent = _load_python_agent(candidate)
+        candidate_module, candidate_agent = _load_python_agent(candidate)
+
+    runtime_audit = _audit_runtime_globals(candidate_module)
+    if not runtime_audit["ok"]:
+        return {
+            "error": "candidate runtime globals violate FP16 precision contract",
+            "precision_audit": precision_audit,
+            "runtime_precision_audit": runtime_audit,
+            "fp16_defaults": fp16_defaults,
+        }
 
     rows = []
     for history_path in paths:
@@ -92,7 +243,14 @@ def evaluate(candidate: Path, episodes: list[str], max_episodes: int):
         try:
             for replay_step in range(1, len(history["steps"])):
                 obs = _agent_observation(env, candidate_seat)
-                action = candidate_agent(obs)
+                with _numpy_fp16_candidate_defaults():
+                    action = candidate_agent(obs)
+                runtime_audit = _audit_runtime_globals(candidate_module)
+                if not runtime_audit["ok"]:
+                    raise RuntimeError(
+                        "candidate created non-FP16 floating runtime state: "
+                        + json.dumps(runtime_audit["violations"][:10], sort_keys=True)
+                    )
                 recorded = _recorded_step_actions(history, replay_step)
                 opponent_action = recorded[opponent_seat]
                 if opponent_action is None:
@@ -177,7 +335,10 @@ def evaluate(candidate: Path, episodes: list[str], max_episodes: int):
             "candidate_seat": "losing v20 seat",
             "opponent_behavior": "recorded historical commands; non-adaptive",
             "recorded_action_parity_required": True,
+            "precision_policy": "candidate floating model/tensor compute defaults to FP16",
+            "fp16_defaults": fp16_defaults,
         },
+        "precision_audit": precision_audit,
         "summary": summary,
         "matches": rows,
     }

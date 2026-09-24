@@ -130,3 +130,32 @@ Research inputs are under `working_files/`:
 Runtime replay now uses the self-contained `static_replay.py` helper inside v23. `working_files/example_train_v21_static_history.py` remains reference-only; its legacy sibling imports are never runtime dependencies.
 
 Generated research artifacts remain confined to `workspace/`.
+
+
+## Execution and FP16 enforcement
+
+Execution-enabled runs are expected to do work, not only produce plans. When `--allow-exec` is present, a successful run must complete at least one valid static-replay case and close its experiment record. Zero valid replay evidence or any unfinished experiment causes the runtime to mark the run `INCOMPLETE`.
+
+Candidate floating-point computation follows the FP16 contract:
+- PyTorch default floating dtype is set to `torch.float16` in the isolated replay process before candidate import;
+- candidate source is audited for obvious explicit wider floating dtypes such as FP32, FP64, double, and BF16;
+- loaded global PyTorch tensors/modules and NumPy floating arrays are audited for non-FP16 state;
+- during each candidate `agent(obs)` call, common NumPy constructors are temporarily wrapped so floating arrays default/cast to `np.float16` while integer arrays remain integer;
+- persistent non-FP16 floating runtime state created during replay causes the candidate replay to fail.
+
+Integer indices, IDs, coordinates, counters, shapes, booleans, action schemas, and environment-required non-floating values remain in their required types. Backend operations that genuinely cannot execute in FP16 are exceptional and must be narrowly scoped and documented.
+
+
+### FP16 enforcement smoke test
+
+After installing requirements:
+
+```bash
+python local_arena/v23/smoke_test_fp16.py
+```
+
+Expected output:
+
+```text
+v23 FP16 enforcement smoke test: OK
+```

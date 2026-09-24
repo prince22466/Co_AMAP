@@ -87,3 +87,44 @@ Conversation memory and research memory are separate:
 - experiments.sqlite3 stores compact scientific evidence and negative results so the model does not need to replay the entire conversation history.
 
 Tracing is provided by the OpenAI Agents SDK. Domain-specific research semantics remain in the local SQLite database.
+
+
+## Mandatory execution contract
+
+When the agent is launched with `--allow-exec`, planning-only completion is not acceptable.
+
+An execution-enabled run MUST, unless blocked by a concrete runtime error or exhausted budget:
+1. inspect enough evidence to select one falsifiable hypothesis;
+2. create or select a concrete candidate policy;
+3. call `start_experiment`;
+4. execute at least one `static_replay_candidate` evaluation;
+5. analyze the measured result;
+6. call `finish_experiment` with SUPPORTED, REJECTED, UNRESOLVED, or ERROR.
+
+The agent must not stop after proposing code, describing an experiment, or writing a plan when execution is enabled. It must perform the experiment and record evidence.
+
+If execution is blocked, the final record must name the exact blocker and the failed tool/step. A run that has execution enabled but performs zero static replay calls is incomplete.
+
+## FP16 precision contract
+
+FP16 is the default and required floating-point precision for v23 candidate models and numerical policy computation.
+
+Required:
+- neural-network/model floating weights: `float16`;
+- floating activations/tensors created by candidate code: `float16`;
+- NumPy floating arrays created for candidate computation: `float16`;
+- PyTorch default floating dtype is set to `torch.float16` in the isolated replay child before candidate loading;
+- checkpoints or learned floating parameters created by v23 experiments must be stored in FP16 unless an external format cannot represent FP16.
+
+Not converted to FP16:
+- integer action codes, IDs, coordinates, counters, indices, shapes, lengths, seeds, and enum values;
+- boolean masks and flags;
+- Kaggriculture environment observations/actions whose schema requires Python integers, booleans, strings, or other non-floating types;
+Disallowed in candidate floating-point computation:
+- explicit `float32`, `float64`, `double`, or `bfloat16` model/tensor dtypes;
+- silent promotion of model weights or activations to wider floating precision;
+- widening a candidate computation merely because a backend operation is inconvenient in FP16.
+
+If an algorithm cannot run under this contract on the available backend, change the algorithm rather than silently widening precision.
+
+Static replay performs a source-level precision audit before executing a candidate and rejects obvious explicit wider floating-point dtypes.
