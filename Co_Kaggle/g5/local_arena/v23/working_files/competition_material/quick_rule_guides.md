@@ -157,6 +157,17 @@ You sell to the shared market and get paid immediately. Shops automatically cons
 
 
 
+Town Center demand
+In addition to unlocked shops, the Town Center consumes products from the shared market throughout the entire game.
+- It consumes 1 unit of every non-fertilizer product every 24 turns by default — once per in-game day.
+- This demand exists from the start of the game and does not depend on which shops have unlocked.
+- Fertilizer is not consumed by the Town Center.
+- Town Center consumption removes goods from shared market inventory, which can affect market prices.
+- The Town Center does not buy directly from players. Players sell to the shared market; the Town Center later consumes goods from that market.
+Therefore, even when no shops are unlocked, there is still baseline demand for wheat, carrot, tomato, strawberry, melon, eggs, milk, and wool.
+
+
+
 The shops buy from the shared market 6 times per day, once every 4 turns. That schedule doesn’t restrict when you sell.
 
 
