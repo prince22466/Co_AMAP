@@ -45,6 +45,8 @@ Negative results are first-class results.
 
 ## Cost policy
 
+The agent model is selected at startup with `--model`. The OpenAI API key may be supplied with `--api-key` or, as a fallback, `OPENAI_API_KEY`. The key itself must never be written to run logs, config files, experiment databases, or replay-process arguments.
+
 Available OpenAI API credit is approximately $6. v23 uses `gpt-6-luna` with low reasoning effort and a persistent local ledger. The default project ceiling is $5.00 with a $0.25 per-run ceiling. There is no automatic escalation to Sol/Astra.
 
 ## Success criteria
