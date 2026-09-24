@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 V23_ROOT = Path(__file__).resolve().parents[1]
@@ -95,6 +96,29 @@ def main() -> int:
         cost = runtime.conservative_cost_usd(usage, 0.10, 0.50)
         assert cost > 0
         db.finish_run(run_id, "DONE", usage, cost, "smoke complete", 0.01)
+
+        # Agents SDK function tools may run on worker threads. Reproduce that
+        # boundary explicitly so sqlite thread-affinity regressions fail CI.
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            threaded_status = pool.submit(db.project_status).result()
+            threaded_goal = pool.submit(db.set_goal, "wins", ">=", 1.0, 0).result()
+            threaded_experiment = pool.submit(
+                db.start_experiment,
+                run_id,
+                "Cross-thread DB tool call works.",
+                "",
+                "",
+                "thread smoke",
+            ).result()
+            threaded_finished = pool.submit(
+                db.finish_experiment,
+                threaded_experiment,
+                "UNRESOLVED",
+                "thread smoke complete",
+            ).result()
+        assert threaded_status["runs_completed"] == 1
+        assert threaded_goal.startswith("goal_")
+        assert threaded_finished["status"] == "UNRESOLVED"
 
         status = db.project_status()
         assert status["runs_completed"] == 1
