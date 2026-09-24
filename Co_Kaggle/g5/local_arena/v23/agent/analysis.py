@@ -312,10 +312,16 @@ def analyze_experiment_records(db: Any, review_id: str | None = None) -> dict[st
         idea = dossier["idea"]
         experiments = dossier["experiments"]
         exp = experiments[-1] if experiments else {}
-        wins = int(exp.get("wins") or 0)
-        losses = int(exp.get("losses") or 0)
-        cases = int(exp.get("replay_cases") or 0)
-        mean = float(exp.get("mean_margin_improvement") or 0.0)
+        games = _latest_games_by_episode(dossier, valid_only=True)
+        improvements = [
+            float(game["margin_improvement"])
+            for game in games
+            if isinstance(game.get("margin_improvement"), (int, float))
+        ]
+        wins = sum(1 for game in games if game.get("result") == "WIN")
+        losses = sum(1 for game in games if game.get("result") == "LOSS")
+        cases = len(games)
+        mean = sum(improvements) / len(improvements) if improvements else 0.0
         layer = str(idea.get("causal_layer") or "other")
         components = sorted(idea.get("components") or [])
         comp_key = " + ".join(components) if components else "(unspecified)"
@@ -345,8 +351,8 @@ def analyze_experiment_records(db: Any, review_id: str | None = None) -> dict[st
             "losses":losses,
             "replay_cases":cases,
             "mean_margin_improvement":mean,
-            "best_margin_improvement":exp.get("best_margin_improvement"),
-            "regressions":exp.get("regressions"),
+            "best_margin_improvement":max(improvements) if improvements else None,
+            "regressions":sum(1 for x in improvements if x < 0),
             "game_record_paths":[
                 game["game_record_path"]
                 for call in dossier["replay_calls"]
@@ -387,5 +393,422 @@ def analyze_experiment_records(db: Any, review_id: str | None = None) -> dict[st
         "note":(
             "Aggregates are descriptive evidence only. Correlation between a component "
             "and outcome does not establish causality; use controlled replay experiments."
+        ),
+    }
+
+
+def _find_scalar_paths_by_terms(scalars: dict[str, float], terms: tuple[str, ...]) -> dict[str, float]:
+    return {
+        path: value for path, value in scalars.items()
+        if any(term in path.lower() for term in terms)
+    }
+
+
+def _load_game_record(root: Path, rel_path: str) -> dict[str, Any]:
+    path = (root / rel_path).resolve()
+    path.relative_to(root.resolve())
+    if not path.is_file():
+        raise FileNotFoundError(f"game record not found: {rel_path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _latest_games_by_episode(dossier: dict[str, Any], valid_only: bool = False) -> list[dict[str, Any]]:
+    """Return one canonical replay row per episode, preferring the latest call."""
+    latest: dict[str, dict[str, Any]] = {}
+    for call in dossier.get("replay_calls", []):
+        for game in call.get("games", []):
+            episode = str(game.get("episode") or "")
+            if not episode:
+                continue
+            row = dict(game)
+            row["replay_call_id"] = call.get("replay_call_id")
+            row["candidate"] = call.get("candidate")
+            latest[episode] = row
+    rows = list(latest.values())
+    if valid_only:
+        rows = [row for row in rows if bool(row.get("valid"))]
+    return rows
+
+
+def compare_candidate_to_v20(root: Path, db: Any, idea_id: str, episode: str) -> dict[str, Any]:
+    dossier = db.idea_dossier(idea_id)
+    if dossier is None:
+        raise ValueError("unknown idea_id: " + idea_id)
+    matches = [
+        game for game in _latest_games_by_episode(dossier)
+        if str(game.get("episode")) == str(episode)
+    ]
+    if not matches:
+        raise ValueError(f"idea {idea_id} has no replay for episode {episode}")
+    game = matches[-1]
+    record_path = game.get("game_record_path")
+    trace = _load_game_record(root, record_path) if record_path else None
+    divergences = []
+    if trace:
+        for step in trace.get("steps", []):
+            if step.get("diverged_from_v20"):
+                divergences.append({
+                    "replay_step": step.get("replay_step"),
+                    "day": step.get("day"),
+                    "hour": step.get("hour"),
+                    "candidate_action": step.get("candidate_action"),
+                    "recorded_v20_action": step.get("recorded_v20_action"),
+                    "recorded_opponent_action": step.get("recorded_opponent_action"),
+                })
+    experiment = dossier["experiments"][-1] if dossier["experiments"] else {}
+    return {
+        "idea_id": idea_id,
+        "episode": episode,
+        "experiment_id": experiment.get("experiment_id"),
+        "candidate": experiment.get("candidate"),
+        "candidate_sha256": experiment.get("candidate_sha256"),
+        "replay_call_id": game.get("replay_call_id"),
+        "game_record_path": record_path,
+        "original_v20_margin": game.get("original_v20_margin"),
+        "candidate_margin": game.get("candidate_margin"),
+        "margin_improvement": game.get("margin_improvement"),
+        "result": game.get("result"),
+        "action_divergences": game.get("action_divergences"),
+        "first_divergence": divergences[0] if divergences else None,
+        "divergence_examples": divergences[:20],
+        "trace_steps": len(trace.get("steps", [])) if trace else 0,
+        "interpretation_note": (
+            "This comparison establishes measured action/outcome differences. "
+            "Replay traces currently do not persist the full counterfactual state each turn, "
+            "so state-level causal claims require additional replay instrumentation."
+        ),
+    }
+
+
+def analyze_cash_flow(root: Path, episode: str) -> dict[str, Any]:
+    _, history = load_loss_history(root, episode)
+    steps = history.get("steps") or []
+    if not steps:
+        raise ValueError("history has no steps")
+    rewards = [float(_field(state, "reward", 0.0) or 0.0) for state in steps[-1]]
+    loser = 0 if rewards[0] <= rewards[1] else 1
+    opponent = 1 - loser
+    terms = ("money", "cash", "bank", "balance", "reward", "price")
+    rows = []
+    previous = None
+    for turn, pair in enumerate(steps):
+        snap = _state_snapshot(pair[loser])
+        scalar = _find_scalar_paths_by_terms(snap["scalars"], terms)
+        if previous is not None:
+            changes = _deltas(previous, scalar, 20)
+            if changes:
+                rows.append({
+                    "turn": turn,
+                    "action_labels": snap["action_labels"],
+                    "cash_like_changes": changes,
+                })
+        previous = scalar
+    by_path: dict[str, float] = defaultdict(float)
+    for row in rows:
+        for change in row["cash_like_changes"]:
+            by_path[str(change["path"])] += float(change["delta"])
+    return {
+        "episode": episode,
+        "v20_seat": loser,
+        "opponent_seat": opponent,
+        "final_margin": rewards[loser] - rewards[opponent],
+        "net_change_by_cash_like_path": sorted(
+            [{"path": k, "net_delta": v} for k, v in by_path.items()],
+            key=lambda x: abs(x["net_delta"]),
+            reverse=True,
+        )[:30],
+        "largest_cash_events": sorted(
+            rows,
+            key=lambda row: sum(abs(float(x["delta"])) for x in row["cash_like_changes"]),
+            reverse=True,
+        )[:30],
+        "note": (
+            "This is an accounting-style decomposition of observable cash-like fields. "
+            "It does not assign causality to policy components."
+        ),
+    }
+
+
+def analyze_inventory_flow(root: Path, episode: str) -> dict[str, Any]:
+    _, history = load_loss_history(root, episode)
+    steps = history.get("steps") or []
+    if not steps:
+        raise ValueError("history has no steps")
+    if not isinstance(steps[-1], list) or len(steps[-1]) != 2:
+        raise ValueError("expected two players")
+    rewards = [float(_field(state, "reward", 0.0) or 0.0) for state in steps[-1]]
+    loser = 0 if rewards[0] <= rewards[1] else 1
+    terms = (
+        "inventory", "capacity", "shed", "wheat", "fertil", "egg",
+        "milk", "wool", "strawberry", "melon",
+    )
+    path_series: dict[str, list[tuple[int, float]]] = defaultdict(list)
+    for turn, pair in enumerate(steps):
+        snap = _state_snapshot(pair[loser])
+        for path, value in _find_scalar_paths_by_terms(snap["scalars"], terms).items():
+            path_series[path].append((turn, value))
+    summaries = []
+    for path, series in path_series.items():
+        if not series:
+            continue
+        values = [v for _, v in series]
+        peak_turn, peak_value = max(series, key=lambda x: x[1])
+        summaries.append({
+            "path": path,
+            "start": series[0][1],
+            "end": series[-1][1],
+            "net_change": series[-1][1] - series[0][1],
+            "peak": peak_value,
+            "peak_turn": peak_turn,
+        })
+    summaries.sort(
+        key=lambda x: (abs(float(x["net_change"])), abs(float(x["peak"]))),
+        reverse=True,
+    )
+    return {
+        "episode": episode,
+        "v20_seat": loser,
+        "final_margin": rewards[loser] - rewards[1 - loser],
+        "inventory_capacity_paths": summaries[:60],
+        "note": (
+            "Generic schema-driven inventory analysis. Paths should be interpreted with "
+            "competition semantics before inferring overflow or bottleneck causality."
+        ),
+    }
+
+
+def analyze_worker_utilization(root: Path, episode: str) -> dict[str, Any]:
+    _, history = load_loss_history(root, episode)
+    steps = history.get("steps") or []
+    if not steps:
+        raise ValueError("history has no steps")
+    if not isinstance(steps[-1], list) or len(steps[-1]) != 2:
+        raise ValueError("expected two players")
+    rewards = [float(_field(state, "reward", 0.0) or 0.0) for state in steps[-1]]
+    loser = 0 if rewards[0] <= rewards[1] else 1
+    counts = Counter()
+    per_turn = []
+    categories = {
+        "idle_pass": ("pass", "idle"),
+        "transport": ("move", "pickup", "drop"),
+        "crop_work": ("plant", "water", "fertil", "harvest"),
+        "animal_work": ("feed", "care", "collect", "place"),
+        "market_or_admin": ("hire", "buy", "sell", "land"),
+    }
+    for turn, pair in enumerate(steps):
+        labels = _state_snapshot(pair[loser])["action_labels"]
+        turn_categories = Counter()
+        for label in labels:
+            low = label.lower()
+            matched = False
+            for category, terms in categories.items():
+                if any(term in low for term in terms):
+                    counts[category] += 1
+                    turn_categories[category] += 1
+                    matched = True
+            if not matched:
+                counts["other"] += 1
+                turn_categories["other"] += 1
+        if turn_categories:
+            per_turn.append({"turn": turn, "categories": dict(turn_categories)})
+    total = sum(counts.values())
+    return {
+        "episode": episode,
+        "v20_seat": loser,
+        "final_margin": rewards[loser] - rewards[1 - loser],
+        "action_category_counts": dict(counts),
+        "action_category_share": {
+            key: (value / total if total else 0.0)
+            for key, value in counts.items()
+        },
+        "active_turn_examples": per_turn[:80],
+        "note": (
+            "Utilization is inferred from recorded action labels, not wall-clock worker "
+            "occupancy. It is useful for spotting transport/idle-heavy policies."
+        ),
+    }
+
+
+def component_effect_matrix(db: Any, review_id: str | None = None) -> dict[str, Any]:
+    analysis = analyze_experiment_records(db, review_id)
+    if analysis.get("scope") != "idea_batch":
+        return analysis
+    rows = []
+    for item in analysis["ideas"]:
+        components = item.get("components") or ["(unspecified)"]
+        for component in components:
+            rows.append({
+                "component": component,
+                "idea_id": item["idea_id"],
+                "wins": int(item.get("wins") or 0),
+                "losses": int(item.get("losses") or 0),
+                "replay_cases": int(item.get("replay_cases") or 0),
+                "mean_margin_improvement": float(item.get("mean_margin_improvement") or 0.0),
+            })
+    grouped: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        g = grouped.setdefault(row["component"], {
+            "component": row["component"],
+            "ideas": 0,
+            "wins": 0,
+            "losses": 0,
+            "replay_cases": 0,
+            "mean_margin_sum": 0.0,
+            "idea_ids": [],
+        })
+        g["ideas"] += 1
+        g["wins"] += row["wins"]
+        g["losses"] += row["losses"]
+        g["replay_cases"] += row["replay_cases"]
+        g["mean_margin_sum"] += row["mean_margin_improvement"]
+        g["idea_ids"].append(row["idea_id"])
+    matrix = []
+    for g in grouped.values():
+        n = max(1, g["ideas"])
+        matrix.append({
+            "component": g["component"],
+            "ideas": g["ideas"],
+            "idea_ids": g["idea_ids"],
+            "wins": g["wins"],
+            "losses": g["losses"],
+            "replay_cases": g["replay_cases"],
+            "mean_of_experiment_mean_margin_improvement": g["mean_margin_sum"] / n,
+        })
+    matrix.sort(
+        key=lambda x: (
+            -x["wins"],
+            -x["mean_of_experiment_mean_margin_improvement"],
+            x["component"],
+        )
+    )
+    return {
+        "review_id": analysis.get("review_id"),
+        "component_matrix": matrix,
+        "component_combinations": analysis.get("by_component_combination", []),
+        "note": (
+            "Descriptive matrix only. Components co-occur across ideas, so rows are not "
+            "independent treatment effects."
+        ),
+    }
+
+
+def cluster_loss_games(root: Path) -> dict[str, Any]:
+    history_dir = root / "working_files" / "loss_games_v20"
+    rows = []
+    for path in sorted(history_dir.glob("*.json")):
+        summary = analyze_loss_history(root, path.stem, window_size=24, top_windows=3)
+        actions = Counter(dict(summary["v20_action_counts"]))
+        transport = sum(v for k, v in actions.items() if any(t in k.lower() for t in ("move", "pickup", "drop")))
+        crop = sum(v for k, v in actions.items() if any(t in k.lower() for t in ("plant", "water", "fertil", "harvest")))
+        animal = sum(v for k, v in actions.items() if any(t in k.lower() for t in ("feed", "care", "collect", "place")))
+        market = sum(v for k, v in actions.items() if any(t in k.lower() for t in ("sell", "buy", "hire", "land")))
+        idle = sum(v for k, v in actions.items() if any(t in k.lower() for t in ("pass", "idle")))
+        features = {
+            "transport_actions": transport,
+            "crop_actions": crop,
+            "animal_actions": animal,
+            "market_actions": market,
+            "idle_actions": idle,
+            "final_margin": float(summary["v20_final_margin"]),
+        }
+        dominant = max(
+            ("transport", "crop", "animal", "market", "idle"),
+            key=lambda name: features[f"{name}_actions"],
+        )
+        rows.append({
+            "episode": path.stem,
+            "cluster": dominant,
+            "features": features,
+            "critical_windows": summary["critical_windows"],
+        })
+    clusters: dict[str, list[str]] = defaultdict(list)
+    for row in rows:
+        clusters[row["cluster"]].append(row["episode"])
+    representatives = []
+    for cluster, episodes in sorted(clusters.items()):
+        candidates = [row for row in rows if row["cluster"] == cluster]
+        representative = max(
+            candidates,
+            key=lambda x: abs(float(x["features"]["final_margin"])),
+        )
+        representatives.append({
+            "cluster": cluster,
+            "episodes": episodes,
+            "representative_episode": representative["episode"],
+        })
+    return {
+        "games": rows,
+        "clusters": representatives,
+        "note": (
+            "These are deterministic behavioral-signature groups, not statistical ML "
+            "clusters. They are intended to diversify replay screens."
+        ),
+    }
+
+
+def hypothesis_evidence(root: Path, db: Any, idea_id: str) -> dict[str, Any]:
+    dossier = db.idea_dossier(idea_id)
+    if dossier is None:
+        raise ValueError("unknown idea_id: " + idea_id)
+    idea = dossier["idea"]
+    experiments = dossier["experiments"]
+    exp = experiments[-1] if experiments else {}
+    all_latest_games = _latest_games_by_episode(dossier)
+    games = [game for game in all_latest_games if bool(game.get("valid"))]
+    invalid_games = [game for game in all_latest_games if not bool(game.get("valid"))]
+    improvements = [
+        float(game["margin_improvement"])
+        for game in games
+        if isinstance(game.get("margin_improvement"), (int, float))
+    ]
+    wins = sum(1 for game in games if game.get("result") == "WIN")
+    losses = sum(1 for game in games if game.get("result") == "LOSS")
+    positive = sum(1 for x in improvements if x > 0)
+    negative = sum(1 for x in improvements if x < 0)
+    unchanged = sum(1 for x in improvements if x == 0)
+    if wins > 0 and positive > negative:
+        verdict = "supported_by_current_replay"
+    elif losses > 0 and negative >= positive:
+        verdict = "contradicted_by_current_replay"
+    else:
+        verdict = "mixed_or_insufficient"
+    return {
+        "idea_id": idea_id,
+        "title": idea.get("title"),
+        "hypothesis": idea.get("hypothesis"),
+        "components": idea.get("components"),
+        "interaction_hypothesis": idea.get("interaction_hypothesis"),
+        "system_prediction": idea.get("system_prediction"),
+        "promotion_rule": idea.get("promotion_rule"),
+        "experiment_id": exp.get("experiment_id"),
+        "candidate": exp.get("candidate"),
+        "candidate_sha256": exp.get("candidate_sha256"),
+        "replay_cases": len(games),
+        "invalid_latest_episodes": len(invalid_games),
+        "wins": wins,
+        "losses": losses,
+        "margin_improved_cases": positive,
+        "margin_worsened_cases": negative,
+        "margin_unchanged_cases": unchanged,
+        "mean_margin_improvement": (
+            sum(improvements) / len(improvements) if improvements else None
+        ),
+        "verdict": verdict,
+        "per_game": [
+            {
+                "episode": game.get("episode"),
+                "result": game.get("result"),
+                "original_v20_margin": game.get("original_v20_margin"),
+                "candidate_margin": game.get("candidate_margin"),
+                "margin_improvement": game.get("margin_improvement"),
+                "game_record_path": game.get("game_record_path"),
+            }
+            for game in games
+        ],
+        "note": (
+            "Only the latest replay result per episode is counted, preventing staged "
+            "1->5->25 screens from double-weighting repeated episodes. Verdict is a "
+            "mechanical summary of current replay evidence, not a proof "
+            "that the proposed causal mechanism is correct."
         ),
     }

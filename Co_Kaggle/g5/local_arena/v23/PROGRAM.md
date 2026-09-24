@@ -202,3 +202,18 @@ Disallowed in candidate floating-point computation:
 If an algorithm cannot run under this contract on the available backend, change the algorithm rather than silently widening precision.
 
 Static replay performs a source-level precision audit before executing a candidate and rejects obvious explicit wider floating-point dtypes.
+
+
+## Performance analysis toolkit
+
+The Performance Analyst has deterministic read-only tools for evidence gathering:
+
+- `compare_candidate_v20(idea_id, episode)`: exact candidate/v20 action divergence plus measured replay outcome.
+- `analyze_cash_flow(episode)`: observable cash-like state changes in a recorded v20 loss.
+- `analyze_inventory_flow(episode)`: inventory/capacity/resource trajectories from the recorded history.
+- `analyze_worker_utilization(episode)`: action-label utilization split across transport, crop, animal, idle, and admin work.
+- `analyze_component_effects(review_id=None)`: descriptive experiment matrix by component and component combination.
+- `cluster_loss_histories()`: deterministic behavioral-signature grouping of all loss histories with representative cases.
+- `evaluate_hypothesis_evidence(idea_id)`: compare the original hypothesis/system prediction with measured replay outcomes.
+
+These tools are evidence compressors, not causal oracles. Historical trajectory summaries are descriptive. Component-effect matrices contain confounding because components may co-occur. Causal claims require controlled static replay. When a replay trace lacks full counterfactual state, the analyzer reports that limitation rather than inferring unrecorded state.

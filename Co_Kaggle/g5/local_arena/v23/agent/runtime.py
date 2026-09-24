@@ -20,9 +20,16 @@ from agents import Agent, ModelSettings, RunConfig, RunContextWrapper, RunHooks,
 from openai.types.shared import Reasoning
 
 from .analysis import (
+    analyze_cash_flow as analyze_cash_flow_data,
     analyze_experiment_records,
+    analyze_inventory_flow as analyze_inventory_flow_data,
     analyze_loss_history,
     analyze_loss_window,
+    analyze_worker_utilization as analyze_worker_utilization_data,
+    cluster_loss_games as cluster_loss_games_data,
+    compare_candidate_to_v20 as compare_candidate_to_v20_data,
+    component_effect_matrix as component_effect_matrix_data,
+    hypothesis_evidence as hypothesis_evidence_data,
 )
 from .support import (
     DEFAULT_MODEL, DEFAULT_SESSION_BUDGET_USD, DEFAULT_TOTAL_BUDGET_USD,
@@ -61,8 +68,11 @@ Engineer a higher-information direction.
 
 Use the available read-only tools selectively:
 - call project_status first;
-- use analyze_experiments for deterministic summaries of experiment records before manually reading rows;
-- use analyze_history_game(episode) to locate suspicious windows in recorded v20 losses, then analyze_history_window only for windows that matter;
+- use analyze_experiments and analyze_component_effects before manually reading experiment rows;
+- use cluster_loss_histories to diversify representative replay cases when useful;
+- use analyze_history_game(episode) to locate suspicious windows in recorded v20 losses, then use analyze_cash_flow, analyze_inventory_flow, analyze_worker_utilization, or analyze_history_window to diagnose the relevant subsystem;
+- use compare_candidate_v20(idea_id, episode) to connect code changes to action divergence and measured outcome;
+- use evaluate_hypothesis_evidence(idea_id) before deciding whether a mechanism is supported, contradicted, or mixed;
 - inspect recent experiment/replay evidence;
 - inspect v20 model structure and raw loss histories only where needed;
 - reason about the whole v20 control system, not isolated functions. Trace feedback
@@ -895,6 +905,62 @@ def analyze_experiments(ctx: RunContextWrapper[AppContext], review_id: str | Non
         return j({"error":f"{type(exc).__name__}: {exc}"})
 
 @function_tool
+def compare_candidate_v20(ctx: RunContextWrapper[AppContext], idea_id: str, episode: str) -> str:
+    """Compare one candidate replay with recorded v20 actions/outcome for an episode."""
+    try:
+        return j(compare_candidate_to_v20_data(ctx.context.local.root, ctx.context.db, idea_id, episode))
+    except Exception as exc:
+        return j({"error":f"{type(exc).__name__}: {exc}"})
+
+@function_tool
+def analyze_cash_flow(ctx: RunContextWrapper[AppContext], episode: str) -> str:
+    """Analyze observable cash-like state changes in one recorded v20 loss."""
+    try:
+        return j(analyze_cash_flow_data(ctx.context.local.root, episode))
+    except Exception as exc:
+        return j({"error":f"{type(exc).__name__}: {exc}"})
+
+@function_tool
+def analyze_inventory_flow(ctx: RunContextWrapper[AppContext], episode: str) -> str:
+    """Analyze observable inventory/capacity/resource paths in one recorded v20 loss."""
+    try:
+        return j(analyze_inventory_flow_data(ctx.context.local.root, episode))
+    except Exception as exc:
+        return j({"error":f"{type(exc).__name__}: {exc}"})
+
+@function_tool
+def analyze_worker_utilization(ctx: RunContextWrapper[AppContext], episode: str) -> str:
+    """Classify recorded v20 actions into transport, crop, animal, idle, and admin work."""
+    try:
+        return j(analyze_worker_utilization_data(ctx.context.local.root, episode))
+    except Exception as exc:
+        return j({"error":f"{type(exc).__name__}: {exc}"})
+
+@function_tool
+def analyze_component_effects(ctx: RunContextWrapper[AppContext], review_id: str | None = None) -> str:
+    """Aggregate experiment outcomes by affected components and component combinations."""
+    try:
+        return j(component_effect_matrix_data(ctx.context.db, review_id))
+    except Exception as exc:
+        return j({"error":f"{type(exc).__name__}: {exc}"})
+
+@function_tool
+def cluster_loss_histories(ctx: RunContextWrapper[AppContext]) -> str:
+    """Group all v20 loss histories by deterministic behavioral signatures and choose representatives."""
+    try:
+        return j(cluster_loss_games_data(ctx.context.local.root))
+    except Exception as exc:
+        return j({"error":f"{type(exc).__name__}: {exc}"})
+
+@function_tool
+def evaluate_hypothesis_evidence(ctx: RunContextWrapper[AppContext], idea_id: str) -> str:
+    """Compare an idea hypothesis/prediction with its measured replay evidence."""
+    try:
+        return j(hypothesis_evidence_data(ctx.context.local.root, ctx.context.db, idea_id))
+    except Exception as exc:
+        return j({"error":f"{type(exc).__name__}: {exc}"})
+
+@function_tool
 def idea_dossier(ctx: RunContextWrapper[AppContext], idea_id: str) -> str:
     """Return canonical lineage for one idea: code version, experiments, replays, and game-record paths."""
     dossier = ctx.context.db.idea_dossier(idea_id)
@@ -1290,7 +1356,10 @@ def main():
       ),
       tools=[
         list_tree,read_text,search_text,summarize_jsonl,project_status,
-        analyze_history_game,analyze_history_window,analyze_experiments,idea_dossier
+        analyze_history_game,analyze_history_window,analyze_experiments,
+        compare_candidate_v20,analyze_cash_flow,analyze_inventory_flow,
+        analyze_worker_utilization,analyze_component_effects,
+        cluster_loss_histories,evaluate_hypothesis_evidence,idea_dossier
       ],
     )
     session=SQLiteSession(args.session_id,str(SESSION_DB))
