@@ -480,6 +480,40 @@ def usage_dict(u):
             "reasoning_tokens":reasoning,"total_tokens":int(getattr(u,"total_tokens",0) or 0)}
 
 
+def add_usage(total: dict[str, int], delta: dict[str, int]) -> None:
+    for key in total:
+        total[key] += int(delta.get(key, 0) or 0)
+
+
+def latest_goal_state(db: ResearchDB) -> dict[str, Any] | None:
+    row = db.db.execute(
+        "SELECT * FROM goals ORDER BY created_at DESC LIMIT 1"
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def persist_budget_ledger(budget: BudgetLedger, model: str, usage: dict[str, int],
+                          input_price: float, output_price: float) -> None:
+    LEDGER_PATH.write_text(
+        json.dumps({
+            **vars(budget.total),
+            "model_last_used": model,
+            "updated_at_utc": utcnow(),
+            "cached_tokens_observed_last_run": usage["cached_tokens"],
+            "cache_write_tokens_observed_last_run": usage["cache_write_tokens"],
+            "reasoning_tokens_observed_last_run": usage["reasoning_tokens"],
+            "pricing_assumption": {
+                "input_usd_per_m": input_price,
+                "output_usd_per_m": output_price,
+                "cached_input_multiplier": 0.10,
+                "cache_write_multiplier": 1.25,
+                "safety_multiplier": 1.10,
+            },
+        }, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
 def parse_args():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument("--task",required=True); p.add_argument("--model",default=DEFAULT_MODEL)
@@ -584,20 +618,128 @@ def main():
             ". Conservative per-run ceiling: USD "+format(args.session_budget_usd,".2f")+
             "; remaining project ledger: USD "+format(budget.remaining_total(),".4f")+
             ". Use durable experiment records and minimize model turns.")
-    hooks=BudgetHooks(log,budget.total.estimated_cost_usd,args.session_budget_usd,
-                      args.total_budget_usd,inp_price,out_price)
     started=time.monotonic(); status="DONE"; output=""
-    try:
-        result=Runner.run_sync(agent,prompt,context=app,session=session,max_turns=args.max_turns,
-          hooks=hooks,
-          run_config=RunConfig(workflow_name="v23 autonomous research",group_id=args.session_id,
-          trace_include_sensitive_data=False,tracing_disabled=args.disable_tracing,
-          trace_metadata={"run_id":run_id,"model":args.model},
-          session_settings=SessionSettings(limit=args.session_history_limit)))
-        output=str(result.final_output or ""); usage=usage_dict(result.context_wrapper.usage)
-    except Exception as exc:
-        status="ERROR"; output=type(exc).__name__+": "+str(exc)
-        usage=dict(hooks.last_usage)
+    usage={"requests":0,"input_tokens":0,"cached_tokens":0,"cache_write_tokens":0,
+           "output_tokens":0,"reasoning_tokens":0,"total_tokens":0}
+    cycle = 0
+    continuation = prompt
+
+    while True:
+        if not budget.can_call():
+            status = "BUDGET_STOP"
+            output = (
+                output.rstrip()
+                + "\n\nAutonomous loop stopped because the configured API budget "
+                  "ceiling was reached before the durable goal."
+            ).strip()
+            log.event("autonomous_stop", {"reason":"budget","cycle":cycle})
+            break
+
+        remaining_session_budget = max(
+            0.0, args.session_budget_usd - budget.session.estimated_cost_usd
+        )
+        if remaining_session_budget <= 0:
+            status = "BUDGET_STOP"
+            output = (
+                output.rstrip()
+                + "\n\nAutonomous loop stopped because the per-run API budget "
+                  "ceiling was reached before the durable goal."
+            ).strip()
+            log.event("autonomous_stop", {"reason":"session_budget","cycle":cycle})
+            break
+
+        cycle += 1
+        hooks=BudgetHooks(
+            log,
+            budget.total.estimated_cost_usd,
+            remaining_session_budget,
+            args.total_budget_usd,
+            inp_price,
+            out_price,
+        )
+        cycle_output = ""
+        cycle_usage = {
+            "requests":0,"input_tokens":0,"cached_tokens":0,"cache_write_tokens":0,
+            "output_tokens":0,"reasoning_tokens":0,"total_tokens":0
+        }
+        try:
+            result=Runner.run_sync(
+              agent, continuation, context=app, session=session,
+              max_turns=args.max_turns, hooks=hooks,
+              run_config=RunConfig(
+                workflow_name="v23 autonomous research",
+                group_id=args.session_id,
+                trace_include_sensitive_data=False,
+                tracing_disabled=args.disable_tracing,
+                trace_metadata={"run_id":run_id,"model":args.model,"cycle":cycle},
+                session_settings=SessionSettings(limit=args.session_history_limit),
+              ),
+            )
+            cycle_output=str(result.final_output or "")
+            cycle_usage=usage_dict(result.context_wrapper.usage)
+        except Exception as exc:
+            cycle_output=type(exc).__name__+": "+str(exc)
+            cycle_usage=dict(hooks.last_usage)
+            exc_name=type(exc).__name__
+            if exc_name not in {"MaxTurnsExceeded"}:
+                status="ERROR"
+                output=cycle_output
+                add_usage(usage, cycle_usage)
+                cycle_cost=conservative_cost_usd(cycle_usage,inp_price,out_price)
+                delta=LegacyUsage(
+                    cycle_usage["input_tokens"],cycle_usage["output_tokens"],
+                    cycle_usage["requests"],cycle_cost
+                )
+                budget.session.add(delta); budget.total.add(delta)
+                persist_budget_ledger(budget,args.model,usage,inp_price,out_price)
+                log.event("autonomous_stop", {
+                    "reason":"runtime_error","cycle":cycle,"error":cycle_output
+                })
+                break
+
+        add_usage(usage, cycle_usage)
+        cycle_cost=conservative_cost_usd(cycle_usage,inp_price,out_price)
+        delta=LegacyUsage(
+            cycle_usage["input_tokens"],cycle_usage["output_tokens"],
+            cycle_usage["requests"],cycle_cost
+        )
+        budget.session.add(delta); budget.total.add(delta)
+        persist_budget_ledger(budget,args.model,usage,inp_price,out_price)
+        output=cycle_output or output
+
+        goal=latest_goal_state(db)
+        goal_reached=bool(goal and goal.get("reached_at"))
+        log.event("autonomous_cycle", {
+            "cycle":cycle,
+            "cycle_output":cycle_output,
+            "cycle_usage":cycle_usage,
+            "cycle_conservative_cost_usd":cycle_cost,
+            "goal":goal,
+            "goal_reached":goal_reached,
+        })
+
+        if goal_reached:
+            status="DONE"
+            output = (
+                cycle_output.rstrip()
+                + "\n\nDurable goal reached; autonomous research loop stopped."
+            ).strip()
+            break
+
+        if not args.allow_exec:
+            status="DONE"
+            break
+
+        continuation=(
+            "Continue the SAME research task and session. The durable goal is still "
+            "unmet. Do not stop merely because a candidate was rejected, one experiment "
+            "finished, or you have a recommendation for the next step. Inspect "
+            "project_status, use prior negative results, create the next justified "
+            "candidate/experiment, execute static replay, and continue making measured "
+            "progress. Only a reached durable goal, exhausted configured API budget, or "
+            "a concrete runtime blocker may terminate the autonomous loop."
+        )
+
     elapsed=time.monotonic()-started
     if status=="DONE" and args.allow_exec:
         progress = db.db.execute(
@@ -636,16 +778,6 @@ def main():
                 "open_experiments": open_experiments,
             })
     cost=conservative_cost_usd(usage,inp_price,out_price)
-    delta=LegacyUsage(usage["input_tokens"],usage["output_tokens"],usage["requests"],cost)
-    budget.session.add(delta); budget.total.add(delta)
-    LEDGER_PATH.write_text(json.dumps({**vars(budget.total),"model_last_used":args.model,
-      "updated_at_utc":utcnow(),"cached_tokens_observed_last_run":usage["cached_tokens"],
-      "cache_write_tokens_observed_last_run":usage["cache_write_tokens"],
-      "reasoning_tokens_observed_last_run":usage["reasoning_tokens"],
-      "pricing_assumption":{"input_usd_per_m":inp_price,"output_usd_per_m":out_price,
-                            "cached_input_multiplier":0.10,
-                            "cache_write_multiplier":1.25,
-                            "safety_multiplier":1.10}},indent=2,sort_keys=True)+"\n",encoding="utf-8")
     db.finish_run(run_id,status,usage,cost,output,elapsed)
     log.event("run_summary",{"run_id":run_id,"elapsed_seconds":round(elapsed,3),
               "usage":usage,"conservative_cost_usd":cost,"project_status":db.project_status()})
@@ -653,6 +785,7 @@ def main():
     print(output); print("\n[v23 observability]")
     print(j({"run_id":run_id,"elapsed_seconds":round(elapsed,3),"usage":usage,
              "conservative_cost_usd":round(cost,8),"session_id":args.session_id,
+             "autonomous_cycles":cycle,"goal":latest_goal_state(db),
              "experiments_db":str(STATE_DB),"session_db":str(SESSION_DB),
              "trace_enabled":not args.disable_tracing}))
     print("[v23 run] "+str(log.dir))
