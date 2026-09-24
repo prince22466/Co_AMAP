@@ -146,7 +146,7 @@ class ResearchDB:
           experiment_id TEXT, replay_call_id TEXT, candidate TEXT, episode TEXT,
           started_at TEXT, elapsed_seconds REAL, valid INTEGER,
           original_v20_margin REAL, candidate_margin REAL, margin_improvement REAL,
-          result TEXT, action_divergences INTEGER, error TEXT);
+          result TEXT, action_divergences INTEGER, game_record_path TEXT, error TEXT);
         CREATE TABLE IF NOT EXISTS goals(
           goal_id TEXT PRIMARY KEY, metric TEXT, operator TEXT, target REAL,
           max_regressions INTEGER, min_games_total INTEGER,
