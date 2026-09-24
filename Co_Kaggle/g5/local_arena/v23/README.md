@@ -144,3 +144,18 @@ Candidate floating-point computation follows the FP16 contract:
 - persistent non-FP16 floating runtime state created during replay causes the candidate replay to fail.
 
 Integer indices, IDs, coordinates, counters, shapes, booleans, action schemas, and environment-required non-floating values remain in their required types. Backend operations that genuinely cannot execute in FP16 are exceptional and must be narrowly scoped and documented.
+
+
+### FP16 enforcement smoke test
+
+After installing requirements:
+
+```bash
+python local_arena/v23/smoke_test_fp16.py
+```
+
+Expected output:
+
+```text
+v23 FP16 enforcement smoke test: OK
+```
