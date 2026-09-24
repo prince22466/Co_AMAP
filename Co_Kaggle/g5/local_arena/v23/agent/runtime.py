@@ -39,6 +39,8 @@ v2 research-memory contract:
 - Goal completion comes only from structured replay metrics, never prose.
 - Model-written candidate policies may execute only through static_replay_candidate.
 - When execution is enabled, do not stop at analysis or planning. You must create/select a concrete candidate, start an experiment, execute at least one static replay, analyze the measured result, and finish the experiment unless a concrete runtime error or budget stop blocks execution.
+- A rejected candidate is evidence, not a blocker. If the durable goal is unmet, continue with the next justified experiment.
+- Only call report_blocker for a concrete runtime/environment failure that makes further research impossible without external intervention.
 - FP16 is mandatory for candidate floating-point model weights, activations, tensors, and learned numeric compute. Integer/boolean/schema-mandated types are exempt. Do not emit float32, float64, double, or bfloat16 candidate model/tensor code unless a backend operation is provably unsupported in FP16; any such exception must be narrowly scoped, documented, and converted back to FP16 immediately.
 """
 
@@ -255,6 +257,7 @@ class AppContext:
     input_price: float
     output_price: float
     replay_python: str
+    blocker_reason: str = ""
 
 
 def j(x):
@@ -355,6 +358,21 @@ def set_goal(ctx: RunContextWrapper[AppContext], metric: str, operator: str, tar
 def project_status(ctx: RunContextWrapper[AppContext]) -> str:
     """Return durable project usage, experiment, replay, and goal status."""
     return j(ctx.context.db.project_status())
+
+@function_tool
+def report_blocker(ctx: RunContextWrapper[AppContext], failed_step: str, reason: str) -> str:
+    """Report a concrete runtime/environment blocker that makes further research impossible."""
+    failed_step = failed_step.strip()
+    reason = reason.strip()
+    if not failed_step or not reason:
+        return j({"error":"failed_step and reason are required"})
+    ctx.context.blocker_reason = failed_step + ": " + reason
+    ctx.context.log.event("research_blocker", {
+        "failed_step": failed_step,
+        "reason": reason,
+    })
+    return j({"blocker_recorded": True, "failed_step": failed_step, "reason": reason})
+
 
 @function_tool
 def static_replay_candidate(ctx: RunContextWrapper[AppContext], candidate: str, experiment_id: str,
@@ -612,7 +630,8 @@ def main():
       max_tokens=args.max_output_tokens,verbosity="low",parallel_tool_calls=False,
       store=False,prompt_cache_options={"mode":"implicit","ttl":"30m"}),
       tools=[list_tree,read_text,search_text,summarize_jsonl,write_workspace_file,run_python,
-             start_experiment,finish_experiment,set_goal,project_status,static_replay_candidate])
+             start_experiment,finish_experiment,set_goal,project_status,report_blocker,
+             static_replay_candidate])
     session=SQLiteSession(args.session_id,str(SESSION_DB))
     prompt=("Research task:\n"+args.task+"\n\nExecution enabled: "+str(args.allow_exec)+
             ". Conservative per-run ceiling: USD "+format(args.session_budget_usd,".2f")+
@@ -724,6 +743,19 @@ def main():
                 cycle_output.rstrip()
                 + "\n\nDurable goal reached; autonomous research loop stopped."
             ).strip()
+            break
+
+        if app.blocker_reason:
+            status="BLOCKED"
+            output = (
+                cycle_output.rstrip()
+                + "\n\nAutonomous research loop stopped on recorded blocker: "
+                + app.blocker_reason
+            ).strip()
+            log.event("autonomous_stop", {
+                "reason":"reported_blocker","cycle":cycle,
+                "blocker":app.blocker_reason,
+            })
             break
 
         if not args.allow_exec:
