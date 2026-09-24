@@ -2,7 +2,7 @@
 
 v23 starts as a **research harness**, not another RL algorithm.
 
-The v1 agent starts directly from `submission_nb/kaggriculture-sub_v20.ipynb` and `game_history/v20` loss cases. It diagnoses v20, proposes a candidate, and evaluates that candidate by replacing the losing v20 seat while replaying the recorded opponent actions verbatim. Python owns execution, filesystem boundaries, and API-budget enforcement.
+The v1 agent starts directly from `working_files/submission_nb/kaggriculture-sub_v20.ipynb` and `working_files/loss_games_v20`. It diagnoses v20, proposes a candidate, and evaluates that candidate by replacing the losing v20 seat while replaying the recorded opponent actions verbatim. Python owns execution, filesystem boundaries, and API-budget enforcement.
 
 ## Agent loop
 
@@ -71,3 +71,19 @@ Each run creates `workspace/runs/<UTC timestamp>-<pid>/config.json`, `events.jso
 v1 intentionally does not modify v20/v21/v22, run model-written code, use external web search, call an expensive fallback model automatically, launch broad training before inspecting metrics, or claim hidden/Kaggle improvement without evidence.
 
 After reviewing v1 behavior, the natural v2 is a controlled candidate-patch + local A/B evaluation workflow.
+
+
+## Self-contained v23 boundary
+
+The agent's readable/executable root is `local_arena/v23` itself. Tool paths are resolved relative to this directory and rejected if they escape it.
+
+Research inputs are under `working_files/`:
+- `submission_nb/kaggriculture-sub_v20.ipynb` — primary baseline
+- `submission_nb/kaggriculture-sub_v19.ipynb` — optional reference baseline
+- `loss_games_v20/*.json` — failure corpus
+- `competition_material/*` — rules/domain material
+- `example_train_v21_static_history.py` — local static-replay implementation reference
+
+The static replay tool loads helpers from the copied `working_files/example_train_v21_static_history.py`; it no longer imports from `v20_rl`, `v21_rl`, `v22_rl`, `game_history`, or any other sibling directory.
+
+Generated research artifacts remain confined to `workspace/`.
