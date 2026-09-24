@@ -2,12 +2,12 @@ one order = one action + one product + quantity.
 For example, selling 20 milk and buying 5 wheat are two orders. HIRE and BUY_LAND are exceptions: each is one order without a product or quantity.
 
 
-
 up to 10 market orders per player, per turn.
 An order can cover multiple units: SELL MILK 20 counts as one order, not 20. Buying seeds or animals also supports quantities.
 Hiring and buying land each use an order slot. These market orders are separate from workers’ actions.
 
-
+*this rule means, more sell orders will cause less buy orders at each turn*
+------------------------------------------------------------------------------------------------------
 
 In the same turn:
 - Your farmer can move.
@@ -17,7 +17,8 @@ In the same turn:
 - You can also submit up to 10 market orders, such as buying and selling.
 But the same worker cannot pick up, move, and place in one turn. Those require separate turns; each movement step is also one action.
 
-
+*this rule means, at each turn, u can do differernt types of actions*
+------------------------------------------------------------------------------------------------------
 
 Crop production
 Times below start from the planting day, assuming the plant survives.
@@ -38,6 +39,8 @@ Important details:
 - One fertilizer application consumes 1 fertilizer and lasts three calendar days.
 
 
+*this rule means, the policy of time to buy seeds, for example at day 21, we should not buy any Melon seeds, because when it is time to harvest, the game has ended*
+--------------------------------------------------------------------------------------------------------------
 
 
 Animal production
@@ -58,6 +61,8 @@ Animals require:
 - Fertilizer requires a separate collection action.
 
 
+*this rule means, the policy of time to buy animals, for example at day 23, we should not buy any more Cows, because when it is time to produce milk, the game has ended*
+--------------------------------------------------------------------------------------------------------------
 
 
 From harvest to sale
@@ -71,7 +76,8 @@ Alternatively, carried inventory automatically enters the shed at day-end, subje
 Therefore:
 Buying-to-sale time = setup/waiting + growth + harvest scheduling + delivery + selling delay.
 
-
+*this rule means, inventory is 2 steps away for sell*
+--------------------------------------------------------------------------------------------------------------
 
 
 End-to-end costs
@@ -92,6 +98,9 @@ Two cautions matter for our analysis:
 - Homegrown wheat/fertilizer is not economically free: consuming it gives up potential sale revenue.
 - The planner’s LABOR_COST = 20 is a forecasting assumption, not an engine fee per care action.
 
+
+*this rule gives a framework, what to consider about cost of each product*
+--------------------------------------------------------------------------------------------------------------
 
 
 
@@ -114,11 +123,22 @@ You cannot directly see their:
 - Submitted orders or intended next actions.
 
 
+*this rule means, adpativeness based on opponents*
+--------------------------------------------------------------------------------------------------------------
+
+
+
+
 for survival, feeding every other day is enough. The animal escapes only after two consecutive unfed days.
 But there’s a production tradeoff:
 - CARE only builds a bonus on days the animal is both fed and cared for.
 - On an unfed production day, it produces only the base 1 unit, and accumulated CARE bonuses are cleared.
 So alternating feeding days saves wheat and worker actions, but can reduce milk, wool, or egg output. Daily feeding supports higher production; it isn’t strictly required for survival.
+
+
+*this rule means, possible way to save money, decrease output and increase output without buying additional animals
+--------------------------------------------------------------------------------------------------------------------
+
 
 hired workers leave at the end of each day; your farmer stays. You choose how many to hire again the next day.
 A few details from the local game engine:
@@ -129,12 +149,12 @@ A few details from the local game engine:
 So hiring early gives each worker more turns to work.
 
 
+The hiring price increases with each hand you hire that day, rather than fluctuating with the market.
+Costs follow this sequence: 1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89…
+For example, hiring 6 hands costs 20 total. The sequence resets the next day, when you need to hire hands again.
 
-A worker can collect fertilizer from animals, carry it to the shed, and deposit it. You can then sell it to the shared market.
-You can also keep fertilizer to use on crops. It counts toward the shed’s 100-unit capacity.
-
-
-
+*this rule means, the cost of hiring is fixed*
+--------------------------------------------------------------------------------------------------------------
 
 
 You can observe more than prices:
@@ -148,13 +168,8 @@ Opponent’s crops and animals	Yes—useful for estimating future supply
 Opponent’s private stored/carried goods	No
 
 
-One naming distinction: “Farmers Market” is one shop type. The shared market is where you trade. Shops don’t have separate trading prices for you.
-
-
-
-you cannot sell directly to shops.
-You sell to the shared market and get paid immediately. Shops automatically consume goods from that market later.
-
+*this rule means, what informantion could be used for adaptive policies*
+--------------------------------------------------------------------------------------------------------------
 
 
 Town Center demand
@@ -167,9 +182,25 @@ In addition to unlocked shops, the Town Center consumes products from the shared
 Therefore, even when no shops are unlocked, there is still baseline demand for wheat, carrot, tomato, strawberry, melon, eggs, milk, and wool.
 
 
+*this rule means, it is possible to predict baseline of demand, which implies price floor for products*
+--------------------------------------------------------------------------------------------------------------
+
+
+A worker can collect fertilizer from animals, carry it to the shed, and deposit it. You can then sell it to the shared market.
+You can also keep fertilizer to use on crops. It counts toward the shed’s 100-unit capacity.
+
+*this rule means, the goodness of animals, it also implies, if u or opponents have lots of animals but no much crops, they will have excessive fertilizer, then it is either discarded or sold in market. which will drive market price down, so the cost of ferterlize crop will be lower*
+-----------------------------------------------------------------------------------------------------------------------
+
+
+One naming distinction: “Farmers Market” is one shop type. The shared market is where you trade. Shops don’t have separate trading prices for you.
+
+
+you cannot sell directly to shops.
+You sell to the shared market and get paid immediately. Shops automatically consume goods from that market later.
+
 
 The shops buy from the shared market 6 times per day, once every 4 turns. That schedule doesn’t restrict when you sell.
-
 
 There are 8 shop types. They buy/consume products from the shared market; they don’t sell goods to you directly.
 
@@ -186,9 +217,6 @@ Smoothie shop	1 strawberry + 1 milk
 Farmers market	1 wheat + 1 carrot + 1 tomato + 1 strawberry
 
 
-
-
-
 new shops open automatically as the game progresses, up to a limit:
 - Starts with 0 shops.
 - One random shop opens every 3 days.
@@ -197,6 +225,9 @@ new shops open automatically as the game progresses, up to a limit:
 Shops consume products from the shared market, increasing demand. For example, more bakeries means more demand for wheat and eggs, which can help their prices rise.
 
 
+*this rule means, by observing the number of different shop, we can predict the demand growth of differernt products*
+-----------------------------------------------------------------------------------------------------------------------
+
 
 Animal purchase prices are also fixed throughout the game:
 Animal	Price
@@ -204,16 +235,18 @@ Cow	400
 Sheep	500
 Goose	300
 
-
+*this rule means, animal price and hiring price are fixed cost*
+-----------------------------------------------------------------------------------------------------------------------
 
 
 Selling requires goods in the shed. Workers act before market orders are processed, so a worker can deposit goods and you can sell them in the same turn.
 
 
-
 Anything that exceeds the shed’s 100-unit capacity is discarded permanently.
 
 
+*this rule means, shed management if new coming products are worth more than existing one in the shed, and the new coming one will make total unit >100, then sell the existing ones before new coming one.*
+-----------------------------------------------------------------------------------------------------------------------
 
 Each worker can perform one action per turn.
 Activity	Time required
@@ -224,8 +257,5 @@ Feed	1 turn for one animal, carrying wheat
 Harvest	1 turn to collect the available yield from one tile
 Deliver	Travel to the shed + 1 turn to deposit goods
 
-
-
-The hiring price increases with each hand you hire that day, rather than fluctuating with the market.
-Costs follow this sequence: 1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89…
-For example, hiring 6 hands costs 20 total. The sequence resets the next day, when you need to hire hands again.
+*this rule means, if Travel not immediately followed by other actions, it is inefficient Travel.*
+-----------------------------------------------------------------------------------------------------------------------
