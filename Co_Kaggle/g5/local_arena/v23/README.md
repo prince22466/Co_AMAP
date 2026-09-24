@@ -12,7 +12,9 @@ v23/
 ├── research_agent.py          # only executable agent entrypoint
 ├── PROGRAM.md                 # agent research/execution contract
 ├── README.md                  # operator guide
-├── requirements.txt
+├── requirements-agent.txt     # OpenAI orchestration environment only
+├── requirements-replay.txt    # Kaggle simulator environment only
+├── setup_envs.py              # creates .venv-agent + .venv-replay
 ├── agent/
 │   ├── runtime.py             # Agents SDK orchestration + observability
 │   └── support.py             # bounded filesystem/log/budget utilities
@@ -49,44 +51,99 @@ Generic `run_python` still refuses model-written workspace files and strips `OPE
 
 ## GCP Vertex AI Workbench
 
-From `Co_Kaggle/g5`:
+OpenAI orchestration and Kaggle replay deliberately use **different Python environments**.
+
+```text
+.venv-agent/
+  openai
+  openai-agents
+  agent runtime
+        |
+        | subprocess + JSON
+        v
+.venv-replay/
+  kaggle-environments
+  torch
+  numpy
+  replay engine
+```
+
+Neither environment depends on the other's SDK.
+
+From `Co_Kaggle/g5/local_arena/v23`:
 
 ```bash
-python -m pip install -r local_arena/v23/requirements.txt
+python setup_envs.py
 export OPENAI_API_KEY="..."
 ```
 
-Do not commit the key. For a persistent Workbench deployment, inject it through your normal secret-management mechanism instead of storing it in a notebook.
+This creates:
 
-### No-API smoke test
-
-After installing requirements, validate SDK imports plus the local run/experiment/replay/goal SQLite lifecycle without consuming API credit:
-
-```bash
-python local_arena/v23/tests/smoke_runtime.py
+```text
+.venv-agent/
+.venv-replay/
 ```
 
-Expected output:
+The agent automatically discovers `.venv-replay/bin/python` when `--allow-exec` is used. You can override it with:
+
+```bash
+--replay-python /path/to/replay/python
+```
+
+or:
+
+```bash
+export V23_REPLAY_PYTHON=/path/to/replay/python
+```
+
+The runtime rejects using the same interpreter for both roles.
+
+Do not commit the API key. The replay subprocess strips OpenAI/token/secret/password/credential environment variables before executing candidate code.
+
+### No-API smoke tests
+
+Agent infrastructure:
+
+```bash
+.venv-agent/bin/python tests/smoke_runtime.py
+```
+
+Expected:
 
 ```text
 v23 infrastructure smoke test: OK
 ```
 
+Replay/FP16 enforcement:
+
+```bash
+.venv-replay/bin/python tests/smoke_fp16.py
+```
+
+Expected:
+
+```text
+v23 FP16 enforcement smoke test: OK
+```
 
 ### First read-only run
 
 ```bash
-python local_arena/v23/research_agent.py \
+.venv-agent/bin/python research_agent.py \
   --task "Inspect the v20 notebook and its recorded loss cases. Diagnose one concrete failure mechanism and design the smallest candidate change to test it with static replay."
 ```
 
-### Permit existing experiments
+A read-only run does not require Kaggle imports in the agent process.
+
+### Execute static replay experiments
 
 ```bash
-python local_arena/v23/research_agent.py \
+.venv-agent/bin/python research_agent.py \
   --allow-exec \
   --task "Start from v20 and its loss cases. Build or select one candidate agent, evaluate it with static replacement replay on the smallest useful subset, then report repaired, improved, and worsened cases."
 ```
+
+The agent process launches `.venv-replay/bin/python replay/runner.py ...` and exchanges only JSON-compatible arguments/results.
 
 ## Budget controls
 
