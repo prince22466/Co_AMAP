@@ -77,8 +77,11 @@ class ResearchDB:
           goal_id TEXT PRIMARY KEY, metric TEXT, operator TEXT, target REAL,
           max_regressions INTEGER, created_at TEXT, reached_at TEXT,
           reached_run_id TEXT, reached_experiment_id TEXT, reached_value REAL,
-          active INTEGER DEFAULT 1);
+          reached_observability_json TEXT, active INTEGER DEFAULT 1);
         """)
+        goal_columns = {row[1] for row in self.db.execute("PRAGMA table_info(goals)").fetchall()}
+        if "reached_observability_json" not in goal_columns:
+            self.db.execute("ALTER TABLE goals ADD COLUMN reached_observability_json TEXT")
         self.db.commit()
 
     def start_run(self, run_id, session_id, task, model):
@@ -128,7 +131,7 @@ class ResearchDB:
         self.db.commit()
         return gid
 
-    def maybe_reach_goal(self, run_id, eid, summary):
+    def maybe_reach_goal(self, run_id, eid, summary, usage_snapshot):
         goal = self.db.execute("SELECT * FROM goals WHERE active=1 ORDER BY created_at DESC LIMIT 1").fetchone()
         if goal is None or goal["metric"] not in summary:
             return None
@@ -143,12 +146,43 @@ class ResearchDB:
                   "<": value < target, "==": value == target}[op]
         if not passed:
             return None
+
+        prior = self.db.execute("""SELECT
+          COALESCE(SUM(api_requests),0) requests,
+          COALESCE(SUM(input_tokens),0) input_tokens,
+          COALESCE(SUM(cached_tokens),0) cached_tokens,
+          COALESCE(SUM(output_tokens),0) output_tokens,
+          COALESCE(SUM(reasoning_tokens),0) reasoning_tokens,
+          COALESCE(SUM(total_tokens),0) total_tokens,
+          COALESCE(SUM(conservative_cost_usd),0) cost
+          FROM runs WHERE status!='RUNNING'""").fetchone()
+        now = datetime.now(timezone.utc)
+        created = datetime.fromisoformat(goal["created_at"])
+        exp = self.db.execute("SELECT started_at FROM experiments WHERE experiment_id=?", (eid,)).fetchone()
+        exp_elapsed = None
+        if exp:
+            exp_elapsed = (now - datetime.fromisoformat(exp["started_at"])).total_seconds()
+        snapshot = {
+          "goal_elapsed_seconds": (now - created).total_seconds(),
+          "experiment_elapsed_seconds": exp_elapsed,
+          "experiments_started": int(self.db.execute("SELECT COUNT(*) FROM experiments").fetchone()[0]),
+          "replay_calls": int(self.db.execute("SELECT COALESCE(SUM(replay_calls),0) FROM experiments").fetchone()[0]),
+          "replay_cases": int(self.db.execute("SELECT COUNT(*) FROM replays").fetchone()[0]),
+          "api_requests": int(prior["requests"]) + int(usage_snapshot.get("requests",0)),
+          "input_tokens": int(prior["input_tokens"]) + int(usage_snapshot.get("input_tokens",0)),
+          "cached_tokens": int(prior["cached_tokens"]) + int(usage_snapshot.get("cached_tokens",0)),
+          "output_tokens": int(prior["output_tokens"]) + int(usage_snapshot.get("output_tokens",0)),
+          "reasoning_tokens": int(prior["reasoning_tokens"]) + int(usage_snapshot.get("reasoning_tokens",0)),
+          "total_tokens": int(prior["total_tokens"]) + int(usage_snapshot.get("total_tokens",0)),
+          "prior_completed_run_cost_usd": float(prior["cost"]),
+        }
         self.db.execute("""UPDATE goals SET reached_at=?,reached_run_id=?,
-          reached_experiment_id=?,reached_value=?,active=0 WHERE goal_id=?""",
-          (utcnow(), run_id, eid, value, goal["goal_id"]))
+          reached_experiment_id=?,reached_value=?,reached_observability_json=?,active=0
+          WHERE goal_id=?""",
+          (utcnow(), run_id, eid, value, json.dumps(snapshot, sort_keys=True), goal["goal_id"]))
         self.db.commit()
         return {"goal_id": goal["goal_id"], "metric": goal["metric"], "value": value,
-                "operator": op, "target": target}
+                "operator": op, "target": target, "observability": snapshot}
 
     def record_replay_call(self, run_id, eid, call_id, candidate, result, started_at, elapsed):
         rows = result.get("matches", []) if isinstance(result, dict) else []
@@ -196,7 +230,11 @@ class ResearchDB:
           "conservative_cost_usd": float(r["cost"]), "experiments_total": int(e["n"]),
           "experiments_supported": int(e["supported"]), "experiments_rejected": int(e["rejected"]),
           "replay_cases_total": int(self.db.execute("SELECT COUNT(*) FROM replays").fetchone()[0]),
-          "goal": dict(goal) if goal else None, "recent_experiments": recent,
+          "goal": ({**dict(goal),
+                    "reached_observability": json.loads(goal["reached_observability_json"])
+                     if goal and goal["reached_observability_json"] else None}
+                   if goal else None),
+          "recent_experiments": recent,
         }
 
 
@@ -286,7 +324,8 @@ def static_replay_candidate(ctx: RunContextWrapper[AppContext], candidate: str, 
     elapsed = time.monotonic() - started
     summary = ctx.context.db.record_replay_call(
         ctx.context.run_id, experiment_id, call_id, candidate, result, started_at, elapsed)
-    reached = ctx.context.db.maybe_reach_goal(ctx.context.run_id, experiment_id, summary)
+    reached = ctx.context.db.maybe_reach_goal(
+        ctx.context.run_id, experiment_id, summary, usage_dict(ctx.usage))
     result["replay_call_id"] = call_id
     result["elapsed_seconds"] = round(elapsed, 3)
     if reached:
@@ -360,7 +399,7 @@ def main():
       tools=[list_tree,read_text,search_text,summarize_jsonl,write_workspace_file,run_python,
              start_experiment,finish_experiment,set_goal,project_status,static_replay_candidate])
     session=SQLiteSession(args.session_id,str(SESSION_DB))
-    prompt=("Research task:\\n"+args.task+"\\n\\nExecution enabled: "+str(args.allow_exec)+
+    prompt=("Research task:\n"+args.task+"\n\nExecution enabled: "+str(args.allow_exec)+
             ". Conservative per-run ceiling: USD "+format(args.session_budget_usd,".2f")+
             "; remaining project ledger: USD "+format(budget.remaining_total(),".4f")+
             ". Use durable experiment records and minimize model turns.")
@@ -385,12 +424,12 @@ def main():
       "cache_write_tokens_observed_last_run":usage["cache_write_tokens"],
       "reasoning_tokens_observed_last_run":usage["reasoning_tokens"],
       "pricing_assumption":{"input_usd_per_m":inp_price,"output_usd_per_m":out_price,
-                            "cached_tokens_priced_as_uncached":True}},indent=2,sort_keys=True)+"\\n",encoding="utf-8")
+                            "cached_tokens_priced_as_uncached":True}},indent=2,sort_keys=True)+"\n",encoding="utf-8")
     db.finish_run(run_id,status,usage,cost,output,elapsed)
     log.event("run_summary",{"run_id":run_id,"elapsed_seconds":round(elapsed,3),
               "usage":usage,"conservative_cost_usd":cost,"project_status":db.project_status()})
     log.final(output)
-    print(output); print("\\n[v23 observability]")
+    print(output); print("\n[v23 observability]")
     print(j({"run_id":run_id,"elapsed_seconds":round(elapsed,3),"usage":usage,
              "conservative_cost_usd":round(cost,8),"session_id":args.session_id,
              "experiments_db":str(STATE_DB),"session_db":str(SESSION_DB),
