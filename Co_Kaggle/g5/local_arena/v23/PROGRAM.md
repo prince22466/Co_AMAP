@@ -30,7 +30,7 @@ next 10 ideas
 repeat until the durable goal is reached
 ```
 
-v21/v22 are not research inputs. v23 starts from the v20 submission notebook, the v20 loss corpus, competition material, and locally generated v23 evidence.
+v23 starts from the v20 submission notebook, the v20 loss corpus, competition material, and locally generated v23 evidence.
 
 ## Current system architecture
 
