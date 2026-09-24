@@ -35,20 +35,17 @@ jobs:
           .ci-agent/bin/python -m pip install --dry-run -r requirements-agent.txt
           .ci-agent/bin/python -m pip install -r requirements-agent.txt
 
-      - name: Resolve replay environment
+      - name: Resolve and install replay environment
         run: |
           .ci-replay/bin/python -m pip install --upgrade pip
           .ci-replay/bin/python -m pip install --dry-run -r requirements-replay.txt
+          .ci-replay/bin/python -m pip install -r requirements-replay.txt
 
-      - name: Install replay smoke runtime
-        run: |
-          .ci-replay/bin/python -m pip install "numpy>=1.26"
-          .ci-replay/bin/python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
-
-      - name: Assert environment isolation
+      - name: Assert environment and code isolation
         run: |
           .ci-agent/bin/python -c "import importlib.util; assert importlib.util.find_spec('agents') is not None; assert importlib.util.find_spec('openai') is not None; assert importlib.util.find_spec('kaggle_environments') is None"
-          .ci-replay/bin/python -c "import importlib.util; assert importlib.util.find_spec('agents') is None; assert importlib.util.find_spec('openai') is None"
+          .ci-replay/bin/python -c "import kaggle_environments, torch, numpy; print('replay imports OK')"
+          ! grep -R -E '(^|[[:space:]])(from|import)[[:space:]]+openai|(^|[[:space:]])(from|import)[[:space:]]+agents' replay
 
       - name: Compile agent code
         run: .ci-agent/bin/python -m py_compile research_agent.py agent/*.py tests/smoke_runtime.py setup_envs.py
