@@ -11,23 +11,35 @@ import time
 import types
 from pathlib import Path
 
-from static_replay import (
-    _agent_observation,
-    _environment_from_history,
-    _field,
-    _load_notebook_agent,
-    _recorded_step_actions,
-    _saved_final_rewards,
-    recorded_action_parity,
-)
+try:
+    from .core import (
+        _agent_observation,
+        _environment_from_history,
+        _field,
+        _load_notebook_agent,
+        _recorded_step_actions,
+        _saved_final_rewards,
+        recorded_action_parity,
+    )
+except ImportError:  # direct script execution: python replay/runner.py
+    from core import (
+        _agent_observation,
+        _environment_from_history,
+        _field,
+        _load_notebook_agent,
+        _recorded_step_actions,
+        _saved_final_rewards,
+        recorded_action_parity,
+    )
 
 HERE = Path(__file__).resolve().parent
-HISTORY_DIR = HERE / "working_files" / "loss_games_v20"
+V23_ROOT = HERE.parent
+HISTORY_DIR = V23_ROOT / "working_files" / "loss_games_v20"
 
 
 def _inside_v23(path: Path) -> Path:
     path = path.expanduser().resolve()
-    path.relative_to(HERE)
+    path.relative_to(V23_ROOT)
     return path
 
 
@@ -42,7 +54,10 @@ FORBIDDEN_FLOAT_PATTERNS = (
 
 def _candidate_source(path: Path) -> str:
     if path.suffix == ".ipynb":
-        from static_replay import _extract_notebook_main
+        try:
+            from .core import _extract_notebook_main
+        except ImportError:
+            from core import _extract_notebook_main
         return _extract_notebook_main(path)
     return path.read_text(encoding="utf-8")
 
@@ -331,7 +346,7 @@ def evaluate(candidate: Path, episodes: list[str], max_episodes: int):
     return {
         "protocol": {
             "mode": "v23_static_replacement_replay_on_v20_losses",
-            "candidate": str(candidate.relative_to(HERE)),
+            "candidate": str(candidate.relative_to(V23_ROOT)),
             "candidate_seat": "losing v20 seat",
             "opponent_behavior": "recorded historical commands; non-adaptive",
             "recorded_action_parity_required": True,
@@ -357,7 +372,7 @@ def main():
     max_episodes = max(1, min(int(args.max_episodes), 50))
 
     try:
-        result = evaluate(HERE / args.candidate, episodes, max_episodes)
+        result = evaluate(V23_ROOT / args.candidate, episodes, max_episodes)
     except BaseException as exc:
         result = {"error": f"{type(exc).__name__}: {exc}"}
 

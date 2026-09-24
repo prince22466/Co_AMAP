@@ -2,13 +2,18 @@
 """No-API smoke test for v23 FP16 enforcement."""
 from __future__ import annotations
 
+import sys
 import tempfile
 from pathlib import Path
+
+V23_ROOT = Path(__file__).resolve().parents[1]
+if str(V23_ROOT) not in sys.path:
+    sys.path.insert(0, str(V23_ROOT))
 
 import numpy as np
 import torch
 
-from static_replay_runner import (
+from replay.runner import (
     _audit_fp16_source,
     _numpy_fp16_candidate_defaults,
     _set_fp16_defaults,

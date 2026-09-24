@@ -2,10 +2,15 @@
 """No-API smoke test for v23 agent infrastructure v2."""
 from __future__ import annotations
 
+import sys
 import tempfile
 from pathlib import Path
 
-import agent_runtime_v2 as runtime
+V23_ROOT = Path(__file__).resolve().parents[1]
+if str(V23_ROOT) not in sys.path:
+    sys.path.insert(0, str(V23_ROOT))
+
+from agent import runtime
 
 
 def main() -> int:

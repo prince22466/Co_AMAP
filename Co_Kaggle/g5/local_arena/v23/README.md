@@ -4,6 +4,36 @@ v23 starts as a **research harness**, not another RL algorithm.
 
 The agent starts directly from `working_files/submission_nb/kaggriculture-sub_v20.ipynb` and `working_files/loss_games_v20`. It diagnoses v20, proposes a candidate, and evaluates that candidate by replacing the losing v20 seat while replaying the recorded opponent actions verbatim. Python owns execution, filesystem boundaries, and API-budget enforcement.
 
+
+## Project layout
+
+```text
+v23/
+├── research_agent.py          # only executable agent entrypoint
+├── PROGRAM.md                 # agent research/execution contract
+├── README.md                  # operator guide
+├── requirements-agent.txt     # OpenAI orchestration environment only
+├── requirements-replay.txt    # Kaggle simulator environment only
+├── setup_envs.py              # creates .venv-agent + .venv-replay
+├── agent/
+│   ├── runtime.py             # Agents SDK orchestration + observability
+│   └── support.py             # bounded filesystem/log/budget utilities
+├── replay/
+│   ├── core.py                # generic static-replay/parity helpers
+│   └── runner.py              # isolated FP16-enforced candidate evaluator
+├── tests/
+│   ├── smoke_runtime.py       # no-API infrastructure smoke test
+│   └── smoke_fp16.py          # no-API FP16 enforcement smoke test
+├── working_files/
+│   ├── competition_material/
+│   ├── loss_games_v20/
+│   ├── submission_nb/
+│   └── reference/             # implementation/roadmap references only
+└── workspace/                 # generated runtime state; gitignored
+```
+
+The root intentionally contains only the entrypoint, operator/agent documentation, dependency file, and package directories. There are no duplicate agent runtimes at the top level.
+
 ## Agent loop
 
 ```text
@@ -21,44 +51,99 @@ Generic `run_python` still refuses model-written workspace files and strips `OPE
 
 ## GCP Vertex AI Workbench
 
-From `Co_Kaggle/g5`:
+OpenAI orchestration and Kaggle replay deliberately use **different Python environments**.
+
+```text
+.venv-agent/
+  openai
+  openai-agents
+  agent runtime
+        |
+        | subprocess + JSON
+        v
+.venv-replay/
+  kaggle-environments
+  torch
+  numpy
+  replay engine
+```
+
+Neither environment depends on the other's SDK.
+
+From `Co_Kaggle/g5/local_arena/v23`:
 
 ```bash
-python -m pip install -r local_arena/v23/requirements.txt
+python setup_envs.py
 export OPENAI_API_KEY="..."
 ```
 
-Do not commit the key. For a persistent Workbench deployment, inject it through your normal secret-management mechanism instead of storing it in a notebook.
+This creates:
 
-### No-API smoke test
-
-After installing requirements, validate SDK imports plus the local run/experiment/replay/goal SQLite lifecycle without consuming API credit:
-
-```bash
-python local_arena/v23/smoke_test_v2.py
+```text
+.venv-agent/
+.venv-replay/
 ```
 
-Expected output:
+The agent automatically discovers `.venv-replay/bin/python` when `--allow-exec` is used. You can override it with:
+
+```bash
+--replay-python /path/to/replay/python
+```
+
+or:
+
+```bash
+export V23_REPLAY_PYTHON=/path/to/replay/python
+```
+
+The runtime rejects using the same interpreter for both roles.
+
+Do not commit the API key. The replay subprocess strips OpenAI/token/secret/password/credential environment variables before executing candidate code.
+
+### No-API smoke tests
+
+Agent infrastructure:
+
+```bash
+.venv-agent/bin/python tests/smoke_runtime.py
+```
+
+Expected:
 
 ```text
 v23 infrastructure smoke test: OK
 ```
 
+Replay/FP16 enforcement:
+
+```bash
+.venv-replay/bin/python tests/smoke_fp16.py
+```
+
+Expected:
+
+```text
+v23 FP16 enforcement smoke test: OK
+```
 
 ### First read-only run
 
 ```bash
-python local_arena/v23/research_agent.py \
+.venv-agent/bin/python research_agent.py \
   --task "Inspect the v20 notebook and its recorded loss cases. Diagnose one concrete failure mechanism and design the smallest candidate change to test it with static replay."
 ```
 
-### Permit existing experiments
+A read-only run does not require Kaggle imports in the agent process.
+
+### Execute static replay experiments
 
 ```bash
-python local_arena/v23/research_agent.py \
+.venv-agent/bin/python research_agent.py \
   --allow-exec \
   --task "Start from v20 and its loss cases. Build or select one candidate agent, evaluate it with static replacement replay on the smallest useful subset, then report repaired, improved, and worsened cases."
 ```
+
+The agent process launches `.venv-replay/bin/python replay/runner.py ...` and exchanges only JSON-compatible arguments/results.
 
 ## Budget controls
 
@@ -92,7 +177,7 @@ v2 uses the OpenAI Agents SDK over the Responses API. It keeps one research agen
 - explicit numeric goal tracking;
 - request/input/output/total token accounting;
 - cached-input, cache-write, and reasoning-token accounting when returned by the API;
-- conservative local cost accounting that still prices all input as uncached;
+- cache-aware conservative local cost accounting with safety headroom;
 - persistent project summaries through the `project_status` tool.
 
 The durable hierarchy is:
@@ -125,9 +210,9 @@ Research inputs are under `working_files/`:
 - `submission_nb/kaggriculture-sub_v19.ipynb` — optional reference baseline
 - `loss_games_v20/*.json` — failure corpus
 - `competition_material/*` — rules/domain material
-- `example_train_v21_static_history.py` — local static-replay implementation reference
+- `reference/example_train_v21_static_history.py` — local static-replay implementation reference
 
-Runtime replay now uses the self-contained `static_replay.py` helper inside v23. `working_files/example_train_v21_static_history.py` remains reference-only; its legacy sibling imports are never runtime dependencies.
+Runtime replay is implemented by `replay/core.py` and `replay/runner.py`. `working_files/reference/example_train_v21_static_history.py` remains reference-only and is never a runtime dependency.
 
 Generated research artifacts remain confined to `workspace/`.
 
@@ -148,10 +233,10 @@ Integer indices, IDs, coordinates, counters, shapes, booleans, action schemas, a
 
 ### FP16 enforcement smoke test
 
-After installing requirements:
+Use the replay environment:
 
 ```bash
-python local_arena/v23/smoke_test_fp16.py
+.venv-replay/bin/python tests/smoke_fp16.py
 ```
 
 Expected output:

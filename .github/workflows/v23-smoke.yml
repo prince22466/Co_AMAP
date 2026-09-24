@@ -1,0 +1,60 @@
+name: v23 smoke
+
+on:
+  pull_request:
+    paths:
+      - "Co_Kaggle/g5/local_arena/v23/**"
+      - ".github/workflows/v23-smoke.yml"
+  push:
+    branches: [main]
+    paths:
+      - "Co_Kaggle/g5/local_arena/v23/**"
+      - ".github/workflows/v23-smoke.yml"
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: Co_Kaggle/g5/local_arena/v23
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Create isolated CI environments
+        run: |
+          python -m venv .ci-agent
+          python -m venv .ci-replay
+
+      - name: Resolve and install agent environment
+        run: |
+          .ci-agent/bin/python -m pip install --upgrade pip
+          .ci-agent/bin/python -m pip install --dry-run -r requirements-agent.txt
+          .ci-agent/bin/python -m pip install -r requirements-agent.txt
+
+      - name: Resolve and install replay environment
+        run: |
+          .ci-replay/bin/python -m pip install --upgrade pip
+          .ci-replay/bin/python -m pip install --dry-run -r requirements-replay.txt
+          .ci-replay/bin/python -m pip install -r requirements-replay.txt
+
+      - name: Assert environment and code isolation
+        run: |
+          .ci-agent/bin/python -c "import importlib.util; assert importlib.util.find_spec('agents') is not None; assert importlib.util.find_spec('openai') is not None; assert importlib.util.find_spec('kaggle_environments') is None"
+          .ci-replay/bin/python -c "import kaggle_environments, torch, numpy; print('replay imports OK')"
+          ! grep -R -E '(^|[[:space:]])(from|import)[[:space:]]+openai|(^|[[:space:]])(from|import)[[:space:]]+agents' replay
+
+      - name: Compile agent code
+        run: .ci-agent/bin/python -m py_compile research_agent.py agent/*.py tests/smoke_runtime.py setup_envs.py
+
+      - name: Compile replay code
+        run: .ci-replay/bin/python -m py_compile replay/*.py tests/smoke_fp16.py
+
+      - name: Agent runtime smoke test
+        run: .ci-agent/bin/python tests/smoke_runtime.py
+
+      - name: Replay FP16 smoke test
+        run: .ci-replay/bin/python tests/smoke_fp16.py

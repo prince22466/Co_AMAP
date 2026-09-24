@@ -18,7 +18,7 @@ from typing import Any
 from agents import Agent, ModelSettings, RunConfig, RunContextWrapper, RunHooks, Runner, SQLiteSession, SessionSettings, function_tool
 from openai.types.shared import Reasoning
 
-from research_agent_v1 import (
+from .support import (
     DEFAULT_MODEL, DEFAULT_SESSION_BUDGET_USD, DEFAULT_TOTAL_BUDGET_USD,
     LEDGER_PATH, MODEL_PRICING_USD_PER_M, SYSTEM_PROMPT as V1_SYSTEM_PROMPT,
     WORKSPACE, BudgetLedger, LocalTools, RunLog, Usage as LegacyUsage,
@@ -254,6 +254,7 @@ class AppContext:
     log: RunLog
     input_price: float
     output_price: float
+    replay_python: str
 
 
 def j(x):
@@ -375,7 +376,7 @@ def static_replay_candidate(ctx: RunContextWrapper[AppContext], candidate: str, 
 
     call_id = "replay_" + uuid.uuid4().hex[:10]
     started_at, started = utcnow(), time.monotonic()
-    runner = ctx.context.local.root / "static_replay_runner.py"
+    runner = ctx.context.local.root / "replay" / "runner.py"
     child_env = {}
     for key, value in os.environ.items():
         upper = key.upper()
@@ -385,7 +386,7 @@ def static_replay_candidate(ctx: RunContextWrapper[AppContext], candidate: str, 
     child_env["PYTHONUNBUFFERED"] = "1"
 
     argv = [
-        sys.executable, str(runner),
+        ctx.context.replay_python, str(runner),
         "--candidate", str(candidate_path.relative_to(ctx.context.local.root)),
         "--episodes-json", json.dumps(episodes or []),
         "--max-episodes", str(max(1, min(int(max_episodes), 50))),
@@ -444,6 +445,7 @@ def static_replay_candidate(ctx: RunContextWrapper[AppContext], candidate: str, 
         "summary":summary,
         "goal_reached":reached,
         "child_returncode": result.get("returncode"),
+        "replay_python": ctx.context.replay_python,
     })
     return j(result)
 
@@ -489,7 +491,40 @@ def parse_args():
     p.add_argument("--session-budget-usd",type=float,default=DEFAULT_SESSION_BUDGET_USD)
     p.add_argument("--input-usd-per-m",type=float); p.add_argument("--output-usd-per-m",type=float)
     p.add_argument("--disable-tracing",action="store_true")
+    p.add_argument(
+        "--replay-python",
+        default=os.getenv("V23_REPLAY_PYTHON"),
+        help="Python interpreter from the isolated replay environment. "
+             "Defaults to V23_REPLAY_PYTHON or v23/.venv-replay.",
+    )
     return p.parse_args()
+
+
+def resolve_replay_python(value: str | None) -> str:
+    """Resolve the isolated replay interpreter without importing Kaggle into the agent env."""
+    candidates = []
+    if value:
+        candidates.append(Path(value).expanduser())
+    root = Path(__file__).resolve().parents[1]
+    if os.name == "nt":
+        candidates.append(root / ".venv-replay" / "Scripts" / "python.exe")
+    else:
+        candidates.append(root / ".venv-replay" / "bin" / "python")
+
+    for candidate in candidates:
+        candidate = candidate.resolve()
+        if candidate.is_file():
+            if candidate == Path(sys.executable).resolve():
+                raise SystemExit(
+                    "replay interpreter must be separate from the agent interpreter; "
+                    "create .venv-replay or pass --replay-python"
+                )
+            return str(candidate)
+
+    raise SystemExit(
+        "isolated replay Python not found. Create v23/.venv-replay from "
+        "requirements-replay.txt or pass --replay-python / V23_REPLAY_PYTHON."
+    )
 
 
 def pricing_for(args):
@@ -510,14 +545,16 @@ def main():
     if not 1<=args.session_history_limit<=500: raise SystemExit("--session-history-limit must be 1..500")
     if not 0<args.session_budget_usd<=args.total_budget_usd: raise SystemExit("invalid budget ceilings")
     inp_price,out_price=pricing_for(args)
+    replay_python=resolve_replay_python(args.replay_python) if args.allow_exec else ""
     WORKSPACE.mkdir(parents=True,exist_ok=True)
     run_id="run_"+datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")+"_"+uuid.uuid4().hex[:8]
     config={"version":2,"run_id":run_id,"task":args.task,"model":args.model,
             "session_id":args.session_id,"max_turns":args.max_turns,
+            "replay_python":replay_python or None,
             "tracing_enabled":not args.disable_tracing,"trace_sensitive_data":False}
     log=RunLog(WORKSPACE,config); local=LocalTools(allow_exec=args.allow_exec,log=log)
     db=ResearchDB(STATE_DB); db.start_run(run_id,args.session_id,args.task,args.model)
-    app=AppContext(run_id,local,db,log,inp_price,out_price)
+    app=AppContext(run_id,local,db,log,inp_price,out_price,replay_python)
     budget=BudgetLedger(LEDGER_PATH,model=args.model,input_usd_per_m=inp_price,
         output_usd_per_m=out_price,total_budget_usd=args.total_budget_usd,
         session_budget_usd=args.session_budget_usd)

@@ -7,7 +7,7 @@ Build an autonomous, evidence-driven research loop for improving the Kaggricultu
 v23 should first understand the existing chain:
 
 ```text
-v20 notebook + game_history/v20 losses
+v20 notebook + working_files/loss_games_v20
     -> diagnose a concrete failure
     -> candidate replacement policy
     -> static replay with recorded opponent actions
@@ -41,17 +41,17 @@ Negative results are first-class results.
 - Distinguish static-history counterfactual performance from live/adaptive-opponent performance.
 - Preserve commands, seeds, configs, and metric paths in the run record.
 - Never infer hidden-score improvement from local proxy metrics alone.
-- Avoid external/public solution lookup in v1; use our own code, histories, and measurements.
+- Avoid external/public solution lookup in v23; use our own code, histories, and measurements.
 
 ## Cost policy
 
-Available OpenAI API credit is approximately $6. v1 uses `gpt-6-luna` with low reasoning effort and a persistent local ledger. The default project ceiling is $5.00 with a $0.25 per-run ceiling. There is no automatic escalation to Sol/Astra.
+Available OpenAI API credit is approximately $6. v23 uses `gpt-6-luna` with low reasoning effort and a persistent local ledger. The default project ceiling is $5.00 with a $0.25 per-run ceiling. There is no automatic escalation to Sol/Astra.
 
-## v1 success criteria
+## Success criteria
 
 A bounded run should locate relevant prior evidence without dumping the repository into context, state a concrete hypothesis, identify or execute a small experiment, separate evidence from conjecture, write a concise research record, and stay well below budget.
 
-Only after that behavior is reliable should v23 gain source-patching and automatic A/B candidate promotion.
+Candidate changes are accepted only through measured static-replay evidence and recorded experiment conclusions.
 
 
 ## Filesystem boundary
@@ -88,6 +88,22 @@ Conversation memory and research memory are separate:
 
 Tracing is provided by the OpenAI Agents SDK. Domain-specific research semantics remain in the local SQLite database.
 
+
+
+
+## Agent/replay isolation contract
+
+OpenAI orchestration and Kaggriculture replay are independent systems.
+
+- The **agent environment** contains the OpenAI SDK and OpenAI Agents SDK. It performs reasoning, planning, candidate generation, experiment selection, memory, tracing, and result analysis.
+- The **replay environment** contains Kaggle Environments, PyTorch, and NumPy. It reconstructs games, runs candidate actions, replays recorded opponent commands, and emits structured metrics.
+- v23 replay code must not import or call OpenAI APIs. Kaggle may carry unrelated transitive OpenAI/LiteLLM packages internally; those are not part of the replay interface.
+- The agent environment must not install, import, or depend on Kaggle Environments.
+- Communication across the boundary is subprocess arguments plus JSON output.
+- The agent runtime must use a replay interpreter different from its own interpreter.
+- Kaggle/LiteLLM dependency constraints must never determine the OpenAI Agents SDK version.
+
+This separation is architectural, not optional dependency management.
 
 ## Mandatory execution contract
 
