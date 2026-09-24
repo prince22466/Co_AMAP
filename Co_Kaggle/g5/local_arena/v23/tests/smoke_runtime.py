@@ -87,6 +87,10 @@ def main() -> int:
         assert reached_goal is not None
         assert reached_goal["goal_id"] == goal_id
         assert reached_goal["reached_at"] is not None
+        assert runtime.autonomous_stop_reason(reached_goal, "", True) == "goal_reached"
+        assert runtime.autonomous_stop_reason({"reached_at": None}, "", True) is None
+        assert runtime.autonomous_stop_reason({"reached_at": None}, "replay failed", True) == "reported_blocker"
+        assert runtime.autonomous_stop_reason({"reached_at": None}, "", False) == "execution_disabled"
 
         finished = db.finish_experiment(
             experiment_id, "SUPPORTED", "smoke experiment completed"
