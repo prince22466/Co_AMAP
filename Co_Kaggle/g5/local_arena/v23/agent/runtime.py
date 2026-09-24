@@ -1442,7 +1442,6 @@ def main():
             }
             analyst_output=""
             analyst_error=""
-            prior_batch = db.batch_lineage_summary()
             analyst_context = build_analyst_context(
                 db, local.root, max_chars=12000
             )
@@ -1454,17 +1453,6 @@ def main():
                 "performance. Produce exactly 10 structurally distinct test ideas in the "
                 "required JSON schema."
             )
-            if prior_batch:
-                analyst_prompt += (
-                    "\n\nRESULTS AND LINEAGE FROM THE MOST RECENT IDEA BATCH:\n"
-                    + j(prior_batch)
-                    + "\nEvery idea_id, experiment_id, candidate path/hash, replay_call_id, "
-                      "and game_record_path above is canonical. Use idea_dossier(idea_id) "
-                      "when you need detailed per-game lineage, and read a game_record_path "
-                      "only when its trace can change the diagnosis. Do not recycle failed "
-                      "idea families unless the new hypothesis explains why the failure "
-                      "would not apply."
-                )
             try:
                 analyst_result=Runner.run_sync(
                     analyst_agent,
@@ -1606,11 +1594,6 @@ def main():
             "output_tokens":0,"reasoning_tokens":0,"total_tokens":0
         }
         cycle_prompt=continuation
-        if new_strategy_review:
-            cycle_prompt += (
-                "\n\nINDEPENDENT PERFORMANCE ANALYST REVIEW:\n"
-                + new_strategy_review
-            )
         engineer_context = build_engineer_context(
             db, next_idea, max_chars=8000
         )
