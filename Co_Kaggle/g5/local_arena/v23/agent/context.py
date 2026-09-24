@@ -85,10 +85,13 @@ def append_progress_files(root: Path, snapshot: dict[str, Any], timestamp: str) 
     record = {"timestamp": timestamp, **snapshot}
     with (workspace / "progress.jsonl").open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(record, sort_keys=True, default=str) + "\n")
-    (workspace / "progress_latest.json").write_text(
+    latest = workspace / "progress_latest.json"
+    tmp = workspace / "progress_latest.json.tmp"
+    tmp.write_text(
         json.dumps(record, indent=2, sort_keys=True, default=str) + "\n",
         encoding="utf-8",
     )
+    tmp.replace(latest)
 
 
 def build_analyst_context(
