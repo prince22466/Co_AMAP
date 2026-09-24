@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sqlite3
@@ -126,7 +127,7 @@ class ResearchDB:
           replay_cases INTEGER DEFAULT 0, final_output TEXT);
         CREATE TABLE IF NOT EXISTS experiments(
           experiment_id TEXT PRIMARY KEY, run_id TEXT, idea_id TEXT, hypothesis TEXT,
-          candidate TEXT, parent_candidate TEXT, notes TEXT, started_at TEXT,
+          candidate TEXT, candidate_sha256 TEXT, parent_candidate TEXT, notes TEXT, started_at TEXT,
           ended_at TEXT, elapsed_seconds REAL, status TEXT, conclusion TEXT,
           replay_calls INTEGER DEFAULT 0, replay_cases INTEGER DEFAULT 0,
           best_margin_improvement REAL, mean_margin_improvement REAL,
@@ -165,6 +166,13 @@ class ResearchDB:
         }
         if "idea_id" not in experiment_columns:
             self.db.execute("ALTER TABLE experiments ADD COLUMN idea_id TEXT")
+        if "candidate_sha256" not in experiment_columns:
+            self.db.execute("ALTER TABLE experiments ADD COLUMN candidate_sha256 TEXT")
+        replay_columns = {
+            row[1] for row in self.db.execute("PRAGMA table_info(replays)").fetchall()
+        }
+        if "game_record_path" not in replay_columns:
+            self.db.execute("ALTER TABLE replays ADD COLUMN game_record_path TEXT")
         idea_columns = {
             row[1] for row in self.db.execute("PRAGMA table_info(research_ideas)").fetchall()
         }
