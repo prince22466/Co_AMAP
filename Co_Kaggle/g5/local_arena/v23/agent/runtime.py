@@ -41,6 +41,7 @@ v2 research-memory contract:
 - Model-written candidate policies may execute only through static_replay_candidate.
 - When execution is enabled, do not stop at analysis or planning. You must create/select a concrete candidate, start an experiment, execute at least one static replay, analyze the measured result, and finish the experiment unless a concrete runtime error or budget stop blocks execution.
 - A rejected candidate is evidence, not a blocker. If the durable goal is unmet, continue with the next justified experiment.
+- Idea/experiment/replay lineage is authoritative. For assigned ideas, keep the supplied idea_id, let start_experiment link the experiment automatically, and use idea_dossier after replay to verify the candidate path/hash, replay_call_id, episode records, and metrics before concluding the experiment.
 - After four consecutive rejected experiments with no wins and no positive mean margin improvement, treat the search as stagnant: abandon the current tweak family, re-inspect raw loss evidence, and move to a different causal layer (for example worker actions/task ranking/logistics/planning/inventory/market). Do not keep making parameter variants of the same idea.
 - Do not use one fixed 5-game screen forever. Rotate or stratify screening histories when a screen repeatedly rejects candidates, and periodically run the strongest candidate family on all 25 histories because local replay is cheaper than additional model reasoning.
 - Only call report_blocker for a concrete runtime/environment failure that makes further research impossible without external intervention.
@@ -69,6 +70,7 @@ Use the available read-only tools selectively:
   changing multiple components is allowed when they implement ONE interaction
   hypothesis and the experiment remains falsifiable;
 - treat rejected hypotheses as negative evidence;
+- treat idea_id -> experiment_id -> candidate path/SHA-256 -> replay_call_id -> episode/game_record_path as the canonical evidence chain. Use idea_dossier(idea_id) for detailed lineage and read individual game_record_path files only when step-level traces can change the diagnosis;
 - if recent search is stagnant, explicitly move away from the repeated hypothesis
   family instead of proposing another parameter tweak.
 
@@ -1472,8 +1474,9 @@ def main():
                   "is the experimental variable; do not reduce it to one component and lose "
                   "the hypothesis. Call start_experiment once, run the smallest useful static "
                   "replay, expand only when its promotion rule is met, record the result, and "
-                  "finish the experiment. Do not skip ahead to another analyst idea in the "
-                  "same cycle."
+                  "after replay call idea_dossier for this idea_id to verify the exact code "
+                  "version and recorded game lineage, then finish the experiment. Do not skip "
+                  "ahead to another analyst idea in the same cycle."
             )
         try:
             result=Runner.run_sync(
