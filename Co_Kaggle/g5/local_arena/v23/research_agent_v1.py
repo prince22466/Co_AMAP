@@ -457,6 +457,7 @@ class LocalTools:
 
         rows = []
         for history_path in paths:
+            case_started = time.monotonic()
             history = json.loads(history_path.read_text(encoding="utf-8"))
             control = recorded_action_parity(history)
             original = _saved_final_rewards(history)
@@ -466,6 +467,7 @@ class LocalTools:
                     "valid": False,
                     "error": "recorded-action parity failed",
                     "recorded_action_control": control,
+                    "elapsed_seconds": round(time.monotonic() - case_started, 6),
                 })
                 continue
 
@@ -474,6 +476,7 @@ class LocalTools:
                     "episode": history_path.stem,
                     "valid": False,
                     "error": "recorded v20 history is tied; cannot infer v20 seat",
+                    "elapsed_seconds": round(time.monotonic() - case_started, 6),
                 })
                 continue
 
@@ -525,6 +528,7 @@ class LocalTools:
                     "action_divergences": action_divergences,
                     "first_action_divergence": first_divergence,
                     "error": "" if valid else f"non-DONE status: {statuses}",
+                    "elapsed_seconds": round(time.monotonic() - case_started, 6),
                 })
             except Exception as exc:
                 rows.append({
@@ -532,6 +536,7 @@ class LocalTools:
                     "valid": False,
                     "original_v20_margin": original_margin,
                     "error": f"{type(exc).__name__}: {exc}",
+                    "elapsed_seconds": round(time.monotonic() - case_started, 6),
                 })
 
         valid_rows = [row for row in rows if row.get("valid")]
