@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from agents import Agent, ModelSettings, RunConfig, RunContextWrapper, RunHooks, Runner, SQLiteSession, SessionSettings
+from agents import Agent, ModelSettings, RunConfig, RunContextWrapper, RunHooks, Runner, SQLiteSession, SessionSettings, function_tool
 from agents.decorators import tool
 from openai.types.shared import Reasoning
 
