@@ -40,6 +40,8 @@ v2 research-memory contract:
 - Model-written candidate policies may execute only through static_replay_candidate.
 - When execution is enabled, do not stop at analysis or planning. You must create/select a concrete candidate, start an experiment, execute at least one static replay, analyze the measured result, and finish the experiment unless a concrete runtime error or budget stop blocks execution.
 - A rejected candidate is evidence, not a blocker. If the durable goal is unmet, continue with the next justified experiment.
+- After four consecutive rejected experiments with no wins and no positive mean margin improvement, treat the search as stagnant: abandon the current tweak family, re-inspect raw loss evidence, and move to a different causal layer (for example worker actions/task ranking/logistics/planning/inventory/market). Do not keep making parameter variants of the same idea.
+- Do not use one fixed 5-game screen forever. Rotate or stratify screening histories when a screen repeatedly rejects candidates, and periodically run the strongest candidate family on all 25 histories because local replay is cheaper than additional model reasoning.
 - Only call report_blocker for a concrete runtime/environment failure that makes further research impossible without external intervention.
 - FP16 is mandatory for candidate floating-point model weights, activations, tensors, and learned numeric compute. Integer/boolean/schema-mandated types are exempt. Do not emit float32, float64, double, or bfloat16 candidate model/tensor code unless a backend operation is provably unsupported in FP16; any such exception must be narrowly scoped, documented, and converted back to FP16 immediately.
 """
@@ -228,6 +230,57 @@ class ResearchDB:
         self.db.commit()
         return summary
 
+    def research_signal(self, recent_limit=6):
+        recent_limit = max(4, min(int(recent_limit), 20))
+        rows = [dict(x) for x in self.db.execute(
+            """SELECT experiment_id,hypothesis,status,wins,losses,replay_cases,
+                      mean_margin_improvement,best_margin_improvement,started_at
+               FROM experiments
+               WHERE status!='RUNNING'
+               ORDER BY started_at DESC LIMIT ?""",
+            (recent_limit,),
+        ).fetchall()]
+
+        consecutive_rejected = 0
+        for row in rows:
+            if row.get("status") == "REJECTED":
+                consecutive_rejected += 1
+            else:
+                break
+
+        positive_recent = any(
+            int(row.get("wins") or 0) > 0
+            or float(row.get("mean_margin_improvement") or 0.0) > 0.0
+            for row in rows
+        )
+        no_effect_recent = sum(
+            1 for row in rows
+            if row.get("mean_margin_improvement") is not None
+            and abs(float(row["mean_margin_improvement"])) < 1e-9
+        )
+        best = self.db.execute(
+            """SELECT COALESCE(MAX(wins),0) best_wins,
+                      COALESCE(MAX(mean_margin_improvement),0) best_mean_margin
+               FROM experiments WHERE status!='RUNNING'"""
+        ).fetchone()
+
+        return {
+            "recent_count": len(rows),
+            "consecutive_rejected": consecutive_rejected,
+            "positive_recent": positive_recent,
+            "no_effect_recent": no_effect_recent,
+            "best_wins": int(best["best_wins"] or 0),
+            "best_mean_margin_improvement": float(best["best_mean_margin"] or 0.0),
+            "stagnating": (
+                len(rows) >= 4
+                and consecutive_rejected >= 4
+                and not positive_recent
+            ),
+            "recent_hypotheses": [
+                row.get("hypothesis", "") for row in rows[:4]
+            ],
+        }
+
     def project_status(self):
         r = self.db.execute("""SELECT COUNT(*) n,COALESCE(SUM(elapsed_seconds),0) elapsed,
           COALESCE(SUM(api_requests),0) requests,COALESCE(SUM(input_tokens),0) input_tokens,
@@ -254,6 +307,7 @@ class ResearchDB:
                      if goal and goal["reached_observability_json"] else None}
                    if goal else None),
           "recent_experiments": recent,
+          "research_signal": self.research_signal(),
         }
 
 
@@ -776,6 +830,7 @@ def main():
 
         goal=latest_goal_state(db)
         goal_reached=bool(goal and goal.get("reached_at"))
+        signal=db.research_signal()
         log.event("autonomous_cycle", {
             "cycle":cycle,
             "cycle_output":cycle_output,
@@ -783,6 +838,7 @@ def main():
             "cycle_conservative_cost_usd":cycle_cost,
             "goal":goal,
             "goal_reached":goal_reached,
+            "research_signal":signal,
         })
 
         stop_reason=autonomous_stop_reason(goal, app.blocker_reason, args.allow_exec)
@@ -811,15 +867,30 @@ def main():
             status="DONE"
             break
 
-        continuation=(
-            "Continue the SAME research task and session. The durable goal is still "
-            "unmet. Do not stop merely because a candidate was rejected, one experiment "
-            "finished, or you have a recommendation for the next step. Inspect "
-            "project_status, use prior negative results, create the next justified "
-            "candidate/experiment, execute static replay, and continue making measured "
-            "progress. Only a reached durable goal, exhausted configured API budget, or "
-            "a concrete runtime blocker may terminate the autonomous loop."
-        )
+        if signal["stagnating"]:
+            continuation=(
+                "STRATEGY RESET REQUIRED. The durable goal is still unmet and the recent "
+                "search is stagnant: at least four consecutive rejected experiments have "
+                "produced neither a win nor positive mean margin improvement. Do NOT make "
+                "another small variant of the recent hypotheses. Re-inspect raw v20 loss "
+                "evidence and v20 policy logic, identify a different causal layer, and run "
+                "a structurally different experiment. Consider worker actions/task ranking/"
+                "logistics/planning/inventory/market rather than staying in one family. "
+                "Rotate or stratify the screening histories if the same small screen has "
+                "been reused. Use project_status and the recent hypotheses as negative "
+                "evidence, then execute the next experiment. Recent hypotheses: "
+                + j(signal["recent_hypotheses"])
+            )
+        else:
+            continuation=(
+                "Continue the SAME research task and session. The durable goal is still "
+                "unmet. Do not stop merely because a candidate was rejected, one experiment "
+                "finished, or you have a recommendation for the next step. Inspect "
+                "project_status, use prior negative results, create the next justified "
+                "candidate/experiment, execute static replay, and continue making measured "
+                "progress. Only a reached durable goal, exhausted configured API budget, or "
+                "a concrete runtime blocker may terminate the autonomous loop."
+            )
 
     elapsed=time.monotonic()-started
     if status=="DONE" and args.allow_exec:
