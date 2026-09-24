@@ -280,7 +280,24 @@ def main() -> int:
                 {
                     "title": f"Idea {i}",
                     "hypothesis": f"Hypothesis {i}",
-                    "causal_layer": "worker" if i % 2 else "market",
+                    "causal_layer": (
+                        "multi_component" if i <= 3
+                        else ("worker" if i % 2 else "market")
+                    ),
+                    "components": (
+                        ["animal_plan", "market_orders"]
+                        if i == 1 else
+                        ["crop_plan", "task_ranking"]
+                        if i == 2 else
+                        ["logistics", "inventory_capacity"]
+                        if i == 3 else
+                        ["worker_policy"]
+                    ),
+                    "interaction_hypothesis": (
+                        f"Interaction hypothesis {i}"
+                        if i <= 3 else "single-component"
+                    ),
+                    "system_prediction": f"System prediction {i}",
                     "rationale": f"Rationale {i}",
                     "smallest_test": "1 case",
                     "promotion_rule": "positive margin -> expand",
@@ -297,6 +314,15 @@ def main() -> int:
                 runtime.json.dumps({**analyst_json, "ideas": analyst_json["ideas"][:9]})
             )
             raise AssertionError("9-idea analyst batch should fail")
+        except ValueError:
+            pass
+
+        too_few_multi = runtime.json.loads(runtime.json.dumps(analyst_json))
+        for idea in too_few_multi["ideas"]:
+            idea["components"] = ["worker_policy"]
+        try:
+            runtime.parse_analyst_batch(runtime.json.dumps(too_few_multi))
+            raise AssertionError("batch with <3 multi-component ideas should fail")
         except ValueError:
             pass
 
@@ -328,6 +354,15 @@ def main() -> int:
                 (eid,),
             ).fetchone()
             assert exp_row["idea_id"] == idea["idea_id"]
+            if expected_index <= 3:
+                stored = batch_db.db.execute(
+                    """SELECT components_json,interaction_hypothesis,system_prediction
+                       FROM research_ideas WHERE idea_id=?""",
+                    (idea["idea_id"],),
+                ).fetchone()
+                assert len(runtime.json.loads(stored["components_json"])) >= 2
+                assert stored["interaction_hypothesis"]
+                assert stored["system_prediction"]
             batch_db.db.execute(
                 """UPDATE experiments
                    SET wins=0,losses=1,replay_cases=1,
