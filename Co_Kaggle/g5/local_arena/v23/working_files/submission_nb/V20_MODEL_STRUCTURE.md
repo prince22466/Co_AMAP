@@ -695,3 +695,170 @@ MARKET
 ```
 
 For a v20 loss, first identify **which of those four stages produced the bad decision**, then make the smallest change and verify it with static replay.
+
+---
+
+# 18. Difference from v19
+
+The most important architectural change is narrow but significant:
+
+```text
+v19:
+planner + feasible candidate generation
+        -> learned_task_score(features)
+        -> greedy worker-task ranking
+
+v20:
+same planner + same feasible candidate generation
+        -> normalized v19 learned_task_score prior
+        + learned residual Q(state, task)
+        -> worker-task ranking
+```
+
+So v20 is **not a full redesign of v19**. It deliberately keeps the v19 planning/candidate constraints and changes the final worker-task ranking stage.
+
+## What stayed essentially the same
+
+v20 preserves the main v19 structure around:
+- `forecast(obs)`
+- animal planning
+- crop planning
+- fixed farm-layout assumptions / animal routes
+- task generation and feasibility checks
+- market-order policy
+- opponent-style heuristics
+- hard-coded economic constants and timing windows
+
+This means many v19 behavioral biases remain reachable in v20.
+
+If v19 never generates a useful task, v20's residual Q cannot invent it.
+
+## What changed
+
+### v19 ranking
+
+v19 uses `learned_task_score(task_features)` as the final learned/heuristic score for feasible worker-task assignments.
+
+Conceptually:
+
+```text
+candidate -> task features -> learned_task_score -> greedy choice
+```
+
+### v20 ranking
+
+v20 keeps that v19 score as a **prior**, normalizes it across the current candidate set, then adds a learned state-dependent neural correction:
+
+```text
+candidate
+   |
+   +-- task_features -----------------> v19 learned_task_score
+   |                                      |
+   |                                      v
+   |                                normalized prior
+   |
+   +-- task features + global state -> residual Q network
+                                          |
+                                          v
+                         normalized prior + residual
+                                          |
+                                          v
+                                      final choice
+```
+
+This lets v20 change worker-task preferences according to broader game state while retaining v19's strong prior.
+
+## Why residual instead of replacing v19 directly
+
+The design preserves a known-feasible baseline and learns only a correction.
+
+Practical consequence:
+
+```text
+v19 knowledge = prior
+v20 learning  = correction
+```
+
+The residual can:
+- promote a task v19 undervalues;
+- demote a task v19 overvalues;
+- make ranking depend on global state.
+
+But it still operates only over v19-generated feasible candidates.
+
+## New state awareness in v20
+
+v19's final ranking is driven primarily by task features through `learned_task_score`.
+
+v20 adds a global-state representation through `q_global_state(...)`, combined with normalized task features before residual scoring.
+
+Therefore two similar worker-task candidates can receive different corrections depending on broader game state.
+
+## Embedded neural model
+
+v20 adds embedded residual-network weights to the submission.
+
+Architecture documented by the v20 checkpoint:
+
+```text
+38 -> 64 -> 64 -> 1
+```
+
+The weights are embedded in `main.py`, decoded with Python standard-library code, so Kaggle runtime still requires no PyTorch/NumPy/filesystem checkpoint.
+
+v19 does not have this residual MLP stage.
+
+## New candidate-set normalization
+
+v20 converts the v19 candidate scores into a normalized prior before adding the residual.
+
+That means the network learns a correction relative to the alternatives available **at that decision point**, rather than simply replacing the absolute v19 score.
+
+## New exact Q pruning
+
+v20 also adds a runtime optimization around residual evaluation.
+
+Candidates are ordered by v19 prior. Once:
+
+```text
+prior(candidate) + maximum_possible_residual < current_best_Q
+```
+
+lower candidates can be skipped safely.
+
+This pruning exists because v20 has a bounded residual neural score; it is not part of the v19 greedy ranking.
+
+## Training relationship
+
+The v20 notebook identifies the selected model as residual Double-DQN update 9.
+
+Its reported selection evidence was evaluated on v19 loss-case seeds from both seats. That historical result is useful for understanding why the checkpoint was chosen, but v23 should evaluate new changes against the current `loss_games_v20` corpus.
+
+## Diagnostic implication for v23
+
+When comparing a v20 loss to v19-style behavior, ask:
+
+1. **Planner/candidate failure?**
+   - Both v19 and v20 inherit it.
+   - Fix planner or task generation.
+
+2. **v19 prior failure corrected by v20?**
+   - Residual Q is doing useful work.
+   - Preserve or strengthen the correction.
+
+3. **v19 prior was good but v20 residual changed it badly?**
+   - Investigate Q features/weights/ranking.
+
+4. **Worker ranking is fine but result still loses?**
+   - Look at market logic, production mix, timing, logistics, reserves, and selling.
+
+Compactly:
+
+```text
+v19 = PLAN -> CANDIDATES -> PRIOR RANK
+
+v20 = PLAN -> CANDIDATES -> PRIOR RANK + STATE-DEPENDENT RESIDUAL Q
+```
+
+This is the central v19 -> v20 difference.
+
