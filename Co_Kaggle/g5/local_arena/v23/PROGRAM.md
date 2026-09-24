@@ -120,10 +120,11 @@ Not converted to FP16:
 - integer action codes, IDs, coordinates, counters, indices, shapes, lengths, seeds, and enum values;
 - boolean masks and flags;
 - Kaggriculture environment observations/actions whose schema requires Python integers, booleans, strings, or other non-floating types;
-- operations that a required backend cannot execute in FP16. Such an exception must be narrowly scoped, documented in the experiment record, and converted back to FP16 immediately after the unsupported operation.
-
-Disallowed by default in candidate computation:
+Disallowed in candidate floating-point computation:
 - explicit `float32`, `float64`, `double`, or `bfloat16` model/tensor dtypes;
-- silent promotion of model weights or activations to wider floating precision.
+- silent promotion of model weights or activations to wider floating precision;
+- widening a candidate computation merely because a backend operation is inconvenient in FP16.
+
+If an algorithm cannot run under this contract on the available backend, change the algorithm rather than silently widening precision.
 
 Static replay performs a source-level precision audit before executing a candidate and rejects obvious explicit wider floating-point dtypes.
