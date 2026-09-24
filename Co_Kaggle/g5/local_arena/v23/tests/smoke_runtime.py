@@ -164,6 +164,61 @@ def main() -> int:
         assert threaded_goal.startswith("goal_")
         assert threaded_finished["status"] == "UNRESOLVED"
 
+        # Stagnation detection: four consecutive rejected, non-improving
+        # experiments must force a strategy reset.
+        stagnation_db = runtime.ResearchDB(Path(tmp) / "stagnation.sqlite3")
+        stagnation_run = "run_stagnation"
+        stagnation_db.start_run(
+            stagnation_run, "stagnation-session", "stagnation smoke", "smoke-model"
+        )
+        for i in range(4):
+            eid = stagnation_db.start_experiment(
+                stagnation_run,
+                f"Repeated local tweak {i}",
+                "",
+                "",
+                "stagnation smoke",
+            )
+            stagnation_db.db.execute(
+                """UPDATE experiments
+                   SET wins=0, losses=5, replay_cases=5,
+                       mean_margin_improvement=0.0,
+                       best_margin_improvement=0.0
+                   WHERE experiment_id=?""",
+                (eid,),
+            )
+            stagnation_db.db.commit()
+            stagnation_db.finish_experiment(
+                eid, "REJECTED", "no measurable improvement"
+            )
+        signal = stagnation_db.research_signal()
+        assert signal["stagnating"] is True
+        assert signal["consecutive_rejected"] == 4
+        assert signal["positive_recent"] is False
+
+        progress_eid = stagnation_db.start_experiment(
+            stagnation_run,
+            "Structurally different candidate",
+            "",
+            "",
+            "stagnation recovery smoke",
+        )
+        stagnation_db.db.execute(
+            """UPDATE experiments
+               SET wins=1, losses=4, replay_cases=5,
+                   mean_margin_improvement=10.0,
+                   best_margin_improvement=20.0
+               WHERE experiment_id=?""",
+            (progress_eid,),
+        )
+        stagnation_db.db.commit()
+        stagnation_db.finish_experiment(
+            progress_eid, "SUPPORTED", "positive signal"
+        )
+        recovered = stagnation_db.research_signal()
+        assert recovered["stagnating"] is False
+        assert recovered["positive_recent"] is True
+
         status = db.project_status()
         assert status["runs_completed"] == 1
         assert status["experiments_total"] == 1
