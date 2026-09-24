@@ -8,11 +8,12 @@ Static replay means:
 
 ```text
 load a recorded v20 loss game
--> infer which seat was v20
--> rebuild the game environment from recorded history
--> replace only the v20 seat with a candidate policy
--> replay the opponent's recorded actions verbatim
--> step the environment forward
+-> assume the lower-reward seat is v20 because this corpus contains v20 losses
+-> create a fresh environment from the history's saved name/configuration/info
+-> verify that replaying both recorded action streams exactly reproduces the saved history
+-> replace only the inferred v20 seat with a candidate policy
+-> keep submitting the opponent's recorded action commands verbatim
+-> step the new counterfactual environment forward
 -> compare the candidate's final reward/margin against the original v20 result
 ```
 
@@ -66,7 +67,9 @@ For v23, this is the important part. Most of the rest of the file is v21 trainin
 
 ## `run_static_episode(...)`
 
-This is the reference implementation for one candidate-vs-recorded-opponent replay.
+This is the v21 training script's reference implementation for one **Q-controller candidate** vs recorded-opponent replay.
+
+For a generic notebook/Python policy replacement, `_run_submission_replacement(...)` from the imported evaluation helper is actually the simpler pattern.
 
 High-level logic:
 
@@ -104,6 +107,9 @@ That loop is the essence of static replay.
 
 # 3. Minimal helper set that matters to v23
 
+Several replay helpers used by this example are **imported**, not defined in this file. The current example retains legacy dependencies on sibling v20/v21 modules. Under the v23-only filesystem design, treat this script as a reference implementation and copy/reimplement the required replay helpers locally rather than depending on those external paths.
+
+
 The v23 agent should care primarily about these helpers.
 
 ## History / seat helpers
@@ -118,18 +124,18 @@ Reads the original terminal rewards from the recorded game.
 
 ### `_infer_v20_seat(history)`
 
-Infers which seat was the losing v20 player.
+Infers the candidate seat by selecting the lower-reward seat.
 
 Current logic:
 
 ```text
 if reward[0] < reward[1]:
-    v20 seat = 0
+    candidate/v20 seat = 0
 else:
-    v20 seat = 1
+    candidate/v20 seat = 1
 ```
 
-Tied histories are rejected because the losing v20 seat cannot be inferred safely.
+Important: the function does **not** inspect metadata proving that this seat ran v20. It relies on the dataset contract that `loss_games_v20` contains games lost by v20. Tied histories are rejected because this convention cannot identify a unique losing seat.
 
 ---
 
@@ -137,11 +143,11 @@ Tied histories are rejected because the losing v20 seat cannot be inferred safel
 
 ### `_environment_from_history(history)`
 
-Reconstructs a Kaggriculture environment from the recorded game state/configuration.
+Creates a **fresh Kaggriculture environment** using the history's saved game name, `configuration`, and `info`.
 
-This is critical. Do not start a fresh random game for static replay.
+It does **not** restore an arbitrary serialized simulator state from a later turn. Replay starts from the newly created episode's initial state and advances by actions.
 
-The reconstructed environment must match the recorded game setup.
+This is why `recorded_action_parity(history)` is mandatory: it proves that, under the current engine, recreating the episode and replaying the recorded actions reproduces the saved observations/rewards/statuses exactly.
 
 ---
 
@@ -217,17 +223,17 @@ This isolates the effect of replacing v20 under the opponent behavior that actua
 
 # 5. What remains fixed
 
-During one static replay, keep these fixed:
+During one static replay, keep these inputs fixed:
 
-- original episode configuration;
-- original initial state;
-- original random environment trajectory as reconstructed;
-- original opponent seat;
-- original opponent action stream;
-- game rules;
-- episode length.
+- saved episode name/configuration/info;
+- inferred candidate/opponent seats;
+- the opponent's recorded **action commands** at each replay step;
+- game rules / engine version;
+- replay length.
 
-Only the candidate policy replaces the recorded v20 policy.
+The counterfactual **state trajectory is not fixed**. Once the candidate takes a different action, later observations, rewards, inventories, prices, positions, etc. may diverge from the recorded history.
+
+The opponent still receives no new decision-making: the harness continues submitting its historical action commands. Those commands may have different effects—or even become invalid/no-ops—in the changed counterfactual state.
 
 ---
 
@@ -241,9 +247,9 @@ Do not interpret static replay as:
 - proof of Kaggle leaderboard improvement;
 - proof that the opponent would make the same decisions after the candidate changes the game state.
 
-The opponent action stream is replayed verbatim even if the candidate creates a state where the opponent would realistically choose differently.
+The opponent action **commands** are replayed verbatim even after the candidate changes the world state. The opponent is never re-queried for a state-appropriate response.
 
-That is the main limitation.
+Therefore a recorded command may be strategically nonsensical or have a different effect in the counterfactual state. That is the main limitation.
 
 ---
 
@@ -298,20 +304,16 @@ If not, the static-replay harness is wrong or incompatible.
 
 # 9. Useful v23 baseline test
 
-Before testing a modified candidate:
-
-```text
-candidate = original v20
-```
+Before testing a modified candidate, run the checked-in original v20 notebook through the generic submission-replacement path.
 
 Expected:
 
-- zero candidate-action divergences;
-- same terminal rewards;
-- same result;
-- same margin.
+- zero action divergences from the recorded v20 action stream;
+- terminal statuses `DONE/DONE`;
+- exactly the recorded terminal rewards;
+- therefore the same result and margin.
 
-This is the strongest simple correctness check.
+The reference `_preflight(...)` performs this v20-submission parity check on one selected history, in addition to full recorded-action parity. For a new v23 harness, it is safer to establish parity across every history before treating the whole corpus as valid evidence.
 
 ---
 
