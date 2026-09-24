@@ -96,6 +96,8 @@ The Agents SDK tracing exporter is enabled by default, but trace payloads are co
 
 Conversation history is persisted in `workspace/agent_sessions.sqlite3`. By default only the most recent 80 session items are retrieved for a run; change this with `--session-history-limit`.
 
+The model path explicitly enables OpenAI implicit prompt caching with a 30-minute TTL. Stable instructions/tool definitions and repeated session prefixes can therefore be reused by the API. `cached_tokens` and `cache_write_tokens` are recorded separately; the local budget guard still prices all input at the uncached rate so caching can only make the real bill lower than the guard estimate.
+
 Negative experiment conclusions are stored in the experiment DB so the agent can avoid re-testing rejected ideas.
 
 
