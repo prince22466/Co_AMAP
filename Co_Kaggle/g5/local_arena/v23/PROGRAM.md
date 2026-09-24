@@ -217,3 +217,40 @@ The Performance Analyst has deterministic read-only tools for evidence gathering
 - `evaluate_hypothesis_evidence(idea_id)`: compare the original hypothesis/system prediction with measured replay outcomes.
 
 These tools are evidence compressors, not causal oracles. Historical trajectory summaries are descriptive. Component-effect matrices contain confounding because components may co-occur. Causal claims require controlled static replay. When a replay trace lacks full counterfactual state, the analyzer reports that limitation rather than inferring unrecorded state.
+
+
+## Context engineering and progress log
+
+v23 builds bounded role-specific context instead of relying on accumulated chat history.
+
+### Performance Analyst context
+
+The Analyst receives a compact context pack containing:
+- durable goal and current progress;
+- current 10-idea batch evidence;
+- component/component-combination summaries;
+- canonical idea -> experiment -> candidate -> replay lineage.
+
+Full histories, replay traces, duplicate staged replay rows, and old conversational chatter are excluded by default. The Analyst drills down with deterministic tools only when needed.
+
+### Experiment Engineer context
+
+The Engineer receives:
+- exactly one assigned idea;
+- hypothesis, affected components, system interaction, rationale;
+- smallest test and promotion rule;
+- resume state / existing experiment ID;
+- existing lineage for that idea;
+- compact project progress.
+
+This keeps coding context narrow and prevents accidental work on unrelated ideas.
+
+### Progress log
+
+The controller writes:
+- `workspace/progress_latest.json`: current canonical research status;
+- `workspace/progress.jsonl`: append-only history of progress snapshots.
+
+Snapshots include the goal, batch progress, current work item, best current-batch result, experiment counts, replay counts, stagnation signal, and conservative cost. A snapshot is written after every autonomous cycle and at run completion.
+
+The low-level RunLog remains the audit/event log. The progress log is the compact operational summary for humans and agents.

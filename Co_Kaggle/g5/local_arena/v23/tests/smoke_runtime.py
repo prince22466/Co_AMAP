@@ -12,6 +12,12 @@ if str(V23_ROOT) not in sys.path:
     sys.path.insert(0, str(V23_ROOT))
 
 from agent import runtime
+from agent.context import (
+    append_progress_files,
+    build_analyst_context,
+    build_engineer_context,
+    build_progress_snapshot,
+)
 from agent.analysis import (
     analyze_cash_flow,
     analyze_experiment_records,
@@ -339,6 +345,39 @@ def main() -> int:
         queue_status = batch_db.idea_batch_status()
         assert queue_status["pending"] == 10
         assert batch_db.strategy_review_trigger() is None
+
+        pending_for_context = batch_db.current_work_idea()
+        engineer_context = build_engineer_context(
+            batch_db, pending_for_context, max_chars=8000
+        )
+        assert engineer_context["role"] == "experiment_engineer"
+        assert engineer_context["assigned_idea"]["idea_id"] == (
+            pending_for_context["idea_id"]
+        )
+        assert engineer_context["assigned_idea"]["promotion_rule"]
+
+        analyst_context = build_analyst_context(
+            batch_db, V23_ROOT, max_chars=12000
+        )
+        assert analyst_context["role"] == "performance_analyst"
+        assert analyst_context["progress"]["batch"]["pending"] == 10
+        assert "selection_policy" in analyst_context
+
+        progress_snapshot = build_progress_snapshot(batch_db)
+        assert progress_snapshot["batch"]["pending"] == 10
+        progress_root = Path(tmp) / "progress_root"
+        append_progress_files(
+            progress_root, progress_snapshot, runtime.utcnow()
+        )
+        latest_progress = progress_root / "workspace" / "progress_latest.json"
+        history_progress = progress_root / "workspace" / "progress.jsonl"
+        assert latest_progress.is_file()
+        assert history_progress.is_file()
+        latest_data = runtime.json.loads(
+            latest_progress.read_text(encoding="utf-8")
+        )
+        assert latest_data["batch"]["pending"] == 10
+        assert history_progress.read_text(encoding="utf-8").count("\n") == 1
 
         # A partially completed engineer cycle must resume the same RUNNING idea
         # instead of silently advancing to the next PENDING idea.
