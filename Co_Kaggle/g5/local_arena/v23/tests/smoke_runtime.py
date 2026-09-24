@@ -509,6 +509,58 @@ def main() -> int:
             "mixed_or_insufficient",
         }
 
+        # Staged 1->5->25 replay must not double-weight the same episode.
+        first_exp_for_stage = batch_db.db.execute(
+            "SELECT experiment_id,candidate FROM experiments WHERE idea_id=?",
+            (first_idea_id,),
+        ).fetchone()
+        batch_db.record_replay_call(
+            batch_run,
+            first_exp_for_stage["experiment_id"],
+            "replay_stage_later",
+            first_exp_for_stage["candidate"],
+            {
+                "summary": {
+                    "games_total": 1,
+                    "games_valid": 1,
+                    "wins": 1,
+                    "losses": 0,
+                    "margin_worsened_cases": 0,
+                    "mean_margin_improvement": 5.0,
+                    "best_margin_improvement": 5.0,
+                },
+                "matches": [{
+                    "episode": "episode_1",
+                    "valid": True,
+                    "original_v20_margin": -10.0,
+                    "candidate_margin": 5.0,
+                    "margin_improvement": 15.0,
+                    "result": "WIN",
+                    "action_divergences": 2,
+                    "game_record_path": None,
+                    "elapsed_seconds": 0.001,
+                    "error": "",
+                }],
+            },
+            runtime.utcnow(),
+            0.001,
+        )
+        staged_evidence = hypothesis_evidence(
+            V23_ROOT, batch_db, first_idea_id
+        )
+        assert staged_evidence["replay_cases"] == 1
+        assert staged_evidence["wins"] == 1
+        assert staged_evidence["losses"] == 0
+        assert staged_evidence["mean_margin_improvement"] == 15.0
+        staged_analysis = analyze_experiment_records(batch_db, review_id)
+        staged_row = next(
+            row for row in staged_analysis["ideas"]
+            if row["idea_id"] == first_idea_id
+        )
+        assert staged_row["replay_cases"] == 1
+        assert staged_row["wins"] == 1
+        assert staged_row["losses"] == 0
+
         # Candidate-v20 comparison follows the exact stored game_record_path.
         compare_root = Path(tmp) / "compare_root"
         record_rel = (
