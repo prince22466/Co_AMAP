@@ -219,6 +219,52 @@ def main() -> int:
         assert recovered["stagnating"] is False
         assert recovered["positive_recent"] is True
 
+        # Independent strategy review trigger is evidence-driven, not every cycle.
+        review_db = runtime.ResearchDB(Path(tmp) / "reviews.sqlite3")
+        review_run = "run_reviews"
+        review_db.start_run(
+            review_run, "review-session", "review smoke", "smoke-model"
+        )
+        assert review_db.strategy_review_trigger() == "initial_diagnosis"
+        review_id = review_db.record_strategy_review(
+            review_run, "initial_diagnosis", "initial analyst review", {}, 0.0
+        )
+        assert review_id.startswith("review_")
+        assert review_db.strategy_review_trigger() is None
+
+        for i in range(2):
+            eid = review_db.start_experiment(
+                review_run, f"Rejected idea {i}", "", "", "review trigger smoke"
+            )
+            review_db.db.execute(
+                """UPDATE experiments
+                   SET wins=0, losses=5, replay_cases=5,
+                       mean_margin_improvement=0.0,
+                       best_margin_improvement=0.0
+                   WHERE experiment_id=?""",
+                (eid,),
+            )
+            review_db.db.commit()
+            review_db.finish_experiment(eid, "REJECTED", "no progress")
+        # Only two experiments are not enough for periodic review unless the
+        # global stagnation detector is active.
+        assert review_db.strategy_review_trigger() is None
+
+        eid = review_db.start_experiment(
+            review_run, "Rejected idea 2", "", "", "review trigger smoke"
+        )
+        review_db.db.execute(
+            """UPDATE experiments
+               SET wins=0, losses=5, replay_cases=5,
+                   mean_margin_improvement=0.0,
+                   best_margin_improvement=0.0
+               WHERE experiment_id=?""",
+            (eid,),
+        )
+        review_db.db.commit()
+        review_db.finish_experiment(eid, "REJECTED", "no progress")
+        assert review_db.strategy_review_trigger() == "periodic_after_3_experiments"
+
         status = db.project_status()
         assert status["runs_completed"] == 1
         assert status["experiments_total"] == 1
