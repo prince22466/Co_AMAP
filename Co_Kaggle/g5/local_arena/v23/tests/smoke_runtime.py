@@ -316,25 +316,35 @@ def main() -> int:
 
         # A partially completed engineer cycle must resume the same RUNNING idea
         # instead of silently advancing to the next PENDING idea.
-        first_work = batch_db.current_work_idea()
+        resume_db = runtime.ResearchDB(Path(tmp) / "resume.sqlite3")
+        resume_run = "run_resume"
+        resume_db.start_run(
+            resume_run, "resume-session", "resume smoke", "smoke-model"
+        )
+        resume_review = resume_db.record_strategy_review(
+            resume_run, "initial_diagnosis",
+            runtime.json.dumps(analyst_json), {}, 0.0
+        )
+        resume_db.add_idea_batch(resume_review, parsed_batch["ideas"])
+        first_work = resume_db.current_work_idea()
         assert first_work is not None
         assert first_work["batch_index"] == 1
         assert first_work["resume_existing"] is False
-        partial_eid = batch_db.start_experiment(
-            batch_run,
+        partial_eid = resume_db.start_experiment(
+            resume_run,
             first_work["hypothesis"],
             "",
             "",
             "partial cycle smoke",
             first_work["idea_id"],
         )
-        resumed_work = batch_db.current_work_idea()
+        resumed_work = resume_db.current_work_idea()
         assert resumed_work is not None
         assert resumed_work["idea_id"] == first_work["idea_id"]
         assert resumed_work["experiment_id"] == partial_eid
         assert resumed_work["resume_existing"] is True
-        same_eid = batch_db.start_experiment(
-            batch_run,
+        same_eid = resume_db.start_experiment(
+            resume_run,
             first_work["hypothesis"],
             "",
             "",
@@ -342,11 +352,8 @@ def main() -> int:
             first_work["idea_id"],
         )
         assert same_eid == partial_eid
-        batch_db.finish_experiment(
-            partial_eid, "UNRESOLVED", "resume behavior verified"
-        )
 
-        for expected_index in range(2, 11):
+        for expected_index in range(1, 11):
             idea = batch_db.next_pending_idea()
             assert idea is not None
             assert idea["batch_index"] == expected_index
