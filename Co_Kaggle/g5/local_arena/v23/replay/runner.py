@@ -11,15 +11,26 @@ import time
 import types
 from pathlib import Path
 
-from replay.core import (
-    _agent_observation,
-    _environment_from_history,
-    _field,
-    _load_notebook_agent,
-    _recorded_step_actions,
-    _saved_final_rewards,
-    recorded_action_parity,
-)
+try:
+    from .core import (
+        _agent_observation,
+        _environment_from_history,
+        _field,
+        _load_notebook_agent,
+        _recorded_step_actions,
+        _saved_final_rewards,
+        recorded_action_parity,
+    )
+except ImportError:  # direct script execution: python replay/runner.py
+    from core import (
+        _agent_observation,
+        _environment_from_history,
+        _field,
+        _load_notebook_agent,
+        _recorded_step_actions,
+        _saved_final_rewards,
+        recorded_action_parity,
+    )
 
 HERE = Path(__file__).resolve().parent
 V23_ROOT = HERE.parent
@@ -43,7 +54,10 @@ FORBIDDEN_FLOAT_PATTERNS = (
 
 def _candidate_source(path: Path) -> str:
     if path.suffix == ".ipynb":
-        from replay.core import _extract_notebook_main
+        try:
+            from .core import _extract_notebook_main
+        except ImportError:
+            from core import _extract_notebook_main
         return _extract_notebook_main(path)
     return path.read_text(encoding="utf-8")
 
