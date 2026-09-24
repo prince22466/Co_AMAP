@@ -62,16 +62,28 @@ Use the available read-only tools selectively:
 - if recent search is stagnant, explicitly move away from the repeated hypothesis
   family instead of proposing another parameter tweak.
 
-Return a concise review with:
-1. PERFORMANCE EVIDENCE: what the measurements actually show.
-2. FAILURE MECHANISMS: 1-3 likely causal bottlenecks, with evidence.
-3. DO-NOT-REPEAT: recent idea families that evidence argues against.
-4. IMPROVEMENT OPTIONS: up to 3 structurally distinct ideas.
-5. NEXT EXPERIMENT: select exactly one idea, state a falsifiable prediction, the
-   smallest useful replay screen, and what result would justify expansion to 5/25
-   and then all 25 histories.
+Return ONLY one compact JSON object with this schema:
+{
+  "performance_evidence": "measured evidence summary",
+  "failure_mechanisms": ["1-3 evidence-backed mechanisms"],
+  "do_not_repeat": ["idea families contradicted by prior evidence"],
+  "ideas": [
+    {
+      "title": "short unique title",
+      "hypothesis": "falsifiable prediction",
+      "causal_layer": "worker|ranking|logistics|planning|inventory|market|other",
+      "rationale": "why this differs from rejected work",
+      "smallest_test": "smallest useful static-replay screen",
+      "promotion_rule": "measured condition to expand toward 5 then all 25"
+    }
+  ]
+}
 
-Do not claim improvement without measured replay evidence. Keep the output compact.
+The ideas array MUST contain exactly 10 structurally distinct ideas. Do not give
+ten parameter variants of one mechanism. Cover multiple causal layers when the
+evidence supports it. Order ideas by expected information value, not confidence.
+
+Do not claim improvement without measured replay evidence.
 """
 
 
@@ -96,7 +108,7 @@ class ResearchDB:
           experiments_started INTEGER DEFAULT 0, replay_calls INTEGER DEFAULT 0,
           replay_cases INTEGER DEFAULT 0, final_output TEXT);
         CREATE TABLE IF NOT EXISTS experiments(
-          experiment_id TEXT PRIMARY KEY, run_id TEXT, hypothesis TEXT,
+          experiment_id TEXT PRIMARY KEY, run_id TEXT, idea_id TEXT, hypothesis TEXT,
           candidate TEXT, parent_candidate TEXT, notes TEXT, started_at TEXT,
           ended_at TEXT, elapsed_seconds REAL, status TEXT, conclusion TEXT,
           replay_calls INTEGER DEFAULT 0, replay_cases INTEGER DEFAULT 0,
@@ -118,12 +130,23 @@ class ResearchDB:
           review_id TEXT PRIMARY KEY, run_id TEXT, created_at TEXT, trigger TEXT,
           experiments_seen INTEGER, replay_cases_seen INTEGER,
           analyst_output TEXT, usage_json TEXT, conservative_cost_usd REAL);
+        CREATE TABLE IF NOT EXISTS research_ideas(
+          idea_id TEXT PRIMARY KEY, review_id TEXT, batch_index INTEGER,
+          title TEXT, hypothesis TEXT, causal_layer TEXT, rationale TEXT,
+          smallest_test TEXT, promotion_rule TEXT, status TEXT DEFAULT 'PENDING',
+          experiment_id TEXT, created_at TEXT, started_at TEXT, finished_at TEXT,
+          conclusion TEXT);
         """)
         goal_columns = {row[1] for row in self.db.execute("PRAGMA table_info(goals)").fetchall()}
         if "reached_observability_json" not in goal_columns:
             self.db.execute("ALTER TABLE goals ADD COLUMN reached_observability_json TEXT")
         if "min_games_total" not in goal_columns:
             self.db.execute("ALTER TABLE goals ADD COLUMN min_games_total INTEGER")
+        experiment_columns = {
+            row[1] for row in self.db.execute("PRAGMA table_info(experiments)").fetchall()
+        }
+        if "idea_id" not in experiment_columns:
+            self.db.execute("ALTER TABLE experiments ADD COLUMN idea_id TEXT")
         self.db.commit()
 
     def start_run(self, run_id, session_id, task, model):
@@ -142,27 +165,72 @@ class ResearchDB:
            usage["reasoning_tokens"], usage["total_tokens"], cost, output, run_id))
         self.db.commit()
 
-    def start_experiment(self, run_id, hypothesis, candidate="", parent_candidate="", notes=""):
+    def start_experiment(self, run_id, hypothesis, candidate="", parent_candidate="",
+                         notes="", idea_id=None):
         eid = "exp_" + uuid.uuid4().hex[:10]
+        if idea_id:
+            idea = self.db.execute(
+                "SELECT * FROM research_ideas WHERE idea_id=?", (idea_id,)
+            ).fetchone()
+            if idea is None:
+                return {"error":"unknown idea_id: " + idea_id}
+            if idea["status"] != "PENDING":
+                return {
+                    "error":"idea is not pending",
+                    "idea_id":idea_id,
+                    "status":idea["status"],
+                }
         self.db.execute("""INSERT INTO experiments(
-          experiment_id,run_id,hypothesis,candidate,parent_candidate,notes,started_at,status)
-          VALUES(?,?,?,?,?,?,?,'RUNNING')""",
-          (eid, run_id, hypothesis, candidate or None, parent_candidate or None,
-           notes or None, utcnow()))
-        self.db.execute("UPDATE runs SET experiments_started=experiments_started+1 WHERE run_id=?", (run_id,))
+          experiment_id,run_id,idea_id,hypothesis,candidate,parent_candidate,notes,
+          started_at,status)
+          VALUES(?,?,?,?,?,?,?,?,'RUNNING')""",
+          (eid, run_id, idea_id, hypothesis, candidate or None,
+           parent_candidate or None, notes or None, utcnow()))
+        if idea_id:
+            self.db.execute(
+                """UPDATE research_ideas
+                   SET status='RUNNING',experiment_id=?,started_at=?
+                   WHERE idea_id=?""",
+                (eid, utcnow(), idea_id),
+            )
+        self.db.execute(
+            "UPDATE runs SET experiments_started=experiments_started+1 WHERE run_id=?",
+            (run_id,),
+        )
         self.db.commit()
         return eid
 
     def finish_experiment(self, eid, status, conclusion):
-        row = self.db.execute("SELECT started_at FROM experiments WHERE experiment_id=?", (eid,)).fetchone()
+        row = self.db.execute(
+            "SELECT started_at,idea_id FROM experiments WHERE experiment_id=?",
+            (eid,),
+        ).fetchone()
         if row is None:
             return {"error": "unknown experiment_id: " + eid}
-        elapsed = (datetime.now(timezone.utc) - datetime.fromisoformat(row["started_at"])).total_seconds()
-        self.db.execute("""UPDATE experiments SET ended_at=?,elapsed_seconds=?,status=?,conclusion=?
-                           WHERE experiment_id=?""",
-                        (utcnow(), elapsed, status, conclusion, eid))
+        elapsed = (
+            datetime.now(timezone.utc) - datetime.fromisoformat(row["started_at"])
+        ).total_seconds()
+        self.db.execute(
+            """UPDATE experiments
+               SET ended_at=?,elapsed_seconds=?,status=?,conclusion=?
+               WHERE experiment_id=?""",
+            (utcnow(), elapsed, status, conclusion, eid),
+        )
+        if row["idea_id"]:
+            idea_status = "ERROR" if status == "ERROR" else "COMPLETED"
+            self.db.execute(
+                """UPDATE research_ideas
+                   SET status=?,finished_at=?,conclusion=?
+                   WHERE idea_id=?""",
+                (idea_status, utcnow(), conclusion, row["idea_id"]),
+            )
         self.db.commit()
-        return {"experiment_id": eid, "status": status, "elapsed_seconds": round(elapsed, 3)}
+        return {
+            "experiment_id": eid,
+            "idea_id": row["idea_id"],
+            "status": status,
+            "elapsed_seconds": round(elapsed, 3),
+        }
 
     def set_goal(self, metric, operator, target, max_regressions, min_games_total=None):
         self.db.execute("UPDATE goals SET active=0 WHERE active=1")
@@ -262,6 +330,84 @@ class ResearchDB:
         self.db.commit()
         return summary
 
+    def add_idea_batch(self, review_id, ideas):
+        if len(ideas) != 10:
+            return {"error":"idea batch must contain exactly 10 ideas","count":len(ideas)}
+        ids = []
+        for index, idea in enumerate(ideas, 1):
+            iid = "idea_" + uuid.uuid4().hex[:10]
+            self.db.execute(
+                """INSERT INTO research_ideas(
+                     idea_id,review_id,batch_index,title,hypothesis,causal_layer,
+                     rationale,smallest_test,promotion_rule,status,created_at)
+                   VALUES(?,?,?,?,?,?,?,?,?,'PENDING',?)""",
+                (
+                    iid, review_id, index,
+                    str(idea.get("title","")).strip(),
+                    str(idea.get("hypothesis","")).strip(),
+                    str(idea.get("causal_layer","other")).strip(),
+                    str(idea.get("rationale","")).strip(),
+                    str(idea.get("smallest_test","")).strip(),
+                    str(idea.get("promotion_rule","")).strip(),
+                    utcnow(),
+                ),
+            )
+            ids.append(iid)
+        self.db.commit()
+        return {"review_id":review_id,"idea_ids":ids,"count":len(ids)}
+
+    def idea_batch_status(self):
+        latest = self.latest_strategy_review()
+        if latest is None:
+            return {
+                "review_id":None,"total":0,"pending":0,"running":0,
+                "completed":0,"errors":0,
+            }
+        rows = self.db.execute(
+            """SELECT status,COUNT(*) n FROM research_ideas
+               WHERE review_id=? GROUP BY status""",
+            (latest["review_id"],),
+        ).fetchall()
+        counts = {row["status"]:int(row["n"]) for row in rows}
+        return {
+            "review_id":latest["review_id"],
+            "total":sum(counts.values()),
+            "pending":counts.get("PENDING",0),
+            "running":counts.get("RUNNING",0),
+            "completed":counts.get("COMPLETED",0),
+            "errors":counts.get("ERROR",0),
+        }
+
+    def next_pending_idea(self):
+        latest = self.latest_strategy_review()
+        if latest is None:
+            return None
+        row = self.db.execute(
+            """SELECT * FROM research_ideas
+               WHERE review_id=? AND status='PENDING'
+               ORDER BY batch_index ASC LIMIT 1""",
+            (latest["review_id"],),
+        ).fetchone()
+        return dict(row) if row is not None else None
+
+    def recent_idea_results(self, review_id=None):
+        if review_id is None:
+            latest = self.latest_strategy_review()
+            review_id = latest["review_id"] if latest else None
+        if not review_id:
+            return []
+        return [dict(row) for row in self.db.execute(
+            """SELECT i.idea_id,i.batch_index,i.title,i.hypothesis,i.causal_layer,
+                      i.status,i.conclusion,e.experiment_id,e.wins,e.losses,
+                      e.replay_cases,e.mean_margin_improvement,
+                      e.best_margin_improvement,e.regressions
+               FROM research_ideas i
+               LEFT JOIN experiments e ON e.idea_id=i.idea_id
+               WHERE i.review_id=?
+               ORDER BY i.batch_index ASC""",
+            (review_id,),
+        ).fetchall()]
+
     def record_strategy_review(self, run_id, trigger, analyst_output,
                                usage=None, conservative_cost_usd=0.0):
         rid = "review_" + uuid.uuid4().hex[:10]
@@ -295,24 +441,14 @@ class ResearchDB:
 
     def strategy_review_trigger(self):
         latest = self.latest_strategy_review()
-        signal = self.research_signal()
-        experiments_total = int(
-            self.db.execute("SELECT COUNT(*) FROM experiments").fetchone()[0]
-        )
         if latest is None:
             return "initial_diagnosis"
-
-        experiments_since_review = (
-            experiments_total - int(latest["experiments_seen"] or 0)
-        )
-        if experiments_since_review <= 0:
+        batch = self.idea_batch_status()
+        if batch["total"] == 0:
+            return "empty_or_invalid_batch_retry"
+        if batch["pending"] > 0 or batch["running"] > 0:
             return None
-
-        if signal["stagnating"] and experiments_since_review >= 2:
-            return "stagnation_with_new_evidence"
-        if experiments_since_review >= 3:
-            return "periodic_after_3_experiments"
-        return None
+        return "idea_batch_exhausted"
 
     def research_signal(self, recent_limit=6):
         recent_limit = max(4, min(int(recent_limit), 20))
@@ -392,6 +528,8 @@ class ResearchDB:
                    if goal else None),
           "recent_experiments": recent,
           "research_signal": self.research_signal(),
+          "idea_batch": self.idea_batch_status(),
+          "recent_idea_results": self.recent_idea_results()[-10:],
           "latest_strategy_review": (
               {
                   "review_id": self.latest_strategy_review()["review_id"],
@@ -419,6 +557,7 @@ class AppContext:
     output_price: float
     replay_python: str
     blocker_reason: str = ""
+    active_idea_id: str = ""
 
 
 def j(x):
@@ -496,9 +635,21 @@ def run_python(ctx: RunContextWrapper[AppContext], script: str, args: list[str] 
 def start_experiment(ctx: RunContextWrapper[AppContext], hypothesis: str, candidate: str = "",
                      parent_candidate: str = "", notes: str = "") -> str:
     """Create a durable experiment record before candidate evaluation."""
-    eid = ctx.context.db.start_experiment(ctx.context.run_id, hypothesis, candidate, parent_candidate, notes)
-    ctx.context.log.event("experiment_start", {"experiment_id": eid, "hypothesis": hypothesis})
-    return j({"experiment_id": eid})
+    eid = ctx.context.db.start_experiment(
+        ctx.context.run_id, hypothesis, candidate, parent_candidate, notes,
+        ctx.context.active_idea_id or None,
+    )
+    if isinstance(eid, dict):
+        return j(eid)
+    ctx.context.log.event(
+        "experiment_start",
+        {
+            "experiment_id": eid,
+            "idea_id": ctx.context.active_idea_id or None,
+            "hypothesis": hypothesis,
+        },
+    )
+    return j({"experiment_id": eid, "idea_id": ctx.context.active_idea_id or None})
 
 @function_tool
 def finish_experiment(ctx: RunContextWrapper[AppContext], experiment_id: str, status: str, conclusion: str) -> str:
