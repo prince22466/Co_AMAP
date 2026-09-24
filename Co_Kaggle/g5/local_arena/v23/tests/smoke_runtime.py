@@ -60,7 +60,12 @@ def main() -> int:
             0.001,
         )
 
-        goal_id = db.set_goal("repair_rate", ">=", 1.0, 0)
+        goal_id = db.set_goal("repair_rate", ">=", 1.0, 0, 1)
+        active_goal = runtime.latest_goal_state(db)
+        assert active_goal is not None
+        assert active_goal["goal_id"] == goal_id
+        assert active_goal["reached_at"] is None
+
         reached = db.maybe_reach_goal(
             run_id,
             experiment_id,
@@ -78,6 +83,37 @@ def main() -> int:
             0.50,
         )
         assert reached and reached["goal_id"] == goal_id
+        reached_goal = runtime.latest_goal_state(db)
+        assert reached_goal is not None
+        assert reached_goal["goal_id"] == goal_id
+        assert reached_goal["reached_at"] is not None
+        assert runtime.autonomous_stop_reason(reached_goal, "", True) == "goal_reached"
+
+        subset_goal_id = db.set_goal("wins", ">=", 1.0, 0, 2)
+        subset_not_reached = db.maybe_reach_goal(
+            run_id,
+            experiment_id,
+            summary,
+            {
+                "requests": 0,
+                "input_tokens": 0,
+                "cached_tokens": 0,
+                "cache_write_tokens": 0,
+                "output_tokens": 0,
+                "reasoning_tokens": 0,
+                "total_tokens": 0,
+            },
+            0.10,
+            0.50,
+        )
+        assert subset_not_reached is None
+        subset_goal = runtime.latest_goal_state(db)
+        assert subset_goal is not None
+        assert subset_goal["goal_id"] == subset_goal_id
+        assert subset_goal["reached_at"] is None
+        assert runtime.autonomous_stop_reason({"reached_at": None}, "", True) is None
+        assert runtime.autonomous_stop_reason({"reached_at": None}, "replay failed", True) == "reported_blocker"
+        assert runtime.autonomous_stop_reason({"reached_at": None}, "", False) == "execution_disabled"
 
         finished = db.finish_experiment(
             experiment_id, "SUPPORTED", "smoke experiment completed"
@@ -133,8 +169,22 @@ def main() -> int:
         assert status["experiments_total"] == 1
         assert status["experiments_supported"] == 1
         assert status["replay_cases_total"] == 1
-        assert status["goal"]["reached_at"] is not None
-        assert status["goal"]["reached_observability"]["replay_cases"] == 1
+
+        # project_status reports the latest goal, which is intentionally the
+        # unreached full-corpus guard created above.
+        assert status["goal"]["goal_id"] == subset_goal_id
+        assert status["goal"]["reached_at"] is None
+
+        # The earlier goal did reach and retained its observability snapshot.
+        reached_goal_row = db.db.execute(
+            "SELECT * FROM goals WHERE goal_id=?", (goal_id,)
+        ).fetchone()
+        assert reached_goal_row is not None
+        assert reached_goal_row["reached_at"] is not None
+        reached_observability = runtime.json.loads(
+            reached_goal_row["reached_observability_json"]
+        )
+        assert reached_observability["replay_cases"] == 1
 
     print("v23 infrastructure smoke test: OK")
     return 0

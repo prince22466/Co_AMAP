@@ -35,10 +35,12 @@ v2 research-memory contract:
 - Pass experiment_id to static_replay_candidate.
 - After analysis, call finish_experiment with SUPPORTED, REJECTED, UNRESOLVED, or ERROR.
 - Call project_status before repeating an idea. Previous negative results are durable evidence.
-- Call set_goal when the task has an explicit numeric target.
+- Call set_goal when the task has an explicit numeric target. If the target is defined over a fixed corpus (for example wins across all 25 histories), set min_games_total to that corpus size so a subset cannot satisfy the final goal.
 - Goal completion comes only from structured replay metrics, never prose.
 - Model-written candidate policies may execute only through static_replay_candidate.
 - When execution is enabled, do not stop at analysis or planning. You must create/select a concrete candidate, start an experiment, execute at least one static replay, analyze the measured result, and finish the experiment unless a concrete runtime error or budget stop blocks execution.
+- A rejected candidate is evidence, not a blocker. If the durable goal is unmet, continue with the next justified experiment.
+- Only call report_blocker for a concrete runtime/environment failure that makes further research impossible without external intervention.
 - FP16 is mandatory for candidate floating-point model weights, activations, tensors, and learned numeric compute. Integer/boolean/schema-mandated types are exempt. Do not emit float32, float64, double, or bfloat16 candidate model/tensor code unless a backend operation is provably unsupported in FP16; any such exception must be narrowly scoped, documented, and converted back to FP16 immediately.
 """
 
@@ -78,13 +80,16 @@ class ResearchDB:
           result TEXT, action_divergences INTEGER, error TEXT);
         CREATE TABLE IF NOT EXISTS goals(
           goal_id TEXT PRIMARY KEY, metric TEXT, operator TEXT, target REAL,
-          max_regressions INTEGER, created_at TEXT, reached_at TEXT,
+          max_regressions INTEGER, min_games_total INTEGER,
+          created_at TEXT, reached_at TEXT,
           reached_run_id TEXT, reached_experiment_id TEXT, reached_value REAL,
           reached_observability_json TEXT, active INTEGER DEFAULT 1);
         """)
         goal_columns = {row[1] for row in self.db.execute("PRAGMA table_info(goals)").fetchall()}
         if "reached_observability_json" not in goal_columns:
             self.db.execute("ALTER TABLE goals ADD COLUMN reached_observability_json TEXT")
+        if "min_games_total" not in goal_columns:
+            self.db.execute("ALTER TABLE goals ADD COLUMN min_games_total INTEGER")
         self.db.commit()
 
     def start_run(self, run_id, session_id, task, model):
@@ -125,12 +130,15 @@ class ResearchDB:
         self.db.commit()
         return {"experiment_id": eid, "status": status, "elapsed_seconds": round(elapsed, 3)}
 
-    def set_goal(self, metric, operator, target, max_regressions):
+    def set_goal(self, metric, operator, target, max_regressions, min_games_total=None):
         self.db.execute("UPDATE goals SET active=0 WHERE active=1")
         gid = "goal_" + uuid.uuid4().hex[:10]
-        self.db.execute("""INSERT INTO goals(goal_id,metric,operator,target,max_regressions,created_at,active)
-                           VALUES(?,?,?,?,?,?,1)""",
-                        (gid, metric, operator, float(target), max_regressions, utcnow()))
+        self.db.execute("""INSERT INTO goals(
+                           goal_id,metric,operator,target,max_regressions,min_games_total,
+                           created_at,active)
+                           VALUES(?,?,?,?,?,?,?,1)""",
+                        (gid, metric, operator, float(target), max_regressions,
+                         min_games_total, utcnow()))
         self.db.commit()
         return gid
 
@@ -143,6 +151,9 @@ class ResearchDB:
             return None
         regressions = int(summary.get("margin_worsened_cases", 0) or 0)
         if goal["max_regressions"] is not None and regressions > int(goal["max_regressions"]):
+            return None
+        games_total = int(summary.get("games_total", 0) or 0)
+        if goal["min_games_total"] is not None and games_total < int(goal["min_games_total"]):
             return None
         target, op, value = float(goal["target"]), goal["operator"], float(value)
         passed = {">=": value >= target, ">": value > target, "<=": value <= target,
@@ -255,10 +266,15 @@ class AppContext:
     input_price: float
     output_price: float
     replay_python: str
+    blocker_reason: str = ""
 
 
 def j(x):
     return json.dumps(x, sort_keys=True, default=str)
+
+
+class BudgetStopError(RuntimeError):
+    """Normal autonomous stop when a configured API budget ceiling is reached."""
 
 
 class BudgetHooks(RunHooks[AppContext]):
@@ -281,9 +297,9 @@ class BudgetHooks(RunHooks[AppContext]):
         usage = usage_dict(context.usage)
         session_cost = self._cost(usage)
         if session_cost >= self.session_limit:
-            raise RuntimeError("session budget ceiling reached before next model call")
+            raise BudgetStopError("session budget ceiling reached before next model call")
         if self.starting_project_cost + session_cost >= self.total_limit:
-            raise RuntimeError("project budget ceiling reached before next model call")
+            raise BudgetStopError("project budget ceiling reached before next model call")
         self.log.event("llm_start", {"usage_before_call": usage,
                                      "session_conservative_cost_usd": session_cost})
 
@@ -344,17 +360,40 @@ def finish_experiment(ctx: RunContextWrapper[AppContext], experiment_id: str, st
 
 @function_tool
 def set_goal(ctx: RunContextWrapper[AppContext], metric: str, operator: str, target: float,
-             max_regressions: int | None = None) -> str:
-    """Set a numeric goal for automatic time/tests/tokens-to-goal accounting."""
+             max_regressions: int | None = None,
+             min_games_total: int | None = None) -> str:
+    """Set a numeric goal plus optional regression and evaluation-size guards."""
     if operator not in {">=",">","<=","<","=="}:
         return j({"error":"invalid operator"})
-    gid = ctx.context.db.set_goal(metric, operator, target, max_regressions)
-    return j({"goal_id":gid,"metric":metric,"operator":operator,"target":target})
+    if min_games_total is not None and min_games_total < 1:
+        return j({"error":"min_games_total must be >= 1"})
+    gid = ctx.context.db.set_goal(
+        metric, operator, target, max_regressions, min_games_total
+    )
+    return j({
+        "goal_id":gid,"metric":metric,"operator":operator,"target":target,
+        "max_regressions":max_regressions,"min_games_total":min_games_total
+    })
 
 @function_tool
 def project_status(ctx: RunContextWrapper[AppContext]) -> str:
     """Return durable project usage, experiment, replay, and goal status."""
     return j(ctx.context.db.project_status())
+
+@function_tool
+def report_blocker(ctx: RunContextWrapper[AppContext], failed_step: str, reason: str) -> str:
+    """Report a concrete runtime/environment blocker that makes further research impossible."""
+    failed_step = failed_step.strip()
+    reason = reason.strip()
+    if not failed_step or not reason:
+        return j({"error":"failed_step and reason are required"})
+    ctx.context.blocker_reason = failed_step + ": " + reason
+    ctx.context.log.event("research_blocker", {
+        "failed_step": failed_step,
+        "reason": reason,
+    })
+    return j({"blocker_recorded": True, "failed_step": failed_step, "reason": reason})
+
 
 @function_tool
 def static_replay_candidate(ctx: RunContextWrapper[AppContext], candidate: str, experiment_id: str,
@@ -480,6 +519,52 @@ def usage_dict(u):
             "reasoning_tokens":reasoning,"total_tokens":int(getattr(u,"total_tokens",0) or 0)}
 
 
+def add_usage(total: dict[str, int], delta: dict[str, int]) -> None:
+    for key in total:
+        total[key] += int(delta.get(key, 0) or 0)
+
+
+def latest_goal_state(db: ResearchDB) -> dict[str, Any] | None:
+    row = db.db.execute(
+        "SELECT * FROM goals ORDER BY created_at DESC LIMIT 1"
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def autonomous_stop_reason(goal: dict[str, Any] | None,
+                           blocker_reason: str,
+                           allow_exec: bool) -> str | None:
+    if goal and goal.get("reached_at"):
+        return "goal_reached"
+    if blocker_reason:
+        return "reported_blocker"
+    if not allow_exec:
+        return "execution_disabled"
+    return None
+
+
+def persist_budget_ledger(budget: BudgetLedger, model: str, usage: dict[str, int],
+                          input_price: float, output_price: float) -> None:
+    LEDGER_PATH.write_text(
+        json.dumps({
+            **vars(budget.total),
+            "model_last_used": model,
+            "updated_at_utc": utcnow(),
+            "cached_tokens_observed_last_run": usage["cached_tokens"],
+            "cache_write_tokens_observed_last_run": usage["cache_write_tokens"],
+            "reasoning_tokens_observed_last_run": usage["reasoning_tokens"],
+            "pricing_assumption": {
+                "input_usd_per_m": input_price,
+                "output_usd_per_m": output_price,
+                "cached_input_multiplier": 0.10,
+                "cache_write_multiplier": 1.25,
+                "safety_multiplier": 1.10,
+            },
+        }, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
 def parse_args():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument("--task",required=True); p.add_argument("--model",default=DEFAULT_MODEL)
@@ -578,26 +663,164 @@ def main():
       max_tokens=args.max_output_tokens,verbosity="low",parallel_tool_calls=False,
       store=False,prompt_cache_options={"mode":"implicit","ttl":"30m"}),
       tools=[list_tree,read_text,search_text,summarize_jsonl,write_workspace_file,run_python,
-             start_experiment,finish_experiment,set_goal,project_status,static_replay_candidate])
+             start_experiment,finish_experiment,set_goal,project_status,report_blocker,
+             static_replay_candidate])
     session=SQLiteSession(args.session_id,str(SESSION_DB))
     prompt=("Research task:\n"+args.task+"\n\nExecution enabled: "+str(args.allow_exec)+
             ". Conservative per-run ceiling: USD "+format(args.session_budget_usd,".2f")+
             "; remaining project ledger: USD "+format(budget.remaining_total(),".4f")+
             ". Use durable experiment records and minimize model turns.")
-    hooks=BudgetHooks(log,budget.total.estimated_cost_usd,args.session_budget_usd,
-                      args.total_budget_usd,inp_price,out_price)
     started=time.monotonic(); status="DONE"; output=""
-    try:
-        result=Runner.run_sync(agent,prompt,context=app,session=session,max_turns=args.max_turns,
-          hooks=hooks,
-          run_config=RunConfig(workflow_name="v23 autonomous research",group_id=args.session_id,
-          trace_include_sensitive_data=False,tracing_disabled=args.disable_tracing,
-          trace_metadata={"run_id":run_id,"model":args.model},
-          session_settings=SessionSettings(limit=args.session_history_limit)))
-        output=str(result.final_output or ""); usage=usage_dict(result.context_wrapper.usage)
-    except Exception as exc:
-        status="ERROR"; output=type(exc).__name__+": "+str(exc)
-        usage=dict(hooks.last_usage)
+    usage={"requests":0,"input_tokens":0,"cached_tokens":0,"cache_write_tokens":0,
+           "output_tokens":0,"reasoning_tokens":0,"total_tokens":0}
+    cycle = 0
+    continuation = prompt
+
+    while True:
+        if not budget.can_call():
+            status = "BUDGET_STOP"
+            output = (
+                output.rstrip()
+                + "\n\nAutonomous loop stopped because the configured API budget "
+                  "ceiling was reached before the durable goal."
+            ).strip()
+            log.event("autonomous_stop", {"reason":"budget","cycle":cycle})
+            break
+
+        remaining_session_budget = max(
+            0.0, args.session_budget_usd - budget.session.estimated_cost_usd
+        )
+        if remaining_session_budget <= 0:
+            status = "BUDGET_STOP"
+            output = (
+                output.rstrip()
+                + "\n\nAutonomous loop stopped because the per-run API budget "
+                  "ceiling was reached before the durable goal."
+            ).strip()
+            log.event("autonomous_stop", {"reason":"session_budget","cycle":cycle})
+            break
+
+        cycle += 1
+        hooks=BudgetHooks(
+            log,
+            budget.total.estimated_cost_usd,
+            remaining_session_budget,
+            args.total_budget_usd,
+            inp_price,
+            out_price,
+        )
+        cycle_output = ""
+        cycle_usage = {
+            "requests":0,"input_tokens":0,"cached_tokens":0,"cache_write_tokens":0,
+            "output_tokens":0,"reasoning_tokens":0,"total_tokens":0
+        }
+        try:
+            result=Runner.run_sync(
+              agent, continuation, context=app, session=session,
+              max_turns=args.max_turns, hooks=hooks,
+              run_config=RunConfig(
+                workflow_name="v23 autonomous research",
+                group_id=args.session_id,
+                trace_include_sensitive_data=False,
+                tracing_disabled=args.disable_tracing,
+                trace_metadata={"run_id":run_id,"model":args.model,"cycle":cycle},
+                session_settings=SessionSettings(limit=args.session_history_limit),
+              ),
+            )
+            cycle_output=str(result.final_output or "")
+            cycle_usage=usage_dict(result.context_wrapper.usage)
+        except Exception as exc:
+            cycle_output=type(exc).__name__+": "+str(exc)
+            cycle_usage=dict(hooks.last_usage)
+            exc_name=type(exc).__name__
+            if isinstance(exc, BudgetStopError):
+                add_usage(usage, cycle_usage)
+                cycle_cost=conservative_cost_usd(cycle_usage,inp_price,out_price)
+                delta=LegacyUsage(
+                    cycle_usage["input_tokens"],cycle_usage["output_tokens"],
+                    cycle_usage["requests"],cycle_cost
+                )
+                budget.session.add(delta); budget.total.add(delta)
+                persist_budget_ledger(budget,args.model,usage,inp_price,out_price)
+                status="BUDGET_STOP"
+                output=cycle_output
+                log.event("autonomous_stop", {
+                    "reason":"budget_hook","cycle":cycle,"detail":cycle_output
+                })
+                break
+            if exc_name not in {"MaxTurnsExceeded"}:
+                status="ERROR"
+                output=cycle_output
+                add_usage(usage, cycle_usage)
+                cycle_cost=conservative_cost_usd(cycle_usage,inp_price,out_price)
+                delta=LegacyUsage(
+                    cycle_usage["input_tokens"],cycle_usage["output_tokens"],
+                    cycle_usage["requests"],cycle_cost
+                )
+                budget.session.add(delta); budget.total.add(delta)
+                persist_budget_ledger(budget,args.model,usage,inp_price,out_price)
+                log.event("autonomous_stop", {
+                    "reason":"runtime_error","cycle":cycle,"error":cycle_output
+                })
+                break
+
+        add_usage(usage, cycle_usage)
+        cycle_cost=conservative_cost_usd(cycle_usage,inp_price,out_price)
+        delta=LegacyUsage(
+            cycle_usage["input_tokens"],cycle_usage["output_tokens"],
+            cycle_usage["requests"],cycle_cost
+        )
+        budget.session.add(delta); budget.total.add(delta)
+        persist_budget_ledger(budget,args.model,usage,inp_price,out_price)
+        output=cycle_output or output
+
+        goal=latest_goal_state(db)
+        goal_reached=bool(goal and goal.get("reached_at"))
+        log.event("autonomous_cycle", {
+            "cycle":cycle,
+            "cycle_output":cycle_output,
+            "cycle_usage":cycle_usage,
+            "cycle_conservative_cost_usd":cycle_cost,
+            "goal":goal,
+            "goal_reached":goal_reached,
+        })
+
+        stop_reason=autonomous_stop_reason(goal, app.blocker_reason, args.allow_exec)
+        if stop_reason == "goal_reached":
+            status="DONE"
+            output = (
+                cycle_output.rstrip()
+                + "\n\nDurable goal reached; autonomous research loop stopped."
+            ).strip()
+            break
+
+        if stop_reason == "reported_blocker":
+            status="BLOCKED"
+            output = (
+                cycle_output.rstrip()
+                + "\n\nAutonomous research loop stopped on recorded blocker: "
+                + app.blocker_reason
+            ).strip()
+            log.event("autonomous_stop", {
+                "reason":"reported_blocker","cycle":cycle,
+                "blocker":app.blocker_reason,
+            })
+            break
+
+        if stop_reason == "execution_disabled":
+            status="DONE"
+            break
+
+        continuation=(
+            "Continue the SAME research task and session. The durable goal is still "
+            "unmet. Do not stop merely because a candidate was rejected, one experiment "
+            "finished, or you have a recommendation for the next step. Inspect "
+            "project_status, use prior negative results, create the next justified "
+            "candidate/experiment, execute static replay, and continue making measured "
+            "progress. Only a reached durable goal, exhausted configured API budget, or "
+            "a concrete runtime blocker may terminate the autonomous loop."
+        )
+
     elapsed=time.monotonic()-started
     if status=="DONE" and args.allow_exec:
         progress = db.db.execute(
@@ -636,16 +859,6 @@ def main():
                 "open_experiments": open_experiments,
             })
     cost=conservative_cost_usd(usage,inp_price,out_price)
-    delta=LegacyUsage(usage["input_tokens"],usage["output_tokens"],usage["requests"],cost)
-    budget.session.add(delta); budget.total.add(delta)
-    LEDGER_PATH.write_text(json.dumps({**vars(budget.total),"model_last_used":args.model,
-      "updated_at_utc":utcnow(),"cached_tokens_observed_last_run":usage["cached_tokens"],
-      "cache_write_tokens_observed_last_run":usage["cache_write_tokens"],
-      "reasoning_tokens_observed_last_run":usage["reasoning_tokens"],
-      "pricing_assumption":{"input_usd_per_m":inp_price,"output_usd_per_m":out_price,
-                            "cached_input_multiplier":0.10,
-                            "cache_write_multiplier":1.25,
-                            "safety_multiplier":1.10}},indent=2,sort_keys=True)+"\n",encoding="utf-8")
     db.finish_run(run_id,status,usage,cost,output,elapsed)
     log.event("run_summary",{"run_id":run_id,"elapsed_seconds":round(elapsed,3),
               "usage":usage,"conservative_cost_usd":cost,"project_status":db.project_status()})
@@ -653,6 +866,7 @@ def main():
     print(output); print("\n[v23 observability]")
     print(j({"run_id":run_id,"elapsed_seconds":round(elapsed,3),"usage":usage,
              "conservative_cost_usd":round(cost,8),"session_id":args.session_id,
+             "autonomous_cycles":cycle,"goal":latest_goal_state(db),
              "experiments_db":str(STATE_DB),"session_db":str(SESSION_DB),
              "trace_enabled":not args.disable_tracing}))
     print("[v23 run] "+str(log.dir))
