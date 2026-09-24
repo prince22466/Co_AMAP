@@ -264,6 +264,10 @@ def j(x):
     return json.dumps(x, sort_keys=True, default=str)
 
 
+class BudgetStopError(RuntimeError):
+    """Normal autonomous stop when a configured API budget ceiling is reached."""
+
+
 class BudgetHooks(RunHooks[AppContext]):
     """Per-model-call usage logging and conservative hard-stop before the next call."""
 
@@ -284,9 +288,9 @@ class BudgetHooks(RunHooks[AppContext]):
         usage = usage_dict(context.usage)
         session_cost = self._cost(usage)
         if session_cost >= self.session_limit:
-            raise RuntimeError("session budget ceiling reached before next model call")
+            raise BudgetStopError("session budget ceiling reached before next model call")
         if self.starting_project_cost + session_cost >= self.total_limit:
-            raise RuntimeError("project budget ceiling reached before next model call")
+            raise BudgetStopError("project budget ceiling reached before next model call")
         self.log.event("llm_start", {"usage_before_call": usage,
                                      "session_conservative_cost_usd": session_cost})
 
@@ -510,6 +514,18 @@ def latest_goal_state(db: ResearchDB) -> dict[str, Any] | None:
     return dict(row) if row is not None else None
 
 
+def autonomous_stop_reason(goal: dict[str, Any] | None,
+                           blocker_reason: str,
+                           allow_exec: bool) -> str | None:
+    if goal and goal.get("reached_at"):
+        return "goal_reached"
+    if blocker_reason:
+        return "reported_blocker"
+    if not allow_exec:
+        return "execution_disabled"
+    return None
+
+
 def persist_budget_ledger(budget: BudgetLedger, model: str, usage: dict[str, int],
                           input_price: float, output_price: float) -> None:
     LEDGER_PATH.write_text(
@@ -700,6 +716,21 @@ def main():
             cycle_output=type(exc).__name__+": "+str(exc)
             cycle_usage=dict(hooks.last_usage)
             exc_name=type(exc).__name__
+            if isinstance(exc, BudgetStopError):
+                add_usage(usage, cycle_usage)
+                cycle_cost=conservative_cost_usd(cycle_usage,inp_price,out_price)
+                delta=LegacyUsage(
+                    cycle_usage["input_tokens"],cycle_usage["output_tokens"],
+                    cycle_usage["requests"],cycle_cost
+                )
+                budget.session.add(delta); budget.total.add(delta)
+                persist_budget_ledger(budget,args.model,usage,inp_price,out_price)
+                status="BUDGET_STOP"
+                output=cycle_output
+                log.event("autonomous_stop", {
+                    "reason":"budget_hook","cycle":cycle,"detail":cycle_output
+                })
+                break
             if exc_name not in {"MaxTurnsExceeded"}:
                 status="ERROR"
                 output=cycle_output
@@ -737,7 +768,8 @@ def main():
             "goal_reached":goal_reached,
         })
 
-        if goal_reached:
+        stop_reason=autonomous_stop_reason(goal, app.blocker_reason, args.allow_exec)
+        if stop_reason == "goal_reached":
             status="DONE"
             output = (
                 cycle_output.rstrip()
@@ -745,7 +777,7 @@ def main():
             ).strip()
             break
 
-        if app.blocker_reason:
+        if stop_reason == "reported_blocker":
             status="BLOCKED"
             output = (
                 cycle_output.rstrip()
@@ -758,7 +790,7 @@ def main():
             })
             break
 
-        if not args.allow_exec:
+        if stop_reason == "execution_disabled":
             status="DONE"
             break
 
