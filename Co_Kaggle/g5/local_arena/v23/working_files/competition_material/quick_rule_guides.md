@@ -1,261 +1,380 @@
-one order = one action + one product + quantity.
-For example, selling 20 milk and buying 5 wheat are two orders. HIRE and BUY_LAND are exceptions: each is one order without a product or quantity.
+# Kaggriculture Quick Rules for the v23 Research Agent
 
+Use this file as the **first-pass strategic reference**.
 
-up to 10 market orders per player, per turn.
-An order can cover multiple units: SELL MILK 20 counts as one order, not 20. Buying seeds or animals also supports quantities.
-Hiring and buying land each use an order slot. These market orders are separate from workers’ actions.
+Interpret labels carefully:
+- **RULE** = guaranteed engine mechanic.
+- **DERIVED FACT** = follows directly from rules.
+- **POLICY HYPOTHESIS** = plausible strategy to test with static replay; not guaranteed optimal.
 
-*this rule means, more sell orders will cause less buy orders at each turn*
-------------------------------------------------------------------------------------------------------
+For edge cases or implementation detail, consult the other files in `competition_material/`.
 
-In the same turn:
-- Your farmer can move.
-- One hired worker can pick up an animal.
-- Another can water a crop.
-- Another can harvest.
-- You can also submit up to 10 market orders, such as buying and selling.
-But the same worker cannot pick up, move, and place in one turn. Those require separate turns; each movement step is also one action.
+---
 
-*this rule means, at each turn, u can do differernt types of actions*
-------------------------------------------------------------------------------------------------------
+## 1. Turn structure and action capacity
 
-Crop production
-Times below start from the planting day, assuming the plant survives.
-Product	Seed cost	First harvest age	Production cycle	Yield
-Wheat	10	2 days ≈48 turns	One harvest; growth window ends at age 4 days	Up to 4 without fertilizer, 6 with fertilizer
-Carrot	20	2 days ≈48 turns	One harvest; growth window ends at age 3 days	Up to 3 without fertilizer, 4 with fertilizer
-Melon	80	10 days ≈240 turns	One harvest; growth window ends at age 12 days	Up to 6
-Tomato	50	8 days ≈192 turns	Four production events: ages 8, 9, 10, 11 days	1 per event, or 2 when watered and fertilized
-Strawberry	100	10 days ≈240 turns	Four production events: ages 10, 12, 14, 16 days	1 per event, or 2 when watered and fertilized
+**RULE**
+- Each farmer/hand performs at most **1 worker action per turn**.
+- Different workers act independently in the same turn.
+- Market orders are a separate action channel.
+- Up to **10 market orders per player per turn**.
+- One order may contain a quantity, e.g. `SELL MILK 20` is one order.
+- `HIRE` and `BUY_LAND` each consume one market-order slot.
 
+**DERIVED FACT**
+Worker parallelism and market actions can happen in the same turn.
 
-These are calendar-day ages, not exact elapsed turns. For example, wheat planted at hour 20 reaches age two after 28 turns, not 48.
-Important details:
-- Seeds enter shared seed inventory; planting requires a separate worker action.
-- Water on the planting day. Otherwise the plant can become weeds at the first day boundary. Subsequently, two consecutive unwatered days kill it.
-- Early harvesting ends a wheat/carrot/melon crop, potentially sacrificing later yield.
-- Tomato/strawberry store at most 4 unharvested units. Delayed harvesting can waste production.
-- One fertilizer application consumes 1 fertilizer and lasts three calendar days.
+**POLICY HYPOTHESIS**
+Treat the 10 market-order slots as a scarce per-turn budget only when demand approaches the cap. Sell, buy, hire, and land orders compete for these slots.
 
+---
 
-*this rule means, the policy of time to buy seeds, for example at day 21, we should not buy any Melon seeds, because when it is time to harvest, the game has ended*
---------------------------------------------------------------------------------------------------------------
+## 2. Crop timing and production
 
+Crop ages are **calendar-day based**, not exact elapsed-turn timers.
 
-Animal production
-Times start from placement on a suitable structure, not purchase.
-Product	Animal purchase	First production age	Repeat interval	Production with daily feeding and care*
-Eggs	Goose: 300	4 days ≈96 turns	1 day =24 turns	First batch up to 4, then 2/event
-Milk	Cow: 400	8 days ≈192 turns	2 days =48 turns	First batch up to 6, then 3/event
-Wool	Sheep: 500	6 days ≈144 turns	3 days =72 turns	First batch up to 6, then 4/event
-Fertilizer	By-product of any animal	Next day boundary after placement	Available daily	1 per collection; missed days do not accumulate
+| Crop | Seed cost | First harvest / production age | Production | Max useful yield |
+|---|---:|---:|---|---|
+| Wheat | 10 | age 2 | one-time | up to 4; 6 with fertilizer |
+| Carrot | 20 | age 2 | one-time | up to 3; 4 with fertilizer |
+| Melon | 80 | age 10 | one-time | up to 6 |
+| Tomato | 50 | ages 8, 9, 10, 11 | ongoing | 1/event; 2 if watered + fertilized |
+| Strawberry | 100 | ages 10, 12, 14, 16 | ongoing | 1/event; 2 if watered + fertilized |
 
+**RULE**
+- Planting consumes a worker action.
+- A crop planted late in a day reaches future ages sooner than `age × 24` elapsed turns.
+- Water on the planting day. Otherwise a crop can become a weed at the first day boundary.
+- Two consecutive unwatered days kill a surviving crop.
+- Early harvest ends wheat/carrot/melon and may sacrifice future yield.
+- Tomato/strawberry store at most 4 unharvested units.
+- One fertilizer application consumes 1 fertilizer and lasts 3 calendar days.
 
-*Assumes care starts on placement day and harvesting prevents storage overflow. Without care bonuses, animal production is 1 unit/event.
-Animals require:
-- Purchase → shed → worker pickup → transport → PLACE.
-- A matching pasture or coop. Building costs a worker action, but no cash/materials.
-- 1 wheat per daily feeding, plus a separate CARE action for bonuses.
+**POLICY HYPOTHESIS**
+Late-game seed purchases should be gated by **time-to-realizable-sale**, not just seed cost. For example, a new melon near the end of a 30-day season is usually uneconomic because first harvest age is 10 days plus setup/harvest/delivery time.
+
+---
+
+## 3. Animal timing and production
+
+Timing starts from **placement on the correct structure**, not purchase.
+
+| Product | Animal | Purchase price | First production age | Repeat |
+|---|---|---:|---:|---:|
+| Eggs | Goose | 300 | 4 days | daily |
+| Milk | Cow | 400 | 8 days | every 2 days |
+| Wool | Sheep | 500 | 6 days | every 3 days |
+| Fertilizer | any animal | — | next day boundary | daily availability |
+
+With daily feeding/care and no storage waste:
+- Goose first batch can reach 4, then 2/event.
+- Cow first batch can reach 6, then 3/event.
+- Sheep first batch can reach 6, then 4/event.
+- Without care bonuses, animal production is 1 unit/event.
+
+**RULE**
+Animal setup path:
+`BUY_ANIMAL → shed → PICKUP → travel → matching structure → PLACE`.
+
+Also:
+- Building coop/pasture costs a worker action but no money/material.
+- Feed consumes wheat.
+- CARE is a separate worker action.
 - Two consecutive unfed days cause escape.
-- Fertilizer requires a separate collection action.
+- Fertilizer collection is a separate worker action.
+- Missed fertilizer collections do not accumulate.
 
+**POLICY HYPOTHESIS**
+Gate animal purchases by remaining season horizon and setup distance. A cow bought very late may never reach first milk production, and actual cutoff can be earlier because purchase, pickup, travel, structure setup, and placement all consume time.
 
-*this rule means, the policy of time to buy animals, for example at day 23, we should not buy any more Cows, because when it is time to produce milk, the game has ended*
---------------------------------------------------------------------------------------------------------------
+---
 
+## 4. Feeding versus production
 
-From harvest to sale
-For every harvested product:
-HARVEST / COLLECT
-    → worker inventory
-    → travel to shed and DROP
-    → eligible for SELL
-Each move and operation consumes a worker action. Worker actions run before market orders, so a successful DROP can be sold in the same turn.
-Alternatively, carried inventory automatically enters the shed at day-end, subject to capacity; overflow is discarded. Holding rules can then delay selling further.
-Therefore:
-Buying-to-sale time = setup/waiting + growth + harvest scheduling + delivery + selling delay.
+**RULE**
+- Survival requires avoiding 2 consecutive unfed days.
+- Daily feeding is not strictly required for survival.
+- CARE bonus accumulates only on days the animal is both fed and cared for.
+- On an unfed production day, production falls to base output and accumulated CARE bonus is cleared.
 
-*this rule means, inventory is 2 steps away for sell*
---------------------------------------------------------------------------------------------------------------
+**POLICY HYPOTHESIS**
+Feeding frequency is a controllable tradeoff:
+- less feeding → lower wheat/labor cost;
+- more feeding/care → higher production from existing animals.
 
+Test this as an economic decision, not a survival rule.
 
-End-to-end costs
-There is no fixed engine charge for watering, caring, harvesting, transporting, or selling. Their cost is worker time and any associated hiring expense.
-Product	Direct production-cost calculation
-Wheat, carrot, melon, tomato, strawberry	Seed cost + fertilizer consumed
-Eggs	Allocated goose purchase cost + wheat feed
-Milk	Allocated cow purchase cost + wheat feed
-Wool	Allocated sheep purchase cost + wheat feed
-Fertilizer	A share of animal purchase/feed costs; it is a joint product
+---
 
+## 5. Harvest-to-sale pipeline
 
-Then add allocated worker hiring and land costs to obtain a full cost.
-For example, charging the entire cow purchase to its first batch:
-First milk batch cost = 400 + cost of approximately 8 daily wheat feeds + allocated labor/land.
-Later batches do not require another cow purchase. Animal fertilizer revenue also offsets the combined operation’s cost.
-Two cautions matter for our analysis:
-- Homegrown wheat/fertilizer is not economically free: consuming it gives up potential sale revenue.
-- The planner’s LABOR_COST = 20 is a forecasting assumption, not an engine fee per care action.
+**RULE**
 
+`HARVEST / COLLECT → worker inventory → travel → DROP at shed → SELL`
 
-*this rule gives a framework, what to consider about cost of each product*
---------------------------------------------------------------------------------------------------------------
+- Every movement step costs one worker action.
+- DROP costs a worker action.
+- Worker actions occur before market orders.
+- Therefore goods dropped into the shed can be sold in the **same turn**.
+- Carried inventory auto-drops at day end if capacity allows.
+- Overflow is discarded.
 
+**DERIVED FACT**
+Time-to-cash includes setup + growth + harvest + transport + delivery + optional holding.
 
+**POLICY HYPOTHESIS**
+Evaluate production using **time-to-realizable-cash**, not raw yield alone.
 
+Travel is not inherently wasteful; it is worthwhile when future production/delivery value exceeds worker-turn opportunity cost.
 
-Each turn, you can observe the opponent’s public farm state:
-Visible	Details
-Money	Current cash
-Workers	Farmer and hired workers’ positions, worker count
-Hiring	Number hired that day
-Land	Unlocked quadrants
-Crops	Type, planting day, watering/fertilizer status, yield on the tile
-Animals	Type, placement day, feeding/care status, available yield
-Farm layout	Structures, weeds, and other tile contents
+---
 
+## 6. Shed and inventory
 
-You cannot directly see their:
-- Shed contents.
-- Seed inventory.
-- Goods carried by workers.
-- Submitted orders or intended next actions.
+**RULE**
+- Shed capacity: **100 non-seed items**.
+- Seeds are separate.
+- Anything beyond capacity is discarded permanently.
+- Selling requires goods to be in the shed.
 
+**POLICY HYPOTHESIS**
+When expected incoming inventory would overflow the shed, free capacity before overflow.
 
-*this rule means, adpativeness based on opponents*
---------------------------------------------------------------------------------------------------------------
+Choose what to sell using **expected future value**, not only current price:
+- current price,
+- expected demand,
+- likely appreciation/depreciation,
+- production scarcity,
+- time remaining.
 
+---
 
+## 7. Production economics
 
+There is no direct engine fee for WATER, CARE, HARVEST, transport, or SELL. Their cost is worker time and any hiring expense.
 
-for survival, feeding every other day is enough. The animal escapes only after two consecutive unfed days.
-But there’s a production tradeoff:
-- CARE only builds a bonus on days the animal is both fed and cared for.
-- On an unfed production day, it produces only the base 1 unit, and accumulated CARE bonuses are cleared.
-So alternating feeding days saves wheat and worker actions, but can reduce milk, wool, or egg output. Daily feeding supports higher production; it isn’t strictly required for survival.
+Approximate direct-cost framework:
 
+| Product | Direct cost components |
+|---|---|
+| Crops | seed + fertilizer consumed |
+| Eggs | allocated goose cost + wheat feed |
+| Milk | allocated cow cost + wheat feed |
+| Wool | allocated sheep cost + wheat feed |
+| Fertilizer | allocated animal purchase/feed cost as joint product |
 
-*this rule means, possible way to save money, decrease output and increase output without buying additional animals
---------------------------------------------------------------------------------------------------------------------
+Then add:
+- worker hiring,
+- land cost,
+- opportunity cost of consumed wheat/fertilizer,
+- travel/action capacity.
 
+**DERIVED FACT**
+Homegrown wheat and fertilizer are not economically free because using them sacrifices possible sale value.
 
-hired workers leave at the end of each day; your farmer stays. You choose how many to hire again the next day.
-A few details from the local game engine:
-- You can hire during the day too, not just at the beginning.
-- Each HIRE order adds one worker, provided you can afford it and stay within the market-order limit.
-- Successive hires cost 1, 1, 2, 3, 5, 8, … times the configured hiring-cost multiplier. This resets daily.
-- New workers can act starting the next turn, because hiring happens after worker actions.
-So hiring early gives each worker more turns to work.
+**POLICY HYPOTHESIS**
+Compare strategies using expected net terminal money, not gross production value.
 
+---
 
-The hiring price increases with each hand you hire that day, rather than fluctuating with the market.
-Costs follow this sequence: 1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89…
-For example, hiring 6 hands costs 20 total. The sequence resets the next day, when you need to hire hands again.
+## 8. Hiring
 
-*this rule means, the cost of hiring is fixed*
---------------------------------------------------------------------------------------------------------------
+**RULE**
+- Hired workers disappear at day end.
+- Hires can happen during the day.
+- New hires can act starting the **next turn**.
+- Hiring uses market orders.
+- Daily marginal hire costs follow:
+  `1, 1, 2, 3, 5, 8, 13, 21, ...`
+- The sequence resets every day.
 
+**DERIVED FACT**
+The hiring-price formula is deterministic, but marginal hire cost is not constant.
 
-You can observe more than prices:
-Information	Visible?
-Current product prices in the shared market	Yes
-Quantity of each product in the shared market	Yes
-Which shops are open, including duplicates	Yes
-Products and quantities those shops consume	Known from the game rules
-Which random shop will open next	No
-Opponent’s crops and animals	Yes—useful for estimating future supply
-Opponent’s private stored/carried goods	No
+**POLICY HYPOTHESIS**
+Hiring earlier in the day increases the number of productive turns available per hired worker. Evaluate a hire by expected incremental value versus its Fibonacci marginal cost.
 
+---
 
-*this rule means, what informantion could be used for adaptive policies*
---------------------------------------------------------------------------------------------------------------
+## 9. What is observable
 
+### Public opponent information
+- money,
+- farmer/worker positions and worker count,
+- hires today,
+- unlocked land,
+- visible crops,
+- visible animals,
+- farm layout.
 
-Town Center demand
-In addition to unlocked shops, the Town Center consumes products from the shared market throughout the entire game.
-- It consumes 1 unit of every non-fertilizer product every 24 turns by default — once per in-game day.
-- This demand exists from the start of the game and does not depend on which shops have unlocked.
-- Fertilizer is not consumed by the Town Center.
-- Town Center consumption removes goods from shared market inventory, which can affect market prices.
-- The Town Center does not buy directly from players. Players sell to the shared market; the Town Center later consumes goods from that market.
-Therefore, even when no shops are unlocked, there is still baseline demand for wheat, carrot, tomato, strawberry, melon, eggs, milk, and wool.
+### Hidden opponent information
+- shed contents,
+- seed inventory,
+- worker-carried inventory,
+- submitted orders,
+- intended future actions.
 
+### Shared market/town information
+- current product prices,
+- market inventory quantities,
+- currently unlocked shops, including duplicates,
+- deterministic product demand of each shop type.
 
-*this rule means, it is possible to predict baseline of demand, which implies price floor for products*
---------------------------------------------------------------------------------------------------------------
+**POLICY HYPOTHESIS**
+Use public farm state to estimate opponent future supply, but keep uncertainty around private inventory and intended actions.
 
+---
 
-A worker can collect fertilizer from animals, carry it to the shed, and deposit it. You can then sell it to the shared market.
-You can also keep fertilizer to use on crops. It counts toward the shed’s 100-unit capacity.
+## 10. Town Center baseline demand
 
-*this rule means, the goodness of animals, it also implies, if u or opponents have lots of animals but no much crops, they will have excessive fertilizer, then it is either discarded or sold in market. which will drive market price down, so the cost of ferterlize crop will be lower*
------------------------------------------------------------------------------------------------------------------------
+**RULE**
+- Town Center consumes **1 unit of every non-fertilizer product every 24 turns** by default.
+- It operates throughout the season.
+- It is independent of random shop unlocks.
+- Fertilizer is excluded.
+- Consumption removes units from shared market inventory.
+- Players do not sell directly to Town Center.
 
+Affected products:
+`WHEAT, CARROT, TOMATO, STRAWBERRY, MELON, EGG, MILK, WOOL`.
 
-One naming distinction: “Farmers Market” is one shop type. The shared market is where you trade. Shops don’t have separate trading prices for you.
+**DERIVED FACT**
+There is predictable baseline demand even with zero unlocked shops.
 
+**POLICY HYPOTHESIS**
+Town Center demand creates recurring upward price pressure relative to no demand, but it does **not** create a guaranteed price floor. The engine's actual minimum sale price remains $1.
 
-you cannot sell directly to shops.
-You sell to the shared market and get paid immediately. Shops automatically consume goods from that market later.
+---
 
+## 11. Shops and predictable demand
 
-The shops buy from the shared market 6 times per day, once every 4 turns. That schedule doesn’t restrict when you sell.
-
-There are 8 shop types. They buy/consume products from the shared market; they don’t sell goods to you directly.
-
-
-Each shop consumes products once every 4 turns (4 in-game hours):
-Shop	Amount per buying cycle
-Bakery	1 wheat + 1 egg
-Pizza shop	1 milk + 1 tomato + 1 wheat
-Brunch spot	1 egg + 1 wheat + 1 strawberry
-Yarn store	2 wool
-Ice cream shop	1 strawberry + 1 milk + 1 wheat
-Pet café	2 carrots
-Smoothie shop	1 strawberry + 1 milk
-Farmers market	1 wheat + 1 carrot + 1 tomato + 1 strawberry
-
-
-new shops open automatically as the game progresses, up to a limit:
-- Starts with 0 shops.
+**RULE**
+- Shops consume goods from the shared market every 4 turns by default = 6 times/day.
 - One random shop opens every 3 days.
-- Maximum 8 shops total.
-- The same shop type can appear multiple times, such as two bakeries.
-Shops consume products from the shared market, increasing demand. For example, more bakeries means more demand for wheat and eggs, which can help their prices rise.
+- Maximum 8 shop instances.
+- Unlocks are with replacement, so duplicate shop types are possible.
+- Shops never buy directly from players.
 
+Per consumption tick:
 
-*this rule means, by observing the number of different shop, we can predict the demand growth of differernt products*
------------------------------------------------------------------------------------------------------------------------
+| Shop | Demand |
+|---|---|
+| Bakery | 1 wheat + 1 egg |
+| Pizza shop | 1 milk + 1 tomato + 1 wheat |
+| Brunch spot | 1 egg + 1 wheat + 1 strawberry |
+| Yarn store | 2 wool |
+| Ice cream shop | 1 strawberry + 1 milk + 1 wheat |
+| Pet café | 2 carrots |
+| Smoothie shop | 1 strawberry + 1 milk |
+| Farmers Market | 1 wheat + 1 carrot + 1 tomato + 1 strawberry |
 
+**DERIVED FACT**
+Given the current unlocked-shop multiset, near-term shop consumption is directly calculable. Only future unlock identities are uncertain.
 
-Animal purchase prices are also fixed throughout the game:
-Animal	Price
-Cow	400
-Sheep	500
-Goose	300
+**POLICY HYPOTHESIS**
+Use shop composition to forecast product-specific demand and test shop-aware hold/sell/production policies.
 
-*this rule means, animal price and hiring price are fixed cost*
------------------------------------------------------------------------------------------------------------------------
+---
 
+## 12. Fertilizer economics
 
-Selling requires goods in the shed. Workers act before market orders are processed, so a worker can deposit goods and you can sell them in the same turn.
+**RULE**
+- Animals create fertilizer availability.
+- Workers must collect it.
+- Fertilizer can be sold or used on crops.
+- Fertilizer occupies shed capacity.
+- Fertilizer can also be bought through the shared market.
 
+**POLICY HYPOTHESIS**
+If either player has many animals relative to crop use, fertilizer supply may rise. If excess fertilizer is sold, market inventory can rise and the buy price can fall.
 
-Anything that exceeds the shed’s 100-unit capacity is discarded permanently.
+This may make **buying fertilizer** cheaper. Home-produced fertilizer still has opportunity cost.
 
+---
 
-*this rule means, shed management if new coming products are worth more than existing one in the shed, and the new coming one will make total unit >100, then sell the existing ones before new coming one.*
------------------------------------------------------------------------------------------------------------------------
+## 13. Fixed and deterministic prices
 
-Each worker can perform one action per turn.
-Activity	Time required
-Travel	1 turn per tile, horizontally or vertically
-Plant	1 turn for one crop tile
-Water	1 turn for one crop tile
-Feed	1 turn for one animal, carrying wheat
-Harvest	1 turn to collect the available yield from one tile
-Deliver	Travel to the shed + 1 turn to deposit goods
+**RULE**
+Animal purchase prices are constant:
+- Goose: 300
+- Cow: 400
+- Sheep: 500
 
-*this rule means, if Travel not immediately followed by other actions, it is inefficient Travel.*
------------------------------------------------------------------------------------------------------------------------
+Hiring follows a deterministic daily-reset Fibonacci schedule.
+
+**DERIVED FACT**
+Animal prices are constant. Hiring prices are deterministic but increase with the number hired that day.
+
+---
+
+## 14. Market price and sell timing
+
+**RULE**
+- Players trade only with the shared market.
+- Sell prices depend on shared market inventory.
+- Town consumption and player buys reduce market inventory.
+- Player sells increase market inventory.
+- The engine price floor is **$1**.
+
+**POLICY HYPOTHESIS**
+Selling everything immediately is not always optimal.
+
+Candidate signals for hold/sell decisions:
+- current price,
+- price trend,
+- current market inventory,
+- Town Center demand,
+- unlocked-shop demand,
+- opponent visible future supply,
+- own expected future supply,
+- shed pressure,
+- remaining season horizon.
+
+This should be tested by static replay against v20 loss cases.
+
+---
+
+## 15. Worker routing
+
+**RULE**
+Approximate worker-action costs:
+
+| Activity | Worker actions |
+|---|---:|
+| move one tile | 1 |
+| plant | 1 |
+| water | 1 |
+| feed | 1 |
+| harvest | 1 |
+| care | 1 |
+| collect fertilizer | 1 |
+| drop/deliver at shed | 1 |
+
+**DERIVED FACT**
+Worker time is a major scarce resource even when an action has zero direct cash cost.
+
+**POLICY HYPOTHESIS**
+Prefer routes that chain productive work:
+`move → operate → move → deliver`.
+
+Minimize movement that does not improve future production, care, harvesting, delivery, or strategic positioning.
+
+---
+
+# Agent reasoning template
+
+For each proposed improvement, reason in this order:
+
+1. **RULE** — which engine mechanic matters?
+2. **STATE SIGNAL** — what observable variable reveals the situation?
+3. **ECONOMIC EFFECT** — how does it change expected terminal money?
+4. **POLICY HYPOTHESIS** — what decision should change?
+5. **STATIC REPLAY TEST** — which v20 loss cases can falsify it?
+6. **METRICS** — compare:
+   - candidate margin,
+   - margin improvement vs recorded v20,
+   - repaired losses,
+   - worsened cases,
+   - action divergences.
+
+Do not promote a policy because it sounds reasonable. Promote it only when static-replay evidence supports it without unacceptable regressions.
