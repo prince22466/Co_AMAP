@@ -14,7 +14,7 @@ on:
 jobs:
   smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: Co_Kaggle/g5/local_arena/v23
@@ -23,17 +23,41 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: "pip"
-          cache-dependency-path: Co_Kaggle/g5/local_arena/v23/requirements.txt
-      - name: Resolve full v23 requirements
-        run: python -m pip install --dry-run -r requirements.txt
-      - name: Install smoke-test runtime
+
+      - name: Create isolated CI environments
         run: |
-          python -m pip install "openai>=2.45.0,<3" "openai-agents==0.19.0" "numpy>=1.26"
-          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
-      - name: Compile v23 Python
-        run: python -m py_compile research_agent.py agent/*.py replay/*.py tests/*.py
-      - name: Runtime smoke test
-        run: python tests/smoke_runtime.py
-      - name: FP16 smoke test
-        run: python tests/smoke_fp16.py
+          python -m venv .ci-agent
+          python -m venv .ci-replay
+
+      - name: Resolve and install agent environment
+        run: |
+          .ci-agent/bin/python -m pip install --upgrade pip
+          .ci-agent/bin/python -m pip install --dry-run -r requirements-agent.txt
+          .ci-agent/bin/python -m pip install -r requirements-agent.txt
+
+      - name: Resolve replay environment
+        run: |
+          .ci-replay/bin/python -m pip install --upgrade pip
+          .ci-replay/bin/python -m pip install --dry-run -r requirements-replay.txt
+
+      - name: Install replay smoke runtime
+        run: |
+          .ci-replay/bin/python -m pip install "numpy>=1.26"
+          .ci-replay/bin/python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Assert environment isolation
+        run: |
+          .ci-agent/bin/python -c "import importlib.util; assert importlib.util.find_spec('agents') is not None; assert importlib.util.find_spec('openai') is not None; assert importlib.util.find_spec('kaggle_environments') is None"
+          .ci-replay/bin/python -c "import importlib.util; assert importlib.util.find_spec('agents') is None; assert importlib.util.find_spec('openai') is None"
+
+      - name: Compile agent code
+        run: .ci-agent/bin/python -m py_compile research_agent.py agent/*.py tests/smoke_runtime.py setup_envs.py
+
+      - name: Compile replay code
+        run: .ci-replay/bin/python -m py_compile replay/*.py tests/smoke_fp16.py
+
+      - name: Agent runtime smoke test
+        run: .ci-agent/bin/python tests/smoke_runtime.py
+
+      - name: Replay FP16 smoke test
+        run: .ci-replay/bin/python tests/smoke_fp16.py
