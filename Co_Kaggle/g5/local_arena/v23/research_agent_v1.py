@@ -385,200 +385,86 @@ class LocalTools:
         episodes: list[str] | None = None,
         max_episodes: int = 25,
     ) -> dict[str, Any]:
-        """Run a v23 candidate notebook/Python agent on recorded v20 loss cases.
-
-        The candidate replaces the inferred losing v20 seat. The opponent action
-        stream is replayed verbatim. Every selected history must pass exact
-        recorded-action parity before it is evaluated.
-        """
+        """Run candidate static replay in the same isolated child used by v2."""
         if not self.allow_exec:
             return {"error": "execution disabled; rerun with --allow-exec"}
-
         candidate_path = self._read_path(candidate)
         if not candidate_path.is_file() or candidate_path.suffix not in {".py", ".ipynb"}:
             return {"error": "candidate must be an existing .py or .ipynb file"}
 
-        history_dir = self.root / "working_files" / "loss_games_v20"
-        all_paths = sorted(history_dir.glob("*.json"))
-        wanted = {str(x).strip() for x in (episodes or []) if str(x).strip()}
-        paths = [p for p in all_paths if not wanted or p.stem in wanted]
-        max_episodes = max(1, min(int(max_episodes), 50))
-        paths = paths[:max_episodes]
-        if not paths:
-            return {"error": "no matching v20 loss histories"}
+        runner = self.root / "static_replay_runner.py"
+        if not runner.is_file():
+            return {"error": "missing static_replay_runner.py"}
 
-        # All replay helpers are loaded from the local v23 reference file.
-        # No import/search/path traversal outside v23 is permitted.
-        import importlib.util
-        import types
+        child_env = {}
+        for key, value in os.environ.items():
+            upper = key.upper()
+            if any(secret in upper for secret in (
+                "OPENAI_API_KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL"
+            )):
+                continue
+            child_env[key] = value
+        child_env["PYTHONUNBUFFERED"] = "1"
 
-        helper_path = self.root / "static_replay.py"
-        if not helper_path.is_file():
-            return {"error": "missing static_replay.py"}
-        spec = importlib.util.spec_from_file_location("v23_static_replay_helpers", helper_path)
-        if spec is None or spec.loader is None:
-            return {"error": "could not load local static replay helper"}
-        helper = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(helper)
-
-        required = (
-            "_agent_observation",
-            "_environment_from_history",
-            "_field",
-            "_load_notebook_agent",
-            "_recorded_step_actions",
-            "_saved_final_rewards",
-            "recorded_action_parity",
-        )
-        missing = [name for name in required if not hasattr(helper, name)]
-        if missing:
+        argv = [
+            sys.executable,
+            str(runner),
+            "--candidate",
+            str(candidate_path.relative_to(self.root)),
+            "--episodes-json",
+            json.dumps(episodes or []),
+            "--max-episodes",
+            str(max(1, min(int(max_episodes), 50))),
+        ]
+        started = time.monotonic()
+        try:
+            completed = subprocess.run(
+                argv,
+                cwd=self.root,
+                capture_output=True,
+                text=True,
+                timeout=MAX_EXEC_SECONDS,
+                env=child_env,
+            )
+        except subprocess.TimeoutExpired as exc:
             return {
-                "error": "self-contained static replay helper is missing required helpers",
-                "missing": missing,
-            }
-        _agent_observation = helper._agent_observation
-        _environment_from_history = helper._environment_from_history
-        _field = helper._field
-        _load_notebook_agent = helper._load_notebook_agent
-        _recorded_step_actions = helper._recorded_step_actions
-        _saved_final_rewards = helper._saved_final_rewards
-        recorded_action_parity = helper.recorded_action_parity
-
-        if candidate_path.suffix == ".ipynb":
-            _, candidate_agent = _load_notebook_agent(candidate_path, "v23_candidate")
-        else:
-            source = candidate_path.read_text(encoding="utf-8")
-            module = types.ModuleType(f"v23_candidate_{id(source)}")
-            module.__file__ = str(candidate_path)
-            exec(compile(source, str(candidate_path), "exec"), module.__dict__)
-            candidate_agent = getattr(module, "agent", None)
-            if not callable(candidate_agent):
-                return {"error": f"{candidate}: expected callable agent(obs)"}
-
-        rows = []
-        for history_path in paths:
-            case_started = time.monotonic()
-            history = json.loads(history_path.read_text(encoding="utf-8"))
-            control = recorded_action_parity(history)
-            original = _saved_final_rewards(history)
-            if not control.get("exact"):
-                rows.append({
-                    "episode": history_path.stem,
-                    "valid": False,
-                    "error": "recorded-action parity failed",
-                    "recorded_action_control": control,
-                    "elapsed_seconds": round(time.monotonic() - case_started, 6),
-                })
-                continue
-
-            if original[0] == original[1]:
-                rows.append({
-                    "episode": history_path.stem,
-                    "valid": False,
-                    "error": "recorded v20 history is tied; cannot infer v20 seat",
-                    "elapsed_seconds": round(time.monotonic() - case_started, 6),
-                })
-                continue
-
-            candidate_seat = 0 if original[0] < original[1] else 1
-            opponent_seat = 1 - candidate_seat
-            original_margin = float(original[candidate_seat] - original[opponent_seat])
-            env = _environment_from_history(history)
-            action_divergences = 0
-            first_divergence = None
-
-            try:
-                for replay_step in range(1, len(history["steps"])):
-                    obs = _agent_observation(env, candidate_seat)
-                    action = candidate_agent(obs)
-                    recorded = _recorded_step_actions(history, replay_step)
-                    opponent_action = recorded[opponent_seat]
-                    if opponent_action is None:
-                        raise RuntimeError(
-                            f"recorded opponent action is None at step {replay_step}"
-                        )
-                    if action != recorded[candidate_seat]:
-                        action_divergences += 1
-                        if first_divergence is None:
-                            first_divergence = {
-                                "replay_step": replay_step,
-                                "day": int(_field(obs, "day", -1)),
-                                "hour": int(_field(obs, "hour", -1)),
-                            }
-                    actions = [None, None]
-                    actions[candidate_seat] = action
-                    actions[opponent_seat] = opponent_action
-                    env.step(actions)
-
-                final_states = env.steps[-1]
-                rewards = [float(_field(state, "reward")) for state in final_states]
-                statuses = [str(_field(state, "status", "")) for state in final_states]
-                margin = rewards[candidate_seat] - rewards[opponent_seat]
-                valid = statuses == ["DONE", "DONE"]
-                rows.append({
-                    "episode": history_path.stem,
-                    "valid": valid,
-                    "v20_seat": candidate_seat,
-                    "original_rewards": original,
-                    "candidate_rewards": rewards,
-                    "original_v20_margin": original_margin,
-                    "candidate_margin": margin,
-                    "margin_improvement": margin - original_margin,
-                    "result": "WIN" if margin > 0 else "LOSS" if margin < 0 else "TIE",
-                    "action_divergences": action_divergences,
-                    "first_action_divergence": first_divergence,
-                    "error": "" if valid else f"non-DONE status: {statuses}",
-                    "elapsed_seconds": round(time.monotonic() - case_started, 6),
-                })
-            except Exception as exc:
-                rows.append({
-                    "episode": history_path.stem,
-                    "valid": False,
-                    "original_v20_margin": original_margin,
-                    "error": f"{type(exc).__name__}: {exc}",
-                    "elapsed_seconds": round(time.monotonic() - case_started, 6),
-                })
-
-        valid_rows = [row for row in rows if row.get("valid")]
-        if valid_rows:
-            margins = [float(row["candidate_margin"]) for row in valid_rows]
-            improvements = [float(row["margin_improvement"]) for row in valid_rows]
-            summary = {
-                "games_total": len(rows),
-                "games_valid": len(valid_rows),
-                "games_invalid": len(rows) - len(valid_rows),
-                "wins": sum(x > 0 for x in margins),
-                "ties": sum(x == 0 for x in margins),
-                "losses": sum(x < 0 for x in margins),
-                "loss_cases_repaired": sum(x > 0 for x in margins),
-                "repair_rate": sum(x > 0 for x in margins) / len(margins),
-                "margin_improved_cases": sum(x > 0 for x in improvements),
-                "margin_worsened_cases": sum(x < 0 for x in improvements),
-                "mean_candidate_margin": sum(margins) / len(margins),
-                "mean_margin_improvement": sum(improvements) / len(improvements),
-                "worst_candidate_margin": min(margins),
-                "best_candidate_margin": max(margins),
-            }
-        else:
-            summary = {
-                "games_total": len(rows),
-                "games_valid": 0,
-                "games_invalid": len(rows),
+                "error": "static replay timeout",
+                "timeout_seconds": MAX_EXEC_SECONDS,
+                "elapsed_seconds": round(time.monotonic() - started, 3),
+                "stdout": self._truncate(exc.stdout if isinstance(exc.stdout, str) else ""),
+                "stderr": self._truncate(exc.stderr if isinstance(exc.stderr, str) else ""),
             }
 
-        result = {
-            "protocol": {
-                "mode": "v23_static_replacement_replay_on_v20_losses",
-                "candidate": candidate,
-                "history_dir": str(history_dir.relative_to(self.root)),
-                "candidate_seat": "inferred losing v20 seat",
-                "opponent_behavior": "recorded v20-loss opponent actions; non-adaptive",
-                "recorded_action_parity_required": True,
-            },
-            "summary": summary,
-            "matches": rows,
-        }
+        marker = "__V23_RESULT__"
+        payload = next(
+            (
+                line[len(marker):]
+                for line in reversed(completed.stdout.splitlines())
+                if line.startswith(marker)
+            ),
+            None,
+        )
+        if payload is None:
+            return {
+                "error": "static replay child did not emit a result marker",
+                "returncode": completed.returncode,
+                "elapsed_seconds": round(time.monotonic() - started, 3),
+                "stdout": self._truncate(completed.stdout),
+                "stderr": self._truncate(completed.stderr),
+            }
+        try:
+            result = json.loads(payload)
+        except json.JSONDecodeError as exc:
+            return {
+                "error": f"invalid static replay child JSON: {exc}",
+                "returncode": completed.returncode,
+                "stdout": self._truncate(completed.stdout),
+                "stderr": self._truncate(completed.stderr),
+            }
+        result["elapsed_seconds"] = round(time.monotonic() - started, 3)
+        result["returncode"] = completed.returncode
         return result
+
 
     def run_python(
         self,
