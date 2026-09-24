@@ -554,19 +554,36 @@ def main():
             "SELECT replay_calls,replay_cases,experiments_started FROM runs WHERE run_id=?",
             (run_id,),
         ).fetchone()
-        if progress and int(progress["replay_calls"] or 0) == 0:
+        valid_replays = int(db.db.execute(
+            "SELECT COUNT(*) FROM replays WHERE run_id=? AND valid=1",
+            (run_id,),
+        ).fetchone()[0])
+        open_experiments = int(db.db.execute(
+            "SELECT COUNT(*) FROM experiments WHERE run_id=? AND status='RUNNING'",
+            (run_id,),
+        ).fetchone()[0])
+        contract_ok = (
+            progress is not None
+            and int(progress["replay_calls"] or 0) > 0
+            and valid_replays > 0
+            and open_experiments == 0
+        )
+        if not contract_ok:
             status="INCOMPLETE"
             output = (
                 output.rstrip()
                 + "\n\nExecution contract violation: --allow-exec was enabled, "
-                  "but the agent completed without running static replay. "
-                  "The run is marked INCOMPLETE rather than DONE."
+                  "but the run did not complete a valid static-replay experiment. "
+                  "A successful run requires at least one valid replay case and no "
+                  "unfinished experiment. The run is marked INCOMPLETE."
             )
             log.event("execution_contract_violation", {
                 "run_id": run_id,
-                "experiments_started": int(progress["experiments_started"] or 0),
-                "replay_calls": int(progress["replay_calls"] or 0),
-                "replay_cases": int(progress["replay_cases"] or 0),
+                "experiments_started": int(progress["experiments_started"] or 0) if progress else 0,
+                "replay_calls": int(progress["replay_calls"] or 0) if progress else 0,
+                "replay_cases": int(progress["replay_cases"] or 0) if progress else 0,
+                "valid_replay_cases": valid_replays,
+                "open_experiments": open_experiments,
             })
     cost=conservative_cost_usd(usage,inp_price,out_price)
     delta=LegacyUsage(usage["input_tokens"],usage["output_tokens"],usage["requests"],cost)
