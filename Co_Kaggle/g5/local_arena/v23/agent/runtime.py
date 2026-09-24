@@ -357,6 +357,48 @@ class ResearchDB:
         self.db.commit()
         return {"experiment_id":experiment_id,"idea_id":row["idea_id"],"candidate":candidate,"candidate_sha256":candidate_sha256}
 
+    def idea_dossier(self, idea_id):
+        idea = self.db.execute("SELECT * FROM research_ideas WHERE idea_id=?", (idea_id,)).fetchone()
+        if idea is None:
+            return None
+        experiments = [dict(row) for row in self.db.execute(
+            "SELECT experiment_id,run_id,idea_id,hypothesis,candidate,candidate_sha256,parent_candidate,notes,started_at,ended_at,elapsed_seconds,status,conclusion,replay_calls,replay_cases,best_margin_improvement,mean_margin_improvement,wins,losses,regressions FROM experiments WHERE idea_id=? ORDER BY started_at",
+            (idea_id,),
+        ).fetchall()]
+        replay_rows = [dict(row) for row in self.db.execute(
+            "SELECT replay_id,experiment_id,replay_call_id,candidate,episode,started_at,elapsed_seconds,valid,original_v20_margin,candidate_margin,margin_improvement,result,action_divergences,game_record_path,error FROM replays WHERE experiment_id IN (SELECT experiment_id FROM experiments WHERE idea_id=?) ORDER BY replay_id",
+            (idea_id,),
+        ).fetchall()]
+        calls = {}
+        for row in replay_rows:
+            call_id = row["replay_call_id"]
+            if call_id not in calls:
+                calls[call_id] = {"replay_call_id":call_id,"candidate":row["candidate"],"games":[]}
+            calls[call_id]["games"].append({
+                "replay_id":row["replay_id"],
+                "episode":row["episode"],
+                "valid":bool(row["valid"]),
+                "result":row["result"],
+                "original_v20_margin":row["original_v20_margin"],
+                "candidate_margin":row["candidate_margin"],
+                "margin_improvement":row["margin_improvement"],
+                "action_divergences":row["action_divergences"],
+                "game_record_path":row["game_record_path"],
+                "error":row["error"],
+            })
+        idea_dict = dict(idea)
+        idea_dict["components"] = json.loads(idea_dict.get("components_json") or "[]")
+        return {"idea":idea_dict,"experiments":experiments,"replay_calls":list(calls.values())}
+
+    def batch_dossiers(self, review_id=None):
+        if review_id is None:
+            latest = self.latest_strategy_review()
+            review_id = latest["review_id"] if latest else None
+        if not review_id:
+            return []
+        ids = [row["idea_id"] for row in self.db.execute("SELECT idea_id FROM research_ideas WHERE review_id=? ORDER BY batch_index", (review_id,)).fetchall()]
+        return [self.idea_dossier(iid) for iid in ids]
+
     def record_replay_call(self, run_id, eid, call_id, candidate, result, started_at, elapsed):
         rows = result.get("matches", []) if isinstance(result, dict) else []
         each = elapsed / max(1, len(rows))
@@ -364,13 +406,13 @@ class ResearchDB:
             self.db.execute("""INSERT INTO replays(
               run_id,experiment_id,replay_call_id,candidate,episode,started_at,
               elapsed_seconds,valid,original_v20_margin,candidate_margin,
-              margin_improvement,result,action_divergences,error)
-              VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+              margin_improvement,result,action_divergences,game_record_path,error)
+              VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
               (run_id, eid, call_id, candidate, row.get("episode",""), started_at,
                float(row.get("elapsed_seconds", each)),
                int(bool(row.get("valid"))), row.get("original_v20_margin"),
                row.get("candidate_margin"), row.get("margin_improvement"), row.get("result"),
-               row.get("action_divergences"), row.get("error","")))
+               row.get("action_divergences"), row.get("game_record_path"), row.get("error","")))
         summary = result.get("summary", {}) if isinstance(result, dict) else {}
         cases = int(summary.get("games_total", len(rows)) or 0)
         self.db.execute("UPDATE runs SET replay_calls=replay_calls+1,replay_cases=replay_cases+? WHERE run_id=?",
@@ -456,7 +498,7 @@ class ResearchDB:
         return [dict(row) for row in self.db.execute(
             """SELECT i.idea_id,i.batch_index,i.title,i.hypothesis,i.causal_layer,
                       i.components_json,i.interaction_hypothesis,i.system_prediction,
-                      i.status,i.conclusion,e.experiment_id,e.wins,e.losses,
+                      i.status,i.conclusion,e.experiment_id,e.candidate,e.candidate_sha256,e.wins,e.losses,
                       e.replay_cases,e.mean_margin_improvement,
                       e.best_margin_improvement,e.regressions
                FROM research_ideas i
