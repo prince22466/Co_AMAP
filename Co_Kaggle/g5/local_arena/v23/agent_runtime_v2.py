@@ -131,7 +131,7 @@ class ResearchDB:
         self.db.commit()
         return gid
 
-    def maybe_reach_goal(self, run_id, eid, summary, usage_snapshot):
+    def maybe_reach_goal(self, run_id, eid, summary, usage_snapshot, input_price, output_price):
         goal = self.db.execute("SELECT * FROM goals WHERE active=1 ORDER BY created_at DESC LIMIT 1").fetchone()
         if goal is None or goal["metric"] not in summary:
             return None
@@ -175,6 +175,11 @@ class ResearchDB:
           "reasoning_tokens": int(prior["reasoning_tokens"]) + int(usage_snapshot.get("reasoning_tokens",0)),
           "total_tokens": int(prior["total_tokens"]) + int(usage_snapshot.get("total_tokens",0)),
           "prior_completed_run_cost_usd": float(prior["cost"]),
+          "conservative_cost_usd_to_goal": (
+              float(prior["cost"])
+              + (int(usage_snapshot.get("input_tokens",0)) * float(input_price)
+                 + int(usage_snapshot.get("output_tokens",0)) * float(output_price)) / 1_000_000.0
+          ),
         }
         self.db.execute("""UPDATE goals SET reached_at=?,reached_run_id=?,
           reached_experiment_id=?,reached_value=?,reached_observability_json=?,active=0
@@ -244,6 +249,8 @@ class AppContext:
     local: LocalTools
     db: ResearchDB
     log: RunLog
+    input_price: float
+    output_price: float
 
 
 def j(x):
@@ -359,7 +366,8 @@ def static_replay_candidate(ctx: RunContextWrapper[AppContext], candidate: str, 
     summary = ctx.context.db.record_replay_call(
         ctx.context.run_id, experiment_id, call_id, candidate, result, started_at, elapsed)
     reached = ctx.context.db.maybe_reach_goal(
-        ctx.context.run_id, experiment_id, summary, usage_dict(ctx.usage))
+        ctx.context.run_id, experiment_id, summary, usage_dict(ctx.usage),
+        ctx.context.input_price, ctx.context.output_price)
     result["replay_call_id"] = call_id
     result["elapsed_seconds"] = round(elapsed, 3)
     if reached:
@@ -422,7 +430,7 @@ def main():
             "tracing_enabled":not args.disable_tracing,"trace_sensitive_data":False}
     log=RunLog(WORKSPACE,config); local=LocalTools(allow_exec=args.allow_exec,log=log)
     db=ResearchDB(STATE_DB); db.start_run(run_id,args.session_id,args.task,args.model)
-    app=AppContext(run_id,local,db,log)
+    app=AppContext(run_id,local,db,log,inp_price,out_price)
     budget=BudgetLedger(LEDGER_PATH,model=args.model,input_usd_per_m=inp_price,
         output_usd_per_m=out_price,total_budget_usd=args.total_budget_usd,
         session_budget_usd=args.session_budget_usd)
