@@ -2,255 +2,510 @@
 
 ## Objective
 
-Build an autonomous, evidence-driven research loop for improving the Kaggriculture agent while keeping experimentation reproducible and OpenAI API spend extremely low.
+v23 is a low-cost autonomous research system for improving the Kaggriculture v20 policy using only local evidence, deterministic analysis, and static counterfactual replay.
 
-v23 should first understand the existing chain:
+The scientific loop is:
 
 ```text
-v20 notebook + working_files/loss_games_v20
-    -> diagnose a concrete failure
-    -> candidate replacement policy
-    -> static replay with recorded opponent actions
-    -> compare candidate vs recorded v20 margins
-    -> next hypothesis
+v20 source + 25 recorded v20 loss histories
+        ↓
+deterministic analysis
+        ↓
+Performance Analyst
+        ↓
+10 falsifiable improvement ideas
+        ↓
+Experiment Engineer
+        ↓
+candidate code
+        ↓
+isolated static replay
+        ↓
+durable evidence + game records
+        ↓
+Performance Analyst reviews the completed batch
+        ↓
+next 10 ideas
+        ↓
+repeat until the durable goal is reached
 ```
 
-v23 is an orchestration/research layer built directly on v20. v21/v22 are not research inputs; only their generic replay implementation patterns may be reused where useful.
+v21/v22 are not research inputs. v23 starts from the v20 submission notebook, the v20 loss corpus, competition material, and locally generated v23 evidence.
 
-## Research contract
+## Current system architecture
 
-Every useful v23 run should answer:
+```text
+                         Python supervisor
+              ┌────────────────┼────────────────┐
+              │                │                │
+              │                │                │
+       context manager      durable state     budget/goal control
+              │                │                │
+              │                │                │
+              ▼                ▼                ▼
+    Performance Analyst   experiments.sqlite3  progress logs
+    stronger reasoning          │
+    read-only                   │
+              │                 │
+              │ 10 ideas        │
+              ▼                 │
+       research_ideas           │
+              │                 │
+              ▼                 │
+    Experiment Engineer ────────┘
+    cheaper execution model
+              │
+              │ candidate code
+              ▼
+      isolated replay process
+              │
+              │ per-game metrics + traces
+              ▼
+        replay evidence
+              │
+              └──────────────► next Analyst review
+```
 
-1. What was observed?
-2. What single falsifiable hypothesis was selected?
-3. Why was this experiment higher-information than alternatives?
-4. What exact command/configuration was executed, if any?
-5. What changed in the measured metrics?
-6. Was the hypothesis supported, rejected, or unresolved?
-7. What is the smallest justified next experiment?
+The supervisor, not either LLM role, owns orchestration, persistence, budgets, stopping conditions, context construction, idea assignment, and progress snapshots.
 
-Negative results are first-class results.
+## Role contracts
 
-## Experimental rules
+### Performance Analyst
 
-- Keep v20/v21/v22 source and checkpoints immutable.
-- Inspect existing metrics before new training.
-- Prefer evaluation/ablation before adding model complexity.
-- Change one conceptual variable at a time unless an interaction is the hypothesis.
-- Keep train/validation separation explicit.
-- Distinguish static-history counterfactual performance from live/adaptive-opponent performance.
-- Preserve commands, seeds, configs, and metric paths in the run record.
-- Never infer hidden-score improvement from local proxy metrics alone.
-- Avoid external/public solution lookup in v23; use our own code, histories, and measurements.
+The Performance Analyst is read-only. It may use a stronger reasoning model than the Experiment Engineer.
 
-## Cost policy
+Responsibilities:
+- diagnose why v20 and recent candidates lose;
+- reason across the whole policy as a coupled system;
+- use deterministic analysis tools before reading raw histories;
+- synthesize prior negative evidence;
+- generate exactly 10 structurally distinct falsifiable ideas per batch;
+- review the completed 10-idea batch before creating the next batch.
 
-The agent model is selected at startup with `--model`. The OpenAI API key may be supplied with `--api-key` or, as a fallback, `OPENAI_API_KEY`. The key itself must never be written to run logs, config files, experiment databases, or replay-process arguments.
+It must reason about interactions among components such as:
+- `crop_plan`;
+- `animal_plan`;
+- worker/task ranking;
+- movement and logistics;
+- worker inventory;
+- shed capacity;
+- `market_orders`;
+- hiring and purchases;
+- land allocation;
+- cash and market prices;
+- future production.
 
-Available OpenAI API credit is approximately $6. v23 uses `gpt-6-luna` with low reasoning effort and a persistent local ledger. The default project ceiling is $5.00 with a $0.25 per-run ceiling. There is no automatic escalation to Sol/Astra.
+At least 3 of every 10 ideas must be multi-component hypotheses involving 2 or more components.
 
-## Success criteria
-
-A bounded run should locate relevant prior evidence without dumping the repository into context, state a concrete hypothesis, identify or execute a small experiment, separate evidence from conjecture, write a concise research record, and stay well below budget.
-
-Candidate changes are accepted only through measured static-replay evidence and recorded experiment conclusions.
-
-
-## Filesystem boundary
-
-v23 is self-contained. The research agent must not inspect or depend on sibling directories. Its complete input surface is `working_files/`, and its generated research surface is `workspace/`. All tool paths are resolved against the v23 directory and traversal outside that root is rejected.
-
-
-## v2 agent infrastructure contract
-
-The production research harness should make progress measurable. Every run records:
-- wall-clock duration;
-- model request count;
-- input/output/total tokens;
-- cached-input and cache-write tokens when available;
-- reasoning tokens when available;
-- conservative API-cost estimate;
-- experiment count;
-- replay call count and replay-case count.
-
-Every experiment has a durable ID and records:
-- hypothesis;
-- candidate and optional parent candidate;
-- start/end time;
-- static replay cases;
-- mean/best margin improvement;
-- wins/losses/regressions;
-- conclusion status: SUPPORTED, REJECTED, UNRESOLVED, or ERROR.
-
-Explicit numeric goals are stored separately. When a replay summary satisfies the active goal (and any regression guard), the system records the exact run and experiment that first reached it. This supports direct calculation of time-to-goal, experiments-to-goal, replay-cases-to-goal, tokens-to-goal, and cost-to-goal.
-
-Conversation memory and research memory are separate:
-- OpenAI Agents SDK SQLiteSession stores conversational/tool context across invocations.
-- experiments.sqlite3 stores compact scientific evidence and negative results so the model does not need to replay the entire conversation history.
-
-Tracing is provided by the OpenAI Agents SDK. Domain-specific research semantics remain in the local SQLite database.
-
-
-
-
-## Agent/replay isolation contract
-
-OpenAI orchestration and Kaggriculture replay are independent systems.
-
-- The **agent environment** contains the OpenAI SDK and OpenAI Agents SDK. It performs reasoning, planning, candidate generation, experiment selection, memory, tracing, and result analysis.
-- The **replay environment** contains Kaggle Environments, PyTorch, and NumPy. It reconstructs games, runs candidate actions, replays recorded opponent commands, and emits structured metrics.
-- v23 replay code must not import or call OpenAI APIs. Kaggle may carry unrelated transitive OpenAI/LiteLLM packages internally; those are not part of the replay interface.
-- The agent environment must not install, import, or depend on Kaggle Environments.
-- Communication across the boundary is subprocess arguments plus JSON output.
-- The agent runtime must use a replay interpreter different from its own interpreter.
-- Kaggle/LiteLLM dependency constraints must never determine the OpenAI Agents SDK version.
-
-This separation is architectural, not optional dependency management.
-
-## Specialist-agent contract
-
-v23 separates research judgment from experiment execution.
-
-- **Performance Analyst**: read-only specialist for performance analysis, causal diagnosis, rejected-idea synthesis, and improvement ideation. It may use a stronger reasoning model than the executor.
-- **Experiment Engineer**: turns the analyst's selected direction into concrete candidate code, executes static replay, and records evidence.
-- **Python supervisor**: owns review cadence, budgets, durable goals, stagnation detection, and termination.
-
-The analyst is intentionally sparse to control cost: run it for initial diagnosis, after materially new stagnant evidence, or after roughly three additional experiments. Do not invoke an expensive analyst every replay cycle.
-
-Analyst output is advisory. Only replay metrics can accept a candidate or satisfy the durable goal.
-
-### System-level hypothesis requirement
-
-The Performance Analyst must reason over the policy as a coupled control system, not as isolated functions. Candidate mechanisms may span `animal_plan`, `crop_plan`, task ranking, worker movement/logistics, inventory/capacity, `market_orders`, hiring, purchases, cash, and future production.
-
-Each 10-idea batch must include at least three coordinated multi-component hypotheses. Every idea records:
-- affected components;
-- the causal interaction between those components;
-- the predicted downstream system effect;
-- the smallest falsification replay;
-- the promotion rule.
-
-A coordinated change is valid even though it modifies multiple functions when those changes implement one falsifiable interaction hypothesis. This is different from changing unrelated variables at once.
+A multi-component experiment is valid when the coordinated changes implement one falsifiable interaction hypothesis. It is not permission to change unrelated variables at once.
 
 Example:
 
 ```text
 animal_plan increases egg production
         +
-worker policy collects eggs faster
+worker policy collects faster
         +
-market_orders immediately sells the excess
+market_orders sells immediately
         ↓
-market saturation / lower prices
+inventory/market pressure
+        ↓
+lower realized prices
         ↓
 high production but worse final cash
 ```
 
-A valid systems experiment could coordinate production pacing and market release policy and predict both inventory-flow and final-margin effects.
+### Experiment Engineer
 
-## Autonomous goal loop
+The Experiment Engineer receives exactly one assigned idea at a time.
 
-v23 follows a cheap Karpathy-style autoresearch loop: the model chooses hypotheses and candidate changes, while local Python owns execution, replay, scoring, persistence, and termination.
+Responsibilities:
+- implement only that assigned hypothesis;
+- preserve coordinated changes when the hypothesis is multi-component;
+- create or resume the linked experiment;
+- run the smallest useful static-replay screen;
+- expand replay only when the idea's promotion rule is satisfied;
+- verify the canonical lineage with `idea_dossier`;
+- close the experiment as `SUPPORTED`, `REJECTED`, `UNRESOLVED`, or `ERROR`.
 
-For an execution-enabled run with a durable numeric goal, model-generated final prose is only a cycle boundary. After every Agents SDK cycle, Python checks the durable goal and resumes the same SQLite session when the goal remains unmet.
+The Engineer must not skip ahead to another queued idea or invent an untracked experiment.
 
-The controller stops only when:
-- measured replay evidence marks the durable goal reached;
-- the configured per-run or project API budget is exhausted;
-- a concrete runtime/environment blocker is recorded through `report_blocker`.
+### Python supervisor
 
-A rejected candidate, completed experiment, next-step recommendation, or ordinary final answer is not a stop condition.
+The supervisor owns:
+- analyst review cadence;
+- 10-idea queue management;
+- resuming unfinished ideas before assigning new ones;
+- role-specific context packs;
+- SQLite persistence;
+- candidate-version binding;
+- replay subprocess execution;
+- goal checks;
+- stagnation/progress signals;
+- API budget enforcement;
+- stop conditions;
+- progress snapshots.
 
-`--max-turns` limits one Agents SDK cycle, not the total autonomous research horizon.
+A model final answer is only a cycle boundary. It does not terminate an unmet durable goal.
 
-## Mandatory execution contract
+## Ten-idea research batches
 
-When the agent is launched with `--allow-exec`, planning-only completion is not acceptable.
+The durable unit of research is an idea batch.
 
-An execution-enabled run MUST, unless blocked by a concrete runtime error or exhausted budget:
-1. inspect enough evidence to select one falsifiable hypothesis;
-2. create or select a concrete candidate policy;
-3. call `start_experiment`;
-4. execute at least one `static_replay_candidate` evaluation;
-5. analyze the measured result;
-6. call `finish_experiment` with SUPPORTED, REJECTED, UNRESOLVED, or ERROR.
+```text
+Analyst review
+    ↓
+ideas 1..10 persisted in SQLite
+    ↓
+Engineer tests idea 1
+    ↓
+Engineer tests idea 2
+    ↓
+...
+    ↓
+Engineer tests idea 10
+    ↓
+batch exhausted
+    ↓
+Analyst receives canonical results/lineage
+    ↓
+next 10 ideas
+```
 
-The agent must not stop after proposing code, describing an experiment, or writing a plan when execution is enabled. It must perform the experiment and record evidence.
+Each idea records:
+- `idea_id`;
+- title;
+- hypothesis;
+- causal layer;
+- affected components;
+- interaction hypothesis;
+- predicted system effect;
+- rationale;
+- smallest test;
+- promotion rule;
+- status;
+- linked experiment and conclusion.
 
-If execution is blocked, the final record must name the exact blocker and the failed tool/step. A run that has execution enabled but performs zero static replay calls is incomplete.
+If an Engineer cycle ends before an experiment is finished, the next cycle resumes the existing `RUNNING` idea and experiment before assigning another pending idea.
 
-## FP16 precision contract
+## Durable scientific lineage
 
-FP16 is the default and required floating-point precision for v23 candidate models and numerical policy computation.
+Evidence must remain unambiguous.
 
-Required:
-- neural-network/model floating weights: `float16`;
-- floating activations/tensors created by candidate code: `float16`;
-- NumPy floating arrays created for candidate computation: `float16`;
-- PyTorch default floating dtype is set to `torch.float16` in the isolated replay child before candidate loading;
-- checkpoints or learned floating parameters created by v23 experiments must be stored in FP16 unless an external format cannot represent FP16.
+```text
+strategy_review
+    ↓
+idea_id
+    ↓
+experiment_id
+    ↓
+candidate path
+candidate SHA-256
+    ↓
+replay_call_id
+    ↓
+episode
+    ↓
+game_record_path
+    ↓
+metrics / conclusion
+```
 
-Not converted to FP16:
-- integer action codes, IDs, coordinates, counters, indices, shapes, lengths, seeds, and enum values;
-- boolean masks and flags;
-- Kaggriculture environment observations/actions whose schema requires Python integers, booleans, strings, or other non-floating types;
-Disallowed in candidate floating-point computation:
-- explicit `float32`, `float64`, `double`, or `bfloat16` model/tensor dtypes;
-- silent promotion of model weights or activations to wider floating precision;
-- widening a candidate computation merely because a backend operation is inconvenient in FP16.
+A single experiment is bound to one candidate path and SHA-256. If the same path changes content during the experiment, replay is rejected rather than silently mixing code versions.
 
-If an algorithm cannot run under this contract on the available backend, change the algorithm rather than silently widening precision.
+Per-game replay traces live under deterministic paths below:
 
-Static replay performs a source-level precision audit before executing a candidate and rejects obvious explicit wider floating-point dtypes.
+```text
+workspace/replay_records/<idea_id>/<experiment_id>/<replay_call_id>/<episode>.json
+```
 
+Both roles can inspect the same canonical evidence through `idea_dossier(idea_id)`.
 
-## Performance analysis toolkit
+## Context engineering
 
-The Performance Analyst has deterministic read-only tools for evidence gathering:
+v23 does not rely on an ever-growing conversation transcript.
 
-- `compare_candidate_v20(idea_id, episode)`: exact candidate/v20 action divergence plus measured replay outcome.
-- `analyze_cash_flow(episode)`: observable cash-like state changes in a recorded v20 loss.
-- `analyze_inventory_flow(episode)`: inventory/capacity/resource trajectories from the recorded history.
-- `analyze_worker_utilization(episode)`: action-label utilization split across transport, crop, animal, idle, and admin work.
-- `analyze_component_effects(review_id=None)`: descriptive experiment matrix by component and component combination.
-- `cluster_loss_histories()`: deterministic behavioral-signature grouping of all loss histories with representative cases.
-- `evaluate_hypothesis_evidence(idea_id)`: compare the original hypothesis/system prediction with measured replay outcomes.
+The controller builds bounded role-specific context packs.
 
-These tools are evidence compressors, not causal oracles. Historical trajectory summaries are descriptive. Component-effect matrices contain confounding because components may co-occur. Causal claims require controlled static replay. When a replay trace lacks full counterfactual state, the analyzer reports that limitation rather than inferring unrecorded state.
+### Analyst context pack
 
-
-## Context engineering and progress log
-
-v23 builds bounded role-specific context instead of relying on accumulated chat history.
-
-### Performance Analyst context
-
-The Analyst receives a compact context pack containing:
+Contains:
 - durable goal and current progress;
-- current 10-idea batch evidence;
+- current batch evidence;
 - component/component-combination summaries;
-- canonical idea -> experiment -> candidate -> replay lineage.
+- compact canonical lineage;
+- context-selection policy.
 
-Full histories, replay traces, duplicate staged replay rows, and old conversational chatter are excluded by default. The Analyst drills down with deterministic tools only when needed.
+Excluded by default:
+- full raw history JSON;
+- full replay traces;
+- duplicate staged replay rows;
+- old conversational chatter.
 
-### Experiment Engineer context
+The Analyst drills down only when needed with deterministic tools.
 
-The Engineer receives:
+### Engineer context pack
+
+Contains:
 - exactly one assigned idea;
-- hypothesis, affected components, system interaction, rationale;
-- smallest test and promotion rule;
+- hypothesis and affected components;
+- system interaction and prediction;
+- rationale;
+- smallest test;
+- promotion rule;
 - resume state / existing experiment ID;
-- existing lineage for that idea;
+- compact lineage for that idea;
 - compact project progress.
 
-This keeps coding context narrow and prevents accidental work on unrelated ideas.
+Context sections are independently bounded so an oversized lineage section cannot destroy the rest of the structured context.
 
-### Progress log
+## Deterministic analysis toolkit
 
-The controller writes:
-- `workspace/progress_latest.json`: current canonical research status;
-- `workspace/progress.jsonl`: append-only history of progress snapshots.
+The Performance Analyst has read-only local Python tools. They compress evidence; they do not call the model themselves.
 
-Snapshots include the goal, batch progress, current work item, best current-batch result, experiment counts, replay counts, stagnation signal, and conservative cost. A snapshot is written after every autonomous cycle and at run completion.
+Core tools:
+- `analyze_history_game(episode)`: summarize one recorded v20 loss and identify high-activity windows;
+- `analyze_history_window(episode, start_turn, end_turn)`: detailed turn-by-turn inspection;
+- `analyze_cash_flow(episode)`: observable cash-like state changes;
+- `analyze_inventory_flow(episode)`: inventory/capacity/resource trajectories;
+- `analyze_worker_utilization(episode)`: action utilization by transport/crop/animal/idle/admin categories;
+- `cluster_loss_histories()`: deterministic behavioral-signature grouping of the loss corpus;
+- `analyze_experiments(review_id=None)`: canonical experiment summaries;
+- `analyze_component_effects(review_id=None)`: descriptive effects by component and component combination;
+- `compare_candidate_v20(idea_id, episode)`: candidate/v20 action divergence plus measured replay outcome;
+- `evaluate_hypothesis_evidence(idea_id)`: compare the original hypothesis with measured replay evidence;
+- `idea_dossier(idea_id)`: canonical idea/code/replay/game-record lineage;
+- `research_progress()`: compact current research state.
 
-The low-level RunLog remains the audit/event log. The progress log is the compact operational summary for humans and agents.
+These tools are evidence compressors, not causal oracles. Historical correlations and component matrices are descriptive. Causal claims require controlled static replay.
+
+Staged replay evidence is deduplicated by episode for analysis, using the latest valid replay for each episode so 1→5→25 expansion does not double-count the same game.
+
+## Static replay contract
+
+The corpus contract is that v20 is the losing side in `working_files/loss_games_v20`.
+
+Static replay means:
+
+```text
+load recorded v20 loss
+    ↓
+recreate same initial configuration
+    ↓
+replace only the v20 side with candidate actions
+    ↓
+replay recorded opponent commands verbatim
+    ↓
+evolve the counterfactual state
+    ↓
+compare candidate outcome with original v20 outcome
+```
+
+Opponent commands are fixed; the resulting trajectory is not. After the candidate diverges, some recorded opponent commands may become invalid or become no-ops. The opponent does not adapt.
+
+A malformed candidate, crash, precision violation, or interface violation invalidates the replay.
+
+## Replay funnel
+
+Replay is local and API-free, so evaluation should be much cheaper than additional reasoning calls.
+
+Typical funnel:
+
+```text
+1 representative case
+    ↓ promising
+~5 representative/stratified cases
+    ↓ promising
+all 25 loss histories
+    ↓
+durable goal check
+```
+
+Representative cases may be selected using deterministic loss-history clustering. Repeated evaluation of the same episode is deduplicated in the analysis layer.
+
+## Durable goal
+
+For the current project target:
+
+```text
+wins >= 13
+min_games_total = 25
+```
+
+A subset result such as 13/13 cannot satisfy the final goal.
+
+Only structured replay metrics can mark a goal reached.
+
+The controller stops only when:
+- the durable goal is reached;
+- the configured per-run/project API budget is exhausted;
+- a genuine runtime/environment blocker is recorded.
+
+Rejected experiments, batch completion, or model prose are not stop conditions.
+
+`--max-turns` limits one Agents SDK cycle, not the full research horizon.
+
+## Progress and observability
+
+Low-level event/audit data is written through `RunLog` under:
+
+```text
+workspace/runs/<timestamp-pid>/
+    config.json
+    events.jsonl
+    final.md
+```
+
+The controller also maintains compact operational progress:
+
+```text
+workspace/progress_latest.json
+workspace/progress.jsonl
+```
+
+`progress_latest.json` is written atomically and represents the latest canonical status.
+
+`progress.jsonl` is append-only and records progress after every autonomous cycle and at run completion.
+
+Snapshots include:
+- durable goal;
+- batch counts;
+- current work item;
+- best current-batch result;
+- experiment/replay counts;
+- stagnation signal;
+- latest review metadata;
+- conservative cost.
+
+## Durable storage
+
+`workspace/experiments.sqlite3` stores scientific memory:
+- runs;
+- strategy reviews;
+- research ideas;
+- experiments;
+- replay rows;
+- goals.
+
+`workspace/agent_sessions.sqlite3` stores Agents SDK conversational/tool session history.
+
+Scientific memory and conversational memory are intentionally separate.
+
+## Agent/replay environment isolation
+
+OpenAI orchestration and Kaggriculture replay run in separate interpreters.
+
+```text
+.venv-agent/
+    openai
+    openai-agents
+    agent/runtime.py
+        │
+        │ subprocess + JSON
+        ▼
+.venv-replay/
+    kaggle-environments
+    torch
+    numpy
+    replay/runner.py
+```
+
+Rules:
+- the agent environment does not depend on Kaggle Environments;
+- replay code does not call OpenAI APIs;
+- the replay subprocess receives no API credentials;
+- the runtime rejects using the same interpreter for both roles;
+- generic `run_python` cannot execute model-written replay candidates;
+- candidate policies execute only through `static_replay_candidate`.
+
+## Execution contract
+
+With `--allow-exec`, a successful research cycle must perform measured work unless budget or a genuine blocker prevents it.
+
+The Engineer should:
+1. receive one assigned idea;
+2. create or resume its experiment;
+3. create/select candidate code;
+4. run static replay;
+5. inspect measured evidence;
+6. verify lineage;
+7. finish the experiment.
+
+A run with execution enabled but no valid replay evidence, or with an unfinished experiment at normal completion, is incomplete.
+
+## Precision contract
+
+Candidate learned floating-point computation uses FP16.
+
+Required:
+- model weights: FP16;
+- floating activations/tensors: FP16;
+- NumPy floating candidate arrays: FP16.
+
+Integer IDs, indices, coordinates, counters, shapes, booleans, enums, and environment schema values keep their required types.
+
+Static replay performs source/runtime checks and rejects obvious wider floating candidate state such as FP32/FP64/BF16 unless a narrowly scoped backend requirement is explicitly handled.
+
+## Cost policy
+
+The execution model and analyst model are independently configurable.
+
+Recommended pattern:
+
+```text
+Experiment Engineer:
+    cheaper model
+    low reasoning
+
+Performance Analyst:
+    stronger reasoning model
+    medium/high reasoning
+    invoked only at batch-review boundaries
+```
+
+Python, not the LLM, performs replay, aggregation, persistence, progress tracking, and most analysis.
+
+The project maintains a persistent API-usage ledger and applies conservative cost accounting. API keys must never be written to logs, databases, candidate subprocess arguments, or replay environment variables.
+
+## Filesystem boundary
+
+v23 is self-contained.
+
+Readable research inputs:
+
+```text
+working_files/
+    competition_material/
+    loss_games_v20/
+    submission_nb/
+    reference/
+```
+
+Generated state:
+
+```text
+workspace/
+    candidates/
+    replay_records/
+    runs/
+    experiments.sqlite3
+    agent_sessions.sqlite3
+    progress_latest.json
+    progress.jsonl
+```
+
+Tools resolve paths against the v23 root and reject traversal outside it.
+
+## Research standard
+
+Every useful experiment should leave enough durable evidence to answer:
+1. What was observed?
+2. What hypothesis was tested?
+3. Which components were changed?
+4. Which exact candidate code version ran?
+5. Which games were evaluated?
+6. What changed in the measured metrics?
+7. Was the hypothesis supported, rejected, or unresolved?
+8. What did this teach the next Analyst review?
+
+Negative results are first-class evidence.
