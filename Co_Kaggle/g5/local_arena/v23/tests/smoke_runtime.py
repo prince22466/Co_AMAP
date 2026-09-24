@@ -169,8 +169,22 @@ def main() -> int:
         assert status["experiments_total"] == 1
         assert status["experiments_supported"] == 1
         assert status["replay_cases_total"] == 1
-        assert status["goal"]["reached_at"] is not None
-        assert status["goal"]["reached_observability"]["replay_cases"] == 1
+
+        # project_status reports the latest goal, which is intentionally the
+        # unreached full-corpus guard created above.
+        assert status["goal"]["goal_id"] == subset_goal_id
+        assert status["goal"]["reached_at"] is None
+
+        # The earlier goal did reach and retained its observability snapshot.
+        reached_goal_row = db.db.execute(
+            "SELECT * FROM goals WHERE goal_id=?", (goal_id,)
+        ).fetchone()
+        assert reached_goal_row is not None
+        assert reached_goal_row["reached_at"] is not None
+        reached_observability = runtime.json.loads(
+            reached_goal_row["reached_observability_json"]
+        )
+        assert reached_observability["replay_cases"] == 1
 
     print("v23 infrastructure smoke test: OK")
     return 0
