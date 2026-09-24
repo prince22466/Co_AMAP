@@ -532,6 +532,10 @@ def analyze_cash_flow(root: Path, episode: str) -> dict[str, Any]:
 def analyze_inventory_flow(root: Path, episode: str) -> dict[str, Any]:
     _, history = load_loss_history(root, episode)
     steps = history.get("steps") or []
+    if not steps:
+        raise ValueError("history has no steps")
+    if not isinstance(steps[-1], list) or len(steps[-1]) != 2:
+        raise ValueError("expected two players")
     rewards = [float(_field(state, "reward", 0.0) or 0.0) for state in steps[-1]]
     loser = 0 if rewards[0] <= rewards[1] else 1
     terms = (
@@ -576,6 +580,10 @@ def analyze_inventory_flow(root: Path, episode: str) -> dict[str, Any]:
 def analyze_worker_utilization(root: Path, episode: str) -> dict[str, Any]:
     _, history = load_loss_history(root, episode)
     steps = history.get("steps") or []
+    if not steps:
+        raise ValueError("history has no steps")
+    if not isinstance(steps[-1], list) or len(steps[-1]) != 2:
+        raise ValueError("expected two players")
     rewards = [float(_field(state, "reward", 0.0) or 0.0) for state in steps[-1]]
     loser = 0 if rewards[0] <= rewards[1] else 1
     counts = Counter()
