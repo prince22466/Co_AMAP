@@ -35,7 +35,7 @@ v2 research-memory contract:
 - Pass experiment_id to static_replay_candidate.
 - After analysis, call finish_experiment with SUPPORTED, REJECTED, UNRESOLVED, or ERROR.
 - Call project_status before repeating an idea. Previous negative results are durable evidence.
-- Call set_goal when the task has an explicit numeric target.
+- Call set_goal when the task has an explicit numeric target. If the target is defined over a fixed corpus (for example wins across all 25 histories), set min_games_total to that corpus size so a subset cannot satisfy the final goal.
 - Goal completion comes only from structured replay metrics, never prose.
 - Model-written candidate policies may execute only through static_replay_candidate.
 - When execution is enabled, do not stop at analysis or planning. You must create/select a concrete candidate, start an experiment, execute at least one static replay, analyze the measured result, and finish the experiment unless a concrete runtime error or budget stop blocks execution.
@@ -80,13 +80,16 @@ class ResearchDB:
           result TEXT, action_divergences INTEGER, error TEXT);
         CREATE TABLE IF NOT EXISTS goals(
           goal_id TEXT PRIMARY KEY, metric TEXT, operator TEXT, target REAL,
-          max_regressions INTEGER, created_at TEXT, reached_at TEXT,
+          max_regressions INTEGER, min_games_total INTEGER,
+          created_at TEXT, reached_at TEXT,
           reached_run_id TEXT, reached_experiment_id TEXT, reached_value REAL,
           reached_observability_json TEXT, active INTEGER DEFAULT 1);
         """)
         goal_columns = {row[1] for row in self.db.execute("PRAGMA table_info(goals)").fetchall()}
         if "reached_observability_json" not in goal_columns:
             self.db.execute("ALTER TABLE goals ADD COLUMN reached_observability_json TEXT")
+        if "min_games_total" not in goal_columns:
+            self.db.execute("ALTER TABLE goals ADD COLUMN min_games_total INTEGER")
         self.db.commit()
 
     def start_run(self, run_id, session_id, task, model):
@@ -127,12 +130,15 @@ class ResearchDB:
         self.db.commit()
         return {"experiment_id": eid, "status": status, "elapsed_seconds": round(elapsed, 3)}
 
-    def set_goal(self, metric, operator, target, max_regressions):
+    def set_goal(self, metric, operator, target, max_regressions, min_games_total=None):
         self.db.execute("UPDATE goals SET active=0 WHERE active=1")
         gid = "goal_" + uuid.uuid4().hex[:10]
-        self.db.execute("""INSERT INTO goals(goal_id,metric,operator,target,max_regressions,created_at,active)
-                           VALUES(?,?,?,?,?,?,1)""",
-                        (gid, metric, operator, float(target), max_regressions, utcnow()))
+        self.db.execute("""INSERT INTO goals(
+                           goal_id,metric,operator,target,max_regressions,min_games_total,
+                           created_at,active)
+                           VALUES(?,?,?,?,?,?,?,1)""",
+                        (gid, metric, operator, float(target), max_regressions,
+                         min_games_total, utcnow()))
         self.db.commit()
         return gid
 
@@ -145,6 +151,9 @@ class ResearchDB:
             return None
         regressions = int(summary.get("margin_worsened_cases", 0) or 0)
         if goal["max_regressions"] is not None and regressions > int(goal["max_regressions"]):
+            return None
+        games_total = int(summary.get("games_total", 0) or 0)
+        if goal["min_games_total"] is not None and games_total < int(goal["min_games_total"]):
             return None
         target, op, value = float(goal["target"]), goal["operator"], float(value)
         passed = {">=": value >= target, ">": value > target, "<=": value <= target,
@@ -351,12 +360,20 @@ def finish_experiment(ctx: RunContextWrapper[AppContext], experiment_id: str, st
 
 @function_tool
 def set_goal(ctx: RunContextWrapper[AppContext], metric: str, operator: str, target: float,
-             max_regressions: int | None = None) -> str:
-    """Set a numeric goal for automatic time/tests/tokens-to-goal accounting."""
+             max_regressions: int | None = None,
+             min_games_total: int | None = None) -> str:
+    """Set a numeric goal plus optional regression and evaluation-size guards."""
     if operator not in {">=",">","<=","<","=="}:
         return j({"error":"invalid operator"})
-    gid = ctx.context.db.set_goal(metric, operator, target, max_regressions)
-    return j({"goal_id":gid,"metric":metric,"operator":operator,"target":target})
+    if min_games_total is not None and min_games_total < 1:
+        return j({"error":"min_games_total must be >= 1"})
+    gid = ctx.context.db.set_goal(
+        metric, operator, target, max_regressions, min_games_total
+    )
+    return j({
+        "goal_id":gid,"metric":metric,"operator":operator,"target":target,
+        "max_regressions":max_regressions,"min_games_total":min_games_total
+    })
 
 @function_tool
 def project_status(ctx: RunContextWrapper[AppContext]) -> str:
