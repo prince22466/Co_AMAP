@@ -30,6 +30,21 @@ export OPENAI_API_KEY="..."
 
 Do not commit the key. For a persistent Workbench deployment, inject it through your normal secret-management mechanism instead of storing it in a notebook.
 
+### No-API smoke test
+
+After installing requirements, validate SDK imports plus the local run/experiment/replay/goal SQLite lifecycle without consuming API credit:
+
+```bash
+python local_arena/v23/smoke_test_v2.py
+```
+
+Expected output:
+
+```text
+v23 infrastructure smoke test: OK
+```
+
+
 ### First read-only run
 
 ```bash
