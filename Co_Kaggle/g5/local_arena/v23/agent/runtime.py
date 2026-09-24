@@ -56,8 +56,17 @@ Use the available read-only tools selectively:
 - call project_status first;
 - inspect recent experiment/replay evidence;
 - inspect v20 model structure and raw loss histories only where needed;
-- distinguish worker/task-ranking, movement/logistics, crop/animal planning,
-  inventory/capacity, market/selling, hiring/purchases, and other causal layers;
+- reason about the whole v20 control system, not isolated functions. Trace feedback
+  loops across crop_plan, animal_plan, worker/task ranking, movement/logistics,
+  worker inventory, shed capacity, market_orders, hiring, purchases, land, cash,
+  prices, and future production;
+- explicitly look for coupled failure modes where one component makes another look
+  bad (for example animal_plan increasing production while market_orders dumps the
+  same goods into a glut, or task ranking harvesting faster than logistics/storage
+  can clear inventory);
+- consider coordinated interventions when the causal mechanism spans components;
+  changing multiple components is allowed when they implement ONE interaction
+  hypothesis and the experiment remains falsifiable;
 - treat rejected hypotheses as negative evidence;
 - if recent search is stagnant, explicitly move away from the repeated hypothesis
   family instead of proposing another parameter tweak.
@@ -71,7 +80,10 @@ Return ONLY one compact JSON object with this schema:
     {
       "title": "short unique title",
       "hypothesis": "falsifiable prediction",
-      "causal_layer": "worker|ranking|logistics|planning|inventory|market|other",
+      "causal_layer": "worker|ranking|logistics|planning|inventory|market|multi_component|other",
+      "components": ["exact v20 components/functions affected"],
+      "interaction_hypothesis": "how these components interact causally; use 'single-component' only when truly local",
+      "system_prediction": "predicted downstream effect on production/logistics/inventory/market/cash and final margin",
       "rationale": "why this differs from rejected work",
       "smallest_test": "smallest useful static-replay screen",
       "promotion_rule": "measured condition to expand toward 5 then all 25"
@@ -80,8 +92,13 @@ Return ONLY one compact JSON object with this schema:
 }
 
 The ideas array MUST contain exactly 10 structurally distinct ideas. Do not give
-ten parameter variants of one mechanism. Cover multiple causal layers when the
-evidence supports it. Order ideas by expected information value, not confidence.
+ten parameter variants of one mechanism. At least 3 ideas MUST be coordinated
+multi-component hypotheses with 2 or more entries in components. Examples include
+coordinating animal_plan with market_orders, crop_plan with worker/task ranking,
+or production with logistics/inventory capacity. The remaining ideas may be local
+when evidence supports a local bottleneck. Prefer interaction hypotheses that
+explain observed end-to-end money/margin outcomes. Order ideas by expected
+information value, not confidence.
 
 Do not claim improvement without measured replay evidence.
 """
@@ -132,7 +149,8 @@ class ResearchDB:
           analyst_output TEXT, usage_json TEXT, conservative_cost_usd REAL);
         CREATE TABLE IF NOT EXISTS research_ideas(
           idea_id TEXT PRIMARY KEY, review_id TEXT, batch_index INTEGER,
-          title TEXT, hypothesis TEXT, causal_layer TEXT, rationale TEXT,
+          title TEXT, hypothesis TEXT, causal_layer TEXT, components_json TEXT,
+          interaction_hypothesis TEXT, system_prediction TEXT, rationale TEXT,
           smallest_test TEXT, promotion_rule TEXT, status TEXT DEFAULT 'PENDING',
           experiment_id TEXT, created_at TEXT, started_at TEXT, finished_at TEXT,
           conclusion TEXT);
@@ -147,6 +165,15 @@ class ResearchDB:
         }
         if "idea_id" not in experiment_columns:
             self.db.execute("ALTER TABLE experiments ADD COLUMN idea_id TEXT")
+        idea_columns = {
+            row[1] for row in self.db.execute("PRAGMA table_info(research_ideas)").fetchall()
+        }
+        if "components_json" not in idea_columns:
+            self.db.execute("ALTER TABLE research_ideas ADD COLUMN components_json TEXT")
+        if "interaction_hypothesis" not in idea_columns:
+            self.db.execute("ALTER TABLE research_ideas ADD COLUMN interaction_hypothesis TEXT")
+        if "system_prediction" not in idea_columns:
+            self.db.execute("ALTER TABLE research_ideas ADD COLUMN system_prediction TEXT")
         self.db.commit()
 
     def start_run(self, run_id, session_id, task, model):
@@ -339,13 +366,17 @@ class ResearchDB:
             self.db.execute(
                 """INSERT INTO research_ideas(
                      idea_id,review_id,batch_index,title,hypothesis,causal_layer,
+                     components_json,interaction_hypothesis,system_prediction,
                      rationale,smallest_test,promotion_rule,status,created_at)
-                   VALUES(?,?,?,?,?,?,?,?,?,'PENDING',?)""",
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'PENDING',?)""",
                 (
                     iid, review_id, index,
                     str(idea.get("title","")).strip(),
                     str(idea.get("hypothesis","")).strip(),
                     str(idea.get("causal_layer","other")).strip(),
+                    json.dumps(idea.get("components",[]), sort_keys=True),
+                    str(idea.get("interaction_hypothesis","")).strip(),
+                    str(idea.get("system_prediction","")).strip(),
                     str(idea.get("rationale","")).strip(),
                     str(idea.get("smallest_test","")).strip(),
                     str(idea.get("promotion_rule","")).strip(),
@@ -398,6 +429,7 @@ class ResearchDB:
             return []
         return [dict(row) for row in self.db.execute(
             """SELECT i.idea_id,i.batch_index,i.title,i.hypothesis,i.causal_layer,
+                      i.components_json,i.interaction_hypothesis,i.system_prediction,
                       i.status,i.conclusion,e.experiment_id,e.wins,e.losses,
                       e.replay_cases,e.mean_margin_improvement,
                       e.best_margin_improvement,e.regressions
@@ -836,15 +868,29 @@ def parse_analyst_batch(text: str) -> dict[str, Any]:
     if not isinstance(ideas, list) or len(ideas) != 10:
         raise ValueError("analyst output must contain exactly 10 ideas")
     required = {
-        "title","hypothesis","causal_layer","rationale",
-        "smallest_test","promotion_rule"
+        "title","hypothesis","causal_layer","interaction_hypothesis",
+        "system_prediction","rationale","smallest_test","promotion_rule"
     }
+    multi_component = 0
     for i, idea in enumerate(ideas, 1):
         if not isinstance(idea, dict):
             raise ValueError(f"idea {i} is not an object")
         missing = [key for key in required if not str(idea.get(key,"")).strip()]
         if missing:
             raise ValueError(f"idea {i} missing fields: {missing}")
+        components = idea.get("components")
+        if not isinstance(components, list) or not components:
+            raise ValueError(f"idea {i} components must be a non-empty list")
+        normalized = [str(x).strip() for x in components if str(x).strip()]
+        if not normalized:
+            raise ValueError(f"idea {i} components must contain names")
+        idea["components"] = normalized
+        if len(set(normalized)) >= 2:
+            multi_component += 1
+    if multi_component < 3:
+        raise ValueError(
+            "analyst batch must contain at least 3 multi-component ideas"
+        )
     return data
 
 
@@ -1271,14 +1317,20 @@ def main():
                     "title":next_idea["title"],
                     "hypothesis":next_idea["hypothesis"],
                     "causal_layer":next_idea["causal_layer"],
+                    "components":json.loads(next_idea["components_json"] or "[]"),
+                    "interaction_hypothesis":next_idea["interaction_hypothesis"],
+                    "system_prediction":next_idea["system_prediction"],
                     "rationale":next_idea["rationale"],
                     "smallest_test":next_idea["smallest_test"],
                     "promotion_rule":next_idea["promotion_rule"],
                 })
-                + "\nImplement this specific idea, call start_experiment once, run the "
-                  "smallest useful static replay, expand only when its promotion rule is "
-                  "met, record the result, and finish the experiment. Do not skip ahead "
-                  "to another analyst idea in the same cycle."
+                + "\nImplement this specific systems hypothesis. If it spans multiple "
+                  "components, make the coordinated changes together because the interaction "
+                  "is the experimental variable; do not reduce it to one component and lose "
+                  "the hypothesis. Call start_experiment once, run the smallest useful static "
+                  "replay, expand only when its promotion rule is met, record the result, and "
+                  "finish the experiment. Do not skip ahead to another analyst idea in the "
+                  "same cycle."
             )
         try:
             result=Runner.run_sync(
