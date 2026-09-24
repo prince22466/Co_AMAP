@@ -784,6 +784,14 @@ def project_status(ctx: RunContextWrapper[AppContext]) -> str:
     return j(ctx.context.db.project_status())
 
 @function_tool
+def idea_dossier(ctx: RunContextWrapper[AppContext], idea_id: str) -> str:
+    """Return canonical lineage for one idea: code version, experiments, replays, and game-record paths."""
+    dossier = ctx.context.db.idea_dossier(idea_id)
+    if dossier is None:
+        return j({"error":"unknown idea_id: " + idea_id})
+    return j(dossier)
+
+@function_tool
 def report_blocker(ctx: RunContextWrapper[AppContext], failed_step: str, reason: str) -> str:
     """Report a concrete runtime/environment blocker that makes further research impossible."""
     failed_step = failed_step.strip()
@@ -804,9 +812,11 @@ def static_replay_candidate(ctx: RunContextWrapper[AppContext], candidate: str, 
     """Run static replay in an isolated child process and persist per-case metrics."""
     if not ctx.context.local.allow_exec:
         return j({"error":"execution disabled; rerun with --allow-exec"})
-    if ctx.context.db.db.execute(
-        "SELECT 1 FROM experiments WHERE experiment_id=?", (experiment_id,)
-    ).fetchone() is None:
+    experiment = ctx.context.db.db.execute(
+        "SELECT experiment_id,idea_id FROM experiments WHERE experiment_id=?",
+        (experiment_id,),
+    ).fetchone()
+    if experiment is None:
         return j({"error":"unknown experiment_id: " + experiment_id})
 
     try:
@@ -815,6 +825,14 @@ def static_replay_candidate(ctx: RunContextWrapper[AppContext], candidate: str, 
         return j({"error":f"{type(exc).__name__}: {exc}"})
     if not candidate_path.is_file() or candidate_path.suffix not in {".py",".ipynb"}:
         return j({"error":"candidate must be an existing .py or .ipynb under v23"})
+
+    candidate_rel = str(candidate_path.relative_to(ctx.context.local.root))
+    candidate_sha256 = hashlib.sha256(candidate_path.read_bytes()).hexdigest()
+    bound = ctx.context.db.bind_candidate(
+        experiment_id, candidate_rel, candidate_sha256
+    )
+    if "error" in bound:
+        return j(bound)
 
     call_id = "replay_" + uuid.uuid4().hex[:10]
     started_at, started = utcnow(), time.monotonic()
@@ -829,10 +847,16 @@ def static_replay_candidate(ctx: RunContextWrapper[AppContext], candidate: str, 
 
     argv = [
         ctx.context.replay_python, str(runner),
-        "--candidate", str(candidate_path.relative_to(ctx.context.local.root)),
+        "--candidate", candidate_rel,
         "--episodes-json", json.dumps(episodes or []),
         "--max-episodes", str(max(1, min(int(max_episodes), 50))),
     ]
+    if experiment["idea_id"]:
+        record_dir = (
+            Path("workspace") / "replay_records" / str(experiment["idea_id"])
+            / experiment_id / call_id
+        )
+        argv.extend(["--record-dir", str(record_dir)])
     try:
         completed = subprocess.run(
             argv,
@@ -871,18 +895,23 @@ def static_replay_candidate(ctx: RunContextWrapper[AppContext], candidate: str, 
 
     elapsed = time.monotonic() - started
     summary = ctx.context.db.record_replay_call(
-        ctx.context.run_id, experiment_id, call_id, candidate, result, started_at, elapsed)
+        ctx.context.run_id, experiment_id, call_id, candidate_rel, result, started_at, elapsed)
     reached = ctx.context.db.maybe_reach_goal(
         ctx.context.run_id, experiment_id, summary, usage_dict(ctx.usage),
         ctx.context.input_price, ctx.context.output_price)
     result["replay_call_id"] = call_id
+    result["idea_id"] = experiment["idea_id"]
+    result["candidate"] = candidate_rel
+    result["candidate_sha256"] = candidate_sha256
     result["elapsed_seconds"] = round(elapsed, 3)
     if reached:
         result["goal_reached"] = reached
     ctx.context.log.event("static_replay", {
         "experiment_id":experiment_id,
         "replay_call_id":call_id,
-        "candidate":candidate,
+        "candidate":candidate_rel,
+        "candidate_sha256":candidate_sha256,
+        "idea_id":experiment["idea_id"],
         "elapsed_seconds":round(elapsed,3),
         "summary":summary,
         "goal_reached":reached,
@@ -1134,8 +1163,8 @@ def main():
       max_tokens=args.max_output_tokens,verbosity="low",parallel_tool_calls=False,
       store=False,prompt_cache_options={"mode":"implicit","ttl":"30m"}),
       tools=[list_tree,read_text,search_text,summarize_jsonl,write_workspace_file,run_python,
-             start_experiment,finish_experiment,set_goal,project_status,report_blocker,
-             static_replay_candidate])
+             start_experiment,finish_experiment,set_goal,project_status,idea_dossier,
+             report_blocker,static_replay_candidate])
     analyst_agent=Agent[AppContext](
       name="v23 Performance Analyst",
       instructions=PERFORMANCE_ANALYST_PROMPT,
@@ -1148,7 +1177,7 @@ def main():
         store=False,
         prompt_cache_options={"mode":"implicit","ttl":"30m"},
       ),
-      tools=[list_tree,read_text,search_text,summarize_jsonl,project_status],
+      tools=[list_tree,read_text,search_text,summarize_jsonl,project_status,idea_dossier],
     )
     session=SQLiteSession(args.session_id,str(SESSION_DB))
     prompt=("Research task:\n"+args.task+"\n\nExecution enabled: "+str(args.allow_exec)+
