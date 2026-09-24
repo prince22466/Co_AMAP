@@ -19,6 +19,11 @@ from typing import Any
 from agents import Agent, ModelSettings, RunConfig, RunContextWrapper, RunHooks, Runner, SQLiteSession, SessionSettings, function_tool, set_default_openai_key
 from openai.types.shared import Reasoning
 
+from .analysis import (
+    analyze_experiment_records,
+    analyze_loss_history,
+    analyze_loss_window,
+)
 from .support import (
     DEFAULT_MODEL, DEFAULT_SESSION_BUDGET_USD, DEFAULT_TOTAL_BUDGET_USD,
     LEDGER_PATH, MODEL_PRICING_USD_PER_M, SYSTEM_PROMPT as V1_SYSTEM_PROMPT,
@@ -56,6 +61,8 @@ Engineer a higher-information direction.
 
 Use the available read-only tools selectively:
 - call project_status first;
+- use analyze_experiments for deterministic summaries of experiment records before manually reading rows;
+- use analyze_history_game(episode) to locate suspicious windows in recorded v20 losses, then analyze_history_window only for windows that matter;
 - inspect recent experiment/replay evidence;
 - inspect v20 model structure and raw loss histories only where needed;
 - reason about the whole v20 control system, not isolated functions. Trace feedback
@@ -829,6 +836,30 @@ def project_status(ctx: RunContextWrapper[AppContext]) -> str:
     return j(ctx.context.db.project_status())
 
 @function_tool
+def analyze_history_game(ctx: RunContextWrapper[AppContext], episode: str, window_size: int = 24, top_windows: int = 8) -> str:
+    """Deterministically summarize one v20 loss history and identify high-activity windows."""
+    try:
+        return j(analyze_loss_history(ctx.context.local.root, episode, window_size, top_windows))
+    except Exception as exc:
+        return j({"error":f"{type(exc).__name__}: {exc}"})
+
+@function_tool
+def analyze_history_window(ctx: RunContextWrapper[AppContext], episode: str, start_turn: int, end_turn: int) -> str:
+    """Return detailed turn-by-turn actions, scalar state, and deltas for one history window."""
+    try:
+        return j(analyze_loss_window(ctx.context.local.root, episode, start_turn, end_turn))
+    except Exception as exc:
+        return j({"error":f"{type(exc).__name__}: {exc}"})
+
+@function_tool
+def analyze_experiments(ctx: RunContextWrapper[AppContext], review_id: str | None = None) -> str:
+    """Aggregate experiment evidence by idea, causal layer, and component combination."""
+    try:
+        return j(analyze_experiment_records(ctx.context.db, review_id))
+    except Exception as exc:
+        return j({"error":f"{type(exc).__name__}: {exc}"})
+
+@function_tool
 def idea_dossier(ctx: RunContextWrapper[AppContext], idea_id: str) -> str:
     """Return canonical lineage for one idea: code version, experiments, replays, and game-record paths."""
     dossier = ctx.context.db.idea_dossier(idea_id)
@@ -1222,7 +1253,10 @@ def main():
         store=False,
         prompt_cache_options={"mode":"implicit","ttl":"30m"},
       ),
-      tools=[list_tree,read_text,search_text,summarize_jsonl,project_status,idea_dossier],
+      tools=[
+        list_tree,read_text,search_text,summarize_jsonl,project_status,
+        analyze_history_game,analyze_history_window,analyze_experiments,idea_dossier
+      ],
     )
     session=SQLiteSession(args.session_id,str(SESSION_DB))
     prompt=("Research task:\n"+args.task+"\n\nExecution enabled: "+str(args.allow_exec)+
