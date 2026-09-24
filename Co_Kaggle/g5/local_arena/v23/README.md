@@ -130,3 +130,16 @@ Research inputs are under `working_files/`:
 Runtime replay now uses the self-contained `static_replay.py` helper inside v23. `working_files/example_train_v21_static_history.py` remains reference-only; its legacy sibling imports are never runtime dependencies.
 
 Generated research artifacts remain confined to `workspace/`.
+
+
+## Execution and FP16 enforcement
+
+Execution-enabled runs are expected to do work, not only produce plans. When `--allow-exec` is present, a successful run must execute at least one static replay. If the agent exits normally without any replay call, the runtime marks the run `INCOMPLETE`.
+
+Candidate floating-point computation follows the FP16 contract:
+- PyTorch default floating dtype is set to `torch.float16` in the isolated replay process before candidate import;
+- candidate source is audited for obvious explicit wider floating dtypes such as FP32, FP64, double, and BF16;
+- loaded global PyTorch tensors/modules and NumPy floating arrays are audited for non-FP16 state;
+- persistent non-FP16 floating runtime state created during replay causes the candidate replay to fail.
+
+Integer indices, IDs, coordinates, counters, shapes, booleans, action schemas, and environment-required non-floating values remain in their required types. Backend operations that genuinely cannot execute in FP16 are exceptional and must be narrowly scoped and documented.
