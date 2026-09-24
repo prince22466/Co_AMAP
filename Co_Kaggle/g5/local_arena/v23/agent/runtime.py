@@ -810,6 +810,20 @@ def main():
       tools=[list_tree,read_text,search_text,summarize_jsonl,write_workspace_file,run_python,
              start_experiment,finish_experiment,set_goal,project_status,report_blocker,
              static_replay_candidate])
+    analyst_agent=Agent[AppContext](
+      name="v23 Performance Analyst",
+      instructions=PERFORMANCE_ANALYST_PROMPT,
+      model=args.model,
+      model_settings=ModelSettings(
+        reasoning=Reasoning(effort=args.reasoning_effort),
+        max_tokens=min(args.max_output_tokens,1200),
+        verbosity="low",
+        parallel_tool_calls=False,
+        store=False,
+        prompt_cache_options={"mode":"implicit","ttl":"30m"},
+      ),
+      tools=[list_tree,read_text,search_text,summarize_jsonl,project_status],
+    )
     session=SQLiteSession(args.session_id,str(SESSION_DB))
     prompt=("Research task:\n"+args.task+"\n\nExecution enabled: "+str(args.allow_exec)+
             ". Conservative per-run ceiling: USD "+format(args.session_budget_usd,".2f")+
@@ -820,6 +834,12 @@ def main():
            "output_tokens":0,"reasoning_tokens":0,"total_tokens":0}
     cycle = 0
     continuation = prompt
+    latest_review = db.latest_strategy_review()
+    strategy_guidance = (
+        str(latest_review["analyst_output"])
+        if latest_review and latest_review.get("analyst_output")
+        else ""
+    )
 
     while True:
         if not budget.can_call():
@@ -845,6 +865,125 @@ def main():
             log.event("autonomous_stop", {"reason":"session_budget","cycle":cycle})
             break
 
+        review_trigger = db.strategy_review_trigger() if args.allow_exec else None
+        new_strategy_review = ""
+        if review_trigger:
+            log.event("specialist_review_start", {
+                "role":"performance_analyst",
+                "trigger":review_trigger,
+                "cycle_before":cycle + 1,
+            })
+            analyst_hooks=BudgetHooks(
+                log,
+                budget.total.estimated_cost_usd,
+                remaining_session_budget,
+                args.total_budget_usd,
+                inp_price,
+                out_price,
+            )
+            analyst_usage={
+                "requests":0,"input_tokens":0,"cached_tokens":0,
+                "cache_write_tokens":0,"output_tokens":0,
+                "reasoning_tokens":0,"total_tokens":0
+            }
+            analyst_output=""
+            analyst_error=""
+            analyst_prompt=(
+                "Research task:\n"+args.task+
+                "\n\nIndependent performance review trigger: "+review_trigger+
+                "\nCall project_status first. Inspect only the minimum additional v20 "
+                "evidence needed to diagnose performance. Produce a concise independent "
+                "review and one selected next experiment direction for the Experiment "
+                "Engineer."
+            )
+            try:
+                analyst_result=Runner.run_sync(
+                    analyst_agent,
+                    analyst_prompt,
+                    context=app,
+                    max_turns=min(6,args.max_turns),
+                    hooks=analyst_hooks,
+                    run_config=RunConfig(
+                        workflow_name="v23 performance analysis",
+                        group_id=args.session_id+"-analyst",
+                        trace_include_sensitive_data=False,
+                        tracing_disabled=args.disable_tracing,
+                        trace_metadata={
+                            "run_id":run_id,"model":args.model,
+                            "role":"performance_analyst",
+                            "trigger":review_trigger,
+                        },
+                    ),
+                )
+                analyst_output=str(analyst_result.final_output or "")
+                analyst_usage=usage_dict(analyst_result.context_wrapper.usage)
+            except Exception as exc:
+                analyst_error=type(exc).__name__+": "+str(exc)
+                analyst_usage=dict(analyst_hooks.last_usage)
+
+            add_usage(usage, analyst_usage)
+            analyst_cost=conservative_cost_usd(
+                analyst_usage,inp_price,out_price
+            )
+            analyst_delta=LegacyUsage(
+                analyst_usage["input_tokens"],analyst_usage["output_tokens"],
+                analyst_usage["requests"],analyst_cost
+            )
+            budget.session.add(analyst_delta)
+            budget.total.add(analyst_delta)
+            persist_budget_ledger(
+                budget,args.model,usage,inp_price,out_price
+            )
+
+            if analyst_error:
+                log.event("specialist_review_error", {
+                    "role":"performance_analyst",
+                    "trigger":review_trigger,
+                    "error":analyst_error,
+                    "usage":analyst_usage,
+                    "conservative_cost_usd":analyst_cost,
+                })
+                if analyst_error.startswith("BudgetStopError:"):
+                    status="BUDGET_STOP"
+                    output=analyst_error
+                    break
+            elif analyst_output:
+                review_id=db.record_strategy_review(
+                    run_id,review_trigger,analyst_output,
+                    analyst_usage,analyst_cost
+                )
+                strategy_guidance=analyst_output
+                new_strategy_review=analyst_output
+                log.event("specialist_review_finish", {
+                    "role":"performance_analyst",
+                    "review_id":review_id,
+                    "trigger":review_trigger,
+                    "usage":analyst_usage,
+                    "conservative_cost_usd":analyst_cost,
+                })
+
+            if not budget.can_call():
+                status="BUDGET_STOP"
+                output=(
+                    output.rstrip()
+                    + "\n\nAutonomous loop stopped after specialist analysis because "
+                      "the configured API budget ceiling was reached."
+                ).strip()
+                break
+
+            remaining_session_budget = max(
+                0.0, args.session_budget_usd
+                - budget.session.estimated_cost_usd
+            )
+            if remaining_session_budget <= 0:
+                status="BUDGET_STOP"
+                output=(
+                    output.rstrip()
+                    + "\n\nAutonomous loop stopped after specialist analysis because "
+                      "the per-run API budget ceiling was reached."
+                ).strip()
+                break
+
         cycle += 1
         hooks=BudgetHooks(
             log,
@@ -859,9 +998,18 @@ def main():
             "requests":0,"input_tokens":0,"cached_tokens":0,"cache_write_tokens":0,
             "output_tokens":0,"reasoning_tokens":0,"total_tokens":0
         }
+        cycle_prompt=continuation
+        if new_strategy_review:
+            cycle_prompt += (
+                "\n\nINDEPENDENT PERFORMANCE ANALYST REVIEW:\n"
+                + new_strategy_review
+                + "\n\nUse this as advisory evidence. Convert the selected direction "
+                  "into concrete candidate code and measured replay; do not merely restate "
+                  "the review."
+            )
         try:
             result=Runner.run_sync(
-              agent, continuation, context=app, session=session,
+              agent, cycle_prompt, context=app, session=session,
               max_turns=args.max_turns, hooks=hooks,
               run_config=RunConfig(
                 workflow_name="v23 autonomous research",
@@ -930,6 +1078,8 @@ def main():
             "goal":goal,
             "goal_reached":goal_reached,
             "research_signal":signal,
+            "strategy_review_trigger":review_trigger,
+            "used_new_strategy_review":bool(new_strategy_review),
         })
 
         stop_reason=autonomous_stop_reason(goal, app.blocker_reason, args.allow_exec)
