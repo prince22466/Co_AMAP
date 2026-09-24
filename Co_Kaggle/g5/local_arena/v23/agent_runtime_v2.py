@@ -178,8 +178,7 @@ class ResearchDB:
           "prior_completed_run_cost_usd": float(prior["cost"]),
           "conservative_cost_usd_to_goal": (
               float(prior["cost"])
-              + (int(usage_snapshot.get("input_tokens",0)) * float(input_price)
-                 + int(usage_snapshot.get("output_tokens",0)) * float(output_price)) / 1_000_000.0
+              + conservative_cost_usd(usage_snapshot, input_price, output_price)
           ),
         }
         self.db.execute("""UPDATE goals SET reached_at=?,reached_run_id=?,
@@ -273,8 +272,7 @@ class BudgetHooks(RunHooks[AppContext]):
                            "output_tokens":0,"reasoning_tokens":0,"total_tokens":0}
 
     def _cost(self, usage):
-        return (usage["input_tokens"] * self.input_price +
-                usage["output_tokens"] * self.output_price) / 1_000_000
+        return conservative_cost_usd(usage, self.input_price, self.output_price)
 
     async def on_llm_start(self, context, agent, system_prompt, input_items):
         usage = usage_dict(context.usage)
@@ -448,6 +446,22 @@ def static_replay_candidate(ctx: RunContextWrapper[AppContext], candidate: str, 
     return j(result)
 
 
+def conservative_cost_usd(usage, input_price, output_price):
+    """Estimate Standard-tier cost including prompt-cache reads/writes, then add 10% headroom."""
+    input_tokens = int(usage.get("input_tokens", 0) or 0)
+    cached_tokens = int(usage.get("cached_tokens", 0) or 0)
+    cache_write_tokens = int(usage.get("cache_write_tokens", 0) or 0)
+    output_tokens = int(usage.get("output_tokens", 0) or 0)
+    uncached_tokens = max(0, input_tokens - cached_tokens - cache_write_tokens)
+    raw = (
+        uncached_tokens * float(input_price)
+        + cached_tokens * float(input_price) * 0.10
+        + cache_write_tokens * float(input_price) * 1.25
+        + output_tokens * float(output_price)
+    ) / 1_000_000.0
+    return raw * 1.10
+
+
 def usage_dict(u):
     cached = cache_write = reasoning = 0
     for e in getattr(u, "request_usage_entries", []) or []:
@@ -533,7 +547,7 @@ def main():
         status="ERROR"; output=type(exc).__name__+": "+str(exc)
         usage=dict(hooks.last_usage)
     elapsed=time.monotonic()-started
-    cost=(usage["input_tokens"]*inp_price+usage["output_tokens"]*out_price)/1_000_000
+    cost=conservative_cost_usd(usage,inp_price,out_price)
     delta=LegacyUsage(usage["input_tokens"],usage["output_tokens"],usage["requests"],cost)
     budget.session.add(delta); budget.total.add(delta)
     LEDGER_PATH.write_text(json.dumps({**vars(budget.total),"model_last_used":args.model,
@@ -541,7 +555,9 @@ def main():
       "cache_write_tokens_observed_last_run":usage["cache_write_tokens"],
       "reasoning_tokens_observed_last_run":usage["reasoning_tokens"],
       "pricing_assumption":{"input_usd_per_m":inp_price,"output_usd_per_m":out_price,
-                            "cached_tokens_priced_as_uncached":True}},indent=2,sort_keys=True)+"\n",encoding="utf-8")
+                            "cached_input_multiplier":0.10,
+                            "cache_write_multiplier":1.25,
+                            "safety_multiplier":1.10}},indent=2,sort_keys=True)+"\n",encoding="utf-8")
     db.finish_run(run_id,status,usage,cost,output,elapsed)
     log.event("run_summary",{"run_id":run_id,"elapsed_seconds":round(elapsed,3),
               "usage":usage,"conservative_cost_usd":cost,"project_status":db.project_status()})
