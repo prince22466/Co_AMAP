@@ -339,6 +339,24 @@ class ResearchDB:
         return {"goal_id": goal["goal_id"], "metric": goal["metric"], "value": value,
                 "operator": op, "target": target, "observability": snapshot}
 
+    def bind_candidate(self, experiment_id, candidate, candidate_sha256):
+        row = self.db.execute(
+            "SELECT experiment_id,idea_id,candidate,candidate_sha256 FROM experiments WHERE experiment_id=?",
+            (experiment_id,),
+        ).fetchone()
+        if row is None:
+            return {"error":"unknown experiment_id: " + experiment_id}
+        if row["candidate"] and row["candidate"] != candidate:
+            return {"error":"candidate path changed within experiment","expected_candidate":row["candidate"],"actual_candidate":candidate}
+        if row["candidate_sha256"] and row["candidate_sha256"] != candidate_sha256:
+            return {"error":"candidate content changed within experiment","candidate":candidate,"expected_sha256":row["candidate_sha256"],"actual_sha256":candidate_sha256}
+        self.db.execute(
+            "UPDATE experiments SET candidate=COALESCE(candidate,?), candidate_sha256=COALESCE(candidate_sha256,?) WHERE experiment_id=?",
+            (candidate,candidate_sha256,experiment_id),
+        )
+        self.db.commit()
+        return {"experiment_id":experiment_id,"idea_id":row["idea_id"],"candidate":candidate,"candidate_sha256":candidate_sha256}
+
     def record_replay_call(self, run_id, eid, call_id, candidate, result, started_at, elapsed):
         rows = result.get("matches", []) if isinstance(result, dict) else []
         each = elapsed / max(1, len(rows))
