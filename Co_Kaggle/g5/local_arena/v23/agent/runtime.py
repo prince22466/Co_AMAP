@@ -1537,8 +1537,17 @@ def main():
                     "rationale":next_idea["rationale"],
                     "smallest_test":next_idea["smallest_test"],
                     "promotion_rule":next_idea["promotion_rule"],
+                    "resume_existing":bool(next_idea.get("resume_existing")),
+                    "existing_experiment_id":next_idea.get("experiment_id"),
                 })
-                + "\nImplement this specific systems hypothesis. If it spans multiple "
+                + (
+                    "\nRESUME the existing RUNNING experiment using existing_experiment_id; "
+                    "do not create a second experiment. Continue from durable state and "
+                    "complete replay/analysis. "
+                    if next_idea.get("resume_existing") else
+                    "\nImplement this specific systems hypothesis. "
+                  )
+                + "If it spans multiple "
                   "components, make the coordinated changes together because the interaction "
                   "is the experimental variable; do not reduce it to one component and lose "
                   "the hypothesis. Call start_experiment once, run the smallest useful static "
