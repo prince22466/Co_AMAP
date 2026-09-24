@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sqlite3
@@ -18,6 +19,11 @@ from typing import Any
 from agents import Agent, ModelSettings, RunConfig, RunContextWrapper, RunHooks, Runner, SQLiteSession, SessionSettings, function_tool, set_default_openai_key
 from openai.types.shared import Reasoning
 
+from .analysis import (
+    analyze_experiment_records,
+    analyze_loss_history,
+    analyze_loss_window,
+)
 from .support import (
     DEFAULT_MODEL, DEFAULT_SESSION_BUDGET_USD, DEFAULT_TOTAL_BUDGET_USD,
     LEDGER_PATH, MODEL_PRICING_USD_PER_M, SYSTEM_PROMPT as V1_SYSTEM_PROMPT,
@@ -40,8 +46,71 @@ v2 research-memory contract:
 - Model-written candidate policies may execute only through static_replay_candidate.
 - When execution is enabled, do not stop at analysis or planning. You must create/select a concrete candidate, start an experiment, execute at least one static replay, analyze the measured result, and finish the experiment unless a concrete runtime error or budget stop blocks execution.
 - A rejected candidate is evidence, not a blocker. If the durable goal is unmet, continue with the next justified experiment.
+- Idea/experiment/replay lineage is authoritative. For assigned ideas, keep the supplied idea_id, let start_experiment link the experiment automatically, and use idea_dossier after replay to verify the candidate path/hash, replay_call_id, episode records, and metrics before concluding the experiment.
+- After four consecutive rejected experiments with no wins and no positive mean margin improvement, treat the search as stagnant: abandon the current tweak family, re-inspect raw loss evidence, and move to a different causal layer (for example worker actions/task ranking/logistics/planning/inventory/market). Do not keep making parameter variants of the same idea.
+- Do not use one fixed 5-game screen forever. Rotate or stratify screening histories when a screen repeatedly rejects candidates, and periodically run the strongest candidate family on all 25 histories because local replay is cheaper than additional model reasoning.
 - Only call report_blocker for a concrete runtime/environment failure that makes further research impossible without external intervention.
 - FP16 is mandatory for candidate floating-point model weights, activations, tensors, and learned numeric compute. Integer/boolean/schema-mandated types are exempt. Do not emit float32, float64, double, or bfloat16 candidate model/tensor code unless a backend operation is provably unsupported in FP16; any such exception must be narrowly scoped, documented, and converted back to FP16 immediately.
+"""
+
+PERFORMANCE_ANALYST_PROMPT = """You are the independent v23 Performance Analyst.
+
+You are read-only. You do not write candidate code and you do not execute replay.
+Your job is to diagnose why research is or is not improving and give the Experiment
+Engineer a higher-information direction.
+
+Use the available read-only tools selectively:
+- call project_status first;
+- use analyze_experiments for deterministic summaries of experiment records before manually reading rows;
+- use analyze_history_game(episode) to locate suspicious windows in recorded v20 losses, then analyze_history_window only for windows that matter;
+- inspect recent experiment/replay evidence;
+- inspect v20 model structure and raw loss histories only where needed;
+- reason about the whole v20 control system, not isolated functions. Trace feedback
+  loops across crop_plan, animal_plan, worker/task ranking, movement/logistics,
+  worker inventory, shed capacity, market_orders, hiring, purchases, land, cash,
+  prices, and future production;
+- explicitly look for coupled failure modes where one component makes another look
+  bad (for example animal_plan increasing production while market_orders dumps the
+  same goods into a glut, or task ranking harvesting faster than logistics/storage
+  can clear inventory);
+- consider coordinated interventions when the causal mechanism spans components;
+  changing multiple components is allowed when they implement ONE interaction
+  hypothesis and the experiment remains falsifiable;
+- treat rejected hypotheses as negative evidence;
+- treat idea_id -> experiment_id -> candidate path/SHA-256 -> replay_call_id -> episode/game_record_path as the canonical evidence chain. Use idea_dossier(idea_id) for detailed lineage and read individual game_record_path files only when step-level traces can change the diagnosis;
+- if recent search is stagnant, explicitly move away from the repeated hypothesis
+  family instead of proposing another parameter tweak.
+
+Return ONLY one compact JSON object with this schema:
+{
+  "performance_evidence": "measured evidence summary",
+  "failure_mechanisms": ["1-3 evidence-backed mechanisms"],
+  "do_not_repeat": ["idea families contradicted by prior evidence"],
+  "ideas": [
+    {
+      "title": "short unique title",
+      "hypothesis": "falsifiable prediction",
+      "causal_layer": "worker|ranking|logistics|planning|inventory|market|multi_component|other",
+      "components": ["exact v20 components/functions affected"],
+      "interaction_hypothesis": "how these components interact causally; use 'single-component' only when truly local",
+      "system_prediction": "predicted downstream effect on production/logistics/inventory/market/cash and final margin",
+      "rationale": "why this differs from rejected work",
+      "smallest_test": "smallest useful static-replay screen",
+      "promotion_rule": "measured condition to expand toward 5 then all 25"
+    }
+  ]
+}
+
+The ideas array MUST contain exactly 10 structurally distinct ideas. Do not give
+ten parameter variants of one mechanism. At least 3 ideas MUST be coordinated
+multi-component hypotheses with 2 or more entries in components. Examples include
+coordinating animal_plan with market_orders, crop_plan with worker/task ranking,
+or production with logistics/inventory capacity. The remaining ideas may be local
+when evidence supports a local bottleneck. Prefer interaction hypotheses that
+explain observed end-to-end money/margin outcomes. Order ideas by expected
+information value, not confidence.
+
+Do not claim improvement without measured replay evidence.
 """
 
 
@@ -66,8 +135,8 @@ class ResearchDB:
           experiments_started INTEGER DEFAULT 0, replay_calls INTEGER DEFAULT 0,
           replay_cases INTEGER DEFAULT 0, final_output TEXT);
         CREATE TABLE IF NOT EXISTS experiments(
-          experiment_id TEXT PRIMARY KEY, run_id TEXT, hypothesis TEXT,
-          candidate TEXT, parent_candidate TEXT, notes TEXT, started_at TEXT,
+          experiment_id TEXT PRIMARY KEY, run_id TEXT, idea_id TEXT, hypothesis TEXT,
+          candidate TEXT, candidate_sha256 TEXT, parent_candidate TEXT, notes TEXT, started_at TEXT,
           ended_at TEXT, elapsed_seconds REAL, status TEXT, conclusion TEXT,
           replay_calls INTEGER DEFAULT 0, replay_cases INTEGER DEFAULT 0,
           best_margin_improvement REAL, mean_margin_improvement REAL,
@@ -84,12 +153,44 @@ class ResearchDB:
           created_at TEXT, reached_at TEXT,
           reached_run_id TEXT, reached_experiment_id TEXT, reached_value REAL,
           reached_observability_json TEXT, active INTEGER DEFAULT 1);
+        CREATE TABLE IF NOT EXISTS strategy_reviews(
+          review_id TEXT PRIMARY KEY, run_id TEXT, created_at TEXT, trigger TEXT,
+          experiments_seen INTEGER, replay_cases_seen INTEGER,
+          analyst_output TEXT, usage_json TEXT, conservative_cost_usd REAL);
+        CREATE TABLE IF NOT EXISTS research_ideas(
+          idea_id TEXT PRIMARY KEY, review_id TEXT, batch_index INTEGER,
+          title TEXT, hypothesis TEXT, causal_layer TEXT, components_json TEXT,
+          interaction_hypothesis TEXT, system_prediction TEXT, rationale TEXT,
+          smallest_test TEXT, promotion_rule TEXT, status TEXT DEFAULT 'PENDING',
+          experiment_id TEXT, created_at TEXT, started_at TEXT, finished_at TEXT,
+          conclusion TEXT);
         """)
         goal_columns = {row[1] for row in self.db.execute("PRAGMA table_info(goals)").fetchall()}
         if "reached_observability_json" not in goal_columns:
             self.db.execute("ALTER TABLE goals ADD COLUMN reached_observability_json TEXT")
         if "min_games_total" not in goal_columns:
             self.db.execute("ALTER TABLE goals ADD COLUMN min_games_total INTEGER")
+        experiment_columns = {
+            row[1] for row in self.db.execute("PRAGMA table_info(experiments)").fetchall()
+        }
+        if "idea_id" not in experiment_columns:
+            self.db.execute("ALTER TABLE experiments ADD COLUMN idea_id TEXT")
+        if "candidate_sha256" not in experiment_columns:
+            self.db.execute("ALTER TABLE experiments ADD COLUMN candidate_sha256 TEXT")
+        replay_columns = {
+            row[1] for row in self.db.execute("PRAGMA table_info(replays)").fetchall()
+        }
+        if "game_record_path" not in replay_columns:
+            self.db.execute("ALTER TABLE replays ADD COLUMN game_record_path TEXT")
+        idea_columns = {
+            row[1] for row in self.db.execute("PRAGMA table_info(research_ideas)").fetchall()
+        }
+        if "components_json" not in idea_columns:
+            self.db.execute("ALTER TABLE research_ideas ADD COLUMN components_json TEXT")
+        if "interaction_hypothesis" not in idea_columns:
+            self.db.execute("ALTER TABLE research_ideas ADD COLUMN interaction_hypothesis TEXT")
+        if "system_prediction" not in idea_columns:
+            self.db.execute("ALTER TABLE research_ideas ADD COLUMN system_prediction TEXT")
         self.db.commit()
 
     def start_run(self, run_id, session_id, task, model):
@@ -108,27 +209,72 @@ class ResearchDB:
            usage["reasoning_tokens"], usage["total_tokens"], cost, output, run_id))
         self.db.commit()
 
-    def start_experiment(self, run_id, hypothesis, candidate="", parent_candidate="", notes=""):
+    def start_experiment(self, run_id, hypothesis, candidate="", parent_candidate="",
+                         notes="", idea_id=None):
         eid = "exp_" + uuid.uuid4().hex[:10]
+        if idea_id:
+            idea = self.db.execute(
+                "SELECT * FROM research_ideas WHERE idea_id=?", (idea_id,)
+            ).fetchone()
+            if idea is None:
+                return {"error":"unknown idea_id: " + idea_id}
+            if idea["status"] != "PENDING":
+                return {
+                    "error":"idea is not pending",
+                    "idea_id":idea_id,
+                    "status":idea["status"],
+                }
         self.db.execute("""INSERT INTO experiments(
-          experiment_id,run_id,hypothesis,candidate,parent_candidate,notes,started_at,status)
-          VALUES(?,?,?,?,?,?,?,'RUNNING')""",
-          (eid, run_id, hypothesis, candidate or None, parent_candidate or None,
-           notes or None, utcnow()))
-        self.db.execute("UPDATE runs SET experiments_started=experiments_started+1 WHERE run_id=?", (run_id,))
+          experiment_id,run_id,idea_id,hypothesis,candidate,parent_candidate,notes,
+          started_at,status)
+          VALUES(?,?,?,?,?,?,?,?,'RUNNING')""",
+          (eid, run_id, idea_id, hypothesis, candidate or None,
+           parent_candidate or None, notes or None, utcnow()))
+        if idea_id:
+            self.db.execute(
+                """UPDATE research_ideas
+                   SET status='RUNNING',experiment_id=?,started_at=?
+                   WHERE idea_id=?""",
+                (eid, utcnow(), idea_id),
+            )
+        self.db.execute(
+            "UPDATE runs SET experiments_started=experiments_started+1 WHERE run_id=?",
+            (run_id,),
+        )
         self.db.commit()
         return eid
 
     def finish_experiment(self, eid, status, conclusion):
-        row = self.db.execute("SELECT started_at FROM experiments WHERE experiment_id=?", (eid,)).fetchone()
+        row = self.db.execute(
+            "SELECT started_at,idea_id FROM experiments WHERE experiment_id=?",
+            (eid,),
+        ).fetchone()
         if row is None:
             return {"error": "unknown experiment_id: " + eid}
-        elapsed = (datetime.now(timezone.utc) - datetime.fromisoformat(row["started_at"])).total_seconds()
-        self.db.execute("""UPDATE experiments SET ended_at=?,elapsed_seconds=?,status=?,conclusion=?
-                           WHERE experiment_id=?""",
-                        (utcnow(), elapsed, status, conclusion, eid))
+        elapsed = (
+            datetime.now(timezone.utc) - datetime.fromisoformat(row["started_at"])
+        ).total_seconds()
+        self.db.execute(
+            """UPDATE experiments
+               SET ended_at=?,elapsed_seconds=?,status=?,conclusion=?
+               WHERE experiment_id=?""",
+            (utcnow(), elapsed, status, conclusion, eid),
+        )
+        if row["idea_id"]:
+            idea_status = "ERROR" if status == "ERROR" else "COMPLETED"
+            self.db.execute(
+                """UPDATE research_ideas
+                   SET status=?,finished_at=?,conclusion=?
+                   WHERE idea_id=?""",
+                (idea_status, utcnow(), conclusion, row["idea_id"]),
+            )
         self.db.commit()
-        return {"experiment_id": eid, "status": status, "elapsed_seconds": round(elapsed, 3)}
+        return {
+            "experiment_id": eid,
+            "idea_id": row["idea_id"],
+            "status": status,
+            "elapsed_seconds": round(elapsed, 3),
+        }
 
     def set_goal(self, metric, operator, target, max_regressions, min_games_total=None):
         self.db.execute("UPDATE goals SET active=0 WHERE active=1")
@@ -202,6 +348,66 @@ class ResearchDB:
         return {"goal_id": goal["goal_id"], "metric": goal["metric"], "value": value,
                 "operator": op, "target": target, "observability": snapshot}
 
+    def bind_candidate(self, experiment_id, candidate, candidate_sha256):
+        row = self.db.execute(
+            "SELECT experiment_id,idea_id,candidate,candidate_sha256 FROM experiments WHERE experiment_id=?",
+            (experiment_id,),
+        ).fetchone()
+        if row is None:
+            return {"error":"unknown experiment_id: " + experiment_id}
+        if row["candidate"] and row["candidate"] != candidate:
+            return {"error":"candidate path changed within experiment","expected_candidate":row["candidate"],"actual_candidate":candidate}
+        if row["candidate_sha256"] and row["candidate_sha256"] != candidate_sha256:
+            return {"error":"candidate content changed within experiment","candidate":candidate,"expected_sha256":row["candidate_sha256"],"actual_sha256":candidate_sha256}
+        self.db.execute(
+            "UPDATE experiments SET candidate=COALESCE(candidate,?), candidate_sha256=COALESCE(candidate_sha256,?) WHERE experiment_id=?",
+            (candidate,candidate_sha256,experiment_id),
+        )
+        self.db.commit()
+        return {"experiment_id":experiment_id,"idea_id":row["idea_id"],"candidate":candidate,"candidate_sha256":candidate_sha256}
+
+    def idea_dossier(self, idea_id):
+        idea = self.db.execute("SELECT * FROM research_ideas WHERE idea_id=?", (idea_id,)).fetchone()
+        if idea is None:
+            return None
+        experiments = [dict(row) for row in self.db.execute(
+            "SELECT experiment_id,run_id,idea_id,hypothesis,candidate,candidate_sha256,parent_candidate,notes,started_at,ended_at,elapsed_seconds,status,conclusion,replay_calls,replay_cases,best_margin_improvement,mean_margin_improvement,wins,losses,regressions FROM experiments WHERE idea_id=? ORDER BY started_at",
+            (idea_id,),
+        ).fetchall()]
+        replay_rows = [dict(row) for row in self.db.execute(
+            "SELECT replay_id,experiment_id,replay_call_id,candidate,episode,started_at,elapsed_seconds,valid,original_v20_margin,candidate_margin,margin_improvement,result,action_divergences,game_record_path,error FROM replays WHERE experiment_id IN (SELECT experiment_id FROM experiments WHERE idea_id=?) ORDER BY replay_id",
+            (idea_id,),
+        ).fetchall()]
+        calls = {}
+        for row in replay_rows:
+            call_id = row["replay_call_id"]
+            if call_id not in calls:
+                calls[call_id] = {"replay_call_id":call_id,"candidate":row["candidate"],"games":[]}
+            calls[call_id]["games"].append({
+                "replay_id":row["replay_id"],
+                "episode":row["episode"],
+                "valid":bool(row["valid"]),
+                "result":row["result"],
+                "original_v20_margin":row["original_v20_margin"],
+                "candidate_margin":row["candidate_margin"],
+                "margin_improvement":row["margin_improvement"],
+                "action_divergences":row["action_divergences"],
+                "game_record_path":row["game_record_path"],
+                "error":row["error"],
+            })
+        idea_dict = dict(idea)
+        idea_dict["components"] = json.loads(idea_dict.get("components_json") or "[]")
+        return {"idea":idea_dict,"experiments":experiments,"replay_calls":list(calls.values())}
+
+    def batch_dossiers(self, review_id=None):
+        if review_id is None:
+            latest = self.latest_strategy_review()
+            review_id = latest["review_id"] if latest else None
+        if not review_id:
+            return []
+        ids = [row["idea_id"] for row in self.db.execute("SELECT idea_id FROM research_ideas WHERE review_id=? ORDER BY batch_index", (review_id,)).fetchall()]
+        return [self.idea_dossier(iid) for iid in ids]
+
     def record_replay_call(self, run_id, eid, call_id, candidate, result, started_at, elapsed):
         rows = result.get("matches", []) if isinstance(result, dict) else []
         each = elapsed / max(1, len(rows))
@@ -209,13 +415,13 @@ class ResearchDB:
             self.db.execute("""INSERT INTO replays(
               run_id,experiment_id,replay_call_id,candidate,episode,started_at,
               elapsed_seconds,valid,original_v20_margin,candidate_margin,
-              margin_improvement,result,action_divergences,error)
-              VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+              margin_improvement,result,action_divergences,game_record_path,error)
+              VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
               (run_id, eid, call_id, candidate, row.get("episode",""), started_at,
                float(row.get("elapsed_seconds", each)),
                int(bool(row.get("valid"))), row.get("original_v20_margin"),
                row.get("candidate_margin"), row.get("margin_improvement"), row.get("result"),
-               row.get("action_divergences"), row.get("error","")))
+               row.get("action_divergences"), row.get("game_record_path"), row.get("error","")))
         summary = result.get("summary", {}) if isinstance(result, dict) else {}
         cases = int(summary.get("games_total", len(rows)) or 0)
         self.db.execute("UPDATE runs SET replay_calls=replay_calls+1,replay_cases=replay_cases+? WHERE run_id=?",
@@ -227,6 +433,224 @@ class ResearchDB:
            summary.get("wins"), summary.get("losses"), summary.get("margin_worsened_cases"), eid))
         self.db.commit()
         return summary
+
+    def add_idea_batch(self, review_id, ideas):
+        if len(ideas) != 10:
+            return {"error":"idea batch must contain exactly 10 ideas","count":len(ideas)}
+        ids = []
+        for index, idea in enumerate(ideas, 1):
+            iid = "idea_" + uuid.uuid4().hex[:10]
+            self.db.execute(
+                """INSERT INTO research_ideas(
+                     idea_id,review_id,batch_index,title,hypothesis,causal_layer,
+                     components_json,interaction_hypothesis,system_prediction,
+                     rationale,smallest_test,promotion_rule,status,created_at)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'PENDING',?)""",
+                (
+                    iid, review_id, index,
+                    str(idea.get("title","")).strip(),
+                    str(idea.get("hypothesis","")).strip(),
+                    str(idea.get("causal_layer","other")).strip(),
+                    json.dumps(idea.get("components",[]), sort_keys=True),
+                    str(idea.get("interaction_hypothesis","")).strip(),
+                    str(idea.get("system_prediction","")).strip(),
+                    str(idea.get("rationale","")).strip(),
+                    str(idea.get("smallest_test","")).strip(),
+                    str(idea.get("promotion_rule","")).strip(),
+                    utcnow(),
+                ),
+            )
+            ids.append(iid)
+        self.db.commit()
+        return {"review_id":review_id,"idea_ids":ids,"count":len(ids)}
+
+    def idea_batch_status(self):
+        latest = self.latest_strategy_review()
+        if latest is None:
+            return {
+                "review_id":None,"total":0,"pending":0,"running":0,
+                "completed":0,"errors":0,
+            }
+        rows = self.db.execute(
+            """SELECT status,COUNT(*) n FROM research_ideas
+               WHERE review_id=? GROUP BY status""",
+            (latest["review_id"],),
+        ).fetchall()
+        counts = {row["status"]:int(row["n"]) for row in rows}
+        return {
+            "review_id":latest["review_id"],
+            "total":sum(counts.values()),
+            "pending":counts.get("PENDING",0),
+            "running":counts.get("RUNNING",0),
+            "completed":counts.get("COMPLETED",0),
+            "errors":counts.get("ERROR",0),
+        }
+
+    def next_pending_idea(self):
+        latest = self.latest_strategy_review()
+        if latest is None:
+            return None
+        row = self.db.execute(
+            """SELECT * FROM research_ideas
+               WHERE review_id=? AND status='PENDING'
+               ORDER BY batch_index ASC LIMIT 1""",
+            (latest["review_id"],),
+        ).fetchone()
+        return dict(row) if row is not None else None
+
+    def recent_idea_results(self, review_id=None):
+        if review_id is None:
+            latest = self.latest_strategy_review()
+            review_id = latest["review_id"] if latest else None
+        if not review_id:
+            return []
+        return [dict(row) for row in self.db.execute(
+            """SELECT i.idea_id,i.batch_index,i.title,i.hypothesis,i.causal_layer,
+                      i.components_json,i.interaction_hypothesis,i.system_prediction,
+                      i.status,i.conclusion,e.experiment_id,e.candidate,e.candidate_sha256,e.wins,e.losses,
+                      e.replay_cases,e.mean_margin_improvement,
+                      e.best_margin_improvement,e.regressions
+               FROM research_ideas i
+               LEFT JOIN experiments e ON e.idea_id=i.idea_id
+               WHERE i.review_id=?
+               ORDER BY i.batch_index ASC""",
+            (review_id,),
+        ).fetchall()]
+
+    def batch_lineage_summary(self, review_id=None):
+        dossiers = self.batch_dossiers(review_id)
+        out = []
+        for d in dossiers:
+            idea = d["idea"]
+            experiments = []
+            for exp in d["experiments"]:
+                calls = [
+                    call for call in d["replay_calls"]
+                    if any(g["replay_id"] is not None for g in call["games"])
+                ]
+                experiments.append({
+                    "experiment_id":exp["experiment_id"],
+                    "status":exp["status"],
+                    "candidate":exp["candidate"],
+                    "candidate_sha256":exp["candidate_sha256"],
+                    "wins":exp["wins"],
+                    "losses":exp["losses"],
+                    "replay_cases":exp["replay_cases"],
+                    "mean_margin_improvement":exp["mean_margin_improvement"],
+                    "best_margin_improvement":exp["best_margin_improvement"],
+                    "regressions":exp["regressions"],
+                    "conclusion":exp["conclusion"],
+                    "replay_call_ids":[call["replay_call_id"] for call in calls],
+                    "game_record_paths":[
+                        game["game_record_path"]
+                        for call in calls for game in call["games"]
+                        if game["game_record_path"]
+                    ],
+                })
+            out.append({
+                "idea_id":idea["idea_id"],
+                "batch_index":idea["batch_index"],
+                "title":idea["title"],
+                "components":idea.get("components",[]),
+                "interaction_hypothesis":idea["interaction_hypothesis"],
+                "system_prediction":idea["system_prediction"],
+                "idea_status":idea["status"],
+                "experiments":experiments,
+            })
+        return out
+
+    def record_strategy_review(self, run_id, trigger, analyst_output,
+                               usage=None, conservative_cost_usd=0.0):
+        rid = "review_" + uuid.uuid4().hex[:10]
+        experiments_seen = int(
+            self.db.execute("SELECT COUNT(*) FROM experiments").fetchone()[0]
+        )
+        replay_cases_seen = int(
+            self.db.execute("SELECT COUNT(*) FROM replays").fetchone()[0]
+        )
+        self.db.execute(
+            """INSERT INTO strategy_reviews(
+                 review_id,run_id,created_at,trigger,experiments_seen,
+                 replay_cases_seen,analyst_output,usage_json,conservative_cost_usd)
+               VALUES(?,?,?,?,?,?,?,?,?)""",
+            (
+                rid, run_id, utcnow(), trigger, experiments_seen,
+                replay_cases_seen, analyst_output,
+                json.dumps(usage or {}, sort_keys=True),
+                float(conservative_cost_usd),
+            ),
+        )
+        self.db.commit()
+        return rid
+
+    def latest_strategy_review(self):
+        row = self.db.execute(
+            """SELECT * FROM strategy_reviews
+               ORDER BY created_at DESC LIMIT 1"""
+        ).fetchone()
+        return dict(row) if row is not None else None
+
+    def strategy_review_trigger(self):
+        latest = self.latest_strategy_review()
+        if latest is None:
+            return "initial_diagnosis"
+        batch = self.idea_batch_status()
+        if batch["total"] == 0:
+            return "empty_or_invalid_batch_retry"
+        if batch["pending"] > 0 or batch["running"] > 0:
+            return None
+        return "idea_batch_exhausted"
+
+    def research_signal(self, recent_limit=6):
+        recent_limit = max(4, min(int(recent_limit), 20))
+        rows = [dict(x) for x in self.db.execute(
+            """SELECT experiment_id,hypothesis,status,wins,losses,replay_cases,
+                      mean_margin_improvement,best_margin_improvement,started_at
+               FROM experiments
+               WHERE status!='RUNNING'
+               ORDER BY started_at DESC LIMIT ?""",
+            (recent_limit,),
+        ).fetchall()]
+
+        consecutive_rejected = 0
+        for row in rows:
+            if row.get("status") == "REJECTED":
+                consecutive_rejected += 1
+            else:
+                break
+
+        positive_recent = any(
+            int(row.get("wins") or 0) > 0
+            or float(row.get("mean_margin_improvement") or 0.0) > 0.0
+            for row in rows
+        )
+        no_effect_recent = sum(
+            1 for row in rows
+            if row.get("mean_margin_improvement") is not None
+            and abs(float(row["mean_margin_improvement"])) < 1e-9
+        )
+        best = self.db.execute(
+            """SELECT COALESCE(MAX(wins),0) best_wins,
+                      COALESCE(MAX(mean_margin_improvement),0) best_mean_margin
+               FROM experiments WHERE status!='RUNNING'"""
+        ).fetchone()
+
+        return {
+            "recent_count": len(rows),
+            "consecutive_rejected": consecutive_rejected,
+            "positive_recent": positive_recent,
+            "no_effect_recent": no_effect_recent,
+            "best_wins": int(best["best_wins"] or 0),
+            "best_mean_margin_improvement": float(best["best_mean_margin"] or 0.0),
+            "stagnating": (
+                len(rows) >= 4
+                and consecutive_rejected >= 4
+                and not positive_recent
+            ),
+            "recent_hypotheses": [
+                row.get("hypothesis", "") for row in rows[:4]
+            ],
+        }
 
     def project_status(self):
         r = self.db.execute("""SELECT COUNT(*) n,COALESCE(SUM(elapsed_seconds),0) elapsed,
@@ -254,6 +678,24 @@ class ResearchDB:
                      if goal and goal["reached_observability_json"] else None}
                    if goal else None),
           "recent_experiments": recent,
+          "research_signal": self.research_signal(),
+          "idea_batch": self.idea_batch_status(),
+          "recent_idea_results": self.recent_idea_results()[-10:],
+          "latest_batch_lineage": self.batch_lineage_summary(),
+          "latest_strategy_review": (
+              {
+                  "review_id": self.latest_strategy_review()["review_id"],
+                  "created_at": self.latest_strategy_review()["created_at"],
+                  "trigger": self.latest_strategy_review()["trigger"],
+                  "experiments_seen": self.latest_strategy_review()["experiments_seen"],
+                  "replay_cases_seen": self.latest_strategy_review()["replay_cases_seen"],
+                  "analyst_output": (
+                      self.latest_strategy_review()["analyst_output"][:3000]
+                      if self.latest_strategy_review()["analyst_output"] else ""
+                  ),
+              }
+              if self.latest_strategy_review() else None
+          ),
         }
 
 
@@ -267,6 +709,7 @@ class AppContext:
     output_price: float
     replay_python: str
     blocker_reason: str = ""
+    active_idea_id: str = ""
 
 
 def j(x):
@@ -344,9 +787,21 @@ def run_python(ctx: RunContextWrapper[AppContext], script: str, args: list[str] 
 def start_experiment(ctx: RunContextWrapper[AppContext], hypothesis: str, candidate: str = "",
                      parent_candidate: str = "", notes: str = "") -> str:
     """Create a durable experiment record before candidate evaluation."""
-    eid = ctx.context.db.start_experiment(ctx.context.run_id, hypothesis, candidate, parent_candidate, notes)
-    ctx.context.log.event("experiment_start", {"experiment_id": eid, "hypothesis": hypothesis})
-    return j({"experiment_id": eid})
+    eid = ctx.context.db.start_experiment(
+        ctx.context.run_id, hypothesis, candidate, parent_candidate, notes,
+        ctx.context.active_idea_id or None,
+    )
+    if isinstance(eid, dict):
+        return j(eid)
+    ctx.context.log.event(
+        "experiment_start",
+        {
+            "experiment_id": eid,
+            "idea_id": ctx.context.active_idea_id or None,
+            "hypothesis": hypothesis,
+        },
+    )
+    return j({"experiment_id": eid, "idea_id": ctx.context.active_idea_id or None})
 
 @function_tool
 def finish_experiment(ctx: RunContextWrapper[AppContext], experiment_id: str, status: str, conclusion: str) -> str:
@@ -381,6 +836,38 @@ def project_status(ctx: RunContextWrapper[AppContext]) -> str:
     return j(ctx.context.db.project_status())
 
 @function_tool
+def analyze_history_game(ctx: RunContextWrapper[AppContext], episode: str, window_size: int = 24, top_windows: int = 8) -> str:
+    """Deterministically summarize one v20 loss history and identify high-activity windows."""
+    try:
+        return j(analyze_loss_history(ctx.context.local.root, episode, window_size, top_windows))
+    except Exception as exc:
+        return j({"error":f"{type(exc).__name__}: {exc}"})
+
+@function_tool
+def analyze_history_window(ctx: RunContextWrapper[AppContext], episode: str, start_turn: int, end_turn: int) -> str:
+    """Return detailed turn-by-turn actions, scalar state, and deltas for one history window."""
+    try:
+        return j(analyze_loss_window(ctx.context.local.root, episode, start_turn, end_turn))
+    except Exception as exc:
+        return j({"error":f"{type(exc).__name__}: {exc}"})
+
+@function_tool
+def analyze_experiments(ctx: RunContextWrapper[AppContext], review_id: str | None = None) -> str:
+    """Aggregate experiment evidence by idea, causal layer, and component combination."""
+    try:
+        return j(analyze_experiment_records(ctx.context.db, review_id))
+    except Exception as exc:
+        return j({"error":f"{type(exc).__name__}: {exc}"})
+
+@function_tool
+def idea_dossier(ctx: RunContextWrapper[AppContext], idea_id: str) -> str:
+    """Return canonical lineage for one idea: code version, experiments, replays, and game-record paths."""
+    dossier = ctx.context.db.idea_dossier(idea_id)
+    if dossier is None:
+        return j({"error":"unknown idea_id: " + idea_id})
+    return j(dossier)
+
+@function_tool
 def report_blocker(ctx: RunContextWrapper[AppContext], failed_step: str, reason: str) -> str:
     """Report a concrete runtime/environment blocker that makes further research impossible."""
     failed_step = failed_step.strip()
@@ -401,9 +888,11 @@ def static_replay_candidate(ctx: RunContextWrapper[AppContext], candidate: str, 
     """Run static replay in an isolated child process and persist per-case metrics."""
     if not ctx.context.local.allow_exec:
         return j({"error":"execution disabled; rerun with --allow-exec"})
-    if ctx.context.db.db.execute(
-        "SELECT 1 FROM experiments WHERE experiment_id=?", (experiment_id,)
-    ).fetchone() is None:
+    experiment = ctx.context.db.db.execute(
+        "SELECT experiment_id,idea_id FROM experiments WHERE experiment_id=?",
+        (experiment_id,),
+    ).fetchone()
+    if experiment is None:
         return j({"error":"unknown experiment_id: " + experiment_id})
 
     try:
@@ -412,6 +901,14 @@ def static_replay_candidate(ctx: RunContextWrapper[AppContext], candidate: str, 
         return j({"error":f"{type(exc).__name__}: {exc}"})
     if not candidate_path.is_file() or candidate_path.suffix not in {".py",".ipynb"}:
         return j({"error":"candidate must be an existing .py or .ipynb under v23"})
+
+    candidate_rel = str(candidate_path.relative_to(ctx.context.local.root))
+    candidate_sha256 = hashlib.sha256(candidate_path.read_bytes()).hexdigest()
+    bound = ctx.context.db.bind_candidate(
+        experiment_id, candidate_rel, candidate_sha256
+    )
+    if "error" in bound:
+        return j(bound)
 
     call_id = "replay_" + uuid.uuid4().hex[:10]
     started_at, started = utcnow(), time.monotonic()
@@ -426,10 +923,16 @@ def static_replay_candidate(ctx: RunContextWrapper[AppContext], candidate: str, 
 
     argv = [
         ctx.context.replay_python, str(runner),
-        "--candidate", str(candidate_path.relative_to(ctx.context.local.root)),
+        "--candidate", candidate_rel,
         "--episodes-json", json.dumps(episodes or []),
         "--max-episodes", str(max(1, min(int(max_episodes), 50))),
     ]
+    if experiment["idea_id"]:
+        record_dir = (
+            Path("workspace") / "replay_records" / str(experiment["idea_id"])
+            / experiment_id / call_id
+        )
+        argv.extend(["--record-dir", str(record_dir)])
     try:
         completed = subprocess.run(
             argv,
@@ -468,18 +971,23 @@ def static_replay_candidate(ctx: RunContextWrapper[AppContext], candidate: str, 
 
     elapsed = time.monotonic() - started
     summary = ctx.context.db.record_replay_call(
-        ctx.context.run_id, experiment_id, call_id, candidate, result, started_at, elapsed)
+        ctx.context.run_id, experiment_id, call_id, candidate_rel, result, started_at, elapsed)
     reached = ctx.context.db.maybe_reach_goal(
         ctx.context.run_id, experiment_id, summary, usage_dict(ctx.usage),
         ctx.context.input_price, ctx.context.output_price)
     result["replay_call_id"] = call_id
+    result["idea_id"] = experiment["idea_id"]
+    result["candidate"] = candidate_rel
+    result["candidate_sha256"] = candidate_sha256
     result["elapsed_seconds"] = round(elapsed, 3)
     if reached:
         result["goal_reached"] = reached
     ctx.context.log.event("static_replay", {
         "experiment_id":experiment_id,
         "replay_call_id":call_id,
-        "candidate":candidate,
+        "candidate":candidate_rel,
+        "candidate_sha256":candidate_sha256,
+        "idea_id":experiment["idea_id"],
         "elapsed_seconds":round(elapsed,3),
         "summary":summary,
         "goal_reached":reached,
@@ -519,6 +1027,46 @@ def usage_dict(u):
             "reasoning_tokens":reasoning,"total_tokens":int(getattr(u,"total_tokens",0) or 0)}
 
 
+def parse_analyst_batch(text: str) -> dict[str, Any]:
+    raw = text.strip()
+    if raw.startswith("```"):
+        lines = raw.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        raw = "\n".join(lines).strip()
+    data = json.loads(raw)
+    ideas = data.get("ideas")
+    if not isinstance(ideas, list) or len(ideas) != 10:
+        raise ValueError("analyst output must contain exactly 10 ideas")
+    required = {
+        "title","hypothesis","causal_layer","interaction_hypothesis",
+        "system_prediction","rationale","smallest_test","promotion_rule"
+    }
+    multi_component = 0
+    for i, idea in enumerate(ideas, 1):
+        if not isinstance(idea, dict):
+            raise ValueError(f"idea {i} is not an object")
+        missing = [key for key in required if not str(idea.get(key,"")).strip()]
+        if missing:
+            raise ValueError(f"idea {i} missing fields: {missing}")
+        components = idea.get("components")
+        if not isinstance(components, list) or not components:
+            raise ValueError(f"idea {i} components must be a non-empty list")
+        normalized = [str(x).strip() for x in components if str(x).strip()]
+        if not normalized:
+            raise ValueError(f"idea {i} components must contain names")
+        idea["components"] = normalized
+        if len(set(normalized)) >= 2:
+            multi_component += 1
+    if multi_component < 3:
+        raise ValueError(
+            "analyst batch must contain at least 3 multi-component ideas"
+        )
+    return data
+
+
 def add_usage(total: dict[str, int], delta: dict[str, int]) -> None:
     for key in total:
         total[key] += int(delta.get(key, 0) or 0)
@@ -554,11 +1102,12 @@ def persist_budget_ledger(budget: BudgetLedger, model: str, usage: dict[str, int
             "cache_write_tokens_observed_last_run": usage["cache_write_tokens"],
             "reasoning_tokens_observed_last_run": usage["reasoning_tokens"],
             "pricing_assumption": {
-                "input_usd_per_m": input_price,
-                "output_usd_per_m": output_price,
+                "executor_input_usd_per_m": input_price,
+                "executor_output_usd_per_m": output_price,
                 "cached_input_multiplier": 0.10,
                 "cache_write_multiplier": 1.25,
                 "safety_multiplier": 1.10,
+                "mixed_model_costs_may_be_accumulated": True,
             },
         }, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -574,6 +1123,17 @@ def parse_args():
         help="OpenAI API key for this agent run. Falls back to OPENAI_API_KEY.",
     )
     p.add_argument("--reasoning-effort",default="low",choices=["none","low","medium","high","xhigh","max"])
+    p.add_argument(
+        "--analyst-model",
+        default=None,
+        help="Model for the independent Performance Analyst. Defaults to --model.",
+    )
+    p.add_argument(
+        "--analyst-reasoning-effort",
+        default="medium",
+        choices=["none","low","medium","high","xhigh","max"],
+        help="Reasoning effort for performance analysis / improvement ideation.",
+    )
     p.add_argument("--max-turns",type=int,default=12); p.add_argument("--max-output-tokens",type=int,default=2500)
     p.add_argument("--allow-exec",action="store_true"); p.add_argument("--session-id",default=DEFAULT_SESSION_ID)
     p.add_argument("--session-history-limit",type=int,default=80)
@@ -617,14 +1177,23 @@ def resolve_replay_python(value: str | None) -> str:
     )
 
 
-def pricing_for(args):
-    if (args.input_usd_per_m is None)!=(args.output_usd_per_m is None):
+def model_pricing(model: str, explicit_input=None, explicit_output=None):
+    if (explicit_input is None) != (explicit_output is None):
         raise SystemExit("pass both explicit token prices")
-    if args.input_usd_per_m is not None:
-        return float(args.input_usd_per_m),float(args.output_usd_per_m)
-    if args.model not in MODEL_PRICING_USD_PER_M:
-        raise SystemExit("unknown model pricing; pass explicit token prices")
-    return MODEL_PRICING_USD_PER_M[args.model]
+    if explicit_input is not None:
+        return float(explicit_input), float(explicit_output)
+    if model not in MODEL_PRICING_USD_PER_M:
+        raise SystemExit(
+            "unknown model pricing for " + model
+            + "; use a known model or explicit token prices"
+        )
+    return MODEL_PRICING_USD_PER_M[model]
+
+
+def pricing_for(args):
+    return model_pricing(
+        args.model, args.input_usd_per_m, args.output_usd_per_m
+    )
 
 
 def main():
@@ -642,12 +1211,19 @@ def main():
     if not 1<=args.session_history_limit<=500: raise SystemExit("--session-history-limit must be 1..500")
     if not 0<args.session_budget_usd<=args.total_budget_usd: raise SystemExit("invalid budget ceilings")
     inp_price,out_price=pricing_for(args)
+    analyst_model=args.analyst_model or args.model
+    if analyst_model == args.model:
+        analyst_inp_price,analyst_out_price=inp_price,out_price
+    else:
+        analyst_inp_price,analyst_out_price=model_pricing(analyst_model)
     replay_python=resolve_replay_python(args.replay_python) if args.allow_exec else ""
     WORKSPACE.mkdir(parents=True,exist_ok=True)
     run_id="run_"+datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")+"_"+uuid.uuid4().hex[:8]
     config={"version":2,"run_id":run_id,"task":args.task,"model":args.model,
             "api_key_source":api_key_source,
             "session_id":args.session_id,"max_turns":args.max_turns,
+            "analyst_model":analyst_model,
+            "analyst_reasoning_effort":args.analyst_reasoning_effort,
             "replay_python":replay_python or None,
             "tracing_enabled":not args.disable_tracing,"trace_sensitive_data":False}
     log=RunLog(WORKSPACE,config); local=LocalTools(allow_exec=args.allow_exec,log=log)
@@ -663,8 +1239,25 @@ def main():
       max_tokens=args.max_output_tokens,verbosity="low",parallel_tool_calls=False,
       store=False,prompt_cache_options={"mode":"implicit","ttl":"30m"}),
       tools=[list_tree,read_text,search_text,summarize_jsonl,write_workspace_file,run_python,
-             start_experiment,finish_experiment,set_goal,project_status,report_blocker,
-             static_replay_candidate])
+             start_experiment,finish_experiment,set_goal,project_status,idea_dossier,
+             report_blocker,static_replay_candidate])
+    analyst_agent=Agent[AppContext](
+      name="v23 Performance Analyst",
+      instructions=PERFORMANCE_ANALYST_PROMPT,
+      model=analyst_model,
+      model_settings=ModelSettings(
+        reasoning=Reasoning(effort=args.analyst_reasoning_effort),
+        max_tokens=min(args.max_output_tokens,1200),
+        verbosity="low",
+        parallel_tool_calls=False,
+        store=False,
+        prompt_cache_options={"mode":"implicit","ttl":"30m"},
+      ),
+      tools=[
+        list_tree,read_text,search_text,summarize_jsonl,project_status,
+        analyze_history_game,analyze_history_window,analyze_experiments,idea_dossier
+      ],
+    )
     session=SQLiteSession(args.session_id,str(SESSION_DB))
     prompt=("Research task:\n"+args.task+"\n\nExecution enabled: "+str(args.allow_exec)+
             ". Conservative per-run ceiling: USD "+format(args.session_budget_usd,".2f")+
@@ -675,6 +1268,12 @@ def main():
            "output_tokens":0,"reasoning_tokens":0,"total_tokens":0}
     cycle = 0
     continuation = prompt
+    latest_review = db.latest_strategy_review()
+    strategy_guidance = (
+        str(latest_review["analyst_output"])
+        if latest_review and latest_review.get("analyst_output")
+        else ""
+    )
 
     while True:
         if not budget.can_call():
@@ -700,6 +1299,174 @@ def main():
             log.event("autonomous_stop", {"reason":"session_budget","cycle":cycle})
             break
 
+        review_trigger = db.strategy_review_trigger() if args.allow_exec else None
+        new_strategy_review = ""
+        if review_trigger:
+            log.event("specialist_review_start", {
+                "role":"performance_analyst",
+                "trigger":review_trigger,
+                "cycle_before":cycle + 1,
+            })
+            analyst_hooks=BudgetHooks(
+                log,
+                budget.total.estimated_cost_usd,
+                remaining_session_budget,
+                args.total_budget_usd,
+                analyst_inp_price,
+                analyst_out_price,
+            )
+            analyst_usage={
+                "requests":0,"input_tokens":0,"cached_tokens":0,
+                "cache_write_tokens":0,"output_tokens":0,
+                "reasoning_tokens":0,"total_tokens":0
+            }
+            analyst_output=""
+            analyst_error=""
+            prior_batch = db.batch_lineage_summary()
+            analyst_prompt=(
+                "Research task:\n"+args.task+
+                "\n\nIndependent performance review trigger: "+review_trigger+
+                "\nCall project_status first. Inspect only the minimum additional v20 "
+                "evidence needed to diagnose performance. Produce exactly 10 structurally "
+                "distinct test ideas in the required JSON schema."
+            )
+            if prior_batch:
+                analyst_prompt += (
+                    "\n\nRESULTS AND LINEAGE FROM THE MOST RECENT IDEA BATCH:\n"
+                    + j(prior_batch)
+                    + "\nEvery idea_id, experiment_id, candidate path/hash, replay_call_id, "
+                      "and game_record_path above is canonical. Use idea_dossier(idea_id) "
+                      "when you need detailed per-game lineage, and read a game_record_path "
+                      "only when its trace can change the diagnosis. Do not recycle failed "
+                      "idea families unless the new hypothesis explains why the failure "
+                      "would not apply."
+                )
+            try:
+                analyst_result=Runner.run_sync(
+                    analyst_agent,
+                    analyst_prompt,
+                    context=app,
+                    max_turns=min(6,args.max_turns),
+                    hooks=analyst_hooks,
+                    run_config=RunConfig(
+                        workflow_name="v23 performance analysis",
+                        group_id=args.session_id+"-analyst",
+                        trace_include_sensitive_data=False,
+                        tracing_disabled=args.disable_tracing,
+                        trace_metadata={
+                            "run_id":run_id,"model":analyst_model,
+                            "role":"performance_analyst",
+                            "trigger":review_trigger,
+                        },
+                    ),
+                )
+                analyst_output=str(analyst_result.final_output or "")
+                analyst_usage=usage_dict(analyst_result.context_wrapper.usage)
+            except Exception as exc:
+                analyst_error=type(exc).__name__+": "+str(exc)
+                analyst_usage=dict(analyst_hooks.last_usage)
+
+            add_usage(usage, analyst_usage)
+            analyst_cost=conservative_cost_usd(
+                analyst_usage,analyst_inp_price,analyst_out_price
+            )
+            analyst_delta=LegacyUsage(
+                analyst_usage["input_tokens"],analyst_usage["output_tokens"],
+                analyst_usage["requests"],analyst_cost
+            )
+            budget.session.add(analyst_delta)
+            budget.total.add(analyst_delta)
+            persist_budget_ledger(
+                budget,args.model,usage,inp_price,out_price
+            )
+
+            if analyst_error:
+                log.event("specialist_review_error", {
+                    "role":"performance_analyst",
+                    "trigger":review_trigger,
+                    "error":analyst_error,
+                    "usage":analyst_usage,
+                    "conservative_cost_usd":analyst_cost,
+                })
+                if analyst_error.startswith("BudgetStopError:"):
+                    status="BUDGET_STOP"
+                    output=analyst_error
+                    break
+            elif analyst_output:
+                try:
+                    parsed_review=parse_analyst_batch(analyst_output)
+                except Exception as exc:
+                    log.event("specialist_review_error", {
+                        "role":"performance_analyst",
+                        "trigger":review_trigger,
+                        "error":"invalid analyst batch: "+str(exc),
+                        "raw_output":analyst_output[:4000],
+                    })
+                    parsed_review=None
+                if parsed_review is not None:
+                    review_id=db.record_strategy_review(
+                        run_id,review_trigger,analyst_output,
+                        analyst_usage,analyst_cost
+                    )
+                    batch_out=db.add_idea_batch(
+                        review_id,parsed_review["ideas"]
+                    )
+                    if "error" in batch_out:
+                        log.event("specialist_review_error", {
+                            "role":"performance_analyst",
+                            "trigger":review_trigger,
+                            "error":batch_out["error"],
+                        })
+                    else:
+                        strategy_guidance=analyst_output
+                        new_strategy_review=analyst_output
+                        log.event("specialist_review_finish", {
+                            "role":"performance_analyst",
+                            "model":analyst_model,
+                            "reasoning_effort":args.analyst_reasoning_effort,
+                            "review_id":review_id,
+                            "trigger":review_trigger,
+                            "idea_count":batch_out["count"],
+                            "idea_ids":batch_out["idea_ids"],
+                            "usage":analyst_usage,
+                            "conservative_cost_usd":analyst_cost,
+                        })
+
+            if not budget.can_call():
+                status="BUDGET_STOP"
+                output=(
+                    output.rstrip()
+                    + "\n\nAutonomous loop stopped after specialist analysis because "
+                      "the configured API budget ceiling was reached."
+                ).strip()
+                break
+
+            remaining_session_budget = max(
+                0.0, args.session_budget_usd
+                - budget.session.estimated_cost_usd
+            )
+            if remaining_session_budget <= 0:
+                status="BUDGET_STOP"
+                output=(
+                    output.rstrip()
+                    + "\n\nAutonomous loop stopped after specialist analysis because "
+                      "the per-run API budget ceiling was reached."
+                ).strip()
+                break
+
+        next_idea = db.next_pending_idea() if args.allow_exec else None
+        if args.allow_exec and next_idea is None:
+            # Invalid/empty analyst output will be retried by the review trigger
+            # on the next controller pass instead of letting the engineer improvise.
+            continuation=(
+                "No pending analyst idea is available. Inspect project_status only; "
+                "do not invent an untracked experiment. The controller will request "
+                "another analyst batch."
+            )
+            app.active_idea_id=""
+        else:
+            app.active_idea_id=next_idea["idea_id"] if next_idea else ""
+
         cycle += 1
         hooks=BudgetHooks(
             log,
@@ -714,9 +1481,40 @@ def main():
             "requests":0,"input_tokens":0,"cached_tokens":0,"cache_write_tokens":0,
             "output_tokens":0,"reasoning_tokens":0,"total_tokens":0
         }
+        cycle_prompt=continuation
+        if new_strategy_review:
+            cycle_prompt += (
+                "\n\nINDEPENDENT PERFORMANCE ANALYST REVIEW:\n"
+                + new_strategy_review
+            )
+        if next_idea:
+            cycle_prompt += (
+                "\n\nASSIGNED IDEA TO IMPLEMENT NOW:\n"
+                + j({
+                    "idea_id":next_idea["idea_id"],
+                    "batch_index":next_idea["batch_index"],
+                    "title":next_idea["title"],
+                    "hypothesis":next_idea["hypothesis"],
+                    "causal_layer":next_idea["causal_layer"],
+                    "components":json.loads(next_idea["components_json"] or "[]"),
+                    "interaction_hypothesis":next_idea["interaction_hypothesis"],
+                    "system_prediction":next_idea["system_prediction"],
+                    "rationale":next_idea["rationale"],
+                    "smallest_test":next_idea["smallest_test"],
+                    "promotion_rule":next_idea["promotion_rule"],
+                })
+                + "\nImplement this specific systems hypothesis. If it spans multiple "
+                  "components, make the coordinated changes together because the interaction "
+                  "is the experimental variable; do not reduce it to one component and lose "
+                  "the hypothesis. Call start_experiment once, run the smallest useful static "
+                  "replay, expand only when its promotion rule is met, record the result, and "
+                  "after replay call idea_dossier for this idea_id to verify the exact code "
+                  "version and recorded game lineage, then finish the experiment. Do not skip "
+                  "ahead to another analyst idea in the same cycle."
+            )
         try:
             result=Runner.run_sync(
-              agent, continuation, context=app, session=session,
+              agent, cycle_prompt, context=app, session=session,
               max_turns=args.max_turns, hooks=hooks,
               run_config=RunConfig(
                 workflow_name="v23 autonomous research",
@@ -774,8 +1572,10 @@ def main():
         persist_budget_ledger(budget,args.model,usage,inp_price,out_price)
         output=cycle_output or output
 
+        app.active_idea_id=""
         goal=latest_goal_state(db)
         goal_reached=bool(goal and goal.get("reached_at"))
+        signal=db.research_signal()
         log.event("autonomous_cycle", {
             "cycle":cycle,
             "cycle_output":cycle_output,
@@ -783,6 +1583,9 @@ def main():
             "cycle_conservative_cost_usd":cycle_cost,
             "goal":goal,
             "goal_reached":goal_reached,
+            "research_signal":signal,
+            "strategy_review_trigger":review_trigger,
+            "used_new_strategy_review":bool(new_strategy_review),
         })
 
         stop_reason=autonomous_stop_reason(goal, app.blocker_reason, args.allow_exec)
@@ -813,12 +1616,9 @@ def main():
 
         continuation=(
             "Continue the SAME research task and session. The durable goal is still "
-            "unmet. Do not stop merely because a candidate was rejected, one experiment "
-            "finished, or you have a recommendation for the next step. Inspect "
-            "project_status, use prior negative results, create the next justified "
-            "candidate/experiment, execute static replay, and continue making measured "
-            "progress. Only a reached durable goal, exhausted configured API budget, or "
-            "a concrete runtime blocker may terminate the autonomous loop."
+            "unmet. The controller will assign the next pending analyst idea. Use prior "
+            "measured results as evidence, implement only the assigned idea, execute "
+            "static replay, and record the conclusion. Do not invent an unqueued idea."
         )
 
     elapsed=time.monotonic()-started
@@ -867,6 +1667,8 @@ def main():
     print(j({"run_id":run_id,"elapsed_seconds":round(elapsed,3),"usage":usage,
              "conservative_cost_usd":round(cost,8),"session_id":args.session_id,
              "autonomous_cycles":cycle,"goal":latest_goal_state(db),
+             "analyst_model":analyst_model,
+             "analyst_reasoning_effort":args.analyst_reasoning_effort,
              "experiments_db":str(STATE_DB),"session_db":str(SESSION_DB),
              "trace_enabled":not args.disable_tracing}))
     print("[v23 run] "+str(log.dir))

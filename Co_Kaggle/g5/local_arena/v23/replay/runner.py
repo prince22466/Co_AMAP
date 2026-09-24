@@ -189,7 +189,7 @@ def _load_python_agent(path: Path):
     return module, agent
 
 
-def evaluate(candidate: Path, episodes: list[str], max_episodes: int):
+def evaluate(candidate: Path, episodes: list[str], max_episodes: int, record_dir: Path | None = None):
     candidate = _inside_v23(candidate)
     if candidate.suffix not in {".py", ".ipynb"} or not candidate.is_file():
         raise ValueError("candidate must be an existing .py or .ipynb under v23")
@@ -221,6 +221,10 @@ def evaluate(candidate: Path, episodes: list[str], max_episodes: int):
             "runtime_precision_audit": runtime_audit,
             "fp16_defaults": fp16_defaults,
         }
+
+    if record_dir is not None:
+        record_dir = _inside_v23(record_dir)
+        record_dir.mkdir(parents=True, exist_ok=True)
 
     rows = []
     for history_path in paths:
@@ -254,6 +258,7 @@ def evaluate(candidate: Path, episodes: list[str], max_episodes: int):
         env = _environment_from_history(history)
         action_divergences = 0
         first_divergence = None
+        step_trace = []
 
         try:
             for replay_step in range(1, len(history["steps"])):
@@ -280,6 +285,16 @@ def evaluate(candidate: Path, episodes: list[str], max_episodes: int):
                             "hour": int(_field(obs, "hour", -1)),
                         }
 
+                step_trace.append({
+                    "replay_step": replay_step,
+                    "day": int(_field(obs, "day", -1)),
+                    "hour": int(_field(obs, "hour", -1)),
+                    "candidate_action": _plain(action),
+                    "recorded_v20_action": _plain(recorded[candidate_seat]),
+                    "recorded_opponent_action": _plain(opponent_action),
+                    "diverged_from_v20": action != recorded[candidate_seat],
+                })
+
                 actions = [None, None]
                 actions[candidate_seat] = action
                 actions[opponent_seat] = opponent_action
@@ -290,6 +305,29 @@ def evaluate(candidate: Path, episodes: list[str], max_episodes: int):
             statuses = [str(_field(state, "status", "")) for state in final_states]
             margin = rewards[candidate_seat] - rewards[opponent_seat]
             valid = statuses == ["DONE", "DONE"]
+            game_record_path = None
+            if record_dir is not None:
+                record_path = record_dir / (history_path.stem + ".json")
+                record_payload = {
+                    "episode": history_path.stem,
+                    "candidate_seat": candidate_seat,
+                    "opponent_seat": opponent_seat,
+                    "original_rewards": original,
+                    "candidate_rewards": rewards,
+                    "original_v20_margin": original_margin,
+                    "candidate_margin": margin,
+                    "margin_improvement": margin - original_margin,
+                    "result": "WIN" if margin > 0 else "LOSS" if margin < 0 else "TIE",
+                    "action_divergences": action_divergences,
+                    "first_action_divergence": first_divergence,
+                    "steps": step_trace,
+                }
+                record_path.write_text(
+                    json.dumps(record_payload, sort_keys=True, default=str) + "\n",
+                    encoding="utf-8",
+                )
+                game_record_path = str(record_path.relative_to(V23_ROOT))
+
             rows.append({
                 "episode": history_path.stem,
                 "valid": valid,
@@ -302,6 +340,7 @@ def evaluate(candidate: Path, episodes: list[str], max_episodes: int):
                 "result": "WIN" if margin > 0 else "LOSS" if margin < 0 else "TIE",
                 "action_divergences": action_divergences,
                 "first_action_divergence": first_divergence,
+                "game_record_path": game_record_path,
                 "error": "" if valid else f"non-DONE status: {statuses}",
                 "elapsed_seconds": round(time.monotonic() - case_started, 6),
             })
@@ -364,6 +403,7 @@ def main():
     parser.add_argument("--candidate", required=True)
     parser.add_argument("--episodes-json", default="[]")
     parser.add_argument("--max-episodes", type=int, default=25)
+    parser.add_argument("--record-dir", default=None)
     args = parser.parse_args()
 
     episodes = json.loads(args.episodes_json)
@@ -372,7 +412,12 @@ def main():
     max_episodes = max(1, min(int(args.max_episodes), 50))
 
     try:
-        result = evaluate(V23_ROOT / args.candidate, episodes, max_episodes)
+        result = evaluate(
+            V23_ROOT / args.candidate,
+            episodes,
+            max_episodes,
+            V23_ROOT / args.record_dir if args.record_dir else None,
+        )
     except BaseException as exc:
         result = {"error": f"{type(exc).__name__}: {exc}"}
 

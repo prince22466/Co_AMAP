@@ -107,6 +107,47 @@ OpenAI orchestration and Kaggriculture replay are independent systems.
 
 This separation is architectural, not optional dependency management.
 
+## Specialist-agent contract
+
+v23 separates research judgment from experiment execution.
+
+- **Performance Analyst**: read-only specialist for performance analysis, causal diagnosis, rejected-idea synthesis, and improvement ideation. It may use a stronger reasoning model than the executor.
+- **Experiment Engineer**: turns the analyst's selected direction into concrete candidate code, executes static replay, and records evidence.
+- **Python supervisor**: owns review cadence, budgets, durable goals, stagnation detection, and termination.
+
+The analyst is intentionally sparse to control cost: run it for initial diagnosis, after materially new stagnant evidence, or after roughly three additional experiments. Do not invoke an expensive analyst every replay cycle.
+
+Analyst output is advisory. Only replay metrics can accept a candidate or satisfy the durable goal.
+
+### System-level hypothesis requirement
+
+The Performance Analyst must reason over the policy as a coupled control system, not as isolated functions. Candidate mechanisms may span `animal_plan`, `crop_plan`, task ranking, worker movement/logistics, inventory/capacity, `market_orders`, hiring, purchases, cash, and future production.
+
+Each 10-idea batch must include at least three coordinated multi-component hypotheses. Every idea records:
+- affected components;
+- the causal interaction between those components;
+- the predicted downstream system effect;
+- the smallest falsification replay;
+- the promotion rule.
+
+A coordinated change is valid even though it modifies multiple functions when those changes implement one falsifiable interaction hypothesis. This is different from changing unrelated variables at once.
+
+Example:
+
+```text
+animal_plan increases egg production
+        +
+worker policy collects eggs faster
+        +
+market_orders immediately sells the excess
+        ↓
+market saturation / lower prices
+        ↓
+high production but worse final cash
+```
+
+A valid systems experiment could coordinate production pacing and market release policy and predict both inventory-flow and final-margin effects.
+
 ## Autonomous goal loop
 
 v23 follows a cheap Karpathy-style autoresearch loop: the model chooses hypotheses and candidate changes, while local Python owns execution, replay, scoring, persistence, and termination.

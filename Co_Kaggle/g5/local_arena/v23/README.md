@@ -159,6 +159,68 @@ A read-only run does not require Kaggle imports in the agent process.
 
 The agent process launches `.venv-replay/bin/python replay/runner.py ...` and exchanges only JSON-compatible arguments/results.
 
+## Specialist analysis model
+
+v23 can use a stronger reasoning model only for performance diagnosis and improvement ideation while keeping the execution agent cheap.
+
+Recommended pattern:
+
+```text
+Performance Analyst (stronger reasoning, read-only)
+    -> diagnose evidence + propose next experiment
+
+Experiment Engineer (cheaper model)
+    -> write candidate code
+    -> execute static replay
+    -> record measured result
+
+Python supervisor
+    -> goal / budget / stagnation / review cadence
+```
+
+Example:
+
+```bash
+.venv-agent/bin/python research_agent.py \
+  --model gpt-6-luna \
+  --reasoning-effort low \
+  --analyst-model gpt-6-sol \
+  --analyst-reasoning-effort medium \
+  --allow-exec \
+  --task "Reach at least 13 wins across all 25 v20 loss histories."
+```
+
+The analyst has read-only tools and cannot write candidate code or execute replay. It runs initially and then only when enough new experiment evidence has accumulated, including stagnation. Its reviews are persisted in `workspace/experiments.sqlite3`.
+
+### Ten-idea research batches
+
+The Performance Analyst works in durable batches of exactly 10 ideas:
+
+```text
+Performance Analyst
+    -> review all measured evidence
+    -> generate 10 structurally distinct ideas
+    -> persist them in SQLite
+
+Experiment Engineer
+    -> take idea 1
+    -> implement candidate
+    -> static replay
+    -> store result
+    -> take idea 2
+    -> ...
+    -> take idea 10
+
+Performance Analyst
+    -> review results of all 10
+    -> generate next 10 ideas
+    -> repeat
+```
+
+Every idea gets a durable `idea_id` and is linked to its experiment and replay metrics. The engineer may not skip ahead or invent unqueued ideas. When a batch is exhausted, the analyst receives the full batch results before producing the next batch.
+
+The loop still terminates only when the durable goal is reached, the API budget is exhausted, or a genuine runtime blocker occurs. For the current v23 objective the final goal must be measured on all 25 loss histories, e.g. `wins >= 13` with `min_games_total = 25`.
+
 ## Autonomous execution until goal
 
 v23 uses a low-cost autoresearch pattern:

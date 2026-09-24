@@ -12,6 +12,11 @@ if str(V23_ROOT) not in sys.path:
     sys.path.insert(0, str(V23_ROOT))
 
 from agent import runtime
+from agent.analysis import (
+    analyze_experiment_records,
+    analyze_loss_history,
+    analyze_loss_window,
+)
 
 
 def main() -> int:
@@ -163,6 +168,267 @@ def main() -> int:
         assert threaded_status["runs_completed"] == 0
         assert threaded_goal.startswith("goal_")
         assert threaded_finished["status"] == "UNRESOLVED"
+
+        # Stagnation detection: four consecutive rejected, non-improving
+        # experiments must force a strategy reset.
+        stagnation_db = runtime.ResearchDB(Path(tmp) / "stagnation.sqlite3")
+        stagnation_run = "run_stagnation"
+        stagnation_db.start_run(
+            stagnation_run, "stagnation-session", "stagnation smoke", "smoke-model"
+        )
+        for i in range(4):
+            eid = stagnation_db.start_experiment(
+                stagnation_run,
+                f"Repeated local tweak {i}",
+                "",
+                "",
+                "stagnation smoke",
+            )
+            stagnation_db.db.execute(
+                """UPDATE experiments
+                   SET wins=0, losses=5, replay_cases=5,
+                       mean_margin_improvement=0.0,
+                       best_margin_improvement=0.0
+                   WHERE experiment_id=?""",
+                (eid,),
+            )
+            stagnation_db.db.commit()
+            stagnation_db.finish_experiment(
+                eid, "REJECTED", "no measurable improvement"
+            )
+        signal = stagnation_db.research_signal()
+        assert signal["stagnating"] is True
+        assert signal["consecutive_rejected"] == 4
+        assert signal["positive_recent"] is False
+
+        progress_eid = stagnation_db.start_experiment(
+            stagnation_run,
+            "Structurally different candidate",
+            "",
+            "",
+            "stagnation recovery smoke",
+        )
+        stagnation_db.db.execute(
+            """UPDATE experiments
+               SET wins=1, losses=4, replay_cases=5,
+                   mean_margin_improvement=10.0,
+                   best_margin_improvement=20.0
+               WHERE experiment_id=?""",
+            (progress_eid,),
+        )
+        stagnation_db.db.commit()
+        stagnation_db.finish_experiment(
+            progress_eid, "SUPPORTED", "positive signal"
+        )
+        recovered = stagnation_db.research_signal()
+        assert recovered["stagnating"] is False
+        assert recovered["positive_recent"] is True
+
+        # Real history deterministic analysis smoke.
+        history_summary = analyze_loss_history(
+            V23_ROOT, "111548564", window_size=24, top_windows=3
+        )
+        assert history_summary["episode"] == "111548564"
+        assert history_summary["turns"] > 0
+        assert history_summary["v20_final_margin"] < 0
+        assert len(history_summary["critical_windows"]) <= 3
+        if history_summary["critical_windows"]:
+            first_window = history_summary["critical_windows"][0]
+            detail = analyze_loss_window(
+                V23_ROOT,
+                "111548564",
+                first_window["start_turn"],
+                min(first_window["start_turn"] + 2, first_window["end_turn"]),
+            )
+            assert detail["rows"]
+            assert detail["episode"] == "111548564"
+
+        # Analyst idea batch queue smoke: exactly 10 ideas, deterministic order,
+        # idea -> experiment linkage, then batch exhaustion -> analyst review.
+        batch_db = runtime.ResearchDB(Path(tmp) / "idea_batch.sqlite3")
+        batch_run = "run_idea_batch"
+        batch_db.start_run(
+            batch_run, "idea-batch-session", "idea batch smoke", "smoke-model"
+        )
+        analyst_json = {
+            "performance_evidence": "smoke evidence",
+            "failure_mechanisms": ["smoke failure"],
+            "do_not_repeat": ["old smoke idea"],
+            "ideas": [
+                {
+                    "title": f"Idea {i}",
+                    "hypothesis": f"Hypothesis {i}",
+                    "causal_layer": (
+                        "multi_component" if i <= 3
+                        else ("worker" if i % 2 else "market")
+                    ),
+                    "components": (
+                        ["animal_plan", "market_orders"]
+                        if i == 1 else
+                        ["crop_plan", "task_ranking"]
+                        if i == 2 else
+                        ["logistics", "inventory_capacity"]
+                        if i == 3 else
+                        ["worker_policy"]
+                    ),
+                    "interaction_hypothesis": (
+                        f"Interaction hypothesis {i}"
+                        if i <= 3 else "single-component"
+                    ),
+                    "system_prediction": f"System prediction {i}",
+                    "rationale": f"Rationale {i}",
+                    "smallest_test": "1 case",
+                    "promotion_rule": "positive margin -> expand",
+                }
+                for i in range(1, 11)
+            ],
+        }
+        parsed_batch = runtime.parse_analyst_batch(
+            runtime.json.dumps(analyst_json)
+        )
+        assert len(parsed_batch["ideas"]) == 10
+        try:
+            runtime.parse_analyst_batch(
+                runtime.json.dumps({**analyst_json, "ideas": analyst_json["ideas"][:9]})
+            )
+            raise AssertionError("9-idea analyst batch should fail")
+        except ValueError:
+            pass
+
+        too_few_multi = runtime.json.loads(runtime.json.dumps(analyst_json))
+        for idea in too_few_multi["ideas"]:
+            idea["components"] = ["worker_policy"]
+        try:
+            runtime.parse_analyst_batch(runtime.json.dumps(too_few_multi))
+            raise AssertionError("batch with <3 multi-component ideas should fail")
+        except ValueError:
+            pass
+
+        review_id = batch_db.record_strategy_review(
+            batch_run, "initial_diagnosis",
+            runtime.json.dumps(analyst_json), {}, 0.0
+        )
+        queued = batch_db.add_idea_batch(review_id, parsed_batch["ideas"])
+        assert queued["count"] == 10
+        queue_status = batch_db.idea_batch_status()
+        assert queue_status["pending"] == 10
+        assert batch_db.strategy_review_trigger() is None
+
+        for expected_index in range(1, 11):
+            idea = batch_db.next_pending_idea()
+            assert idea is not None
+            assert idea["batch_index"] == expected_index
+            eid = batch_db.start_experiment(
+                batch_run,
+                idea["hypothesis"],
+                "",
+                "",
+                "idea batch smoke",
+                idea["idea_id"],
+            )
+            assert isinstance(eid, str)
+            exp_row = batch_db.db.execute(
+                "SELECT idea_id FROM experiments WHERE experiment_id=?",
+                (eid,),
+            ).fetchone()
+            assert exp_row["idea_id"] == idea["idea_id"]
+
+            candidate_path = f"workspace/candidates/idea_{expected_index}.py"
+            candidate_hash = f"{expected_index:064x}"
+            bound = batch_db.bind_candidate(eid, candidate_path, candidate_hash)
+            assert bound["idea_id"] == idea["idea_id"]
+            assert bound["candidate"] == candidate_path
+            assert bound["candidate_sha256"] == candidate_hash
+            same = batch_db.bind_candidate(eid, candidate_path, candidate_hash)
+            assert same["candidate_sha256"] == candidate_hash
+            changed = batch_db.bind_candidate(
+                eid, candidate_path, f"{expected_index + 100:064x}"
+            )
+            assert changed["error"] == "candidate content changed within experiment"
+
+            batch_db.record_replay_call(
+                batch_run,
+                eid,
+                f"replay_batch_{expected_index}",
+                candidate_path,
+                {
+                    "summary": {
+                        "games_total": 1,
+                        "games_valid": 1,
+                        "wins": 0,
+                        "losses": 1,
+                        "margin_worsened_cases": 0,
+                        "mean_margin_improvement": 0.0,
+                        "best_margin_improvement": 0.0,
+                    },
+                    "matches": [{
+                        "episode": f"episode_{expected_index}",
+                        "valid": True,
+                        "original_v20_margin": -10.0,
+                        "candidate_margin": -10.0,
+                        "margin_improvement": 0.0,
+                        "result": "LOSS",
+                        "action_divergences": 1,
+                        "game_record_path": (
+                            f"workspace/replay_records/{idea['idea_id']}/"
+                            f"{eid}/replay_batch_{expected_index}/"
+                            f"episode_{expected_index}.json"
+                        ),
+                        "elapsed_seconds": 0.001,
+                        "error": "",
+                    }],
+                },
+                runtime.utcnow(),
+                0.001,
+            )
+
+            dossier = batch_db.idea_dossier(idea["idea_id"])
+            assert dossier is not None
+            assert dossier["idea"]["idea_id"] == idea["idea_id"]
+            assert dossier["experiments"][0]["candidate"] == candidate_path
+            assert dossier["experiments"][0]["candidate_sha256"] == candidate_hash
+            assert dossier["replay_calls"][0]["replay_call_id"] == (
+                f"replay_batch_{expected_index}"
+            )
+            assert dossier["replay_calls"][0]["games"][0]["game_record_path"].endswith(
+                f"episode_{expected_index}.json"
+            )
+
+            if expected_index <= 3:
+                stored = batch_db.db.execute(
+                    """SELECT components_json,interaction_hypothesis,system_prediction
+                       FROM research_ideas WHERE idea_id=?""",
+                    (idea["idea_id"],),
+                ).fetchone()
+                assert len(runtime.json.loads(stored["components_json"])) >= 2
+                assert stored["interaction_hypothesis"]
+                assert stored["system_prediction"]
+            batch_db.finish_experiment(
+                eid, "REJECTED", "smoke idea rejected"
+            )
+
+        exhausted = batch_db.idea_batch_status()
+        assert exhausted["pending"] == 0
+        assert exhausted["running"] == 0
+        assert exhausted["completed"] == 10
+        assert batch_db.next_pending_idea() is None
+        assert batch_db.strategy_review_trigger() == "idea_batch_exhausted"
+        results = batch_db.recent_idea_results(review_id)
+        assert len(results) == 10
+        assert all(row["experiment_id"] for row in results)
+        assert all(row["candidate"] for row in results)
+        assert all(row["candidate_sha256"] for row in results)
+        lineage = batch_db.batch_lineage_summary(review_id)
+        assert len(lineage) == 10
+        assert lineage[0]["idea_id"]
+        assert lineage[0]["experiments"][0]["replay_call_ids"]
+        assert lineage[0]["experiments"][0]["game_record_paths"]
+
+        experiment_analysis = analyze_experiment_records(batch_db, review_id)
+        assert experiment_analysis["scope"] == "idea_batch"
+        assert len(experiment_analysis["ideas"]) == 10
+        assert experiment_analysis["by_causal_layer"]
+        assert experiment_analysis["by_component_combination"]
 
         status = db.project_status()
         assert status["runs_completed"] == 1
