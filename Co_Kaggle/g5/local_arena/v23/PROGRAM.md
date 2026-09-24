@@ -89,6 +89,22 @@ Conversation memory and research memory are separate:
 Tracing is provided by the OpenAI Agents SDK. Domain-specific research semantics remain in the local SQLite database.
 
 
+
+
+## Agent/replay isolation contract
+
+OpenAI orchestration and Kaggriculture replay are independent systems.
+
+- The **agent environment** contains the OpenAI SDK and OpenAI Agents SDK. It performs reasoning, planning, candidate generation, experiment selection, memory, tracing, and result analysis.
+- The **replay environment** contains Kaggle Environments, PyTorch, and NumPy. It reconstructs games, runs candidate actions, replays recorded opponent commands, and emits structured metrics.
+- The replay environment must not require or import OpenAI packages.
+- The agent environment must not require or import Kaggle Environments.
+- Communication across the boundary is subprocess arguments plus JSON output.
+- The agent runtime must use a replay interpreter different from its own interpreter.
+- Kaggle/LiteLLM dependency constraints must never determine the OpenAI Agents SDK version.
+
+This separation is architectural, not optional dependency management.
+
 ## Mandatory execution contract
 
 When the agent is launched with `--allow-exec`, planning-only completion is not acceptable.
