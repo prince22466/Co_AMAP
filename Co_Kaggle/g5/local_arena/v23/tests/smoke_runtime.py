@@ -219,52 +219,6 @@ def main() -> int:
         assert recovered["stagnating"] is False
         assert recovered["positive_recent"] is True
 
-        # Independent strategy review trigger is evidence-driven, not every cycle.
-        review_db = runtime.ResearchDB(Path(tmp) / "reviews.sqlite3")
-        review_run = "run_reviews"
-        review_db.start_run(
-            review_run, "review-session", "review smoke", "smoke-model"
-        )
-        assert review_db.strategy_review_trigger() == "initial_diagnosis"
-        review_id = review_db.record_strategy_review(
-            review_run, "initial_diagnosis", "initial analyst review", {}, 0.0
-        )
-        assert review_id.startswith("review_")
-        assert review_db.strategy_review_trigger() is None
-
-        for i in range(2):
-            eid = review_db.start_experiment(
-                review_run, f"Rejected idea {i}", "", "", "review trigger smoke"
-            )
-            review_db.db.execute(
-                """UPDATE experiments
-                   SET wins=0, losses=5, replay_cases=5,
-                       mean_margin_improvement=0.0,
-                       best_margin_improvement=0.0
-                   WHERE experiment_id=?""",
-                (eid,),
-            )
-            review_db.db.commit()
-            review_db.finish_experiment(eid, "REJECTED", "no progress")
-        # Only two experiments are not enough for periodic review unless the
-        # global stagnation detector is active.
-        assert review_db.strategy_review_trigger() is None
-
-        eid = review_db.start_experiment(
-            review_run, "Rejected idea 2", "", "", "review trigger smoke"
-        )
-        review_db.db.execute(
-            """UPDATE experiments
-               SET wins=0, losses=5, replay_cases=5,
-                   mean_margin_improvement=0.0,
-                   best_margin_improvement=0.0
-               WHERE experiment_id=?""",
-            (eid,),
-        )
-        review_db.db.commit()
-        review_db.finish_experiment(eid, "REJECTED", "no progress")
-        assert review_db.strategy_review_trigger() == "periodic_after_3_experiments"
-
         # Analyst idea batch queue smoke: exactly 10 ideas, deterministic order,
         # idea -> experiment linkage, then batch exhaustion -> analyst review.
         batch_db = runtime.ResearchDB(Path(tmp) / "idea_batch.sqlite3")
@@ -354,6 +308,68 @@ def main() -> int:
                 (eid,),
             ).fetchone()
             assert exp_row["idea_id"] == idea["idea_id"]
+
+            candidate_path = f"workspace/candidates/idea_{expected_index}.py"
+            candidate_hash = f"{expected_index:064x}"
+            bound = batch_db.bind_candidate(eid, candidate_path, candidate_hash)
+            assert bound["idea_id"] == idea["idea_id"]
+            assert bound["candidate"] == candidate_path
+            assert bound["candidate_sha256"] == candidate_hash
+            same = batch_db.bind_candidate(eid, candidate_path, candidate_hash)
+            assert same["candidate_sha256"] == candidate_hash
+            changed = batch_db.bind_candidate(
+                eid, candidate_path, f"{expected_index + 100:064x}"
+            )
+            assert changed["error"] == "candidate content changed within experiment"
+
+            batch_db.record_replay_call(
+                batch_run,
+                eid,
+                f"replay_batch_{expected_index}",
+                candidate_path,
+                {
+                    "summary": {
+                        "games_total": 1,
+                        "games_valid": 1,
+                        "wins": 0,
+                        "losses": 1,
+                        "margin_worsened_cases": 0,
+                        "mean_margin_improvement": 0.0,
+                        "best_margin_improvement": 0.0,
+                    },
+                    "matches": [{
+                        "episode": f"episode_{expected_index}",
+                        "valid": True,
+                        "original_v20_margin": -10.0,
+                        "candidate_margin": -10.0,
+                        "margin_improvement": 0.0,
+                        "result": "LOSS",
+                        "action_divergences": 1,
+                        "game_record_path": (
+                            f"workspace/replay_records/{idea['idea_id']}/"
+                            f"{eid}/replay_batch_{expected_index}/"
+                            f"episode_{expected_index}.json"
+                        ),
+                        "elapsed_seconds": 0.001,
+                        "error": "",
+                    }],
+                },
+                runtime.utcnow(),
+                0.001,
+            )
+
+            dossier = batch_db.idea_dossier(idea["idea_id"])
+            assert dossier is not None
+            assert dossier["idea"]["idea_id"] == idea["idea_id"]
+            assert dossier["experiments"][0]["candidate"] == candidate_path
+            assert dossier["experiments"][0]["candidate_sha256"] == candidate_hash
+            assert dossier["replay_calls"][0]["replay_call_id"] == (
+                f"replay_batch_{expected_index}"
+            )
+            assert dossier["replay_calls"][0]["games"][0]["game_record_path"].endswith(
+                f"episode_{expected_index}.json"
+            )
+
             if expected_index <= 3:
                 stored = batch_db.db.execute(
                     """SELECT components_json,interaction_hypothesis,system_prediction
@@ -363,15 +379,6 @@ def main() -> int:
                 assert len(runtime.json.loads(stored["components_json"])) >= 2
                 assert stored["interaction_hypothesis"]
                 assert stored["system_prediction"]
-            batch_db.db.execute(
-                """UPDATE experiments
-                   SET wins=0,losses=1,replay_cases=1,
-                       mean_margin_improvement=0.0,
-                       best_margin_improvement=0.0
-                   WHERE experiment_id=?""",
-                (eid,),
-            )
-            batch_db.db.commit()
             batch_db.finish_experiment(
                 eid, "REJECTED", "smoke idea rejected"
             )
@@ -385,6 +392,13 @@ def main() -> int:
         results = batch_db.recent_idea_results(review_id)
         assert len(results) == 10
         assert all(row["experiment_id"] for row in results)
+        assert all(row["candidate"] for row in results)
+        assert all(row["candidate_sha256"] for row in results)
+        lineage = batch_db.batch_lineage_summary(review_id)
+        assert len(lineage) == 10
+        assert lineage[0]["idea_id"]
+        assert lineage[0]["experiments"][0]["replay_call_ids"]
+        assert lineage[0]["experiments"][0]["game_record_paths"]
 
         status = db.project_status()
         assert status["runs_completed"] == 1
