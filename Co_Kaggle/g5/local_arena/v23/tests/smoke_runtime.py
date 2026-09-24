@@ -98,25 +98,33 @@ def main() -> int:
         db.finish_run(run_id, "DONE", usage, cost, "smoke complete", 0.01)
 
         # Agents SDK function tools may run on worker threads. Reproduce that
-        # boundary explicitly so sqlite thread-affinity regressions fail CI.
+        # boundary explicitly using a separate DB so the main lifecycle assertions
+        # remain unchanged.
+        thread_db = runtime.ResearchDB(Path(tmp) / "threaded.sqlite3")
+        thread_run_id = "run_thread_smoke"
+        thread_db.start_run(
+            thread_run_id, "thread-smoke-session", "thread smoke task", "smoke-model"
+        )
         with ThreadPoolExecutor(max_workers=1) as pool:
-            threaded_status = pool.submit(db.project_status).result()
-            threaded_goal = pool.submit(db.set_goal, "wins", ">=", 1.0, 0).result()
+            threaded_status = pool.submit(thread_db.project_status).result()
+            threaded_goal = pool.submit(
+                thread_db.set_goal, "wins", ">=", 1.0, 0
+            ).result()
             threaded_experiment = pool.submit(
-                db.start_experiment,
-                run_id,
+                thread_db.start_experiment,
+                thread_run_id,
                 "Cross-thread DB tool call works.",
                 "",
                 "",
                 "thread smoke",
             ).result()
             threaded_finished = pool.submit(
-                db.finish_experiment,
+                thread_db.finish_experiment,
                 threaded_experiment,
                 "UNRESOLVED",
                 "thread smoke complete",
             ).result()
-        assert threaded_status["runs_completed"] == 1
+        assert threaded_status["runs_completed"] == 0
         assert threaded_goal.startswith("goal_")
         assert threaded_finished["status"] == "UNRESOLVED"
 
