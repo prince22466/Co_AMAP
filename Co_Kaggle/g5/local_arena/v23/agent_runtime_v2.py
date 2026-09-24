@@ -6,6 +6,8 @@ import argparse
 import json
 import os
 import sqlite3
+import subprocess
+import sys
 import time
 import uuid
 from dataclasses import dataclass
@@ -356,12 +358,74 @@ def project_status(ctx: RunContextWrapper[AppContext]) -> str:
 @function_tool
 def static_replay_candidate(ctx: RunContextWrapper[AppContext], candidate: str, experiment_id: str,
                             episodes: list[str] | None = None, max_episodes: int = 25) -> str:
-    """Run static replay and persist timing and per-case metrics for an experiment."""
-    if ctx.context.db.db.execute("SELECT 1 FROM experiments WHERE experiment_id=?", (experiment_id,)).fetchone() is None:
+    """Run static replay in an isolated child process and persist per-case metrics."""
+    if not ctx.context.local.allow_exec:
+        return j({"error":"execution disabled; rerun with --allow-exec"})
+    if ctx.context.db.db.execute(
+        "SELECT 1 FROM experiments WHERE experiment_id=?", (experiment_id,)
+    ).fetchone() is None:
         return j({"error":"unknown experiment_id: " + experiment_id})
+
+    try:
+        candidate_path = ctx.context.local._read_path(candidate)
+    except Exception as exc:
+        return j({"error":f"{type(exc).__name__}: {exc}"})
+    if not candidate_path.is_file() or candidate_path.suffix not in {".py",".ipynb"}:
+        return j({"error":"candidate must be an existing .py or .ipynb under v23"})
+
     call_id = "replay_" + uuid.uuid4().hex[:10]
     started_at, started = utcnow(), time.monotonic()
-    result = ctx.context.local.static_replay_candidate(candidate, episodes, max_episodes)
+    runner = ctx.context.local.root / "static_replay_runner.py"
+    child_env = {}
+    for key, value in os.environ.items():
+        upper = key.upper()
+        if any(secret in upper for secret in ("OPENAI_API_KEY","TOKEN","SECRET","PASSWORD","CREDENTIAL")):
+            continue
+        child_env[key] = value
+    child_env["PYTHONUNBUFFERED"] = "1"
+
+    argv = [
+        sys.executable, str(runner),
+        "--candidate", str(candidate_path.relative_to(ctx.context.local.root)),
+        "--episodes-json", json.dumps(episodes or []),
+        "--max-episodes", str(max(1, min(int(max_episodes), 50))),
+    ]
+    try:
+        completed = subprocess.run(
+            argv,
+            cwd=ctx.context.local.root,
+            capture_output=True,
+            text=True,
+            timeout=300,
+            env=child_env,
+        )
+        marker = "__V23_RESULT__"
+        payload_line = next(
+            (line[len(marker):] for line in reversed(completed.stdout.splitlines())
+             if line.startswith(marker)),
+            None,
+        )
+        if payload_line is None:
+            result = {
+                "error":"static replay child did not emit a result marker",
+                "returncode":completed.returncode,
+                "stdout":completed.stdout[-4000:],
+                "stderr":completed.stderr[-4000:],
+            }
+        else:
+            result = json.loads(payload_line)
+            if completed.returncode != 0 and "error" not in result:
+                result["error"] = f"static replay child exited {completed.returncode}"
+    except subprocess.TimeoutExpired as exc:
+        result = {
+            "error":"static replay timeout",
+            "timeout_seconds":300,
+            "stdout":exc.stdout[-4000:] if isinstance(exc.stdout,str) else "",
+            "stderr":exc.stderr[-4000:] if isinstance(exc.stderr,str) else "",
+        }
+    except Exception as exc:
+        result = {"error":f"{type(exc).__name__}: {exc}"}
+
     elapsed = time.monotonic() - started
     summary = ctx.context.db.record_replay_call(
         ctx.context.run_id, experiment_id, call_id, candidate, result, started_at, elapsed)
@@ -372,8 +436,15 @@ def static_replay_candidate(ctx: RunContextWrapper[AppContext], candidate: str, 
     result["elapsed_seconds"] = round(elapsed, 3)
     if reached:
         result["goal_reached"] = reached
-    ctx.context.log.event("static_replay", {"experiment_id":experiment_id,"replay_call_id":call_id,
-                          "elapsed_seconds":round(elapsed,3),"summary":summary,"goal_reached":reached})
+    ctx.context.log.event("static_replay", {
+        "experiment_id":experiment_id,
+        "replay_call_id":call_id,
+        "candidate":candidate,
+        "elapsed_seconds":round(elapsed,3),
+        "summary":summary,
+        "goal_reached":reached,
+        "child_returncode": result.get("returncode"),
+    })
     return j(result)
 
 
