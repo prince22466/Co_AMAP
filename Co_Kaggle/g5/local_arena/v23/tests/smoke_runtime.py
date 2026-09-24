@@ -13,9 +13,16 @@ if str(V23_ROOT) not in sys.path:
 
 from agent import runtime
 from agent.analysis import (
+    analyze_cash_flow,
     analyze_experiment_records,
+    analyze_inventory_flow,
     analyze_loss_history,
     analyze_loss_window,
+    analyze_worker_utilization,
+    cluster_loss_games,
+    compare_candidate_to_v20,
+    component_effect_matrix,
+    hypothesis_evidence,
 )
 
 
@@ -243,6 +250,25 @@ def main() -> int:
             assert detail["rows"]
             assert detail["episode"] == "111548564"
 
+        cash = analyze_cash_flow(V23_ROOT, "111548564")
+        assert cash["episode"] == "111548564"
+        assert cash["final_margin"] < 0
+
+        inventory = analyze_inventory_flow(V23_ROOT, "111548564")
+        assert inventory["episode"] == "111548564"
+        assert inventory["final_margin"] < 0
+
+        utilization = analyze_worker_utilization(V23_ROOT, "111548564")
+        assert utilization["episode"] == "111548564"
+        assert utilization["action_category_counts"]
+
+        clusters = cluster_loss_games(V23_ROOT)
+        assert clusters["games"]
+        assert clusters["clusters"]
+        assert any(
+            row["episode"] == "111548564" for row in clusters["games"]
+        )
+
         # Analyst idea batch queue smoke: exactly 10 ideas, deterministic order,
         # idea -> experiment linkage, then batch exhaustion -> analyst review.
         batch_db = runtime.ResearchDB(Path(tmp) / "idea_batch.sqlite3")
@@ -468,6 +494,62 @@ def main() -> int:
         assert len(experiment_analysis["ideas"]) == 10
         assert experiment_analysis["by_causal_layer"]
         assert experiment_analysis["by_component_combination"]
+
+        effect_matrix = component_effect_matrix(batch_db, review_id)
+        assert effect_matrix["component_matrix"]
+        assert effect_matrix["component_combinations"]
+
+        first_idea_id = queued["idea_ids"][0]
+        evidence = hypothesis_evidence(V23_ROOT, batch_db, first_idea_id)
+        assert evidence["idea_id"] == first_idea_id
+        assert evidence["replay_cases"] == 1
+        assert evidence["verdict"] in {
+            "supported_by_current_replay",
+            "contradicted_by_current_replay",
+            "mixed_or_insufficient",
+        }
+
+        # Candidate-v20 comparison follows the exact stored game_record_path.
+        compare_root = Path(tmp) / "compare_root"
+        record_rel = (
+            "workspace/replay_records/"
+            + first_idea_id
+            + "/synthetic/replay/episode_1.json"
+        )
+        record_path = compare_root / record_rel
+        record_path.parent.mkdir(parents=True, exist_ok=True)
+        record_path.write_text(
+            runtime.json.dumps({
+                "steps": [
+                    {
+                        "replay_step": 1,
+                        "day": 0,
+                        "hour": 1,
+                        "candidate_action": {"farmer": ["PASS"]},
+                        "recorded_v20_action": {"farmer": ["MOVE"]},
+                        "recorded_opponent_action": {"farmer": ["PASS"]},
+                        "diverged_from_v20": True,
+                    }
+                ]
+            }),
+            encoding="utf-8",
+        )
+        first_exp = batch_db.db.execute(
+            "SELECT experiment_id FROM experiments WHERE idea_id=?",
+            (first_idea_id,),
+        ).fetchone()["experiment_id"]
+        batch_db.db.execute(
+            """UPDATE replays SET game_record_path=?
+               WHERE experiment_id=? AND episode='episode_1'""",
+            (record_rel, first_exp),
+        )
+        batch_db.db.commit()
+        compared = compare_candidate_to_v20(
+            compare_root, batch_db, first_idea_id, "episode_1"
+        )
+        assert compared["idea_id"] == first_idea_id
+        assert compared["first_divergence"]["replay_step"] == 1
+        assert compared["trace_steps"] == 1
 
         status = db.project_status()
         assert status["runs_completed"] == 1
