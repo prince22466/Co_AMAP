@@ -97,8 +97,8 @@ OpenAI orchestration and Kaggriculture replay are independent systems.
 
 - The **agent environment** contains the OpenAI SDK and OpenAI Agents SDK. It performs reasoning, planning, candidate generation, experiment selection, memory, tracing, and result analysis.
 - The **replay environment** contains Kaggle Environments, PyTorch, and NumPy. It reconstructs games, runs candidate actions, replays recorded opponent commands, and emits structured metrics.
-- The replay environment must not require or import OpenAI packages.
-- The agent environment must not require or import Kaggle Environments.
+- v23 replay code must not import or call OpenAI APIs. Kaggle may carry unrelated transitive OpenAI/LiteLLM packages internally; those are not part of the replay interface.
+- The agent environment must not install, import, or depend on Kaggle Environments.
 - Communication across the boundary is subprocess arguments plus JSON output.
 - The agent runtime must use a replay interpreter different from its own interpreter.
 - Kaggle/LiteLLM dependency constraints must never determine the OpenAI Agents SDK version.
