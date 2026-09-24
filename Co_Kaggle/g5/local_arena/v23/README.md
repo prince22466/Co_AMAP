@@ -233,10 +233,10 @@ Integer indices, IDs, coordinates, counters, shapes, booleans, action schemas, a
 
 ### FP16 enforcement smoke test
 
-After installing requirements:
+Use the replay environment:
 
 ```bash
-python local_arena/v23/tests/smoke_fp16.py
+.venv-replay/bin/python tests/smoke_fp16.py
 ```
 
 Expected output:
