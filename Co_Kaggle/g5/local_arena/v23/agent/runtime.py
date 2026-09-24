@@ -508,6 +508,48 @@ class ResearchDB:
             (review_id,),
         ).fetchall()]
 
+    def batch_lineage_summary(self, review_id=None):
+        dossiers = self.batch_dossiers(review_id)
+        out = []
+        for d in dossiers:
+            idea = d["idea"]
+            experiments = []
+            for exp in d["experiments"]:
+                calls = [
+                    call for call in d["replay_calls"]
+                    if any(g["replay_id"] is not None for g in call["games"])
+                ]
+                experiments.append({
+                    "experiment_id":exp["experiment_id"],
+                    "status":exp["status"],
+                    "candidate":exp["candidate"],
+                    "candidate_sha256":exp["candidate_sha256"],
+                    "wins":exp["wins"],
+                    "losses":exp["losses"],
+                    "replay_cases":exp["replay_cases"],
+                    "mean_margin_improvement":exp["mean_margin_improvement"],
+                    "best_margin_improvement":exp["best_margin_improvement"],
+                    "regressions":exp["regressions"],
+                    "conclusion":exp["conclusion"],
+                    "replay_call_ids":[call["replay_call_id"] for call in calls],
+                    "game_record_paths":[
+                        game["game_record_path"]
+                        for call in calls for game in call["games"]
+                        if game["game_record_path"]
+                    ],
+                })
+            out.append({
+                "idea_id":idea["idea_id"],
+                "batch_index":idea["batch_index"],
+                "title":idea["title"],
+                "components":idea.get("components",[]),
+                "interaction_hypothesis":idea["interaction_hypothesis"],
+                "system_prediction":idea["system_prediction"],
+                "idea_status":idea["status"],
+                "experiments":experiments,
+            })
+        return out
+
     def record_strategy_review(self, run_id, trigger, analyst_output,
                                usage=None, conservative_cost_usd=0.0):
         rid = "review_" + uuid.uuid4().hex[:10]
@@ -630,6 +672,7 @@ class ResearchDB:
           "research_signal": self.research_signal(),
           "idea_batch": self.idea_batch_status(),
           "recent_idea_results": self.recent_idea_results()[-10:],
+          "latest_batch_lineage": self.batch_lineage_summary(),
           "latest_strategy_review": (
               {
                   "review_id": self.latest_strategy_review()["review_id"],
@@ -1243,7 +1286,7 @@ def main():
             }
             analyst_output=""
             analyst_error=""
-            prior_batch = db.recent_idea_results()
+            prior_batch = db.batch_lineage_summary()
             analyst_prompt=(
                 "Research task:\n"+args.task+
                 "\n\nIndependent performance review trigger: "+review_trigger+
@@ -1253,9 +1296,12 @@ def main():
             )
             if prior_batch:
                 analyst_prompt += (
-                    "\n\nRESULTS FROM THE MOST RECENT IDEA BATCH:\n"
+                    "\n\nRESULTS AND LINEAGE FROM THE MOST RECENT IDEA BATCH:\n"
                     + j(prior_batch)
-                    + "\nUse these measured outcomes as evidence. Do not recycle failed "
+                    + "\nEvery idea_id, experiment_id, candidate path/hash, replay_call_id, "
+                      "and game_record_path above is canonical. Use idea_dossier(idea_id) "
+                      "when you need detailed per-game lineage, and read a game_record_path "
+                      "only when its trace can change the diagnosis. Do not recycle failed "
                       "idea families unless the new hypothesis explains why the failure "
                       "would not apply."
                 )
