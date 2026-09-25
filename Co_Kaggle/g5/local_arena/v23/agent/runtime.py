@@ -62,7 +62,7 @@ v2 research-memory contract:
 - Every replayed candidate MUST be a durable artifact under workspace/candidates/. Use write_candidate_file to create it before replay. Never evaluate ephemeral code, descriptive candidate strings, or arbitrary files elsewhere in v23.
 - Treat workspace/candidates/<name>.py or .ipynb plus its SHA-256 as the immutable experiment artifact. Keep rejected as well as successful candidates for lineage and branching.
 - An assigned idea is not complete until the exact durable candidate has been plugged into static replay and produced at least one valid measured replay result. If finish_experiment returns execution-contract feedback, do not move on or merely explain; continue the SAME idea, create/fix the candidate, replay it correctly, inspect the result, and call finish_experiment again.
-- ERROR is not an escape hatch from the execution contract. Use ERROR only when concrete runtime evidence exists: a persisted replay error for this experiment or a blocker recorded through report_blocker. If ERROR is rejected, continue the SAME idea and complete code -> replay -> result.
+- ERROR is not an escape hatch from the execution contract. Use ERROR only when concrete runtime evidence exists: a persisted replay error for this experiment or a blocker recorded through report_blocker. Candidate-code/runtime errors are recoverable attempts: close only the failed experiment attempt, keep the SAME idea RUNNING, create a fresh experiment with a new candidate artifact/content, and replay again. Do not call report_blocker for SyntaxError, ImportError, NameError, candidate load failure, or other fixable generated-code errors.
 - Every new idea must produce a new candidate artifact AND new candidate content. Reusing a path or SHA-256 already bound to a different idea is rejected. Derive from prior work if useful, but make a real idea-specific code change and save it as a new workspace/candidates/ artifact before replay.
 - When execution is enabled, do not stop at analysis or planning. You must create/select a concrete candidate, start an experiment, execute at least one static replay, analyze the measured result, and finish the experiment unless a concrete runtime error or budget stop blocks execution.
 - A rejected candidate is evidence, not a blocker. If the durable goal is unmet, continue with the next justified experiment.
@@ -259,7 +259,10 @@ class ResearchDB:
                 ).fetchone()
                 if existing is not None and existing["status"] == "RUNNING":
                     return str(existing["experiment_id"])
-            if idea["status"] != "PENDING":
+                # A prior recoverable attempt may be finished as ERROR while the
+                # idea intentionally stays RUNNING. In that case create a fresh
+                # experiment attempt below.
+            elif idea["status"] != "PENDING":
                 return {
                     "error":"idea is not pending or resumable",
                     "idea_id":idea_id,
@@ -285,7 +288,7 @@ class ResearchDB:
         self.db.commit()
         return eid
 
-    def finish_experiment(self, eid, status, conclusion):
+    def finish_experiment(self, eid, status, conclusion, retry_same_idea=False):
         row = self.db.execute(
             "SELECT started_at,idea_id FROM experiments WHERE experiment_id=?",
             (eid,),
@@ -302,18 +305,27 @@ class ResearchDB:
             (utcnow(), elapsed, status, conclusion, eid),
         )
         if row["idea_id"]:
-            idea_status = "ERROR" if status == "ERROR" else "COMPLETED"
-            self.db.execute(
-                """UPDATE research_ideas
-                   SET status=?,finished_at=?,conclusion=?
-                   WHERE idea_id=?""",
-                (idea_status, utcnow(), conclusion, row["idea_id"]),
-            )
+            if retry_same_idea:
+                self.db.execute(
+                    """UPDATE research_ideas
+                       SET status='RUNNING',finished_at=NULL,conclusion=?
+                       WHERE idea_id=?""",
+                    (conclusion, row["idea_id"]),
+                )
+            else:
+                idea_status = "ERROR" if status == "ERROR" else "COMPLETED"
+                self.db.execute(
+                    """UPDATE research_ideas
+                       SET status=?,finished_at=?,conclusion=?
+                       WHERE idea_id=?""",
+                    (idea_status, utcnow(), conclusion, row["idea_id"]),
+                )
         self.db.commit()
         return {
             "experiment_id": eid,
             "idea_id": row["idea_id"],
             "status": status,
+            "retry_same_idea": bool(retry_same_idea),
             "elapsed_seconds": round(elapsed, 3),
         }
 
@@ -409,22 +421,20 @@ class ResearchDB:
             reused = self.db.execute(
                 """SELECT experiment_id,idea_id,candidate,candidate_sha256
                    FROM experiments
-                   WHERE idea_id IS NOT NULL
-                     AND idea_id != ?
-                     AND experiment_id != ?
+                   WHERE experiment_id != ?
                      AND (
                          candidate = ?
                          OR candidate_sha256 = ?
                      )
                    ORDER BY started_at ASC
                    LIMIT 1""",
-                (row["idea_id"], experiment_id, candidate, candidate_sha256),
+                (experiment_id, candidate, candidate_sha256),
             ).fetchone()
             if reused is not None:
                 same_path = reused["candidate"] == candidate
                 same_sha = reused["candidate_sha256"] == candidate_sha256
                 return {
-                    "error":"candidate must be new for each idea",
+                    "error":"candidate must be new for each experiment attempt",
                     "idea_id":row["idea_id"],
                     "candidate":candidate,
                     "candidate_sha256":candidate_sha256,
@@ -433,8 +443,8 @@ class ResearchDB:
                     "same_path":bool(same_path),
                     "same_sha256":bool(same_sha),
                     "feedback":(
-                        "Do not reuse another idea's candidate. Continue the SAME assigned "
-                        "idea, make a real idea-specific code change, save it as a new file "
+                        "Do not reuse a prior attempt's candidate. Continue the SAME assigned "
+                        "idea, fix the runtime/code error, save corrected code as a NEW file "
                         "under workspace/candidates/, then replay that new artifact."
                     ),
                 }
@@ -1237,6 +1247,24 @@ def finish_experiment(ctx: RunContextWrapper[AppContext], experiment_id: str, st
             }
             ctx.context.log.event("experiment_finish_rejected", feedback)
             return j(feedback)
+
+    if status == "ERROR" and not ctx.context.blocker_reason:
+        # Persisted replay errors caused by generated candidate code are recoverable.
+        # Close this immutable attempt, keep the idea RUNNING, and force a fresh
+        # experiment/candidate attempt on the next Engineer cycle.
+        out = ctx.context.db.finish_experiment(
+            experiment_id, status, conclusion, retry_same_idea=True
+        )
+        out["retry_required"] = True
+        out["feedback"] = (
+            "This failed candidate attempt is now closed and immutable. Continue the SAME "
+            "idea. Call start_experiment again to create a NEW experiment attempt, then "
+            "write a NEW corrected candidate artifact with a different path/content, plug "
+            "that candidate into static_replay_candidate, and retry until a valid measured "
+            "result exists. Do not call report_blocker for fixable candidate code errors."
+        )
+        ctx.context.log.event("experiment_retry_scheduled", out)
+        return j(out)
 
     out = ctx.context.db.finish_experiment(experiment_id, status, conclusion)
     ctx.context.log.event("experiment_finish", out)
