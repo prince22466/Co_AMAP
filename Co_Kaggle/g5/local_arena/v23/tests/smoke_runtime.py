@@ -524,6 +524,51 @@ def main() -> int:
         assert replay_error_evidence["ok"] is True
         assert replay_error_evidence["replay_error_cases"] == 1
 
+        # A different idea may not reuse either the same candidate path or
+        # byte-identical candidate content from a prior idea.
+        uniqueness_db = runtime.ResearchDB(Path(tmp) / "candidate_uniqueness.sqlite3")
+        uniq_run = "run_candidate_uniqueness"
+        uniqueness_db.start_run(
+            uniq_run, "uniq-session", "candidate uniqueness smoke", "smoke-model"
+        )
+        review = uniqueness_db.record_strategy_review(
+            uniq_run, "initial_diagnosis", runtime.json.dumps(analyst_json), {}, 0.0
+        )
+        queued = uniqueness_db.add_idea_batch(review, parsed_batch["ideas"])
+        idea1, idea2 = queued["idea_ids"][:2]
+
+        exp1 = uniqueness_db.start_experiment(
+            uniq_run, "idea one", "", "", "uniq smoke", idea1
+        )
+        sha1 = runtime.hashlib.sha256(b"candidate one").hexdigest()
+        first_bind = uniqueness_db.bind_candidate(
+            exp1, "workspace/candidates/idea1.py", sha1
+        )
+        assert "error" not in first_bind
+
+        exp2 = uniqueness_db.start_experiment(
+            uniq_run, "idea two", "", "", "uniq smoke", idea2
+        )
+        same_path = uniqueness_db.bind_candidate(
+            exp2, "workspace/candidates/idea1.py",
+            runtime.hashlib.sha256(b"candidate two").hexdigest()
+        )
+        assert same_path["error"] == "candidate must be new for each idea"
+        assert same_path["same_path"] is True
+
+        same_sha = uniqueness_db.bind_candidate(
+            exp2, "workspace/candidates/idea2.py", sha1
+        )
+        assert same_sha["error"] == "candidate must be new for each idea"
+        assert same_sha["same_sha256"] is True
+
+        unique_bind = uniqueness_db.bind_candidate(
+            exp2,
+            "workspace/candidates/idea2.py",
+            runtime.hashlib.sha256(b"candidate two").hexdigest(),
+        )
+        assert "error" not in unique_bind
+
         assert len(parsed_batch["ideas"]) == 10
 
         invalid_attempt_id = batch_db.record_analyst_attempt(
