@@ -524,6 +524,165 @@ def main() -> int:
         assert replay_error_evidence["ok"] is True
         assert replay_error_evidence["replay_error_cases"] == 1
 
+        classified = runtime.candidate_code_failure_evidence(error_db, None)
+        assert classified["candidate_code_failure"] is False
+
+        # Self-repair classification must be scoped only to agent-generated
+        # workspace/candidates artifacts, never working_files/reference inputs.
+        scoped_db = runtime.ResearchDB(Path(tmp) / "repair_scope.sqlite3")
+        scoped_run = "run_repair_scope"
+        scoped_db.start_run(
+            scoped_run, "repair-scope-session", "repair scope smoke", "smoke-model"
+        )
+        scoped_review = scoped_db.record_strategy_review(
+            scoped_run, "initial_diagnosis", runtime.json.dumps(analyst_json), {}, 0.0
+        )
+        scoped_batch = scoped_db.add_idea_batch(scoped_review, parsed_batch["ideas"])
+        scoped_idea = scoped_batch["idea_ids"][0]
+        scoped_exp = scoped_db.start_experiment(
+            scoped_run, "scope test", "", "", "scope smoke", scoped_idea
+        )
+        scoped_db.record_replay_call(
+            scoped_run,
+            scoped_exp,
+            "replay_scope_reference",
+            "working_files/reference/bad_reference.py",
+            {
+                "summary": {"games_total": 1, "games_valid": 0, "games_invalid": 1},
+                "matches": [{
+                    "episode": "scope-reference",
+                    "valid": False,
+                    "original_v20_margin": -1.0,
+                    "candidate_margin": None,
+                    "margin_improvement": None,
+                    "result": None,
+                    "action_divergences": None,
+                    "elapsed_seconds": 0.001,
+                    "error": "SyntaxError: invalid syntax",
+                }],
+            },
+            runtime.utcnow(),
+            0.001,
+        )
+        reference_failure = runtime.candidate_code_failure_evidence(
+            scoped_db, scoped_idea
+        )
+        assert reference_failure["candidate_code_failure"] is False
+
+        # Close the reference-file attempt as a recoverable test fixture so
+        # start_experiment creates a genuinely fresh attempt for the same idea.
+        scoped_db.finish_experiment(
+            scoped_exp, "ERROR", "reference fixture complete", retry_same_idea=True
+        )
+        scoped_exp2 = scoped_db.start_experiment(
+            scoped_run, "scope candidate test", "", "", "scope candidate smoke", scoped_idea
+        )
+        assert scoped_exp2 != scoped_exp
+        scoped_candidate = "workspace/candidates/scope_candidate.py"
+        scoped_sha = runtime.hashlib.sha256(b"scope candidate").hexdigest()
+        scoped_bound = scoped_db.bind_candidate(
+            scoped_exp2, scoped_candidate, scoped_sha
+        )
+        assert "error" not in scoped_bound
+        scoped_db.record_replay_call(
+            scoped_run,
+            scoped_exp2,
+            "replay_scope_candidate",
+            scoped_candidate,
+            {
+                "summary": {"games_total": 1, "games_valid": 0, "games_invalid": 1},
+                "matches": [{
+                    "episode": "scope-candidate",
+                    "valid": False,
+                    "original_v20_margin": -1.0,
+                    "candidate_margin": None,
+                    "margin_improvement": None,
+                    "result": None,
+                    "action_divergences": None,
+                    "elapsed_seconds": 0.001,
+                    "error": "SyntaxError: invalid syntax",
+                }],
+            },
+            runtime.utcnow(),
+            0.001,
+        )
+        generated_failure = runtime.candidate_code_failure_evidence(
+            scoped_db, scoped_idea
+        )
+        assert generated_failure["candidate_code_failure"] is True
+        assert generated_failure["matched_errors"][0]["candidate"].startswith(
+            "workspace/candidates/"
+        )
+
+        # Recoverable candidate runtime errors close only the failed attempt,
+        # keep the same idea RUNNING, and allow a fresh experiment attempt.
+        retry_db = runtime.ResearchDB(Path(tmp) / "retry_attempt.sqlite3")
+        retry_run = "run_retry_attempt"
+        retry_db.start_run(
+            retry_run, "retry-session", "retry attempt smoke", "smoke-model"
+        )
+        retry_review = retry_db.record_strategy_review(
+            retry_run, "initial_diagnosis", runtime.json.dumps(analyst_json), {}, 0.0
+        )
+        retry_batch = retry_db.add_idea_batch(retry_review, parsed_batch["ideas"])
+        retry_idea = retry_batch["idea_ids"][0]
+        attempt1 = retry_db.start_experiment(
+            retry_run, "repairable candidate", "", "", "attempt one", retry_idea
+        )
+        attempt1_finish = retry_db.finish_experiment(
+            attempt1, "ERROR", "SyntaxError in generated candidate", retry_same_idea=True
+        )
+        assert attempt1_finish["retry_same_idea"] is True
+        retry_work = retry_db.current_work_idea()
+        assert retry_work is not None
+        assert retry_work["idea_id"] == retry_idea
+        assert retry_work["status"] == "RUNNING"
+        assert retry_work["resume_existing"] is False
+        assert retry_work["repair_after_error"] is True
+        assert retry_work["previous_experiment_status"] == "ERROR"
+
+        repair_context = build_engineer_context(
+            retry_db, retry_work, max_chars=8000
+        )
+        assert repair_context["assigned_idea"]["repair_after_error"] is True
+        assert "Generated candidate-code failures are repair tasks" in (
+            repair_context["execution_policy"]["self_correction"]
+        )
+
+        attempt2 = retry_db.start_experiment(
+            retry_run, "repairable candidate retry", "", "", "attempt two", retry_idea
+        )
+        assert attempt2 != attempt1
+        retry_idea_row = retry_db.db.execute(
+            "SELECT experiment_id,status FROM research_ideas WHERE idea_id=?",
+            (retry_idea,),
+        ).fetchone()
+        assert retry_idea_row["experiment_id"] == attempt2
+        assert retry_idea_row["status"] == "RUNNING"
+
+        retry_work_after_error = retry_db.current_work_idea()
+        assert retry_work_after_error is not None
+        assert retry_work_after_error["idea_id"] == retry_idea
+        assert retry_work_after_error["resume_existing"] is True
+        assert retry_work_after_error["repair_after_error"] is False
+
+        sha_attempt1 = runtime.hashlib.sha256(b"bad candidate").hexdigest()
+        sha_attempt2 = runtime.hashlib.sha256(b"fixed candidate").hexdigest()
+        first = retry_db.bind_candidate(
+            attempt1, "workspace/candidates/retry_attempt1.py", sha_attempt1
+        )
+        assert "error" not in first
+        reused_same_attempt_code = retry_db.bind_candidate(
+            attempt2, "workspace/candidates/retry_attempt2.py", sha_attempt1
+        )
+        assert reused_same_attempt_code["error"] == (
+            "candidate must be new for each experiment attempt"
+        )
+        fixed = retry_db.bind_candidate(
+            attempt2, "workspace/candidates/retry_attempt2.py", sha_attempt2
+        )
+        assert "error" not in fixed
+
         # A different idea may not reuse either the same candidate path or
         # byte-identical candidate content from a prior idea.
         uniqueness_db = runtime.ResearchDB(Path(tmp) / "candidate_uniqueness.sqlite3")
@@ -553,13 +712,13 @@ def main() -> int:
             exp2, "workspace/candidates/idea1.py",
             runtime.hashlib.sha256(b"candidate two").hexdigest()
         )
-        assert same_path["error"] == "candidate must be new for each idea"
+        assert same_path["error"] == "candidate must be new for each experiment attempt"
         assert same_path["same_path"] is True
 
         same_sha = uniqueness_db.bind_candidate(
             exp2, "workspace/candidates/idea2.py", sha1
         )
-        assert same_sha["error"] == "candidate must be new for each idea"
+        assert same_sha["error"] == "candidate must be new for each experiment attempt"
         assert same_sha["same_sha256"] is True
 
         unique_bind = uniqueness_db.bind_candidate(

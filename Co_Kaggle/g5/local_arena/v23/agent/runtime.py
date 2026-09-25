@@ -62,7 +62,7 @@ v2 research-memory contract:
 - Every replayed candidate MUST be a durable artifact under workspace/candidates/. Use write_candidate_file to create it before replay. Never evaluate ephemeral code, descriptive candidate strings, or arbitrary files elsewhere in v23.
 - Treat workspace/candidates/<name>.py or .ipynb plus its SHA-256 as the immutable experiment artifact. Keep rejected as well as successful candidates for lineage and branching.
 - An assigned idea is not complete until the exact durable candidate has been plugged into static replay and produced at least one valid measured replay result. If finish_experiment returns execution-contract feedback, do not move on or merely explain; continue the SAME idea, create/fix the candidate, replay it correctly, inspect the result, and call finish_experiment again.
-- ERROR is not an escape hatch from the execution contract. Use ERROR only when concrete runtime evidence exists: a persisted replay error for this experiment or a blocker recorded through report_blocker. If ERROR is rejected, continue the SAME idea and complete code -> replay -> result.
+- ERROR is not an escape hatch from the execution contract. Use ERROR only when concrete runtime evidence exists: a persisted replay error for this experiment or a blocker recorded through report_blocker. Candidate-code/runtime errors are recoverable attempts: close only the failed experiment attempt, keep the SAME idea RUNNING, create a fresh experiment with a new candidate artifact/content, and replay again. Do not call report_blocker for SyntaxError, ImportError, NameError, candidate load failure, or other fixable generated-code errors.
 - Every new idea must produce a new candidate artifact AND new candidate content. Reusing a path or SHA-256 already bound to a different idea is rejected. Derive from prior work if useful, but make a real idea-specific code change and save it as a new workspace/candidates/ artifact before replay.
 - When execution is enabled, do not stop at analysis or planning. You must create/select a concrete candidate, start an experiment, execute at least one static replay, analyze the measured result, and finish the experiment unless a concrete runtime error or budget stop blocks execution.
 - A rejected candidate is evidence, not a blocker. If the durable goal is unmet, continue with the next justified experiment.
@@ -71,6 +71,8 @@ v2 research-memory contract:
 - After four consecutive rejected experiments with no wins and no positive mean margin improvement, treat the search as stagnant: abandon the current tweak family, re-inspect raw loss evidence, and move to a different causal layer (for example worker actions/task ranking/logistics/planning/inventory/market). Do not keep making parameter variants of the same idea.
 - Do not use one fixed 5-game screen forever. Rotate or stratify screening histories when a screen repeatedly rejects candidates, and periodically run the strongest candidate family on all 25 histories because local replay is cheaper than additional model reasoning.
 - Only call report_blocker for a concrete runtime/environment failure that makes further research impossible without external intervention.
+- SELF-CORRECTION IS REQUIRED only for agent-generated candidate artifacts under workspace/candidates/. When static_replay_candidate returns candidate_repair_required=true, inspect the returned error, close that attempt with finish_experiment(..., ERROR, ...), call start_experiment again for the SAME idea, write a NEW corrected candidate artifact under workspace/candidates/, and replay it. Repeat this repair loop until replay produces a valid measured result or a truly external blocker exists.
+- Never edit, rewrite, or self-correct user/project-supplied reference files such as working_files/, replay/, agent/, v20 source/notebooks, or any repository file outside workspace/candidates/. Treat those as read-only inputs. If such an external/reference file is actually broken, report the concrete blocker instead of modifying it.
 - FP16 is mandatory for candidate floating-point model weights, activations, tensors, and learned numeric compute. Integer/boolean/schema-mandated types are exempt. Do not emit float32, float64, double, or bfloat16 candidate model/tensor code unless a backend operation is provably unsupported in FP16; any such exception must be narrowly scoped, documented, and converted back to FP16 immediately.
 """
 
@@ -259,7 +261,10 @@ class ResearchDB:
                 ).fetchone()
                 if existing is not None and existing["status"] == "RUNNING":
                     return str(existing["experiment_id"])
-            if idea["status"] != "PENDING":
+                # A prior recoverable attempt may be finished as ERROR while the
+                # idea intentionally stays RUNNING. In that case create a fresh
+                # experiment attempt below.
+            elif idea["status"] != "PENDING":
                 return {
                     "error":"idea is not pending or resumable",
                     "idea_id":idea_id,
@@ -285,7 +290,7 @@ class ResearchDB:
         self.db.commit()
         return eid
 
-    def finish_experiment(self, eid, status, conclusion):
+    def finish_experiment(self, eid, status, conclusion, retry_same_idea=False):
         row = self.db.execute(
             "SELECT started_at,idea_id FROM experiments WHERE experiment_id=?",
             (eid,),
@@ -302,18 +307,27 @@ class ResearchDB:
             (utcnow(), elapsed, status, conclusion, eid),
         )
         if row["idea_id"]:
-            idea_status = "ERROR" if status == "ERROR" else "COMPLETED"
-            self.db.execute(
-                """UPDATE research_ideas
-                   SET status=?,finished_at=?,conclusion=?
-                   WHERE idea_id=?""",
-                (idea_status, utcnow(), conclusion, row["idea_id"]),
-            )
+            if retry_same_idea:
+                self.db.execute(
+                    """UPDATE research_ideas
+                       SET status='RUNNING',finished_at=NULL,conclusion=?
+                       WHERE idea_id=?""",
+                    (conclusion, row["idea_id"]),
+                )
+            else:
+                idea_status = "ERROR" if status == "ERROR" else "COMPLETED"
+                self.db.execute(
+                    """UPDATE research_ideas
+                       SET status=?,finished_at=?,conclusion=?
+                       WHERE idea_id=?""",
+                    (idea_status, utcnow(), conclusion, row["idea_id"]),
+                )
         self.db.commit()
         return {
             "experiment_id": eid,
             "idea_id": row["idea_id"],
             "status": status,
+            "retry_same_idea": bool(retry_same_idea),
             "elapsed_seconds": round(elapsed, 3),
         }
 
@@ -409,22 +423,20 @@ class ResearchDB:
             reused = self.db.execute(
                 """SELECT experiment_id,idea_id,candidate,candidate_sha256
                    FROM experiments
-                   WHERE idea_id IS NOT NULL
-                     AND idea_id != ?
-                     AND experiment_id != ?
+                   WHERE experiment_id != ?
                      AND (
                          candidate = ?
                          OR candidate_sha256 = ?
                      )
                    ORDER BY started_at ASC
                    LIMIT 1""",
-                (row["idea_id"], experiment_id, candidate, candidate_sha256),
+                (experiment_id, candidate, candidate_sha256),
             ).fetchone()
             if reused is not None:
                 same_path = reused["candidate"] == candidate
                 same_sha = reused["candidate_sha256"] == candidate_sha256
                 return {
-                    "error":"candidate must be new for each idea",
+                    "error":"candidate must be new for each experiment attempt",
                     "idea_id":row["idea_id"],
                     "candidate":candidate,
                     "candidate_sha256":candidate_sha256,
@@ -433,8 +445,8 @@ class ResearchDB:
                     "same_path":bool(same_path),
                     "same_sha256":bool(same_sha),
                     "feedback":(
-                        "Do not reuse another idea's candidate. Continue the SAME assigned "
-                        "idea, make a real idea-specific code change, save it as a new file "
+                        "Do not reuse a prior attempt's candidate. Continue the SAME assigned "
+                        "idea, fix the runtime/code error, save corrected code as a NEW file "
                         "under workspace/candidates/, then replay that new artifact."
                     ),
                 }
@@ -579,7 +591,16 @@ class ResearchDB:
         ).fetchone()
         if row is not None:
             out = dict(row)
-            out["resume_existing"] = True
+            experiment_status = None
+            if row["experiment_id"]:
+                exp = self.db.execute(
+                    "SELECT status FROM experiments WHERE experiment_id=?",
+                    (row["experiment_id"],),
+                ).fetchone()
+                experiment_status = exp["status"] if exp is not None else None
+            out["resume_existing"] = experiment_status == "RUNNING"
+            out["repair_after_error"] = experiment_status == "ERROR"
+            out["previous_experiment_status"] = experiment_status
             return out
         row = self.db.execute(
             """SELECT * FROM research_ideas
@@ -1238,6 +1259,24 @@ def finish_experiment(ctx: RunContextWrapper[AppContext], experiment_id: str, st
             ctx.context.log.event("experiment_finish_rejected", feedback)
             return j(feedback)
 
+    if status == "ERROR" and not ctx.context.blocker_reason:
+        # Persisted replay errors caused by generated candidate code are recoverable.
+        # Close this immutable attempt, keep the idea RUNNING, and force a fresh
+        # experiment/candidate attempt on the next Engineer cycle.
+        out = ctx.context.db.finish_experiment(
+            experiment_id, status, conclusion, retry_same_idea=True
+        )
+        out["retry_required"] = True
+        out["feedback"] = (
+            "This failed candidate attempt is now closed and immutable. Continue the SAME "
+            "idea. Call start_experiment again to create a NEW experiment attempt, then "
+            "write a NEW corrected candidate artifact with a different path/content, plug "
+            "that candidate into static_replay_candidate, and retry until a valid measured "
+            "result exists. Do not call report_blocker for fixable candidate code errors."
+        )
+        ctx.context.log.event("experiment_retry_scheduled", out)
+        return j(out)
+
     out = ctx.context.db.finish_experiment(experiment_id, status, conclusion)
     ctx.context.log.event("experiment_finish", out)
     return j(out)
@@ -1373,6 +1412,54 @@ def idea_dossier(ctx: RunContextWrapper[AppContext], idea_id: str) -> str:
         return j({"error":"unknown idea_id: " + idea_id})
     return j_bounded(dossier, 12000)
 
+_CANDIDATE_CODE_ERROR_MARKERS = (
+    "syntaxerror", "invalid syntax", "importerror", "modulenotfounderror",
+    "no module named", "nameerror", "is not defined", "attributeerror",
+    "indentationerror", "taberror", "failed to load candidate",
+    "candidate load", "compile(", "unexpected indent",
+)
+
+
+def candidate_code_failure_evidence(db: ResearchDB, idea_id: str | None) -> dict[str, Any]:
+    """Find recent replay evidence that points to fixable generated candidate code."""
+    if not idea_id:
+        return {"candidate_code_failure": False, "errors": []}
+    rows = db.db.execute(
+        """SELECT r.error,r.experiment_id,r.replay_call_id,e.candidate,e.candidate_sha256
+           FROM replays r
+           JOIN experiments e ON e.experiment_id=r.experiment_id
+           WHERE e.idea_id=? AND COALESCE(TRIM(r.error),'') != ''
+           ORDER BY r.replay_id DESC LIMIT 8""",
+        (idea_id,),
+    ).fetchall()
+    errors = []
+    matched = []
+    for row in rows:
+        err = str(row["error"] or "").strip()
+        if not err:
+            continue
+        item = {
+            "error": err[:3000],
+            "experiment_id": row["experiment_id"],
+            "replay_call_id": row["replay_call_id"],
+            "candidate": row["candidate"],
+            "candidate_sha256": row["candidate_sha256"],
+        }
+        errors.append(item)
+        low = err.casefold()
+        candidate = str(row["candidate"] or "").replace("\\", "/")
+        generated_candidate = candidate.startswith("workspace/candidates/")
+        if generated_candidate and any(
+            marker in low for marker in _CANDIDATE_CODE_ERROR_MARKERS
+        ):
+            matched.append(item)
+    return {
+        "candidate_code_failure": bool(matched),
+        "errors": errors[:4],
+        "matched_errors": matched[:4],
+    }
+
+
 @function_tool
 def report_blocker(ctx: RunContextWrapper[AppContext], failed_step: str, reason: str) -> str:
     """Report a concrete runtime/environment blocker that makes further research impossible."""
@@ -1380,6 +1467,29 @@ def report_blocker(ctx: RunContextWrapper[AppContext], failed_step: str, reason:
     reason = reason.strip()
     if not failed_step or not reason:
         return j({"error":"failed_step and reason are required"})
+
+    repair = candidate_code_failure_evidence(
+        ctx.context.db, ctx.context.active_idea_id or None
+    )
+    # Only persisted failures from an agent-generated workspace/candidates artifact
+    # trigger self-repair. A SyntaxError mentioned in working_files/ or another
+    # supplied/reference file must not cause the agent to rewrite that file.
+    if ctx.context.active_idea_id and repair["candidate_code_failure"]:
+        feedback = {
+            "error":"generated candidate-code failure is recoverable, not a global blocker",
+            "idea_id":ctx.context.active_idea_id,
+            "candidate_code_errors":repair.get("matched_errors", []),
+            "feedback":(
+                "Self-correct only the generated workspace/candidates artifact. Keep the "
+                "SAME idea. Close the failed attempt with finish_experiment(..., ERROR, ...), "
+                "call start_experiment again to get a NEW experiment_id, write a NEW corrected "
+                "candidate file under workspace/candidates/, and replay it. Never modify "
+                "working_files/ or other supplied repository/reference files."
+            ),
+        }
+        ctx.context.log.event("blocker_rejected_candidate_repair", feedback)
+        return j_bounded(feedback, 12000)
+
     ctx.context.blocker_reason = failed_step + ": " + reason
     ctx.context.log.event("research_blocker", {
         "failed_step": failed_step,
@@ -1523,6 +1633,17 @@ def static_replay_candidate(ctx: RunContextWrapper[AppContext], candidate: str, 
             "game_record_path": row.get("game_record_path"),
             "error": row.get("error"),
         })
+    error_texts = []
+    top_error = result.get("error") if isinstance(result, dict) else None
+    if top_error:
+        error_texts.append(str(top_error))
+    error_texts.extend(
+        str(row.get("error") or "") for row in compact_matches if row.get("error")
+    )
+    candidate_repair_required = any(
+        any(marker in err.casefold() for marker in _CANDIDATE_CODE_ERROR_MARKERS)
+        for err in error_texts
+    )
     model_result = {
         "protocol": result.get("protocol") if isinstance(result, dict) else None,
         "precision_audit": result.get("precision_audit") if isinstance(result, dict) else None,
@@ -1534,7 +1655,15 @@ def static_replay_candidate(ctx: RunContextWrapper[AppContext], candidate: str, 
         "candidate_sha256": candidate_sha256,
         "elapsed_seconds": round(elapsed, 3),
         "goal_reached": reached,
-        "error": result.get("error") if isinstance(result, dict) else None,
+        "error": top_error,
+        "candidate_repair_required": candidate_repair_required,
+        "repair_errors": [err[:3000] for err in error_texts[:4]],
+        "repair_action": (
+            "Generated candidate code failed. Self-correct now: finish this immutable "
+            "attempt as ERROR, start a NEW experiment for the SAME idea, create a NEW "
+            "corrected candidate path/content, and replay again. Do not call report_blocker."
+            if candidate_repair_required else None
+        ),
         "detail_policy": "Use idea_dossier or game_record_path for targeted drill-down; full traces are not returned to model context.",
     }
     return j_bounded(model_result, 24000)
