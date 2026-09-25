@@ -184,11 +184,24 @@ def forecast(obs):
                     if at_turn>step and at_day<30:
                         net_flow[c][at_turn]+=units if fi==obs['player'] else (1.8 if ongoing else units)
 
-    # Retain v20's assumption that our currently held goods are near-term market
-    # supply, but place that supply on the current turn instead of folding it into
-    # an entire day bucket.
-    for c,n in totals(obs['private']).items():
-        if c in net_flow:net_flow[c][step]+=n
+    # Immediate own supply: only goods already in the shed can be sold now.
+    # Carried worker inventory is deliberately excluded until it reaches the shed.
+    # Match market_orders() reserve policy so wheat/fertilizer kept for operations
+    # are not forecast as current-turn market supply.
+    private=obs['private'];shed=private['shed'];total=totals(private)
+    own_farm=obs['farms'][obs['player']]
+    live=sum(
+        1 for row in own_farm['tiles'] for tile_state in row
+        if isinstance(tile_state,dict) and 'animal' in tile_state
+    )
+    reserve_wheat=0 if day==29 else max(4,live+2)
+    reserve_fert=0 if day<10 or day==29 else 4
+    for c,n in shed.items():
+        if c not in net_flow or n<=0:continue
+        sellable=n
+        if c=='WHEAT':sellable=min(n,max(0,total.get(c,0)-reserve_wheat))
+        elif c=='FERTILIZER':sellable=min(n,max(0,total.get(c,0)-reserve_fert))
+        if sellable:net_flow[c][step]+=sellable
 
     # Retain the old herd-to-wheat-demand heuristic, but express it as one daily flow
     # rather than subtracting a fractional amount continuously across a day.
