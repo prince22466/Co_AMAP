@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import asyncio
 import hashlib
 import json
@@ -59,7 +60,7 @@ v2 research-memory contract:
 - Call set_goal when the task has an explicit numeric target. If the target is defined over a fixed corpus (for example wins across all 25 histories), set min_games_total to that corpus size so a subset cannot satisfy the final goal.
 - Goal completion comes only from structured replay metrics, never prose.
 - Model-written candidate policies may execute only through static_replay_candidate.
-- Every replayed candidate MUST be a durable artifact under workspace/candidates/. Use write_candidate_file to create it before replay. Never evaluate ephemeral code, descriptive candidate strings, or arbitrary files elsewhere in v23.
+- Every replayed candidate MUST be a durable full-v20-derived artifact under workspace/candidates/. Use write_v20_candidate_file to create it by replacing one or more named top-level functions from the v20 baseline. Do NOT build a tiny standalone agent(obs) replacement. Never evaluate ephemeral code, descriptive candidate strings, or arbitrary files elsewhere in v23.
 - Treat workspace/candidates/<name>.py or .ipynb plus its SHA-256 as the immutable experiment artifact. Keep rejected as well as successful candidates for lineage and branching.
 - An assigned idea is not complete until the exact durable candidate has been plugged into static replay and produced at least one valid measured replay result. If finish_experiment returns execution-contract feedback, do not move on or merely explain; continue the SAME idea, create/fix the candidate, replay it correctly, inspect the result, and call finish_experiment again.
 - ERROR is not an escape hatch from the execution contract. Use ERROR only when concrete runtime evidence exists: a persisted replay error for this experiment or a blocker recorded through report_blocker. Candidate-code/runtime errors are recoverable attempts: close only the failed experiment attempt, keep the SAME idea RUNNING, create a fresh experiment with a new candidate artifact/content, and replay again. Do not call report_blocker for SyntaxError, ImportError, NameError, candidate load failure, or other fixable generated-code errors.
@@ -1017,10 +1018,186 @@ def write_workspace_file(ctx: RunContextWrapper[AppContext], path: str, content:
     return j_bounded(ctx.context.local.write_workspace_file(path, content, overwrite), 8000)
 
 
+V20_BASELINE_NOTEBOOK = (
+    Path(__file__).resolve().parents[1]
+    / "working_files"
+    / "submission_nb"
+    / "kaggriculture-sub_v20.ipynb"
+)
+
+
+def _v20_baseline_source(local: LocalTools) -> str:
+    # The v20 baseline is a checked-in read-only research input. Resolve it from
+    # runtime.py's canonical v23 location rather than LocalTools.root, which tests
+    # may deliberately redirect to an isolated temporary workspace.
+    path = V20_BASELINE_NOTEBOOK
+    notebook = json.loads(path.read_text(encoding="utf-8"))
+    found = []
+    for cell in notebook.get("cells", []):
+        if cell.get("cell_type") != "code":
+            continue
+        lines = "".join(cell.get("source", [])).splitlines()
+        if not lines:
+            continue
+        first = lines[0].strip()
+        if first.startswith("%%writefile"):
+            target = first[len("%%writefile"):].strip().strip("'\"")
+            if Path(target).name == "main.py":
+                found.append("\n".join(lines[1:]) + "\n")
+    if len(found) != 1:
+        raise ValueError(
+            f"{path}: expected exactly one %%writefile main.py cell, found {len(found)}"
+        )
+    return found[0]
+
+
+def _top_level_functions(source: str) -> dict[str, ast.FunctionDef | ast.AsyncFunctionDef]:
+    tree = ast.parse(source)
+    return {
+        node.name: node
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+
+def _replace_v20_functions(
+    baseline: str, replacements: dict[str, str]
+) -> tuple[str, list[str]]:
+    if not replacements:
+        raise ValueError("at least one v20 function replacement is required")
+    baseline_functions = _top_level_functions(baseline)
+    unknown = sorted(set(replacements) - set(baseline_functions))
+    if unknown:
+        raise ValueError(
+            "replacement names must be existing top-level v20 functions; unknown: "
+            + ", ".join(unknown)
+        )
+
+    lines = baseline.splitlines(keepends=True)
+    edits = []
+    for name, replacement in replacements.items():
+        replacement = str(replacement or "").strip() + "\n"
+        parsed = ast.parse(replacement)
+        defs = [
+            node for node in parsed.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        ]
+        if len(defs) != 1 or len(parsed.body) != 1 or defs[0].name != name:
+            raise ValueError(
+                f"replacement for {name} must contain exactly one top-level def {name}(...)"
+            )
+        old = baseline_functions[name]
+        start_line = min(
+            [old.lineno] + [d.lineno for d in getattr(old, "decorator_list", [])]
+        )
+        edits.append((start_line - 1, old.end_lineno, replacement))
+
+    for start, end, replacement in sorted(edits, reverse=True):
+        lines[start:end] = [replacement]
+    candidate = "".join(lines)
+    ast.parse(candidate)
+    return candidate, sorted(replacements)
+
+
+def validate_v20_derived_source(local: LocalTools, source: str) -> dict[str, Any]:
+    try:
+        baseline = _v20_baseline_source(local)
+        baseline_functions = set(_top_level_functions(baseline))
+        candidate_functions = set(_top_level_functions(source))
+    except Exception as exc:
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
+    missing_functions = sorted(baseline_functions - candidate_functions)
+    retained_ratio = len(source) / max(1, len(baseline))
+    ok = not missing_functions and retained_ratio >= 0.75
+    return {
+        "ok": ok,
+        "baseline_chars": len(baseline),
+        "candidate_chars": len(source),
+        "retained_size_ratio": round(retained_ratio, 4),
+        "baseline_function_count": len(baseline_functions),
+        "candidate_function_count": len(candidate_functions),
+        "missing_v20_functions": missing_functions,
+        "error": None if ok else (
+            "candidate is not a full v20-derived policy; preserve all v20 top-level "
+            "functions and modify only the assigned function(s)"
+        ),
+    }
+
+
+@function_tool
+def write_v20_candidate_file(
+    ctx: RunContextWrapper[AppContext],
+    filename: str,
+    replacements_json: str,
+    overwrite: bool = False,
+) -> str:
+    """Create a full v20-derived candidate by replacing named top-level v20 functions.
+
+    replacements_json must be a JSON object mapping existing v20 function names
+    to complete replacement function source strings.
+    """
+    filename = filename.strip()
+    if (
+        not filename
+        or Path(filename).name != filename
+        or Path(filename).suffix.lower() != ".py"
+    ):
+        return j({"error":"filename must be a simple .py file name"})
+    try:
+        replacements = json.loads(replacements_json)
+        if not isinstance(replacements, dict) or not replacements:
+            raise ValueError(
+                "replacements_json must be a non-empty JSON object mapping "
+                "v20 function names to replacement function source"
+            )
+        if not all(
+            isinstance(name, str) and isinstance(source, str)
+            for name, source in replacements.items()
+        ):
+            raise ValueError(
+                "every replacements_json key and value must be a string"
+            )
+        baseline = _v20_baseline_source(ctx.context.local)
+        candidate_source, changed_functions = _replace_v20_functions(
+            baseline, replacements
+        )
+        validation = validate_v20_derived_source(
+            ctx.context.local, candidate_source
+        )
+        if not validation["ok"]:
+            return j(validation)
+    except Exception as exc:
+        return j({"error":f"{type(exc).__name__}: {exc}"})
+
+    out = ctx.context.local.write_workspace_file(
+        str(Path("candidates") / filename), candidate_source, overwrite
+    )
+    if "error" in out:
+        return j(out)
+    candidate = "workspace/" + out["path"]
+    candidate_path = ctx.context.local._read_path(candidate)
+    out.update({
+        "candidate": candidate,
+        "sha256": hashlib.sha256(candidate_path.read_bytes()).hexdigest(),
+        "baseline": "working_files/submission_nb/kaggriculture-sub_v20.ipynb",
+        "baseline_sha256": hashlib.sha256(baseline.encode("utf-8")).hexdigest(),
+        "changed_functions": changed_functions,
+        "v20_derived_validation": validation,
+    })
+    ctx.context.log.event("v20_candidate_artifact_written", {
+        "candidate": candidate,
+        "sha256": out["sha256"],
+        "changed_functions": changed_functions,
+        "retained_size_ratio": validation["retained_size_ratio"],
+    })
+    return j_bounded(out, 12000)
+
+
 @function_tool
 def write_candidate_file(ctx: RunContextWrapper[AppContext], filename: str, content: str,
                          overwrite: bool = False) -> str:
-    """Create a durable executable candidate under workspace/candidates/."""
+    """Legacy raw candidate writer. Engineer research should use write_v20_candidate_file."""
     filename = filename.strip()
     if not filename or Path(filename).name != filename:
         return j({"error":"filename must be a simple file name, not a path"})
@@ -1070,7 +1247,7 @@ def validate_candidate_path(local: LocalTools, candidate: str,
     except ValueError:
         return "", (
             "candidate must live under workspace/candidates/; "
-            "create it with write_candidate_file"
+            "create it with write_v20_candidate_file"
         )
     return str(candidate_path.relative_to(local.root)), None
 
@@ -1517,6 +1694,26 @@ def static_replay_candidate(ctx: RunContextWrapper[AppContext], candidate: str, 
     if candidate_error:
         return j({"error": candidate_error})
     candidate_path = ctx.context.local._read_path(candidate_rel)
+    if candidate_path.suffix.lower() != ".py":
+        return j({
+            "error":"v23 research candidates must be full v20-derived .py artifacts",
+            "feedback":"Create the candidate with write_v20_candidate_file.",
+        })
+    candidate_source = candidate_path.read_text(encoding="utf-8")
+    baseline_validation = validate_v20_derived_source(
+        ctx.context.local, candidate_source
+    )
+    if not baseline_validation["ok"]:
+        return j({
+            "error":"candidate is not baseline-derived",
+            "candidate":candidate_rel,
+            "validation":baseline_validation,
+            "feedback":(
+                "Do not replace v20 with a small standalone agent. Use "
+                "write_v20_candidate_file to copy the complete v20 policy and replace "
+                "only the function(s) required by the assigned hypothesis."
+            ),
+        })
     candidate_sha256 = hashlib.sha256(candidate_path.read_bytes()).hexdigest()
     bound = ctx.context.db.bind_candidate(
         experiment_id, candidate_rel, candidate_sha256
@@ -1939,7 +2136,7 @@ def main():
       max_tokens=args.max_output_tokens,verbosity="low",parallel_tool_calls=False,
       store=False,prompt_cache_options={"mode":"implicit","ttl":"30m"},
       retry=model_retry_settings()),
-      tools=[list_tree,read_text,search_text,summarize_jsonl,write_workspace_file,write_candidate_file,run_python,
+      tools=[list_tree,read_text,search_text,summarize_jsonl,write_workspace_file,write_v20_candidate_file,run_python,
              start_experiment,finish_experiment,set_goal,project_status,idea_dossier,
              report_blocker,static_replay_candidate])
     analyst_agent=Agent[AppContext](
@@ -1977,6 +2174,7 @@ def main():
            "output_tokens":0,"reasoning_tokens":0,"total_tokens":0}
     cycle = 0
     analyst_failures = 0
+    analyst_repair_feedback = ""
     continuation = prompt
     latest_review = db.latest_strategy_review()
     strategy_guidance = (
@@ -2045,6 +2243,20 @@ def main():
                 "performance. Produce exactly 10 structurally distinct test ideas in the "
                 "required JSON schema."
             )
+            if analyst_repair_feedback:
+                analyst_prompt += (
+                    "\n\nSELF-CORRECTION REQUIRED. Your previous Analyst attempt was "
+                    "invalid. Correct the output instead of abandoning the research run. "
+                    "Return a complete replacement batch that satisfies the schema exactly. "
+                    "Validation/runtime feedback:\n" + analyst_repair_feedback
+                )
+            log.communication(
+                "controller",
+                "performance_analyst",
+                "analyst_request",
+                analyst_prompt,
+                {"trigger": review_trigger, "attempt": analyst_failures + 1},
+            )
             try:
                 analyst_result=Runner.run_sync(
                     analyst_agent,
@@ -2066,9 +2278,23 @@ def main():
                 )
                 analyst_output=str(analyst_result.final_output or "")
                 analyst_usage=usage_dict(analyst_result.context_wrapper.usage)
+                log.communication(
+                    "performance_analyst",
+                    "controller",
+                    "analyst_response",
+                    analyst_output,
+                    {"trigger": review_trigger},
+                )
             except Exception as exc:
                 analyst_error=type(exc).__name__+": "+str(exc)
                 analyst_usage=dict(analyst_hooks.last_usage)
+                log.communication(
+                    "performance_analyst",
+                    "controller",
+                    "analyst_error",
+                    analyst_error,
+                    {"trigger": review_trigger},
+                )
 
             add_usage(usage, analyst_usage)
             analyst_cost=conservative_cost_usd(
@@ -2102,6 +2328,10 @@ def main():
                     output=analyst_error
                     break
                 analyst_failures += 1
+                analyst_repair_feedback = (
+                    "Previous Analyst call failed before producing a valid batch: "
+                    + analyst_error[:4000]
+                )
             elif analyst_output:
                 try:
                     parsed_review=parse_analyst_batch(analyst_output)
@@ -2118,6 +2348,11 @@ def main():
                         "raw_output":analyst_output[:4000],
                     })
                     analyst_failures += 1
+                    analyst_repair_feedback = (
+                        parse_error[:3000]
+                        + "\nPrevious invalid output (bounded):\n"
+                        + analyst_output[:5000]
+                    )
                 if parsed_review is not None:
                     db.record_analyst_attempt(
                         run_id,review_trigger,"VALID",analyst_output,"",
@@ -2132,6 +2367,11 @@ def main():
                     )
                     if "error" in batch_out:
                         analyst_failures += 1
+                        analyst_repair_feedback = (
+                            "Batch persistence/validation rejected the Analyst output: "
+                            + str(batch_out["error"])[:4000]
+                            + "\nReturn a corrected complete 10-idea batch."
+                        )
                         log.event("specialist_review_error", {
                             "role":"performance_analyst",
                             "trigger":review_trigger,
@@ -2139,6 +2379,7 @@ def main():
                         })
                     else:
                         analyst_failures = 0
+                        analyst_repair_feedback = ""
                         strategy_guidance=analyst_output
                         new_strategy_review=analyst_output
                         log.event("specialist_review_finish", {
@@ -2158,19 +2399,24 @@ def main():
                     "analyst returned empty output",analyst_usage,analyst_cost
                 )
                 analyst_failures += 1
-
-            if analyst_failures >= 2:
-                status="ERROR"
-                output=(
-                    "Performance Analyst failed to produce a valid 10-idea batch "
-                    "twice in this run. Inspect analyst_attempts and run events before retrying."
+                analyst_repair_feedback = (
+                    "Previous Analyst attempt returned empty output. Return exactly one "
+                    "complete replacement JSON batch containing 10 valid ideas."
                 )
-                log.event("autonomous_stop", {
-                    "reason":"analyst_batch_invalid",
+
+            if analyst_failures:
+                log.event("analyst_self_correction_scheduled", {
                     "failures":analyst_failures,
                     "trigger":review_trigger,
+                    "feedback":analyst_repair_feedback[:5000],
                 })
-                break
+                log.communication(
+                    "controller",
+                    "performance_analyst",
+                    "analyst_self_correction",
+                    analyst_repair_feedback,
+                    {"failures": analyst_failures, "trigger": review_trigger},
+                )
 
             if not budget.can_call():
                 status="BUDGET_STOP"
@@ -2244,6 +2490,17 @@ def main():
                 "only when its promotion rule is met, verify idea_dossier after replay, "
                 "and finish the experiment before moving to another idea."
             )
+        log.communication(
+            "controller",
+            "experiment_engineer",
+            "engineer_request",
+            cycle_prompt,
+            {
+                "cycle": cycle,
+                "idea_id": next_idea.get("idea_id") if next_idea else None,
+                "experiment_id": next_idea.get("experiment_id") if next_idea else None,
+            },
+        )
         try:
             result=Runner.run_sync(
               agent, cycle_prompt, context=app, session=session,
@@ -2259,9 +2516,29 @@ def main():
             )
             cycle_output=str(result.final_output or "")
             cycle_usage=usage_dict(result.context_wrapper.usage)
+            log.communication(
+                "experiment_engineer",
+                "controller",
+                "engineer_response",
+                cycle_output,
+                {
+                    "cycle": cycle,
+                    "idea_id": next_idea.get("idea_id") if next_idea else None,
+                },
+            )
         except Exception as exc:
             cycle_output=type(exc).__name__+": "+str(exc)
             cycle_usage=dict(hooks.last_usage)
+            log.communication(
+                "experiment_engineer",
+                "controller",
+                "engineer_error",
+                cycle_output,
+                {
+                    "cycle": cycle,
+                    "idea_id": next_idea.get("idea_id") if next_idea else None,
+                },
+            )
             exc_name=type(exc).__name__
             if isinstance(exc, BudgetStopError):
                 add_usage(usage, cycle_usage)
@@ -2356,24 +2633,55 @@ def main():
             break
 
         unfinished = None
+        repair_after_error = False
         if next_idea:
             current = db.current_work_idea()
+            repair_after_error = bool(
+                current
+                and current.get("idea_id") == next_idea.get("idea_id")
+                and current.get("repair_after_error")
+            )
             if (
                 current
                 and current.get("idea_id") == next_idea.get("idea_id")
                 and current.get("status") == "RUNNING"
                 and current.get("experiment_id")
+                and not repair_after_error
             ):
                 unfinished = experiment_execution_contract(
                     db, str(current["experiment_id"])
                 )
 
-        if unfinished and not unfinished.get("ok"):
+        if repair_after_error:
+            continuation=(
+                "SELF-CORRECTION FEEDBACK: the previous immutable candidate attempt failed "
+                "with generated-code/runtime evidence. Continue the SAME assigned idea, but "
+                "do NOT reuse or edit the failed artifact and do NOT reuse the failed "
+                "experiment. Inspect the prior replay error in the Engineer context, call "
+                "start_experiment to create a NEW experiment attempt, write a NEW corrected "
+                "artifact under workspace/candidates/, replay it, and repeat repair attempts "
+                "until a valid measured result exists."
+            )
+            log.event("engineer_repair_feedback", {
+                "idea_id": current.get("idea_id") if current else None,
+                "previous_experiment_id": current.get("experiment_id") if current else None,
+            })
+            log.communication(
+                "controller",
+                "experiment_engineer",
+                "engineer_self_correction",
+                continuation,
+                {
+                    "idea_id": current.get("idea_id") if current else None,
+                    "previous_experiment_id": current.get("experiment_id") if current else None,
+                },
+            )
+        elif unfinished and not unfinished.get("ok"):
             continuation=(
                 "RETRY FEEDBACK: the previous Engineer cycle did not complete the "
                 "required idea -> durable code -> plug into static replay -> valid measured "
-                "result lifecycle. Continue the SAME assigned idea and experiment; do NOT "
-                "advance to another idea. Missing requirements: "
+                "result lifecycle. Continue the SAME assigned idea and current RUNNING "
+                "experiment; do NOT advance to another idea. Missing requirements: "
                 + ", ".join(unfinished.get("missing", []))
                 + ". Create/fix the candidate with write_candidate_file under "
                   "workspace/candidates/, run static_replay_candidate with that exact "
@@ -2385,6 +2693,17 @@ def main():
                 "experiment_id": current.get("experiment_id"),
                 "missing": unfinished.get("missing", []),
             })
+            log.communication(
+                "controller",
+                "experiment_engineer",
+                "engineer_retry",
+                continuation,
+                {
+                    "idea_id": current.get("idea_id"),
+                    "experiment_id": current.get("experiment_id"),
+                    "missing": unfinished.get("missing", []),
+                },
+            )
         else:
             continuation=(
                 "Continue the SAME research task and session. The durable goal is still "

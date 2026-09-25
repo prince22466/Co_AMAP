@@ -227,8 +227,56 @@ class RunLog:
         self.dir = base / "runs" / f"{stamp}-{os.getpid()}"
         self.dir.mkdir(parents=True, exist_ok=False)
         self.events_path = self.dir / "events.jsonl"
+        self.base = base
+        self.run_id = str(config.get("run_id") or "")
+        self.communication_path = self.dir / "agent_communication.jsonl"
+        self.global_communication_path = base / "agent_communication.jsonl"
+        self.latest_communication_path = base / "agent_communication_latest.md"
         (self.dir / "config.json").write_text(
             json.dumps(config, indent=2, sort_keys=True, default=str) + "\n",
+            encoding="utf-8",
+        )
+
+    def communication(
+        self,
+        sender: str,
+        recipient: str,
+        kind: str,
+        message: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """Persist a bounded human-readable inter-agent/controller message."""
+        raw = str(message or "")
+        max_chars = 16000
+        if len(raw) > max_chars:
+            keep = max_chars // 2
+            raw = (
+                raw[:keep]
+                + f"\n... <communication truncated {len(raw) - max_chars} chars> ...\n"
+                + raw[-keep:]
+            )
+        row = {
+            "time_utc": datetime.now(timezone.utc).isoformat(),
+            "run_id": self.run_id,
+            "sender": sender,
+            "recipient": recipient,
+            "kind": kind,
+            "message": raw,
+            "metadata": metadata or {},
+        }
+        encoded = json.dumps(row, sort_keys=True, default=str) + "\n"
+        for target in (self.communication_path, self.global_communication_path):
+            with target.open("a", encoding="utf-8") as handle:
+                handle.write(encoded)
+        self.latest_communication_path.write_text(
+            "# v23 agent communication — latest\n\n"
+            + f"Time: {row['time_utc']}\n"
+            + f"Run: {self.run_id}\n"
+            + f"From: {sender}\n"
+            + f"To: {recipient}\n"
+            + f"Kind: {kind}\n\n"
+            + raw.rstrip()
+            + "\n",
             encoding="utf-8",
         )
 

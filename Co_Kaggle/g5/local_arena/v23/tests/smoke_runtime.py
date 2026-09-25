@@ -730,6 +730,72 @@ def main() -> int:
 
         assert len(parsed_batch["ideas"]) == 10
 
+        # Agent communication must be persisted in both global and per-run logs.
+        comm_log = runtime.RunLog(
+            Path(tmp),
+            {"run_id": "run_comm_smoke", "task": "communication smoke"},
+        )
+        comm_log.communication(
+            "performance_analyst",
+            "experiment_engineer",
+            "idea_handoff",
+            "test communication",
+            {"idea_id": "idea_smoke"},
+        )
+        global_comm = Path(tmp) / "agent_communication.jsonl"
+        run_comm = comm_log.dir / "agent_communication.jsonl"
+        latest_comm = Path(tmp) / "agent_communication_latest.md"
+        assert global_comm.exists()
+        assert run_comm.exists()
+        assert latest_comm.exists()
+        assert "test communication" in global_comm.read_text(encoding="utf-8")
+        assert "performance_analyst" in latest_comm.read_text(encoding="utf-8")
+
+        # Candidate construction must preserve the complete v20 policy and
+        # replace named v20 functions instead of generating a tiny standalone agent.
+        v20_source = runtime._v20_baseline_source(tool_local)
+        v20_functions = runtime._top_level_functions(v20_source)
+        assert "agent" in v20_functions
+        assert len(v20_functions) > 5
+
+        agent_node = v20_functions["agent"]
+        v20_lines = v20_source.splitlines(keepends=True)
+        original_agent = "".join(
+            v20_lines[agent_node.lineno - 1:agent_node.end_lineno]
+        )
+        rebuilt, changed = runtime._replace_v20_functions(
+            v20_source, {"agent": original_agent}
+        )
+        assert changed == ["agent"]
+        assert runtime.validate_v20_derived_source(tool_local, rebuilt)["ok"] is True
+
+        tiny_candidate = "def agent(obs):\n    return {'farmer':['PASS'],'hands':[],'market':[]}\n"
+        tiny_validation = runtime.validate_v20_derived_source(
+            tool_local, tiny_candidate
+        )
+        assert tiny_validation["ok"] is False
+        assert len(tiny_validation["missing_v20_functions"]) > 0
+        assert tiny_validation["retained_size_ratio"] < 0.75
+
+        # Function patching must reject invented/non-v20 function names.
+        try:
+            runtime._replace_v20_functions(
+                v20_source,
+                {"made_up_policy": "def made_up_policy(obs):\n    return None\n"},
+            )
+            raise AssertionError("unknown v20 function replacement should fail")
+        except ValueError as exc:
+            assert "unknown" in str(exc)
+
+        # Autonomous recovery policy regression: invalid Analyst batches must
+        # schedule self-correction rather than terminate after two failures.
+        runtime_source = Path(runtime.__file__).read_text(encoding="utf-8")
+        assert "if analyst_failures >= 2:" not in runtime_source
+        assert "analyst_self_correction_scheduled" in runtime_source
+        assert "SELF-CORRECTION REQUIRED" in runtime_source
+        assert "engineer_repair_feedback" in runtime_source
+        assert "start_experiment to create a NEW experiment attempt" in runtime_source
+
         invalid_attempt_id = batch_db.record_analyst_attempt(
             batch_run,
             "initial_diagnosis",
