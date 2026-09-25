@@ -1543,6 +1543,8 @@ def main():
     if not 1200<=args.analyst_max_output_tokens<=12000: raise SystemExit("--analyst-max-output-tokens must be 1200..12000")
     if not 6<=args.analyst_max_turns<=30: raise SystemExit("--analyst-max-turns must be 6..30")
     if not 1<=args.session_history_limit<=500: raise SystemExit("--session-history-limit must be 1..500")
+    if not 0<=args.model_call_min_interval_seconds<=60:
+        raise SystemExit("--model-call-min-interval-seconds must be 0..60")
     if not 0<args.session_budget_usd<=args.total_budget_usd: raise SystemExit("invalid budget ceilings")
     inp_price,out_price=pricing_for(args)
     analyst_model=args.analyst_model or args.model
@@ -1560,6 +1562,7 @@ def main():
             "analyst_reasoning_effort":args.analyst_reasoning_effort,
             "analyst_max_output_tokens":args.analyst_max_output_tokens,
             "analyst_max_turns":args.analyst_max_turns,
+            "model_call_min_interval_seconds":args.model_call_min_interval_seconds,
             "replay_python":replay_python or None,
             "tracing_enabled":not args.disable_tracing,"trace_sensitive_data":False}
     log=RunLog(WORKSPACE,config); local=LocalTools(allow_exec=args.allow_exec,log=log)
