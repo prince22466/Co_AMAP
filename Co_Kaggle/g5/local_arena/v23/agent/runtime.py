@@ -73,7 +73,12 @@ You are read-only. You do not write candidate code and you do not execute replay
 Your job is to diagnose why research is or is not improving and give the Experiment
 Engineer a higher-information direction.
 
-Use the available read-only tools selectively:
+Use the available read-only tools selectively.
+Turn discipline is mandatory:
+- You MUST reserve time for the final JSON batch; tool exploration is not the deliverable.
+- On an initial diagnosis, use at most 5 tool-call rounds before returning the final JSON.
+- Prefer one corpus-level summary plus 2-3 representative deep dives; never inspect all 25 games manually.
+- If evidence is incomplete after the tool budget, state uncertainty in the hypotheses and still return the required 10-idea JSON batch.
 - Start from the supplied ANALYST CONTEXT PACK and call research_progress if you need a fresh compact status snapshot.
 - Call project_status only when you need fields not already present in the context pack;
 - use analyze_experiments and analyze_component_effects before manually reading experiment rows;
@@ -794,6 +799,20 @@ def j(x):
     return json.dumps(x, sort_keys=True, default=str)
 
 
+def j_bounded(x, max_chars=12000):
+    """Bound large tool payloads so one diagnostic call cannot flood model context."""
+    raw = j(x)
+    max_chars = max(2000, int(max_chars))
+    if len(raw) <= max_chars:
+        return raw
+    return j({
+        "truncated": True,
+        "original_chars": len(raw),
+        "preview": raw[:max_chars],
+        "instruction": "Narrow the next analysis query instead of requesting the full payload again.",
+    })
+
+
 class BudgetStopError(RuntimeError):
     """Normal autonomous stop when a configured API budget ceiling is reached."""
 
@@ -925,7 +944,7 @@ def research_progress(ctx: RunContextWrapper[AppContext]) -> str:
 def analyze_history_game(ctx: RunContextWrapper[AppContext], episode: str, window_size: int = 24, top_windows: int = 8) -> str:
     """Deterministically summarize one v20 loss history and identify high-activity windows."""
     try:
-        return j(analyze_loss_history(ctx.context.local.root, episode, window_size, top_windows))
+        return j_bounded(analyze_loss_history(ctx.context.local.root, episode, window_size, top_windows), 12000)
     except Exception as exc:
         return j({"error":f"{type(exc).__name__}: {exc}"})
 
@@ -933,7 +952,7 @@ def analyze_history_game(ctx: RunContextWrapper[AppContext], episode: str, windo
 def analyze_history_window(ctx: RunContextWrapper[AppContext], episode: str, start_turn: int, end_turn: int) -> str:
     """Return detailed turn-by-turn actions, scalar state, and deltas for one history window."""
     try:
-        return j(analyze_loss_window(ctx.context.local.root, episode, start_turn, end_turn))
+        return j_bounded(analyze_loss_window(ctx.context.local.root, episode, start_turn, end_turn), 14000)
     except Exception as exc:
         return j({"error":f"{type(exc).__name__}: {exc}"})
 
@@ -941,7 +960,7 @@ def analyze_history_window(ctx: RunContextWrapper[AppContext], episode: str, sta
 def analyze_experiments(ctx: RunContextWrapper[AppContext], review_id: str | None = None) -> str:
     """Aggregate experiment evidence by idea, causal layer, and component combination."""
     try:
-        return j(analyze_experiment_records(ctx.context.db, review_id))
+        return j_bounded(analyze_experiment_records(ctx.context.db, review_id), 12000)
     except Exception as exc:
         return j({"error":f"{type(exc).__name__}: {exc}"})
 
@@ -949,7 +968,7 @@ def analyze_experiments(ctx: RunContextWrapper[AppContext], review_id: str | Non
 def compare_candidate_v20(ctx: RunContextWrapper[AppContext], idea_id: str, episode: str) -> str:
     """Compare one candidate replay with recorded v20 actions/outcome for an episode."""
     try:
-        return j(compare_candidate_to_v20_data(ctx.context.local.root, ctx.context.db, idea_id, episode))
+        return j_bounded(compare_candidate_to_v20_data(ctx.context.local.root, ctx.context.db, idea_id, episode), 12000)
     except Exception as exc:
         return j({"error":f"{type(exc).__name__}: {exc}"})
 
@@ -957,7 +976,7 @@ def compare_candidate_v20(ctx: RunContextWrapper[AppContext], idea_id: str, epis
 def analyze_cash_flow(ctx: RunContextWrapper[AppContext], episode: str) -> str:
     """Analyze observable cash-like state changes in one recorded v20 loss."""
     try:
-        return j(analyze_cash_flow_data(ctx.context.local.root, episode))
+        return j_bounded(analyze_cash_flow_data(ctx.context.local.root, episode), 10000)
     except Exception as exc:
         return j({"error":f"{type(exc).__name__}: {exc}"})
 
@@ -965,7 +984,7 @@ def analyze_cash_flow(ctx: RunContextWrapper[AppContext], episode: str) -> str:
 def analyze_inventory_flow(ctx: RunContextWrapper[AppContext], episode: str) -> str:
     """Analyze observable inventory/capacity/resource paths in one recorded v20 loss."""
     try:
-        return j(analyze_inventory_flow_data(ctx.context.local.root, episode))
+        return j_bounded(analyze_inventory_flow_data(ctx.context.local.root, episode), 10000)
     except Exception as exc:
         return j({"error":f"{type(exc).__name__}: {exc}"})
 
@@ -973,7 +992,7 @@ def analyze_inventory_flow(ctx: RunContextWrapper[AppContext], episode: str) -> 
 def analyze_worker_utilization(ctx: RunContextWrapper[AppContext], episode: str) -> str:
     """Classify recorded v20 actions into transport, crop, animal, idle, and admin work."""
     try:
-        return j(analyze_worker_utilization_data(ctx.context.local.root, episode))
+        return j_bounded(analyze_worker_utilization_data(ctx.context.local.root, episode), 10000)
     except Exception as exc:
         return j({"error":f"{type(exc).__name__}: {exc}"})
 
@@ -981,7 +1000,7 @@ def analyze_worker_utilization(ctx: RunContextWrapper[AppContext], episode: str)
 def analyze_component_effects(ctx: RunContextWrapper[AppContext], review_id: str | None = None) -> str:
     """Aggregate experiment outcomes by affected components and component combinations."""
     try:
-        return j(component_effect_matrix_data(ctx.context.db, review_id))
+        return j_bounded(component_effect_matrix_data(ctx.context.db, review_id), 10000)
     except Exception as exc:
         return j({"error":f"{type(exc).__name__}: {exc}"})
 
@@ -989,7 +1008,20 @@ def analyze_component_effects(ctx: RunContextWrapper[AppContext], review_id: str
 def cluster_loss_histories(ctx: RunContextWrapper[AppContext]) -> str:
     """Group all v20 loss histories by deterministic behavioral signatures and choose representatives."""
     try:
-        return j(cluster_loss_games_data(ctx.context.local.root))
+        data = cluster_loss_games_data(ctx.context.local.root)
+        compact = {
+            "clusters": data.get("clusters", []),
+            "games": [
+                {
+                    "episode": row.get("episode"),
+                    "cluster": row.get("cluster"),
+                    "features": row.get("features"),
+                }
+                for row in data.get("games", [])
+            ],
+            "note": data.get("note"),
+        }
+        return j_bounded(compact, 10000)
     except Exception as exc:
         return j({"error":f"{type(exc).__name__}: {exc}"})
 
@@ -997,7 +1029,7 @@ def cluster_loss_histories(ctx: RunContextWrapper[AppContext]) -> str:
 def evaluate_hypothesis_evidence(ctx: RunContextWrapper[AppContext], idea_id: str) -> str:
     """Compare an idea hypothesis/prediction with its measured replay evidence."""
     try:
-        return j(hypothesis_evidence_data(ctx.context.local.root, ctx.context.db, idea_id))
+        return j_bounded(hypothesis_evidence_data(ctx.context.local.root, ctx.context.db, idea_id), 10000)
     except Exception as exc:
         return j({"error":f"{type(exc).__name__}: {exc}"})
 
@@ -1007,7 +1039,7 @@ def idea_dossier(ctx: RunContextWrapper[AppContext], idea_id: str) -> str:
     dossier = ctx.context.db.idea_dossier(idea_id)
     if dossier is None:
         return j({"error":"unknown idea_id: " + idea_id})
-    return j(dossier)
+    return j_bounded(dossier, 12000)
 
 @function_tool
 def report_blocker(ctx: RunContextWrapper[AppContext], failed_step: str, reason: str) -> str:
@@ -1282,6 +1314,12 @@ def parse_args():
         default=4000,
         help="Output budget for the 10-idea Analyst JSON batch.",
     )
+    p.add_argument(
+        "--analyst-max-turns",
+        type=int,
+        default=12,
+        help="Maximum model/tool turns for one Performance Analyst review.",
+    )
     p.add_argument("--max-turns",type=int,default=12); p.add_argument("--max-output-tokens",type=int,default=2500)
     p.add_argument("--allow-exec",action="store_true"); p.add_argument("--session-id",default=DEFAULT_SESSION_ID)
     p.add_argument("--session-history-limit",type=int,default=80)
@@ -1357,6 +1395,7 @@ def main():
     if not 1<=args.max_turns<=50: raise SystemExit("--max-turns must be 1..50")
     if not 256<=args.max_output_tokens<=20000: raise SystemExit("--max-output-tokens must be 256..20000")
     if not 1200<=args.analyst_max_output_tokens<=12000: raise SystemExit("--analyst-max-output-tokens must be 1200..12000")
+    if not 6<=args.analyst_max_turns<=30: raise SystemExit("--analyst-max-turns must be 6..30")
     if not 1<=args.session_history_limit<=500: raise SystemExit("--session-history-limit must be 1..500")
     if not 0<args.session_budget_usd<=args.total_budget_usd: raise SystemExit("invalid budget ceilings")
     inp_price,out_price=pricing_for(args)
@@ -1374,6 +1413,7 @@ def main():
             "analyst_model":analyst_model,
             "analyst_reasoning_effort":args.analyst_reasoning_effort,
             "analyst_max_output_tokens":args.analyst_max_output_tokens,
+            "analyst_max_turns":args.analyst_max_turns,
             "replay_python":replay_python or None,
             "tracing_enabled":not args.disable_tracing,"trace_sensitive_data":False}
     log=RunLog(WORKSPACE,config); local=LocalTools(allow_exec=args.allow_exec,log=log)
@@ -1492,7 +1532,7 @@ def main():
                     analyst_agent,
                     analyst_prompt,
                     context=app,
-                    max_turns=min(6,args.max_turns),
+                    max_turns=args.analyst_max_turns,
                     hooks=analyst_hooks,
                     run_config=RunConfig(
                         workflow_name="v23 performance analysis",
