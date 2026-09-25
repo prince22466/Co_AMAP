@@ -71,6 +71,7 @@ v2 research-memory contract:
 - After four consecutive rejected experiments with no wins and no positive mean margin improvement, treat the search as stagnant: abandon the current tweak family, re-inspect raw loss evidence, and move to a different causal layer (for example worker actions/task ranking/logistics/planning/inventory/market). Do not keep making parameter variants of the same idea.
 - Do not use one fixed 5-game screen forever. Rotate or stratify screening histories when a screen repeatedly rejects candidates, and periodically run the strongest candidate family on all 25 histories because local replay is cheaper than additional model reasoning.
 - Only call report_blocker for a concrete runtime/environment failure that makes further research impossible without external intervention.
+- SELF-CORRECTION IS REQUIRED for generated candidate-code failures. When static_replay_candidate returns candidate_repair_required=true, inspect the returned error, close that attempt with finish_experiment(..., ERROR, ...), call start_experiment again for the SAME idea, write a NEW corrected candidate artifact, and replay it. Repeat this repair loop until replay produces a valid measured result or a truly external blocker exists.
 - FP16 is mandatory for candidate floating-point model weights, activations, tensors, and learned numeric compute. Integer/boolean/schema-mandated types are exempt. Do not emit float32, float64, double, or bfloat16 candidate model/tensor code unless a backend operation is provably unsupported in FP16; any such exception must be narrowly scoped, documented, and converted back to FP16 immediately.
 """
 
@@ -589,7 +590,16 @@ class ResearchDB:
         ).fetchone()
         if row is not None:
             out = dict(row)
-            out["resume_existing"] = True
+            experiment_status = None
+            if row["experiment_id"]:
+                exp = self.db.execute(
+                    "SELECT status FROM experiments WHERE experiment_id=?",
+                    (row["experiment_id"],),
+                ).fetchone()
+                experiment_status = exp["status"] if exp is not None else None
+            out["resume_existing"] = experiment_status == "RUNNING"
+            out["repair_after_error"] = experiment_status == "ERROR"
+            out["previous_experiment_status"] = experiment_status
             return out
         row = self.db.execute(
             """SELECT * FROM research_ideas
@@ -1401,6 +1411,50 @@ def idea_dossier(ctx: RunContextWrapper[AppContext], idea_id: str) -> str:
         return j({"error":"unknown idea_id: " + idea_id})
     return j_bounded(dossier, 12000)
 
+_CANDIDATE_CODE_ERROR_MARKERS = (
+    "syntaxerror", "invalid syntax", "importerror", "modulenotfounderror",
+    "no module named", "nameerror", "is not defined", "attributeerror",
+    "indentationerror", "taberror", "failed to load candidate",
+    "candidate load", "compile(", "unexpected indent",
+)
+
+
+def candidate_code_failure_evidence(db: ResearchDB, idea_id: str | None) -> dict[str, Any]:
+    """Find recent replay evidence that points to fixable generated candidate code."""
+    if not idea_id:
+        return {"candidate_code_failure": False, "errors": []}
+    rows = db.db.execute(
+        """SELECT r.error,r.experiment_id,r.replay_call_id,e.candidate,e.candidate_sha256
+           FROM replays r
+           JOIN experiments e ON e.experiment_id=r.experiment_id
+           WHERE e.idea_id=? AND COALESCE(TRIM(r.error),'') != ''
+           ORDER BY r.replay_id DESC LIMIT 8""",
+        (idea_id,),
+    ).fetchall()
+    errors = []
+    matched = []
+    for row in rows:
+        err = str(row["error"] or "").strip()
+        if not err:
+            continue
+        item = {
+            "error": err[:3000],
+            "experiment_id": row["experiment_id"],
+            "replay_call_id": row["replay_call_id"],
+            "candidate": row["candidate"],
+            "candidate_sha256": row["candidate_sha256"],
+        }
+        errors.append(item)
+        low = err.casefold()
+        if any(marker in low for marker in _CANDIDATE_CODE_ERROR_MARKERS):
+            matched.append(item)
+    return {
+        "candidate_code_failure": bool(matched),
+        "errors": errors[:4],
+        "matched_errors": matched[:4],
+    }
+
+
 @function_tool
 def report_blocker(ctx: RunContextWrapper[AppContext], failed_step: str, reason: str) -> str:
     """Report a concrete runtime/environment blocker that makes further research impossible."""
@@ -1408,6 +1462,31 @@ def report_blocker(ctx: RunContextWrapper[AppContext], failed_step: str, reason:
     reason = reason.strip()
     if not failed_step or not reason:
         return j({"error":"failed_step and reason are required"})
+
+    repair = candidate_code_failure_evidence(
+        ctx.context.db, ctx.context.active_idea_id or None
+    )
+    combined = (failed_step + " " + reason).casefold()
+    looks_like_candidate_code = (
+        repair["candidate_code_failure"]
+        or any(marker in combined for marker in _CANDIDATE_CODE_ERROR_MARKERS)
+    )
+    if ctx.context.active_idea_id and looks_like_candidate_code:
+        feedback = {
+            "error":"generated candidate-code failure is recoverable, not a global blocker",
+            "idea_id":ctx.context.active_idea_id,
+            "candidate_code_errors":repair.get("matched_errors", []),
+            "feedback":(
+                "Self-correct the generated code. Keep the SAME idea. Close the failed "
+                "attempt with finish_experiment(..., ERROR, ...), call start_experiment "
+                "again to get a NEW experiment_id, write a NEW corrected candidate file, "
+                "and replay it. Do not stop the autonomous run for a fixable candidate "
+                "SyntaxError/import/name/load error."
+            ),
+        }
+        ctx.context.log.event("blocker_rejected_candidate_repair", feedback)
+        return j_bounded(feedback, 12000)
+
     ctx.context.blocker_reason = failed_step + ": " + reason
     ctx.context.log.event("research_blocker", {
         "failed_step": failed_step,
@@ -1551,6 +1630,17 @@ def static_replay_candidate(ctx: RunContextWrapper[AppContext], candidate: str, 
             "game_record_path": row.get("game_record_path"),
             "error": row.get("error"),
         })
+    error_texts = []
+    top_error = result.get("error") if isinstance(result, dict) else None
+    if top_error:
+        error_texts.append(str(top_error))
+    error_texts.extend(
+        str(row.get("error") or "") for row in compact_matches if row.get("error")
+    )
+    candidate_repair_required = any(
+        any(marker in err.casefold() for marker in _CANDIDATE_CODE_ERROR_MARKERS)
+        for err in error_texts
+    )
     model_result = {
         "protocol": result.get("protocol") if isinstance(result, dict) else None,
         "precision_audit": result.get("precision_audit") if isinstance(result, dict) else None,
@@ -1562,7 +1652,15 @@ def static_replay_candidate(ctx: RunContextWrapper[AppContext], candidate: str, 
         "candidate_sha256": candidate_sha256,
         "elapsed_seconds": round(elapsed, 3),
         "goal_reached": reached,
-        "error": result.get("error") if isinstance(result, dict) else None,
+        "error": top_error,
+        "candidate_repair_required": candidate_repair_required,
+        "repair_errors": [err[:3000] for err in error_texts[:4]],
+        "repair_action": (
+            "Generated candidate code failed. Self-correct now: finish this immutable "
+            "attempt as ERROR, start a NEW experiment for the SAME idea, create a NEW "
+            "corrected candidate path/content, and replay again. Do not call report_blocker."
+            if candidate_repair_required else None
+        ),
         "detail_policy": "Use idea_dossier or game_record_path for targeted drill-down; full traces are not returned to model context.",
     }
     return j_bounded(model_result, 24000)
