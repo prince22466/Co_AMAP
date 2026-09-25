@@ -128,6 +128,9 @@ def forecast(obs):
     net_flow={c:[0.]*SEASON_TURNS for c in items}
     projected={c:[float(items[c])]*SEASON_TURNS for c in items}
 
+    # =========================================================================
+    # DEMAND: TOWN CENTER + SHOPS
+    # =========================================================================
     # Exact demand from currently unlocked shops. Duplicate shop names in shops
     # are counted independently, and SHOPS stores the per-product quantity explicitly.
     current_shop_demand={c:0. for c in items}
@@ -158,6 +161,9 @@ def forecast(obs):
             for c in items:
                 if c!='FERTILIZER':net_flow[c][t]-=1.
 
+    # =========================================================================
+    # SUPPLY: ROLLING STATE SETUP
+    # =========================================================================
     # Future supply is rebuilt from the latest observation every turn.
     # Our side models when existing goods/assets are expected to reach the market:
     #   1) shed stock -> immediate supply;
@@ -171,6 +177,9 @@ def forecast(obs):
     shed=private['shed'];total=totals(private)
     positions=[tuple(own_farm['farmer'])]+[tuple(p) for p in own_farm['hands']]
 
+    # =========================================================================
+    # SUPPLY: OPPONENT SIDE (COARSE / VISIBLE PRODUCTION ONLY)
+    # =========================================================================
     # Keep the existing opponent-visible-production heuristic separate from our improved
     # own-side future supply model. Opponent hidden inventory/replanting remains uncertain.
     herd=0
@@ -199,6 +208,9 @@ def forecast(obs):
                 if at_turn>step and at_day<30:
                     net_flow[c][at_turn]+=1.8 if ongoing else units
 
+    # =========================================================================
+    # SUPPLY: OUR SIDE - SELLABLE STOCK / RESERVE SETUP
+    # =========================================================================
     # Reserve policy mirrors market_orders(). Allocate today's sellable budget to shed
     # stock first, then to carried stock as it reaches the shed.
     live=sum(
@@ -211,7 +223,10 @@ def forecast(obs):
     if 'WHEAT' in sellable_budget:sellable_budget['WHEAT']=max(0,total.get('WHEAT',0)-reserve_wheat)
     if 'FERTILIZER' in sellable_budget:sellable_budget['FERTILIZER']=max(0,total.get('FERTILIZER',0)-reserve_fert)
 
-    # Immediate supply: goods already in the shed can be sold this turn.
+    # =========================================================================
+    # SUPPLY: OUR SIDE - IMMEDIATE SUPPLY (SHED)
+    # =========================================================================
+    # Goods already in the shed can be sold this turn.
     for c,n in shed.items():
         if c not in net_flow or n<=0:continue
         sellable=min(n,sellable_budget.get(c,0))
@@ -219,6 +234,9 @@ def forecast(obs):
             net_flow[c][step]+=sellable
             sellable_budget[c]-=sellable
 
+    # =========================================================================
+    # SUPPLY: OUR SIDE - FUTURE SUPPLY (CARRIED INVENTORY)
+    # =========================================================================
     # Carried goods are future supply. Estimate the earliest shed arrival from the
     # worker's current position; automatic end-of-day drop provides an upper bound.
     next_day_turn=(day+1)*TURNS_PER_DAY
@@ -235,6 +253,9 @@ def forecast(obs):
                 net_flow[c][delivery_turn]+=sellable
                 sellable_budget[c]-=sellable
 
+    # =========================================================================
+    # SUPPLY: OUR SIDE - FUTURE SUPPLY (TILES, CROPS, ANIMALS)
+    # =========================================================================
     # Tile stock needs HARVEST plus transport to a shed-access tile. For yield already
     # visible now, include the nearest current worker's approach distance. For future
     # production we assume a worker can be present at the tile when production lands.
@@ -289,13 +310,21 @@ def forecast(obs):
                 at=own_market_turn(p,ready_turn)
                 if at<SEASON_TURNS:net_flow[crop][at]+=units
 
-    # Retain the old herd-to-wheat-demand heuristic, but express it as one daily flow
+    # =========================================================================
+    # LEGACY INTERNAL-CONSUMPTION HEURISTIC: ANIMAL FEED / WHEAT
+    # =========================================================================
+    # This is NOT town/shop market demand. It retains v20's old herd-to-wheat
+    # heuristic as a negative market flow until we replace it with a buy-deficit model.
+    # Express it as one daily flow
     # rather than subtracting a fractional amount continuously across a day.
     if 'WHEAT' in net_flow and herd:
         first_feed=((step//TURNS_PER_DAY)+1)*TURNS_PER_DAY
         for t in range(first_feed,SEASON_TURNS,TURNS_PER_DAY):
             net_flow['WHEAT'][t]-=herd
 
+    # =========================================================================
+    # PROJECTION: NET FLOW -> PROJECTED MARKET INVENTORY
+    # =========================================================================
     # Convert per-turn net flow into expected start-of-turn market inventory.
     for c in items:
         running=float(items[c])
