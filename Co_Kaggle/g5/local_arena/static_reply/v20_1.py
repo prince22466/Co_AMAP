@@ -65,6 +65,11 @@ CENTER_INTERVAL=24
 SHOP_UNLOCK_TURNS=3*TURNS_PER_DAY
 MAX_SHOPS=8
 
+# Opponent hidden-shed prior. Keep these global so ablations can change the
+# assumption without touching forecast logic.
+OPP_SHED_RATIO=0.8
+OPP_SHED_FALLBACK=2
+
 # Absolute turn counter for this agent instance. agent(obs) resets it at the
 # opening observation and advances it once after every call.
 STEP=0
@@ -178,35 +183,87 @@ def forecast(obs):
     positions=[tuple(own_farm['farmer'])]+[tuple(p) for p in own_farm['hands']]
 
     # =========================================================================
-    # SUPPLY: OPPONENT SIDE (COARSE / VISIBLE PRODUCTION ONLY)
+    # SUPPLY: OPPONENT SIDE - HIDDEN SHED PRIOR
     # =========================================================================
-    # Keep the existing opponent-visible-production heuristic separate from our improved
-    # own-side future supply model. Opponent hidden inventory/replanting remains uncertain.
+    # The opponent's shed is private. As a tunable first prior, assume they hold
+    # OPP_SHED_RATIO of our corresponding shed stock. If our shed has none of a
+    # product, use a small deterministic fallback instead of per-turn randomness so
+    # the forecast remains stable and ablations are reproducible.
+    opp_hidden_shed={}
+    for c in items:
+        ours=shed.get(c,0)
+        opp_hidden_shed[c]=round(OPP_SHED_RATIO*ours) if ours>0 else OPP_SHED_FALLBACK
+        if opp_hidden_shed[c]>0:net_flow[c][step]+=opp_hidden_shed[c]
+
+    # =========================================================================
+    # SUPPLY: OPPONENT SIDE - PUBLIC FUTURE SUPPLY
+    # =========================================================================
+    # Public opponent assets are modeled symmetrically with ours:
+    # - crops/animals are assumed well cared;
+    # - visible yield is harvested efficiently;
+    # - workers transport efficiently to the shed;
+    # - current crops are forecast only through their remaining lifecycle;
+    # - replacement crops are unknown until they are actually observed.
+    #
+    # After goods reach the opponent shed, assume efficient selling, so shed arrival
+    # is also the estimated market-arrival turn. Hidden stock already in the shed is
+    # handled separately above by OPP_SHED_RATIO / OPP_SHED_FALLBACK.
     herd=0
     for farm in obs['farms']:
         for row in farm['tiles']:
             for tile_state in row:
                 if isinstance(tile_state,dict) and 'animal' in tile_state:herd+=1
+
     opp_farm=obs['farms'][1-player]
-    for row in opp_farm['tiles']:
-        for tile_state in row:
+    opp_positions=[tuple(opp_farm['farmer'])]+[tuple(p) for p in opp_farm['hands']]
+
+    def opp_market_turn(p,ready_turn,include_worker_approach=False):
+        approach=min(dist(pos,p) for pos in opp_positions) if include_worker_approach and opp_positions else 0
+        return ready_turn+approach+dist(p,nearest_shed(p))+1
+
+    for y,row in enumerate(opp_farm['tiles']):
+        for x,tile_state in enumerate(row):
             if not isinstance(tile_state,dict):continue
+            p=(x,y)
+
             if 'animal' in tile_state:
-                a=ANIMALS[tile_state['animal']];product=a[1]
-                held=tile_state.get('yield_units',0)
-                if held:net_flow[product][step]+=held
+                a=ANIMALS[tile_state['animal']]
+                product=a[1];held=tile_state.get('yield_units',0)
+                if held:
+                    at=opp_market_turn(p,step,True)
+                    if at<SEASON_TURNS:net_flow[product][at]+=held
+
+                # Existing opponent animals are assumed well fed/cared and efficiently
+                # harvested/delivered, matching our-side 3/4/2 steady-state assumption.
                 first_day=tile_state['placed_day']+a[2]
                 for at_day in range(max(day+1,first_day),30):
-                    if (at_day-first_day)%a[3]==0:
-                        net_flow[product][at_day*TURNS_PER_DAY]+=a[4]
+                    if (at_day-first_day)%a[3]:continue
+                    ready_turn=at_day*TURNS_PER_DAY
+                    at=opp_market_turn(p,ready_turn)
+                    if at<SEASON_TURNS:net_flow[product][at]+=a[4]
+
             if 'crop' not in tile_state:continue
-            c=tile_state['crop'];planted=tile_state['planted_day'];ongoing=c in ('TOMATO','STRAWBERRY')
-            held=tile_state.get('yield_units',0) if ongoing or day>=planted+CROPS[c][3] else 0
-            if held:net_flow[c][step]+=held
-            for age,units in CROPS[c][2]:
-                at_day=planted+age;at_turn=at_day*TURNS_PER_DAY
-                if at_turn>step and at_day<30:
-                    net_flow[c][at_turn]+=1.8 if ongoing else units
+            crop=tile_state['crop'];planted=tile_state['planted_day']
+            ongoing=crop in ('TOMATO','STRAWBERRY')
+            held=tile_state.get('yield_units',0)
+            if held:
+                at=opp_market_turn(p,step,True)
+                if at<SEASON_TURNS:net_flow[crop][at]+=held
+
+            # Forecast only the remaining output of the crop currently visible.
+            # Do not guess what the opponent replants after the final harvest.
+            for age,scheduled_units in CROPS[crop][2]:
+                at_day=planted+age;ready_turn=at_day*TURNS_PER_DAY
+                if ready_turn<=step or at_day>=30:continue
+                if ongoing:
+                    # Assume good watering. Current visible fertilizer coverage gives
+                    # a 2-unit event; otherwise use the 1-unit base yield.
+                    units=2 if tile_state.get('fertilized_until_day',-1)>=at_day else 1
+                else:
+                    units=max(0,scheduled_units-held)
+                if not units:continue
+                at=opp_market_turn(p,ready_turn)
+                if at<SEASON_TURNS:net_flow[crop][at]+=units
 
     # =========================================================================
     # SUPPLY: OUR SIDE - SELLABLE STOCK / RESERVE SETUP
