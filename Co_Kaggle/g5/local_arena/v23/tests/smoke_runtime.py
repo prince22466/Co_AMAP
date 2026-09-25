@@ -383,24 +383,192 @@ def main() -> int:
         import replay.runner as replay_runner
         assert callable(replay_runner._plain)
 
-        # Candidate descriptions must never poison immutable experiment binding.
+        # Candidate descriptions and arbitrary v23 files must never become replay artifacts.
         tool_local = object.__new__(runtime.LocalTools)
         tool_local.root = Path(tmp).resolve()
         tool_local.workspace = (Path(tmp) / "workspace").resolve()
+        tool_local.workspace.mkdir(parents=True, exist_ok=True)
         tool_local.allow_exec = False
         tool_local.log = None
-        candidate_file = Path(tmp) / "candidate.py"
-        candidate_file.write_text("def agent(obs):\n    return []\n", encoding="utf-8")
 
         candidate, error = runtime.validate_candidate_path(
             tool_local, "descriptive candidate text"
         )
         assert candidate == ""
-        assert error and "existing .py/.ipynb path" in error
+        assert error and "workspace/candidates" in error
 
+        outside = Path(tmp) / "candidate.py"
+        outside.write_text("def agent(obs):\n    return []\n", encoding="utf-8")
         candidate, error = runtime.validate_candidate_path(tool_local, "candidate.py")
-        assert candidate == "candidate.py"
+        assert candidate == ""
+        assert error and "workspace/candidates" in error
+
+        durable = tool_local.workspace / "candidates" / "candidate.py"
+        durable.parent.mkdir(parents=True, exist_ok=True)
+        durable.write_text("def agent(obs):\n    return []\n", encoding="utf-8")
+        candidate, error = runtime.validate_candidate_path(
+            tool_local, "workspace/candidates/candidate.py"
+        )
+        assert candidate == "workspace/candidates/candidate.py"
         assert error is None
+
+        candidate, error = runtime.validate_candidate_path(
+            tool_local, "", allow_empty=False
+        )
+        assert candidate == ""
+        assert error and "write_candidate_file" in error
+
+        # An experiment may not be considered complete until durable code is
+        # bound and at least one valid measured replay result is persisted.
+        contract_db = runtime.ResearchDB(Path(tmp) / "execution_contract.sqlite3")
+        contract_run = "run_execution_contract"
+        contract_db.start_run(
+            contract_run, "contract-session", "contract smoke", "smoke-model"
+        )
+        contract_eid = contract_db.start_experiment(
+            contract_run, "must execute before finish", "", "", "contract smoke"
+        )
+        incomplete = runtime.experiment_execution_contract(contract_db, contract_eid)
+        assert incomplete["ok"] is False
+        assert "durable candidate path" in incomplete["missing"]
+        assert "at least one static replay call" in incomplete["missing"]
+        assert "at least one valid measured WIN/LOSS/TIE result with margins" in incomplete["missing"]
+
+        contract_candidate = tool_local.workspace / "candidates" / "contract.py"
+        contract_candidate.write_text(
+            "def agent(obs):\n    return []\n", encoding="utf-8"
+        )
+        contract_sha = runtime.hashlib.sha256(contract_candidate.read_bytes()).hexdigest()
+        bound = contract_db.bind_candidate(
+            contract_eid, "workspace/candidates/contract.py", contract_sha
+        )
+        assert "error" not in bound
+        contract_db.record_replay_call(
+            contract_run,
+            contract_eid,
+            "replay_contract",
+            "workspace/candidates/contract.py",
+            {
+                "summary": {
+                    "games_total": 1,
+                    "games_valid": 1,
+                    "wins": 0,
+                    "losses": 1,
+                    "margin_worsened_cases": 0,
+                    "mean_margin_improvement": 5.0,
+                    "best_margin_improvement": 5.0,
+                },
+                "matches": [{
+                    "episode": "contract",
+                    "valid": True,
+                    "original_v20_margin": -10.0,
+                    "candidate_margin": -5.0,
+                    "margin_improvement": 5.0,
+                    "result": "LOSS",
+                    "action_divergences": 1,
+                    "elapsed_seconds": 0.001,
+                    "error": "",
+                }],
+            },
+            runtime.utcnow(),
+            0.001,
+        )
+        complete = runtime.experiment_execution_contract(contract_db, contract_eid)
+        assert complete["ok"] is True
+        assert complete["valid_replay_cases"] == 1
+        assert complete["measured_replay_cases"] == 1
+        assert complete["candidate_sha256"] == contract_sha
+
+        # ERROR must not bypass the lifecycle without concrete runtime evidence.
+        error_db = runtime.ResearchDB(Path(tmp) / "error_contract.sqlite3")
+        error_run = "run_error_contract"
+        error_db.start_run(
+            error_run, "error-contract-session", "error contract smoke", "smoke-model"
+        )
+        error_eid = error_db.start_experiment(
+            error_run, "error evidence required", "", "", "error smoke"
+        )
+        no_evidence = runtime.experiment_runtime_error_evidence(error_db, error_eid, "")
+        assert no_evidence["ok"] is False
+        assert no_evidence["replay_error_cases"] == 0
+        blocker_evidence = runtime.experiment_runtime_error_evidence(
+            error_db, error_eid, "replay interpreter unavailable"
+        )
+        assert blocker_evidence["ok"] is True
+
+        error_db.record_replay_call(
+            error_run,
+            error_eid,
+            "replay_error_contract",
+            "workspace/candidates/error.py",
+            {
+                "summary": {"games_total": 1, "games_valid": 0, "games_invalid": 1},
+                "matches": [{
+                    "episode": "error-case",
+                    "valid": False,
+                    "original_v20_margin": -1.0,
+                    "candidate_margin": None,
+                    "margin_improvement": None,
+                    "result": None,
+                    "action_divergences": None,
+                    "elapsed_seconds": 0.001,
+                    "error": "RuntimeError: synthetic replay failure",
+                }],
+            },
+            runtime.utcnow(),
+            0.001,
+        )
+        replay_error_evidence = runtime.experiment_runtime_error_evidence(
+            error_db, error_eid, ""
+        )
+        assert replay_error_evidence["ok"] is True
+        assert replay_error_evidence["replay_error_cases"] == 1
+
+        # A different idea may not reuse either the same candidate path or
+        # byte-identical candidate content from a prior idea.
+        uniqueness_db = runtime.ResearchDB(Path(tmp) / "candidate_uniqueness.sqlite3")
+        uniq_run = "run_candidate_uniqueness"
+        uniqueness_db.start_run(
+            uniq_run, "uniq-session", "candidate uniqueness smoke", "smoke-model"
+        )
+        review = uniqueness_db.record_strategy_review(
+            uniq_run, "initial_diagnosis", runtime.json.dumps(analyst_json), {}, 0.0
+        )
+        queued = uniqueness_db.add_idea_batch(review, parsed_batch["ideas"])
+        idea1, idea2 = queued["idea_ids"][:2]
+
+        exp1 = uniqueness_db.start_experiment(
+            uniq_run, "idea one", "", "", "uniq smoke", idea1
+        )
+        sha1 = runtime.hashlib.sha256(b"candidate one").hexdigest()
+        first_bind = uniqueness_db.bind_candidate(
+            exp1, "workspace/candidates/idea1.py", sha1
+        )
+        assert "error" not in first_bind
+
+        exp2 = uniqueness_db.start_experiment(
+            uniq_run, "idea two", "", "", "uniq smoke", idea2
+        )
+        same_path = uniqueness_db.bind_candidate(
+            exp2, "workspace/candidates/idea1.py",
+            runtime.hashlib.sha256(b"candidate two").hexdigest()
+        )
+        assert same_path["error"] == "candidate must be new for each idea"
+        assert same_path["same_path"] is True
+
+        same_sha = uniqueness_db.bind_candidate(
+            exp2, "workspace/candidates/idea2.py", sha1
+        )
+        assert same_sha["error"] == "candidate must be new for each idea"
+        assert same_sha["same_sha256"] is True
+
+        unique_bind = uniqueness_db.bind_candidate(
+            exp2,
+            "workspace/candidates/idea2.py",
+            runtime.hashlib.sha256(b"candidate two").hexdigest(),
+        )
+        assert "error" not in unique_bind
+
         assert len(parsed_batch["ideas"]) == 10
 
         invalid_attempt_id = batch_db.record_analyst_attempt(
