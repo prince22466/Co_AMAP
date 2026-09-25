@@ -318,6 +318,12 @@ def main() -> int:
         parsed_batch = runtime.parse_analyst_batch(
             runtime.json.dumps(analyst_json)
         )
+
+        bounded = runtime.j_bounded({"x": "a" * 20000}, max_chars=3000)
+        bounded_obj = runtime.json.loads(bounded)
+        assert bounded_obj["truncated"] is True
+        assert bounded_obj["original_chars"] > 3000
+        assert len(bounded_obj["preview"]) == 3000
         assert len(parsed_batch["ideas"]) == 10
 
         invalid_attempt_id = batch_db.record_analyst_attempt(
