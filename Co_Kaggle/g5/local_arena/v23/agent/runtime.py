@@ -1121,10 +1121,14 @@ def validate_v20_derived_source(local: LocalTools, source: str) -> dict[str, Any
 def write_v20_candidate_file(
     ctx: RunContextWrapper[AppContext],
     filename: str,
-    replacements: dict[str, str],
+    replacements_json: str,
     overwrite: bool = False,
 ) -> str:
-    """Create a full v20-derived candidate by replacing named top-level v20 functions."""
+    """Create a full v20-derived candidate by replacing named top-level v20 functions.
+
+    replacements_json must be a JSON object mapping existing v20 function names
+    to complete replacement function source strings.
+    """
     filename = filename.strip()
     if (
         not filename
@@ -1133,6 +1137,19 @@ def write_v20_candidate_file(
     ):
         return j({"error":"filename must be a simple .py file name"})
     try:
+        replacements = json.loads(replacements_json)
+        if not isinstance(replacements, dict) or not replacements:
+            raise ValueError(
+                "replacements_json must be a non-empty JSON object mapping "
+                "v20 function names to replacement function source"
+            )
+        if not all(
+            isinstance(name, str) and isinstance(source, str)
+            for name, source in replacements.items()
+        ):
+            raise ValueError(
+                "every replacements_json key and value must be a string"
+            )
         baseline = _v20_baseline_source(ctx.context.local)
         candidate_source, changed_functions = _replace_v20_functions(
             baseline, replacements
