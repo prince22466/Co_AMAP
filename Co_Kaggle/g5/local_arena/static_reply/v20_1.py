@@ -118,9 +118,9 @@ def forecast(obs):
     # before that turn's market orders and town consumption. This matches engine order:
     # player market orders execute first, then town/shop demand for the same step.
     #
-    # This first hourly version intentionally keeps the old production assumptions
-    # coarse, but places them on the real turn timeline. Future work can improve the
-    # sell-delay/opponent models without changing the 720-turn forecast interface.
+    # The forecast is rebuilt every turn. Own-side supply uses explicit market-arrival
+    # timing from currently observed inventory/assets; the opponent supply model remains
+    # deliberately coarse and can be improved independently later.
     global STEP
     day=obs['day'];hour=obs['hour'];step=STEP
     items=obs['market']['inventory'];shops=obs['town']['unlocked_shops']
