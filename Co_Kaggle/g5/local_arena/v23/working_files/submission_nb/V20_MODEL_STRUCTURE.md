@@ -13,7 +13,7 @@ observation
   -> plan crops
   -> generate feasible worker tasks
   -> rank worker-task candidates with:
-       normalized heuristic prior + learned neural residual Q
+       normalized learned tree prior + learned neural residual Q
   -> build worker actions
   -> build rule-based market orders
   -> return Kaggriculture action dict
@@ -68,7 +68,7 @@ return {
 
 ## Learned part
 
-The learned component is a residual action-value network used inside worker-task selection.
+Worker-task selection has two learned components: an inherited ensemble of 16 decision trees (`_tree_0` through `_tree_15`, summed by `learned_task_score`) and a residual action-value network. The prior is therefore learned, although its inputs include hand-designed task weights and features.
 
 Conceptually:
 
@@ -86,7 +86,7 @@ Embedded model:
 input -> 64 -> 64 -> 1
 ```
 
-The checked-in v20 model uses the embedded update-9 weights and runs without PyTorch at submission time.
+The checked-in v20 model labels its embedded weights as update 9 and runs without PyTorch at submission time. Source inspection verifies the embedded architecture and inference, but does not independently authenticate the checkpoint's training history.
 
 The learned ranker is used only after the agent has already generated feasible worker/task candidates.
 
@@ -172,7 +172,7 @@ animal_plan(obs, projected)
 
 Responsibilities:
 
-1. Preserve animals already placed.
+1. Preserve animals already placed on predefined `ROUTES` tiles (not arbitrary tiles elsewhere).
 2. Allocate animals already owned but not placed.
 3. Consider adding new animals to predefined animal tiles.
 4. Score candidate animal types by projected economics.
@@ -214,11 +214,13 @@ crop_plan(obs, projected, animal)
 
 Responsibilities:
 
-1. Enumerate usable crop tiles not reserved for animals.
-2. Preserve crops already growing.
+1. Enumerate usable crop tiles outside the fixed `ANIMAL_POINTS` set.
+2. Preserve crops already growing on the enumerated crop tiles.
 3. Use a fixed cheap opening layout early.
 4. Later score crop candidates using projected prices and production timing.
 5. Reserve future projected supply after assigning a crop.
+
+Despite its signature, `crop_plan(obs, projected, animal)` never reads `animal`. It excludes every predefined animal tile, including tiles absent from the current animal plan. `animal_plan` also modifies a local copy of the forecast, so its additions are not passed back through `projected` to the crop planner.
 
 Approximate crop score:
 
@@ -259,7 +261,7 @@ unit_actions(obs, animal, crops)
 
 This is the most important bridge between the planners and the learned model.
 
-It generates tasks such as:
+It produces actions through both direct rules and ranked tasks, including:
 
 - move toward planned animal/crop locations
 - build coop/pasture
@@ -274,7 +276,7 @@ It generates tasks such as:
 - pick up wheat/fertilizer
 - drop carried goods
 
-Each task has roughly:
+Only entries in the ranked `tasks` list have this structure (directly assigned actions do not):
 
 ```text
 (target_position, operation, heuristic_weight, required_resource)
@@ -283,6 +285,8 @@ Each task has roughly:
 Workers with already-forced actions are removed first.
 Remaining workers and tasks form feasible candidate pairs.
 
+The distinction matters: delivery moves and DROP/PLACE, carried-animal transport/build/place/dig, shed pickups of new animals, and some immediate wheat/fertilizer pickups are assigned directly by `unit_actions` before Q ranking. They are not options selected by the residual network. Movement toward a ranked task is then produced by `move`; fallback DROP/PASS is assigned after ranking.
+
 Feasibility checks include:
 
 - required carried resource
@@ -290,6 +294,8 @@ Feasibility checks include:
 - remaining turns in the day
 - current position
 - task/resource compatibility
+
+Here, "feasible" means passing the policy's filters, not a guarantee of successful engine execution. These checks do not simulate all same-turn interactions. The ranked operation types are PLANT, DIG, HARVEST, WATER, FERTILIZE, FEED, CARE, COLLECT_FERTILIZER, and PICKUP.
 
 ---
 
@@ -305,9 +311,10 @@ v20 computes:
 
 ```text
 task_features(...)
-heuristic baseline = learned_task_score(features)
+learned tree baseline = learned_task_score(features)
 normalized prior = q_normalized_prior(all baselines)
 global state = q_global_state(...)
+state_bias = q_state_bias(global state)
 candidate vector = q_norm_task(features)
 neural residual = q_residual_score(state_bias, candidate)
 ```
@@ -324,7 +331,9 @@ Then:
 
 - that worker is removed from the free-worker set;
 - tasks targeting the same tile are removed;
-- selection repeats until no useful worker/task pairs remain.
+- selection repeats until workers or tasks run out, or no pair passes the filters. There is no positive-score threshold and no explicit PASS candidate in the ranking.
+
+Equal Q values are resolved by higher raw tree score, then shorter distance, lower worker index, and lower task index. Candidate normalization and the global-state contribution are recomputed after each assignment.
 
 Unassigned workers:
 
@@ -340,7 +349,7 @@ The neural network is deliberately **residual**.
 That means:
 
 ```text
-heuristic/tree score
+learned tree score
         |
         v
  normalized prior
@@ -359,7 +368,7 @@ This matters for diagnosis:
 The Q network cannot choose it.
 
 ### If a useful candidate exists but is ranked badly
-The heuristic prior or residual Q may be responsible.
+The learned tree prior or residual Q may be responsible.
 
 ### If worker actions are good but money is still poor
 The failure may instead be crop/animal planning or market logic.
@@ -372,7 +381,7 @@ v20 does not evaluate every residual candidate blindly.
 
 It:
 
-1. sorts candidates by the heuristic prior;
+1. sorts candidates by the learned tree prior;
 2. evaluates the current best;
 3. uses a known maximum residual bound;
 4. skips candidates whose best possible final Q cannot beat the current best.
@@ -396,7 +405,7 @@ Function:
 market_orders(obs, animal, crops, actions)
 ```
 
-This is mostly rule-based and independent of the residual Q network.
+This is entirely rule-based: it does not call the residual Q network. It does depend on the selected worker actions for same-turn inventory accounting, so Q choices can indirectly affect orders.
 
 Major sequence:
 
@@ -414,8 +423,8 @@ WHEAT:
   except final day
 
 FERTILIZER:
-  reserve 4 during much of the game
-  released near end
+  reserve 4 on days 10–28
+  reserve 0 on days 0–9 and day 29
 ```
 
 ### C. Opening
@@ -475,6 +484,8 @@ Early-game public observations classify opponents into rough archetypes such as:
 
 This classification affects some heuristics, including worker counts and selected early behavior.
 
+Specifically, `V16` changes final-day harvest weights in `unit_actions`, final-day hand targets in `market_orders`, and a day-0 seed-sort condition. That seed-sort condition cannot affect the opening return at hour 0. Trader subtype labels have no downstream policy branch; the mix constants are unused, and the old opening worker-PASS override is disabled by `if False`.
+
 It is not a learned classifier.
 
 Potential v23 research area:
@@ -510,11 +521,13 @@ There are also:
 - fixed date windows/deadlines,
 - reserve thresholds.
 
-These are high-value ablation targets because they affect behavior independently of the learned Q model.
+The active constants are useful ablation targets because they affect behavior independently of the learned Q model. However, `TRADER_MIX`, `NORMAL_MIX`, and `V16_MIX` are defined but never read in this notebook: changing them has no effect. `V16_FINAL_HANDS` is used by `market_orders`, and `V16_FINAL_BONUS` by `unit_actions`.
 
 ---
 
 # 13. Dependency graph
+
+This is a simplified ranking path. Direct worker assignments bypass the ranker. `market_orders` also receives `obs`, `animal`, and `crops` directly; those edges are omitted below. The crop planner receives an unused `animal` argument and does not consume the animal planner's forecast adjustments.
 
 ```text
                          obs
@@ -589,7 +602,7 @@ If an important action never exists as a candidate, changing Q weights cannot fi
 Compare:
 
 ```text
-heuristic prior
+learned tree prior
 neural residual
 final Q
 selected candidate
@@ -644,7 +657,7 @@ Prefer isolated changes.
 ### Learned-ranking layer
 - state features
 - task features
-- heuristic-prior weight
+- learned-tree-prior weight
 - residual network / Q objective
 
 ### Market layer
@@ -688,7 +701,7 @@ GENERATE TASKS
   rule-based feasible worker actions
 
 RANK TASKS
-  heuristic prior + learned residual Q
+  learned tree prior + learned residual Q
 
 MARKET
   mostly rule-based selling/buying/hiring/land logic
@@ -737,7 +750,7 @@ If v19 never generates a useful task, v20's residual Q cannot invent it.
 
 ### v19 ranking
 
-v19 uses `learned_task_score(task_features)` as the final learned/heuristic score for feasible worker-task assignments.
+v19 uses `learned_task_score(task_features)` as the final learned tree score for feasible worker-task assignments.
 
 Conceptually:
 
@@ -790,7 +803,7 @@ But it still operates only over v19-generated feasible candidates.
 
 v19's final ranking is driven primarily by task features through `learned_task_score`.
 
-v20 adds a global-state representation through `q_global_state(...)`, combined with normalized task features before residual scoring.
+v20 adds a global-state representation through `q_global_state(...)`, combined with normalized task features before residual scoring. v19 was not state-blind: its task features already include day, hour, worker count, and local inventory/tile information. The new 17-feature vector adds broader context such as both players' money, hand/land counts, market prices, and candidate/free-worker counts.
 
 Therefore two similar worker-task candidates can receive different corrections depending on broader game state.
 
@@ -834,6 +847,8 @@ The v20 notebook identifies the selected model as residual Double-DQN update 9.
 
 Its reported selection evidence was evaluated on v19 loss-case seeds from both seats. That historical result is useful for understanding why the checkpoint was chosen, but v23 should evaluate new changes against the current `loss_games_v20` corpus.
 
+The notebook reports 21/30 wins (70.0%) and mean margin +1322.47. These are notebook-reported results, not independently reproduced by this source review.
+
 ## Diagnostic implication for v23
 
 When comparing a v20 loss to v19-style behavior, ask:
@@ -861,4 +876,45 @@ v20 = PLAN -> CANDIDATES -> PRIOR RANK + STATE-DEPENDENT RESIDUAL Q
 ```
 
 This is the central v19 -> v20 difference.
+
+## Source-review verification
+
+The v20 notebook here and `submission_nb/kaggriculture-sub_v20.ipynb` were byte-identical when reviewed. Comparing parsed function definitions against v19 showed that `unit_actions` was the only existing function changed; six Q helper functions were added. This verifies the architectural comparison above, not the reported win rate.
+
+A second source audit also confirmed that existing module-level assignment values were unchanged from v19, and loaded the embedded inference code to verify 16 tree functions, 21 task scales, and 6,721 network parameters. The stored network parameters are float32 bytes decoded into Python floats; inference is ordinary Python floating-point arithmetic, not FP16 tensor inference. These checks establish runtime structure, not training provenance or playing strength.
+
+# 19. Component-to-function map
+
+All names below refer to the notebook's embedded `main.py`. Several components are blocks within a larger function rather than standalone functions.
+
+| Component | Corresponding functions / code | Role and boundary |
+|---|---|---|
+| Entrypoint and orchestration | `agent` | Classifies opponent, calls planners, assembles worker and market actions. |
+| Opponent classification | `agent`, global `OPP_STYLE` | Rule-based early-game classification; no separate classifier function. |
+| Economic constants and production schedules | `CROPS`, `ANIMALS`, `SHOPS`, `HERD_LIMIT`, `FERT_FACTOR`, `LABOR_COST`, `HERD_THRESHOLD` | Tables/constants used by forecast, planners, and execution. |
+| Price approximation | `price` | Estimates product prices from projected market inventory. |
+| Inventory aggregation | `totals` | Sums shed and worker inventory; seeds remain separate. |
+| Tile access and layout | `tile`, `ROUTES`, `ANIMAL_POINTS`, `SHED` | Fixed spatial assumptions shared across planning and execution. |
+| Distance and movement | `dist`, `move`, `nearest_shed` | Manhattan distance, one-step movement, and nearest shed tile. |
+| Supply/demand forecast | `forecast` | Uses both farms and own inventory to return projected market inventory and demand. |
+| Animal allocation and economics | `animal_plan` | Keeps route animals, allocates owned stock, evaluates purchases using a local forecast copy. |
+| Crop allocation and economics | `crop_plan` | Preserves crops, applies opening layout, scores future production; ignores its `animal` argument. |
+| Fertilizer benefit | `fert_value` | Used by `unit_actions` for fertilizer tasks and `market_orders` for purchase targets. |
+| Forced worker actions | Initial blocks of `unit_actions` | Delivery, animal setup, and immediate resource pickups bypass learned ranking. |
+| Task generation and feasibility | `unit_actions` | Creates remaining tasks and filters worker-task pairs by resources and time/distance. |
+| Task features | `task_features` | Produces 21 features, including heuristic task weight. |
+| Learned tree prior | `learned_task_score`, `_tree_0` through `_tree_15`, `_TREE_FUNCTIONS` | Sums 16 tree predictions inherited from v19. |
+| Prior normalization | `q_normalized_prior`, `_q_clip` | Subtracts candidate-set maximum, divides by standard deviation floored at 1, clips to [-5, 5]. |
+| Task-input normalization | `q_norm_task`, `_Q_TASK_SCALES`, `_q_clip` | Scales and clips the 21 task features. |
+| Global-state features | `q_global_state`, `_q_clip` | Produces 17 state features, including candidate and free-worker counts. |
+| Embedded network loading | Module-level `_Q_WEIGHTS_B64`, `_Q_ALL`, `_Q_W*`, `_Q_B*` | Decodes 6,721 float32 parameters using `base64` and `struct`; no external checkpoint needed at runtime. |
+| Shared first-layer computation | `q_state_bias` | Computes the state contribution once per assignment decision. |
+| Neural residual inference | `q_residual_score` | 38 → 64 → 64 → 1 MLP with tanh hidden layers and linear output. |
+| Greedy assignment and exact pruning | Ranking loop in `unit_actions`, `_Q_RESIDUAL_MAX` | Adds normalized prior and residual, prunes by upper bound, removes selected worker and same-tile tasks. |
+| Fallback worker actions | Final block of `unit_actions` | Assigns DROP at shed when carrying inventory, otherwise PASS. |
+| Same-turn inventory accounting | Initial block of `market_orders` | Accounts for worker DROP and eligible PLACE actions before forming sales. |
+| Selling and reserves | SELL loop in `market_orders` | Immediate sales subject to wheat/fertilizer reserves. |
+| Opening market package | Day-0/hour-0 branch in `market_orders` | Returns the fixed ten-order opening package. |
+| Hiring and purchases | Remaining blocks of `market_orders` | HIRE, wheat, land, animals, seeds, fertilizer; final order cap of ten. |
+| Inactive mix settings | `TRADER_MIX`, `NORMAL_MIX`, `V16_MIX` | Defined only; no runtime consumer. |
 
