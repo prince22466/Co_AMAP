@@ -524,6 +524,9 @@ def main() -> int:
         assert replay_error_evidence["ok"] is True
         assert replay_error_evidence["replay_error_cases"] == 1
 
+        classified = runtime.candidate_code_failure_evidence(error_db, None)
+        assert classified["candidate_code_failure"] is False
+
         # Recoverable candidate runtime errors close only the failed attempt,
         # keep the same idea RUNNING, and allow a fresh experiment attempt.
         retry_db = runtime.ResearchDB(Path(tmp) / "retry_attempt.sqlite3")
@@ -558,6 +561,12 @@ def main() -> int:
         ).fetchone()
         assert retry_idea_row["experiment_id"] == attempt2
         assert retry_idea_row["status"] == "RUNNING"
+
+        retry_work_after_error = retry_db.current_work_idea()
+        assert retry_work_after_error is not None
+        assert retry_work_after_error["idea_id"] == retry_idea
+        assert retry_work_after_error["resume_existing"] is True
+        assert retry_work_after_error["repair_after_error"] is False
 
         sha_attempt1 = runtime.hashlib.sha256(b"bad candidate").hexdigest()
         sha_attempt2 = runtime.hashlib.sha256(b"fixed candidate").hexdigest()
