@@ -370,6 +370,15 @@ def main() -> int:
         assert normalized["malformed_matches_dropped"] == 3
 
 
+        retry = runtime.model_retry_settings()
+        assert retry.max_retries == 5
+        assert retry.backoff.initial_delay == 0.5
+        assert retry.backoff.max_delay == 16.0
+
+        pacer = runtime.ModelCallPacer(0.0)
+        assert pacer.min_interval_seconds == 0.0
+
+
         # Replay runner must have the serialization helper it uses for step traces.
         import replay.runner as replay_runner
         assert callable(replay_runner._plain)
