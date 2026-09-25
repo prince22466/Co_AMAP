@@ -368,6 +368,30 @@ def main() -> int:
         })
         assert normalized["matches"] == [{"episode": "ok", "valid": True}]
         assert normalized["malformed_matches_dropped"] == 3
+
+
+        # Replay runner must have the serialization helper it uses for step traces.
+        import replay.runner as replay_runner
+        assert callable(replay_runner._plain)
+
+        # Candidate descriptions must never poison immutable experiment binding.
+        tool_local = object.__new__(runtime.LocalTools)
+        tool_local.root = Path(tmp).resolve()
+        tool_local.workspace = (Path(tmp) / "workspace").resolve()
+        tool_local.allow_exec = False
+        tool_local.log = None
+        candidate_file = Path(tmp) / "candidate.py"
+        candidate_file.write_text("def agent(obs):\n    return []\n", encoding="utf-8")
+
+        candidate, error = runtime.validate_candidate_path(
+            tool_local, "descriptive candidate text"
+        )
+        assert candidate == ""
+        assert error and "existing .py/.ipynb path" in error
+
+        candidate, error = runtime.validate_candidate_path(tool_local, "candidate.py")
+        assert candidate == "candidate.py"
+        assert error is None
         assert len(parsed_batch["ideas"]) == 10
 
         invalid_attempt_id = batch_db.record_analyst_attempt(
