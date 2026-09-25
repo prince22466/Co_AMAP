@@ -158,50 +158,136 @@ def forecast(obs):
             for c in items:
                 if c!='FERTILIZER':net_flow[c][t]-=1.
 
-    # Preserve the old visible-production model, now scheduled on absolute turns.
-    # Current visible yield is treated as near-term sellable supply; future scheduled
-    # crop/animal yields are placed at the start of their production day.
+    # Future supply is rebuilt from the latest observation every turn.
+    # Our side models when existing goods/assets are expected to reach the market:
+    #   1) shed stock -> immediate supply;
+    #   2) carried stock -> supply after delivery to the shed;
+    #   3) yield already sitting on our tiles -> harvest + delivery;
+    #   4) remaining output of crops currently planted;
+    #   5) recurring output of animals currently placed, assuming they are well cared.
+    # We deliberately do NOT forecast replacement crops after a current crop finishes;
+    # a newly planted crop enters the forecast only after it appears in a later observation.
+    player=obs['player'];private=obs['private'];own_farm=obs['farms'][player]
+    shed=private['shed'];total=totals(private)
+    positions=[tuple(own_farm['farmer'])]+[tuple(p) for p in own_farm['hands']]
+
+    # Keep the existing opponent-visible-production heuristic separate from our improved
+    # own-side future supply model. Opponent hidden inventory/replanting remains uncertain.
     herd=0
-    for fi,farm in enumerate(obs['farms']):
+    for farm in obs['farms']:
         for row in farm['tiles']:
             for tile_state in row:
-                if not isinstance(tile_state,dict):continue
-                if 'animal' in tile_state:
-                    a=ANIMALS[tile_state['animal']];herd+=1
-                    product=a[1];held=tile_state.get('yield_units',0)
-                    if held:net_flow[product][step]+=held
-                    first_day=tile_state['placed_day']+a[2]
-                    for at_day in range(max(day+1,first_day),30):
-                        if (at_day-first_day)%a[3]==0:
-                            net_flow[product][at_day*TURNS_PER_DAY]+=a[4]
-                if 'crop' not in tile_state:continue
-                c=tile_state['crop'];planted=tile_state['planted_day'];ongoing=c in ('TOMATO','STRAWBERRY')
-                held=tile_state.get('yield_units',0) if ongoing or day>=planted+CROPS[c][3] else 0
-                if held:net_flow[c][step]+=held
-                for age,units in CROPS[c][2]:
-                    at_day=planted+age
-                    at_turn=at_day*TURNS_PER_DAY
-                    if at_turn>step and at_day<30:
-                        net_flow[c][at_turn]+=units if fi==obs['player'] else (1.8 if ongoing else units)
+                if isinstance(tile_state,dict) and 'animal' in tile_state:herd+=1
+    opp_farm=obs['farms'][1-player]
+    for row in opp_farm['tiles']:
+        for tile_state in row:
+            if not isinstance(tile_state,dict):continue
+            if 'animal' in tile_state:
+                a=ANIMALS[tile_state['animal']];product=a[1]
+                held=tile_state.get('yield_units',0)
+                if held:net_flow[product][step]+=held
+                first_day=tile_state['placed_day']+a[2]
+                for at_day in range(max(day+1,first_day),30):
+                    if (at_day-first_day)%a[3]==0:
+                        net_flow[product][at_day*TURNS_PER_DAY]+=a[4]
+            if 'crop' not in tile_state:continue
+            c=tile_state['crop'];planted=tile_state['planted_day'];ongoing=c in ('TOMATO','STRAWBERRY')
+            held=tile_state.get('yield_units',0) if ongoing or day>=planted+CROPS[c][3] else 0
+            if held:net_flow[c][step]+=held
+            for age,units in CROPS[c][2]:
+                at_day=planted+age;at_turn=at_day*TURNS_PER_DAY
+                if at_turn>step and at_day<30:
+                    net_flow[c][at_turn]+=1.8 if ongoing else units
 
-    # Immediate own supply: only goods already in the shed can be sold now.
-    # Carried worker inventory is deliberately excluded until it reaches the shed.
-    # Match market_orders() reserve policy so wheat/fertilizer kept for operations
-    # are not forecast as current-turn market supply.
-    private=obs['private'];shed=private['shed'];total=totals(private)
-    own_farm=obs['farms'][obs['player']]
+    # Reserve policy mirrors market_orders(). Allocate today's sellable budget to shed
+    # stock first, then to carried stock as it reaches the shed.
     live=sum(
         1 for row in own_farm['tiles'] for tile_state in row
         if isinstance(tile_state,dict) and 'animal' in tile_state
     )
     reserve_wheat=0 if day==29 else max(4,live+2)
     reserve_fert=0 if day<10 or day==29 else 4
+    sellable_budget={c:total.get(c,0) for c in net_flow}
+    if 'WHEAT' in sellable_budget:sellable_budget['WHEAT']=max(0,total.get('WHEAT',0)-reserve_wheat)
+    if 'FERTILIZER' in sellable_budget:sellable_budget['FERTILIZER']=max(0,total.get('FERTILIZER',0)-reserve_fert)
+
+    # Immediate supply: goods already in the shed can be sold this turn.
     for c,n in shed.items():
         if c not in net_flow or n<=0:continue
-        sellable=n
-        if c=='WHEAT':sellable=min(n,max(0,total.get(c,0)-reserve_wheat))
-        elif c=='FERTILIZER':sellable=min(n,max(0,total.get(c,0)-reserve_fert))
-        if sellable:net_flow[c][step]+=sellable
+        sellable=min(n,sellable_budget.get(c,0))
+        if sellable:
+            net_flow[c][step]+=sellable
+            sellable_budget[c]-=sellable
+
+    # Carried goods are future supply. Estimate the earliest shed arrival from the
+    # worker's current position; automatic end-of-day drop provides an upper bound.
+    next_day_turn=(day+1)*TURNS_PER_DAY
+    for i,inv in enumerate(private['inventories']):
+        if i>=len(positions):break
+        pos=positions[i]
+        travel_turn=step+max(1,dist(pos,nearest_shed(pos)))
+        delivery_turn=min(travel_turn,next_day_turn) if day<29 else travel_turn
+        if delivery_turn>=SEASON_TURNS:continue
+        for c,n in inv.items():
+            if c not in net_flow or n<=0:continue
+            sellable=min(n,sellable_budget.get(c,0))
+            if sellable:
+                net_flow[c][delivery_turn]+=sellable
+                sellable_budget[c]-=sellable
+
+    # Tile stock needs HARVEST plus transport to a shed-access tile. For yield already
+    # visible now, include the nearest current worker's approach distance. For future
+    # production we assume a worker can be present at the tile when production lands.
+    def own_market_turn(p,ready_turn,include_worker_approach=False):
+        approach=min(dist(pos,p) for pos in positions) if include_worker_approach and positions else 0
+        return ready_turn+approach+dist(p,nearest_shed(p))+1
+
+    for y,row in enumerate(own_farm['tiles']):
+        for x,tile_state in enumerate(row):
+            if not isinstance(tile_state,dict):continue
+            p=(x,y)
+
+            if 'animal' in tile_state:
+                a=ANIMALS[tile_state['animal']]
+                product=a[1];held=tile_state.get('yield_units',0)
+                if held:
+                    at=own_market_turn(p,step,True)
+                    if at<SEASON_TURNS:net_flow[product][at]+=held
+
+                # Existing animals are forecast for the rest of the season. Under the
+                # well-cared assumption, use v20's steady-state 3/4/2 units per event.
+                first_day=tile_state['placed_day']+a[2]
+                for at_day in range(max(day+1,first_day),30):
+                    if (at_day-first_day)%a[3]:continue
+                    ready_turn=at_day*TURNS_PER_DAY
+                    at=own_market_turn(p,ready_turn)
+                    if at<SEASON_TURNS:net_flow[product][at]+=a[4]
+
+            if 'crop' not in tile_state:continue
+            crop=tile_state['crop'];planted=tile_state['planted_day']
+            ongoing=crop in ('TOMATO','STRAWBERRY')
+            held=tile_state.get('yield_units',0)
+            if held:
+                at=own_market_turn(p,step,True)
+                if at<SEASON_TURNS:net_flow[crop][at]+=held
+
+            # Forecast only the remaining output of the crop currently on this tile.
+            # No replacement crop is assumed after its last scheduled harvest.
+            for age,scheduled_units in CROPS[crop][2]:
+                at_day=planted+age;ready_turn=at_day*TURNS_PER_DAY
+                if ready_turn<=step or at_day>=30:continue
+                if ongoing:
+                    # Base scheduled yield is 1; current fertilizer coverage makes it 2
+                    # assuming the crop is watered. Later fertilization is learned from
+                    # later observations and the rolling forecast is rebuilt then.
+                    units=2 if tile_state.get('fertilized_until_day',-1)>=at_day else 1
+                else:
+                    # One-time crop schedule is a final total, so subtract any yield
+                    # already visible on the tile to avoid counting it twice.
+                    units=max(0,scheduled_units-held)
+                if not units:continue
+                at=own_market_turn(p,ready_turn)
+                if at<SEASON_TURNS:net_flow[crop][at]+=units
 
     # Retain the old herd-to-wheat-demand heuristic, but express it as one daily flow
     # rather than subtracting a fractional amount continuously across a day.
