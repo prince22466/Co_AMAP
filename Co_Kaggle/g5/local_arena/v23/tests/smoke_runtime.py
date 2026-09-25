@@ -319,6 +319,35 @@ def main() -> int:
             runtime.json.dumps(analyst_json)
         )
         assert len(parsed_batch["ideas"]) == 10
+
+        invalid_attempt_id = batch_db.record_analyst_attempt(
+            batch_run,
+            "initial_diagnosis",
+            "INVALID",
+            "{truncated-json",
+            "invalid analyst batch: JSONDecodeError",
+            {"requests": 2, "input_tokens": 1000, "output_tokens": 1200},
+            0.05,
+        )
+        assert invalid_attempt_id.startswith("attempt_")
+        valid_attempt_id = batch_db.record_analyst_attempt(
+            batch_run,
+            "initial_diagnosis",
+            "VALID",
+            runtime.json.dumps(analyst_json),
+            "",
+            {"requests": 1, "input_tokens": 500, "output_tokens": 2500},
+            0.04,
+        )
+        assert valid_attempt_id.startswith("attempt_")
+        attempt_rows = batch_db.db.execute(
+            "SELECT status,error,analyst_output FROM analyst_attempts ORDER BY created_at"
+        ).fetchall()
+        assert len(attempt_rows) == 2
+        assert attempt_rows[0]["status"] == "INVALID"
+        assert "JSONDecodeError" in attempt_rows[0]["error"]
+        assert attempt_rows[1]["status"] == "VALID"
+        assert batch_db.project_status()["analyst_attempts_total"] == 2
         try:
             runtime.parse_analyst_batch(
                 runtime.json.dumps({**analyst_json, "ideas": analyst_json["ideas"][:9]})
