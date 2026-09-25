@@ -9,7 +9,10 @@ import math
 import base64
 import struct
 
-CROPS={ ## explain the data format
+# Crop tuple format: (seed_cost, reference/base market price, yield_schedule, final_yield_age).
+# yield_schedule contains (crop_age_in_days, units_produced) events; e.g. WHEAT
+# costs 10, has reference price 25, yields 4 units at age 4, and its last yield is age 4.
+CROPS={
  'WHEAT':(10,25,((4,4),),4),
  'CARROT':(20,35,((3,3),),3),
  'TOMATO':(50,60,((8,2),(9,2),(10,2),(11,2)),11),
@@ -25,21 +28,39 @@ SHOPS={'BAKERY':('WHEAT','EGG'),'PIZZA_SHOP':('MILK','TOMATO','WHEAT'),
 
 ROUTES=(((4,4),(4,3),(4,2)),((3,4),(3,3),(2,3)),((5,4),(5,3)),((6,4),(6,3)),((4,5),(3,5)),((4,6),(3,6)))
 ANIMAL_POINTS={p for route in ROUTES for p in route}
-SHED=((4,4),(5,4),(4,5),(5,5)) # what does it mean
+# The shed occupies the central 2x2 tiles. These coordinates are the transfer interface
+# used for PICKUP/DROP/PLACE decisions and as routing targets via nearest_shed().
+SHED=((4,4),(5,4),(4,5),(5,5))
 PASS=['PASS']
-HERD_LIMIT=13 # where and what is this for 
+# Maximum size of the desired animal plan. animal_plan() stops adding new animals once
+# existing/planned animals fill 13 route slots.
+HERD_LIMIT=13
 FERT_FACTOR=0.8
-LABOR_COST=20 # where and what is this for
-HERD_THRESHOLD=200 # where and what is this for
+# Heuristic daily labor/maintenance penalty used only when animal_plan() estimates
+# the economics of adding an animal. It is not a fee charged by the game engine.
+LABOR_COST=20
+# Minimum projected net score required for animal_plan() to expand the herd. If the
+# best candidate animal is below 200, planning stops adding animals.
+HERD_THRESHOLD=200
 OPP_STYLE=None
-TRADER_MIX=(6,4,5) # what does it mean
-NORMAL_MIX=(8,5,0)# what does it mean
-V16_MIX=(7,4,0)# what does it mean, what is this for and where is it used
+# Legacy opponent-style tuning tuple. In this v20 file it is never read, so its values
+# have no runtime effect and the tuple-component semantics cannot be recovered from v20.
+TRADER_MIX=(6,4,5)
+# Legacy opponent-style tuning tuple; defined but unused in v20, so changing it does
+# not change the policy.
+NORMAL_MIX=(8,5,0)
+# Legacy V16-specific tuning tuple; defined but never consumed in v20. Active V16
+# behavior instead comes from OPP_STYLE, V16_FINAL_HANDS, V16_FINAL_BONUS, and seed ordering.
+V16_MIX=(7,4,0)
 V16_FINAL_HANDS=10
 V16_FINAL_BONUS=160
 
 def price(item, inventory):
-    #write the logic of this function
+    # Heuristic market-price model used by the crop/animal planners. Inventory 10,000 is
+    # treated as the equilibrium point (d == 0). Scarcity (d < 0) raises the estimate;
+    # surplus (d >= 0) lowers it with item-specific curves, always floored at 1. The
+    # function forecasts planning value from projected inventory; it does not read the
+    # live market price directly.
     d=inventory-10000
     if item=='WHEAT':return max(1,25-5*math.log1p(d)/math.log(401)) if d>=0 else 25+math.sqrt(-d)
     if item in ('CARROT','TOMATO','EGG'):
@@ -53,24 +74,36 @@ def price(item, inventory):
     if item=='WOOL':return max(1,200-640*(d/105)**2) if d>=0 else 200+40*math.log1p(-d)/math.log(106)
     return max(1,100-.2*d)
 
-def dist(a,b):return abs(a[0]-b[0])+abs(a[1]-b[1]) #what is this for
+# Manhattan grid distance. It is used for route ordering, nearest-shed selection,
+# worker/task travel cost, deadlines, and feasibility checks.
+def dist(a,b):return abs(a[0]-b[0])+abs(a[1]-b[1])
 def move(a,b):
-    #what is the logic
+    # Return one cardinal step from a toward b. Prefer the x-axis when |dx| >= |dy|;
+    # otherwise move on y. If already at b, PASS.
     dx=b[0]-a[0];dy=b[1]-a[1]
     if abs(dx)>=abs(dy) and dx:return ['EAST' if dx>0 else 'WEST']
     if dy:return ['SOUTH' if dy>0 else 'NORTH']
     return PASS
 def nearest_shed(p):return min(SHED,key=lambda s:dist(p,s))
-def tile(f,p):return f['tiles'][p[1]][p[0]] #what is this for
+# Convert an (x, y) farm coordinate to the row-major tile grid entry tiles[y][x].
+def tile(f,p):return f['tiles'][p[1]][p[0]]
 def totals(private):
-    #what is this for
+    # Aggregate the player's private shed inventory plus every farmer/hand inventory into
+    # one item-count dictionary. Seeds and items already placed on farm tiles are separate.
     result=dict(private['shed'])
     for inv in private['inventories']:
         for c,n in inv.items():result[c]=result.get(c,0)+n
     return result
 
 def forecast(obs):
-    #write the logic for forecasting, what does it observe, what does it forecast
+    # Build a heuristic day-by-day market-inventory forecast through day 30.
+    # Observed inputs: current day, shared market inventory, unlocked shops, visible crops
+    # and animals on both farms, and our private shed/carried inventory. It estimates:
+    #   1) demand[item]: baseline demand + unlocked-shop demand + animal wheat demand;
+    #   2) supply[item][day]: current/future visible crop and animal yields plus our stock;
+    #   3) projected[item][day]: current market inventory + cumulative future supply
+    #      - elapsed expected demand, including a gradual allowance for future shops.
+    # The result is projected inventory (used later by price()) plus the demand estimate.
     day=obs['day'];items=obs['market']['inventory'];shops=obs['town']['unlocked_shops']
     demand={c:float(c!='FERTILIZER') for c in items}
     expected={c:0. for c in items}
@@ -109,7 +142,12 @@ def forecast(obs):
     return projected,demand
 
 def animal_plan(obs,projected):
-    #what is this for, what is the logic, what does it use for plan
+    # Produce a desired {tile: animal_type} layout on the fixed animal ROUTES.
+    # Logic: keep already-placed route animals, allocate owned-but-unplaced animals to free
+    # route slots, then on days 3..17 consider additional animals. Each species is scored
+    # by projected product revenue + fertilizer value - wheat feed - LABOR_COST - purchase
+    # cost. Expansion is capped by HERD_LIMIT and stops below HERD_THRESHOLD. A local copy
+    # of projected inventory is updated after each choice to model its future supply impact.
     f=obs['farms'][obs['player']];day=obs['day'];plan={}
     for row in ROUTES:
         for p in row:
@@ -142,7 +180,12 @@ def animal_plan(obs,projected):
     return plan
 
 def crop_plan(obs,projected,animal):
-        #what is this for, what is the logic, what does it use for plan
+    # Produce a desired {tile: crop_type} layout for unlocked tiles outside ANIMAL_POINTS.
+    # Existing crops are preserved. Days 0..3 use a fixed 13-WHEAT/6-MELON opening; later
+    # candidates are scored from projected future sale value - seed/fertilizer cost,
+    # normalized by production duration and adjusted by crop-specific heuristic multipliers.
+    # Owned seeds receive a small bonus, and projected supply is updated after each choice.
+    # Note: the `animal` argument is currently unused; exclusion uses fixed ANIMAL_POINTS.
     f=obs['farms'][obs['player']];day=obs['day'];seeds=obs['private']['seeds'];plan={}
     points=[(x,y) for y in range(10) for x in range(10) if tile(f,(x,y))!='LOCKED' and (x,y) not in ANIMAL_POINTS]
     points.sort(key=lambda p:(dist(p,nearest_shed(p)),p[1],p[0]))
@@ -180,7 +223,11 @@ def crop_plan(obs,projected,animal):
     return plan
 
 def fert_value(t,day,prices):
-    #what is this for, what is the logic
+    # Approximate the marginal value of fertilizing a crop now. Only TOMATO/STRAWBERRY are
+    # considered. Already-covered crops return 0. Otherwise it looks for yield events in
+    # the next three crop-age steps, requires an event on the next step, and returns
+    # current_crop_price * number_of_covered_events - fertilizer_price. unit_actions() uses
+    # this to create FERTILIZE tasks; market_orders() uses it to size fertilizer purchases.
     if t.get('fertilized_until_day',-1)>=day:return 0
     c=t['crop'];age=day-t['planted_day']
     if c in ('TOMATO','STRAWBERRY'):
@@ -226,7 +273,10 @@ _TREE_FUNCTIONS=(_tree_0,_tree_1,_tree_2,_tree_3,_tree_4,_tree_5,_tree_6,_tree_7
 TASK_OPS=('PLANT','DIG','HARVEST','WATER','FERTILIZE','FEED','CARE','COLLECT_FERTILIZER','PICKUP')
 TASK_KINDS=('WHEAT','CARROT','TOMATO','STRAWBERRY','MELON','COW','SHEEP','GOOSE')
 def task_features(obs,i,task):
-    #what is this for, what is the logic,
+    # Encode one (worker, task) candidate as the 21 features consumed by both the inherited
+    # decision-tree prior and the residual Q network: day/hour, worker-target distance,
+    # heuristic task weight, operation/crop-or-animal IDs, tile age/yield/status, worker
+    # resources and inventory size, shed distance, target/worker coordinates, and unit count.
 
     p,op,weight,resource=task
     farm=obs['farms'][obs['player']];positions=[farm['farmer']]+farm['hands']
@@ -239,7 +289,9 @@ def task_features(obs,i,task):
         p[0],p[1],pos[0],pos[1],len(positions)]
 
 def learned_task_score(features):
-    #what is this for, what is the logic,
+    # v19-style learned prior: evaluate the same 21-feature vector with all 16 embedded
+    # decision trees and sum their predictions. v20 normalizes this score across feasible
+    # candidates, then adds the neural residual before choosing a worker-task pair.
     value=0.
     for predict in _TREE_FUNCTIONS:value+=predict(features)
     return value
@@ -563,14 +615,17 @@ _Q_TASK_SCALES=(29.,23.,20.,500.,8.,7.,30.,20.,5.,1.,1.,30.,20.,20.,50.,10.,9.,9
 _Q_RESIDUAL_MAX=_Q_B4+sum(abs(w) for w in _Q_W4)
 
 def _q_clip(v,lo=-5.,hi=5.):
-        #what is this for
+    # Saturate normalized inputs/scores to a bounded range. This prevents extreme feature
+    # values or priors from dominating the embedded residual network.
     return lo if v<lo else hi if v>hi else v
 
 def q_norm_task(features):
     return tuple(_q_clip(float(v)/s) for v,s in zip(features,_Q_TASK_SCALES))
 
 def q_normalized_prior(raw_scores):
-    #what is this for
+    # Convert raw tree scores into a candidate-relative prior. Subtract the current maximum
+    # (so the best tree prior is 0), divide by population standard deviation with a floor of
+    # 1, then clip to [-5, 5]. This keeps relative preference while stabilizing scale.
     n=len(raw_scores)
     if not n:return ()
     top=max(raw_scores)
@@ -579,7 +634,10 @@ def q_normalized_prior(raw_scores):
     return tuple(_q_clip((x-top)/scale) for x in raw_scores)
 
 def q_global_state(obs,candidate_count,free_workers):
-    #what is this for, what is the logic
+    # Build the 17 global-state inputs for the residual Q network: normalized day/hour,
+    # both players' money and money gap, hand counts, land counts, own wheat/fertilizer,
+    # key market prices, current feasible-candidate count, and free-worker count. Each value
+    # is normalized by a fixed scale and clipped before entering the network.
     p=int(obs['player']);o=1-p;own=obs['farms'][p];opp=obs['farms'][o]
     private=obs['private'];total=totals(private);prices=obs['market']['prices']
     x=(
@@ -593,7 +651,10 @@ def q_global_state(obs,candidate_count,free_workers):
 def q_state_bias(state):
     # First-layer contribution of the 17 global-state inputs is identical for
     # every candidate in one assignment decision, so compute it once.
-    #what is this for, what is the logic
+    # q_state_bias() precomputes B0 + W_state * global_state for each of the 64 first-layer
+    # neurons. The global state is identical for every candidate in this assignment round,
+    # so this shared contribution is calculated once; q_residual_score() then adds the
+    # candidate-specific 21-feature contribution before tanh.
     out=[]
     for j in range(64):
         row=j*38
@@ -619,7 +680,13 @@ def q_residual_score(state_bias,candidate):
     return v
 
 def unit_actions(obs,animal,crops):
-    #what is this for, what is the logic
+    # Convert the animal/crop plans into one action for the farmer and every hand.
+    # Pipeline: first force delivery and animal-placement logistics; stage animals/resources
+    # from the shed; generate crop/animal maintenance tasks; form feasible worker-task pairs
+    # using resource and remaining-time checks; rank each pair with normalized tree prior +
+    # residual Q; greedily assign the best pair, removing that worker and all tasks on the
+    # chosen tile; finally DROP carried inventory at the shed or PASS. Direct forced actions
+    # bypass the learned ranker; only candidates in `tasks` go through Q selection.
     f=obs['farms'][obs['player']];private=obs['private'];day=obs['day'];hour=obs['hour']
     prices=obs['market']['prices'];positions=[f['farmer']]+f['hands'];invs=private['inventories']
     actions=[None]*len(positions);shed=dict(private['shed']);free=[];reserved=set()
@@ -762,8 +829,15 @@ def unit_actions(obs,animal,crops):
 
 
 def market_orders(obs,animal,crops,actions):
-    #what is this for, what is the logic
-    # how does it decide what to sell, buy, hire, under the constrain of max 10 orders
+    # Build the rule-based market order list (maximum 10 orders). First account for goods
+    # that current worker DROP/PLACE actions will move into the shed, then emit SELL orders
+    # for available products while reserving wheat for the herd and fertilizer for crops.
+    # Day 0/hour 0 is a fixed 10-order opening. Otherwise, remaining slots are considered in
+    # this order: HIRE (early hours, target hand count, Fibonacci hire cost), BUY_PRODUCT
+    # WHEAT, BUY_LAND, BUY_ANIMAL toward animal_plan(), BUY_SEED toward crop_plan(), then
+    # BUY_PRODUCT FERTILIZER when fert_value() indicates demand. Every stage checks cash and
+    # order capacity; earlier SELL/HIRE orders can consume slots needed by later purchases,
+    # and the final `orders[:10]` enforces the engine limit defensively.
     f=obs['farms'][obs['player']];p=obs['private'];day=obs['day'];hour=obs['hour'];prices=obs['market']['prices']
     cash=f['money'];orders=[];held=dict(p['shed']);total=totals(p)
     for i,a in enumerate(actions):
