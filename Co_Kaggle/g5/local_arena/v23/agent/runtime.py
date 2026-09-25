@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import hashlib
 import json
 import os
@@ -784,6 +785,28 @@ class ResearchDB:
 
 
 @dataclass
+class ModelCallPacer:
+    min_interval_seconds: float = 8.0
+    last_started_monotonic: float = 0.0
+
+    async def wait(self, log, role: str) -> None:
+        interval = max(0.0, float(self.min_interval_seconds))
+        if interval <= 0:
+            self.last_started_monotonic = time.monotonic()
+            return
+        now = time.monotonic()
+        wait_seconds = max(0.0, interval - (now - self.last_started_monotonic))
+        if wait_seconds > 0:
+            log.event("model_call_pacing", {
+                "role": role,
+                "delay_seconds": round(wait_seconds, 3),
+                "min_interval_seconds": interval,
+            })
+            await asyncio.sleep(wait_seconds)
+        self.last_started_monotonic = time.monotonic()
+
+
+@dataclass
 class AppContext:
     run_id: str
     local: LocalTools
@@ -792,6 +815,7 @@ class AppContext:
     input_price: float
     output_price: float
     replay_python: str
+    pacer: ModelCallPacer
     blocker_reason: str = ""
     active_idea_id: str = ""
 
@@ -868,8 +892,11 @@ def model_retry_settings() -> ModelRetrySettings:
 class BudgetHooks(RunHooks[AppContext]):
     """Per-model-call usage logging and conservative hard-stop before the next call."""
 
-    def __init__(self, log, starting_project_cost, session_limit, total_limit, input_price, output_price):
+    def __init__(self, log, starting_project_cost, session_limit, total_limit, input_price, output_price,
+                 pacer: ModelCallPacer, role: str):
         self.log = log
+        self.pacer = pacer
+        self.role = role
         self.starting_project_cost = float(starting_project_cost)
         self.session_limit = float(session_limit)
         self.total_limit = float(total_limit)
@@ -882,6 +909,7 @@ class BudgetHooks(RunHooks[AppContext]):
         return conservative_cost_usd(usage, self.input_price, self.output_price)
 
     async def on_llm_start(self, context, agent, system_prompt, input_items):
+        await self.pacer.wait(self.log, self.role)
         usage = usage_dict(context.usage)
         session_cost = self._cost(usage)
         if session_cost >= self.session_limit:
@@ -1435,6 +1463,12 @@ def parse_args():
     p.add_argument("--max-turns",type=int,default=12); p.add_argument("--max-output-tokens",type=int,default=2500)
     p.add_argument("--allow-exec",action="store_true"); p.add_argument("--session-id",default=DEFAULT_SESSION_ID)
     p.add_argument("--session-history-limit",type=int,default=80)
+    p.add_argument(
+        "--model-call-min-interval-seconds",
+        type=float,
+        default=8.0,
+        help="Minimum spacing between model calls across analyst/engineer roles; set 0 to disable.",
+    )
     p.add_argument("--total-budget-usd",type=float,default=DEFAULT_TOTAL_BUDGET_USD)
     p.add_argument("--session-budget-usd",type=float,default=DEFAULT_SESSION_BUDGET_USD)
     p.add_argument("--input-usd-per-m",type=float); p.add_argument("--output-usd-per-m",type=float)
@@ -1530,7 +1564,10 @@ def main():
             "tracing_enabled":not args.disable_tracing,"trace_sensitive_data":False}
     log=RunLog(WORKSPACE,config); local=LocalTools(allow_exec=args.allow_exec,log=log)
     db=ResearchDB(STATE_DB); db.start_run(run_id,args.session_id,args.task,args.model)
-    app=AppContext(run_id,local,db,log,inp_price,out_price,replay_python)
+    app=AppContext(
+        run_id,local,db,log,inp_price,out_price,replay_python,
+        ModelCallPacer(args.model_call_min_interval_seconds),
+    )
     budget=BudgetLedger(LEDGER_PATH,model=args.model,input_usd_per_m=inp_price,
         output_usd_per_m=out_price,total_budget_usd=args.total_budget_usd,
         session_budget_usd=args.session_budget_usd)
@@ -1626,6 +1663,8 @@ def main():
                 args.total_budget_usd,
                 analyst_inp_price,
                 analyst_out_price,
+                app.pacer,
+                "performance_analyst",
             )
             analyst_usage={
                 "requests":0,"input_tokens":0,"cached_tokens":0,
@@ -1822,6 +1861,8 @@ def main():
             args.total_budget_usd,
             inp_price,
             out_price,
+            app.pacer,
+            "experiment_engineer",
         )
         cycle_output = ""
         cycle_usage = {
