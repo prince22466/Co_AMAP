@@ -383,20 +383,15 @@ def main() -> int:
         candidate_file = Path(tmp) / "candidate.py"
         candidate_file.write_text("def agent(obs):\n    return []\n", encoding="utf-8")
 
-        class _Ctx:
-            pass
-
-        fake = _Ctx()
-        fake.context = _Ctx()
-        fake.context.local = tool_local
-        fake.context.db = db
-        fake.context.run_id = run_id
-        fake.context.active_idea_id = ""
-
-        rejected = runtime.start_experiment.on_invoke_tool(
-            runtime.RunContextWrapper(context=fake.context, usage=None),
-            '{"hypothesis":"h","candidate":"descriptive candidate text"}',
+        candidate, error = runtime.validate_candidate_path(
+            tool_local, "descriptive candidate text"
         )
+        assert candidate == ""
+        assert error and "existing .py/.ipynb path" in error
+
+        candidate, error = runtime.validate_candidate_path(tool_local, "candidate.py")
+        assert candidate == "candidate.py"
+        assert error is None
         assert len(parsed_batch["ideas"]) == 10
 
         invalid_attempt_id = batch_db.record_analyst_attempt(
