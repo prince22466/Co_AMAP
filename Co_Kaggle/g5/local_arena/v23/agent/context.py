@@ -188,6 +188,8 @@ def build_engineer_context(
             "smallest_test": idea.get("smallest_test"),
             "promotion_rule": idea.get("promotion_rule"),
             "resume_existing": bool(idea.get("resume_existing")),
+            "repair_after_error": bool(idea.get("repair_after_error")),
+            "previous_experiment_status": idea.get("previous_experiment_status"),
             "existing_experiment_id": idea.get("experiment_id"),
         },
         "existing_lineage": _clip(compact_lineage, 3200),
