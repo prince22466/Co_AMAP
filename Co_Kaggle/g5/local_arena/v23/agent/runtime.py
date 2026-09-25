@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+import random
 import sqlite3
 import subprocess
 import sys
@@ -17,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from agents import Agent, ModelSettings, RunConfig, RunContextWrapper, RunHooks, Runner, SQLiteSession, SessionSettings, function_tool, set_default_openai_key
+from openai import RateLimitError
 from openai.types.shared import Reasoning
 
 from .context import (
@@ -846,6 +848,71 @@ class BudgetStopError(RuntimeError):
     """Normal autonomous stop when a configured API budget ceiling is reached."""
 
 
+def _rate_limit_retry_after_seconds(exc: BaseException) -> float | None:
+    """Extract Retry-After from an OpenAI rate-limit response when available."""
+    response = getattr(exc, "response", None)
+    headers = getattr(response, "headers", None)
+    if headers is None:
+        return None
+    raw = headers.get("retry-after") or headers.get("Retry-After")
+    if raw is None:
+        return None
+    try:
+        return max(0.0, float(raw))
+    except (TypeError, ValueError):
+        return None
+
+
+def run_with_rate_limit_retry(
+    call,
+    *,
+    log,
+    role: str,
+    max_attempts: int = 5,
+    base_delay_seconds: float = 1.0,
+    max_delay_seconds: float = 16.0,
+):
+    """Retry transient OpenAI TPM/RPM 429s with bounded backoff.
+
+    The supplied callable should resume against the same durable/session state.
+    Non-rate-limit exceptions are never retried here.
+    """
+    max_attempts = max(1, int(max_attempts))
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return call()
+        except RateLimitError as exc:
+            if attempt >= max_attempts:
+                log.event("rate_limit_exhausted", {
+                    "role": role,
+                    "attempt": attempt,
+                    "max_attempts": max_attempts,
+                    "error": f"{type(exc).__name__}: {exc}",
+                })
+                raise
+
+            retry_after = _rate_limit_retry_after_seconds(exc)
+            if retry_after is None:
+                retry_after = min(
+                    max_delay_seconds,
+                    base_delay_seconds * (2 ** (attempt - 1)),
+                )
+            # Small jitter prevents synchronized retries without materially
+            # extending a server-provided Retry-After.
+            delay = min(
+                max_delay_seconds,
+                max(0.05, retry_after) + random.uniform(0.05, 0.25),
+            )
+            log.event("rate_limit_retry", {
+                "role": role,
+                "attempt": attempt,
+                "max_attempts": max_attempts,
+                "delay_seconds": round(delay, 3),
+                "server_retry_after_seconds": retry_after,
+            })
+            time.sleep(delay)
+
+
 class BudgetHooks(RunHooks[AppContext]):
     """Per-model-call usage logging and conservative hard-stop before the next call."""
 
@@ -1625,23 +1692,27 @@ def main():
                 "required JSON schema."
             )
             try:
-                analyst_result=Runner.run_sync(
-                    analyst_agent,
-                    analyst_prompt,
-                    context=app,
-                    max_turns=args.analyst_max_turns,
-                    hooks=analyst_hooks,
-                    run_config=RunConfig(
-                        workflow_name="v23 performance analysis",
-                        group_id=args.session_id+"-analyst",
-                        trace_include_sensitive_data=False,
-                        tracing_disabled=args.disable_tracing,
-                        trace_metadata={
-                            "run_id":run_id,"model":analyst_model,
-                            "role":"performance_analyst",
-                            "trigger":review_trigger,
-                        },
+                analyst_result=run_with_rate_limit_retry(
+                    lambda: Runner.run_sync(
+                        analyst_agent,
+                        analyst_prompt,
+                        context=app,
+                        max_turns=args.analyst_max_turns,
+                        hooks=analyst_hooks,
+                        run_config=RunConfig(
+                            workflow_name="v23 performance analysis",
+                            group_id=args.session_id+"-analyst",
+                            trace_include_sensitive_data=False,
+                            tracing_disabled=args.disable_tracing,
+                            trace_metadata={
+                                "run_id":run_id,"model":analyst_model,
+                                "role":"performance_analyst",
+                                "trigger":review_trigger,
+                            },
+                        ),
                     ),
+                    log=log,
+                    role="performance_analyst",
                 )
                 analyst_output=str(analyst_result.final_output or "")
                 analyst_usage=usage_dict(analyst_result.context_wrapper.usage)
@@ -1822,17 +1893,21 @@ def main():
                 "and finish the experiment before moving to another idea."
             )
         try:
-            result=Runner.run_sync(
-              agent, cycle_prompt, context=app, session=session,
-              max_turns=args.max_turns, hooks=hooks,
-              run_config=RunConfig(
-                workflow_name="v23 autonomous research",
-                group_id=args.session_id,
-                trace_include_sensitive_data=False,
-                tracing_disabled=args.disable_tracing,
-                trace_metadata={"run_id":run_id,"model":args.model,"cycle":cycle},
-                session_settings=SessionSettings(limit=args.session_history_limit),
+            result=run_with_rate_limit_retry(
+              lambda: Runner.run_sync(
+                agent, cycle_prompt, context=app, session=session,
+                max_turns=args.max_turns, hooks=hooks,
+                run_config=RunConfig(
+                  workflow_name="v23 autonomous research",
+                  group_id=args.session_id,
+                  trace_include_sensitive_data=False,
+                  tracing_disabled=args.disable_tracing,
+                  trace_metadata={"run_id":run_id,"model":args.model,"cycle":cycle},
+                  session_settings=SessionSettings(limit=args.session_history_limit),
+                ),
               ),
+              log=log,
+              role="experiment_engineer",
             )
             cycle_output=str(result.final_output or "")
             cycle_usage=usage_dict(result.context_wrapper.usage)
