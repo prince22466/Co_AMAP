@@ -61,6 +61,7 @@ v2 research-memory contract:
 - Goal completion comes only from structured replay metrics, never prose.
 - Model-written candidate policies may execute only through static_replay_candidate.
 - Every replayed candidate MUST be a durable full-v20-derived artifact under workspace/candidates/. Use write_v20_candidate_file to create it by replacing one or more named top-level functions from the v20 baseline. Do NOT build a tiny standalone agent(obs) replacement. Never evaluate ephemeral code, descriptive candidate strings, or arbitrary files elsewhere in v23.
+- To inspect v20 implementation, NEVER use read_text/search_text on the serialized notebook. Call list_v20_functions and read_v20_function instead. read_v20_function returns exact extracted function source and supports paging. Raw-notebook truncation or inability to inspect notebook JSON is NOT a blocker.
 - Treat workspace/candidates/<name>.py or .ipynb plus its SHA-256 as the immutable experiment artifact. Keep rejected as well as successful candidates for lineage and branching.
 - An assigned idea is not complete until the exact durable candidate has been plugged into static replay and produced at least one valid measured replay result. If finish_experiment returns execution-contract feedback, do not move on or merely explain; continue the SAME idea, create/fix the candidate, replay it correctly, inspect the result, and call finish_experiment again.
 - ERROR is not an escape hatch from the execution contract. Use ERROR only when concrete runtime evidence exists: a persisted replay error for this experiment or a blocker recorded through report_blocker. Candidate-code/runtime errors are recoverable attempts: close only the failed experiment attempt, keep the SAME idea RUNNING, create a fresh experiment with a new candidate artifact/content, and replay again. Do not call report_blocker for SyntaxError, ImportError, NameError, candidate load failure, or other fixable generated-code errors.
@@ -1060,6 +1061,119 @@ def _top_level_functions(source: str) -> dict[str, ast.FunctionDef | ast.AsyncFu
     }
 
 
+def _v20_function_source(
+    local: LocalTools, function_name: str
+) -> tuple[str, ast.FunctionDef | ast.AsyncFunctionDef]:
+    baseline = _v20_baseline_source(local)
+    functions = _top_level_functions(baseline)
+    name = function_name.strip()
+    if not name:
+        raise ValueError("function_name is required")
+    node = functions.get(name)
+    if node is None:
+        raise ValueError(
+            "unknown v20 top-level function: " + name
+            + "; call list_v20_functions first"
+        )
+    lines = baseline.splitlines(keepends=True)
+    start_line = min(
+        [node.lineno] + [d.lineno for d in getattr(node, "decorator_list", [])]
+    )
+    source = "".join(lines[start_line - 1:node.end_lineno])
+    return source, node
+
+
+@function_tool
+def list_v20_functions(ctx: RunContextWrapper[AppContext]) -> str:
+    """List exact top-level v20 function names, signatures, and source line ranges."""
+    try:
+        baseline = _v20_baseline_source(ctx.context.local)
+        functions = _top_level_functions(baseline)
+        rows = []
+        for name, node in sorted(functions.items(), key=lambda item: item[1].lineno):
+            args = []
+            all_args = list(node.args.posonlyargs) + list(node.args.args)
+            defaults_offset = len(all_args) - len(node.args.defaults)
+            for index, arg in enumerate(all_args):
+                item = arg.arg
+                if index >= defaults_offset:
+                    default = node.args.defaults[index - defaults_offset]
+                    try:
+                        item += "=" + ast.unparse(default)
+                    except Exception:
+                        item += "=..."
+                args.append(item)
+            if node.args.vararg:
+                args.append("*" + node.args.vararg.arg)
+            for arg, default in zip(node.args.kwonlyargs, node.args.kw_defaults):
+                item = arg.arg
+                if default is not None:
+                    try:
+                        item += "=" + ast.unparse(default)
+                    except Exception:
+                        item += "=..."
+                args.append(item)
+            if node.args.kwarg:
+                args.append("**" + node.args.kwarg.arg)
+            start_line = min(
+                [node.lineno]
+                + [d.lineno for d in getattr(node, "decorator_list", [])]
+            )
+            rows.append({
+                "name": name,
+                "signature": f"{name}({', '.join(args)})",
+                "start_line": start_line,
+                "end_line": node.end_lineno,
+                "source_lines": node.end_lineno - start_line + 1,
+            })
+        return j_bounded({
+            "baseline":"working_files/submission_nb/kaggriculture-sub_v20.ipynb",
+            "function_count":len(rows),
+            "functions":rows,
+            "instruction":(
+                "Use read_v20_function(function_name, start_line, max_lines) "
+                "to inspect exact implementation. Do not read/search the raw notebook."
+            ),
+        }, 20000)
+    except Exception as exc:
+        return j({"error":f"{type(exc).__name__}: {exc}"})
+
+
+@function_tool
+def read_v20_function(
+    ctx: RunContextWrapper[AppContext],
+    function_name: str,
+    start_line: int = 1,
+    max_lines: int = 240,
+) -> str:
+    """Read exact source for one top-level v20 function with paging."""
+    try:
+        source, _ = _v20_function_source(ctx.context.local, function_name)
+        lines = source.splitlines()
+        start_line = max(1, int(start_line))
+        max_lines = max(1, min(int(max_lines), 400))
+        selected = lines[start_line - 1:start_line - 1 + max_lines]
+        next_start = (
+            start_line + len(selected)
+            if start_line - 1 + len(selected) < len(lines)
+            else None
+        )
+        return j_bounded({
+            "function_name": function_name.strip(),
+            "source_start_line": start_line,
+            "returned_lines": len(selected),
+            "total_function_lines": len(lines),
+            "next_start_line": next_start,
+            "source":"\n".join(selected),
+            "instruction":(
+                "If next_start_line is not null, call read_v20_function again "
+                "with that start_line before editing the function."
+            ),
+        }, 24000)
+    except Exception as exc:
+        return j({"error":f"{type(exc).__name__}: {exc}"})
+
+
 def _replace_v20_functions(
     baseline: str, replacements: dict[str, str]
 ) -> tuple[str, list[str]]:
@@ -1645,6 +1759,36 @@ def report_blocker(ctx: RunContextWrapper[AppContext], failed_step: str, reason:
     if not failed_step or not reason:
         return j({"error":"failed_step and reason are required"})
 
+    combined_blocker_text = (failed_step + " " + reason).lower()
+    source_access_blocker = (
+        ("v20" in combined_blocker_text or "notebook" in combined_blocker_text)
+        and any(
+            term in combined_blocker_text
+            for term in ("source", "function", "inspect", "truncat", "serialized")
+        )
+    )
+    if source_access_blocker:
+        try:
+            baseline = _v20_baseline_source(ctx.context.local)
+            functions = _top_level_functions(baseline)
+        except Exception:
+            functions = {}
+        if functions:
+            feedback = {
+                "error":"v20 source inspection is locally recoverable, not a blocker",
+                "idea_id":ctx.context.active_idea_id or None,
+                "available_function_count":len(functions),
+                "feedback":(
+                    "Do not inspect the raw serialized notebook with read_text/search_text. "
+                    "Call list_v20_functions, then read_v20_function for the exact function "
+                    "implementation. If the previous candidate attempt is closed, call "
+                    "start_experiment again for the SAME idea, create a NEW corrected "
+                    "v20-derived candidate, and replay it."
+                ),
+            }
+            ctx.context.log.event("blocker_rejected_v20_source_access", feedback)
+            return j_bounded(feedback, 12000)
+
     repair = candidate_code_failure_evidence(
         ctx.context.db, ctx.context.active_idea_id or None
     )
@@ -2136,7 +2280,7 @@ def main():
       max_tokens=args.max_output_tokens,verbosity="low",parallel_tool_calls=False,
       store=False,prompt_cache_options={"mode":"implicit","ttl":"30m"},
       retry=model_retry_settings()),
-      tools=[list_tree,read_text,search_text,summarize_jsonl,write_workspace_file,write_v20_candidate_file,run_python,
+      tools=[list_tree,read_text,search_text,summarize_jsonl,list_v20_functions,read_v20_function,write_workspace_file,write_v20_candidate_file,run_python,
              start_experiment,finish_experiment,set_goal,project_status,idea_dossier,
              report_blocker,static_replay_candidate])
     analyst_agent=Agent[AppContext](
