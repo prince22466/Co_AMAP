@@ -730,6 +730,27 @@ def main() -> int:
 
         assert len(parsed_batch["ideas"]) == 10
 
+        # Agent communication must be persisted in both global and per-run logs.
+        comm_log = runtime.RunLog(
+            Path(tmp),
+            {"run_id": "run_comm_smoke", "task": "communication smoke"},
+        )
+        comm_log.communication(
+            "performance_analyst",
+            "experiment_engineer",
+            "idea_handoff",
+            "test communication",
+            {"idea_id": "idea_smoke"},
+        )
+        global_comm = Path(tmp) / "agent_communication.jsonl"
+        run_comm = comm_log.dir / "agent_communication.jsonl"
+        latest_comm = Path(tmp) / "agent_communication_latest.md"
+        assert global_comm.exists()
+        assert run_comm.exists()
+        assert latest_comm.exists()
+        assert "test communication" in global_comm.read_text(encoding="utf-8")
+        assert "performance_analyst" in latest_comm.read_text(encoding="utf-8")
+
         # Candidate construction must preserve the complete v20 policy and
         # replace named v20 functions instead of generating a tiny standalone agent.
         v20_source = runtime._v20_baseline_source(tool_local)
