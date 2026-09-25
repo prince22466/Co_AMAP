@@ -2225,6 +2225,13 @@ def main():
                     "Return a complete replacement batch that satisfies the schema exactly. "
                     "Validation/runtime feedback:\n" + analyst_repair_feedback
                 )
+            log.communication(
+                "controller",
+                "performance_analyst",
+                "analyst_request",
+                analyst_prompt,
+                {"trigger": review_trigger, "attempt": analyst_failures + 1},
+            )
             try:
                 analyst_result=Runner.run_sync(
                     analyst_agent,
@@ -2246,9 +2253,23 @@ def main():
                 )
                 analyst_output=str(analyst_result.final_output or "")
                 analyst_usage=usage_dict(analyst_result.context_wrapper.usage)
+                log.communication(
+                    "performance_analyst",
+                    "controller",
+                    "analyst_response",
+                    analyst_output,
+                    {"trigger": review_trigger},
+                )
             except Exception as exc:
                 analyst_error=type(exc).__name__+": "+str(exc)
                 analyst_usage=dict(analyst_hooks.last_usage)
+                log.communication(
+                    "performance_analyst",
+                    "controller",
+                    "analyst_error",
+                    analyst_error,
+                    {"trigger": review_trigger},
+                )
 
             add_usage(usage, analyst_usage)
             analyst_cost=conservative_cost_usd(
@@ -2364,6 +2385,13 @@ def main():
                     "trigger":review_trigger,
                     "feedback":analyst_repair_feedback[:5000],
                 })
+                log.communication(
+                    "controller",
+                    "performance_analyst",
+                    "analyst_self_correction",
+                    analyst_repair_feedback,
+                    {"failures": analyst_failures, "trigger": review_trigger},
+                )
 
             if not budget.can_call():
                 status="BUDGET_STOP"
@@ -2437,6 +2465,17 @@ def main():
                 "only when its promotion rule is met, verify idea_dossier after replay, "
                 "and finish the experiment before moving to another idea."
             )
+        log.communication(
+            "controller",
+            "experiment_engineer",
+            "engineer_request",
+            cycle_prompt,
+            {
+                "cycle": cycle,
+                "idea_id": next_idea.get("idea_id") if next_idea else None,
+                "experiment_id": next_idea.get("experiment_id") if next_idea else None,
+            },
+        )
         try:
             result=Runner.run_sync(
               agent, cycle_prompt, context=app, session=session,
@@ -2452,9 +2491,29 @@ def main():
             )
             cycle_output=str(result.final_output or "")
             cycle_usage=usage_dict(result.context_wrapper.usage)
+            log.communication(
+                "experiment_engineer",
+                "controller",
+                "engineer_response",
+                cycle_output,
+                {
+                    "cycle": cycle,
+                    "idea_id": next_idea.get("idea_id") if next_idea else None,
+                },
+            )
         except Exception as exc:
             cycle_output=type(exc).__name__+": "+str(exc)
             cycle_usage=dict(hooks.last_usage)
+            log.communication(
+                "experiment_engineer",
+                "controller",
+                "engineer_error",
+                cycle_output,
+                {
+                    "cycle": cycle,
+                    "idea_id": next_idea.get("idea_id") if next_idea else None,
+                },
+            )
             exc_name=type(exc).__name__
             if isinstance(exc, BudgetStopError):
                 add_usage(usage, cycle_usage)
@@ -2582,6 +2641,16 @@ def main():
                 "idea_id": current.get("idea_id") if current else None,
                 "previous_experiment_id": current.get("experiment_id") if current else None,
             })
+            log.communication(
+                "controller",
+                "experiment_engineer",
+                "engineer_self_correction",
+                continuation,
+                {
+                    "idea_id": current.get("idea_id") if current else None,
+                    "previous_experiment_id": current.get("experiment_id") if current else None,
+                },
+            )
         elif unfinished and not unfinished.get("ok"):
             continuation=(
                 "RETRY FEEDBACK: the previous Engineer cycle did not complete the "
@@ -2599,6 +2668,17 @@ def main():
                 "experiment_id": current.get("experiment_id"),
                 "missing": unfinished.get("missing", []),
             })
+            log.communication(
+                "controller",
+                "experiment_engineer",
+                "engineer_retry",
+                continuation,
+                {
+                    "idea_id": current.get("idea_id"),
+                    "experiment_id": current.get("experiment_id"),
+                    "missing": unfinished.get("missing", []),
+                },
+            )
         else:
             continuation=(
                 "Continue the SAME research task and session. The durable goal is still "
