@@ -527,6 +527,81 @@ def main() -> int:
         classified = runtime.candidate_code_failure_evidence(error_db, None)
         assert classified["candidate_code_failure"] is False
 
+        # Self-repair classification must be scoped only to agent-generated
+        # workspace/candidates artifacts, never working_files/reference inputs.
+        scoped_db = runtime.ResearchDB(Path(tmp) / "repair_scope.sqlite3")
+        scoped_run = "run_repair_scope"
+        scoped_db.start_run(
+            scoped_run, "repair-scope-session", "repair scope smoke", "smoke-model"
+        )
+        scoped_review = scoped_db.record_strategy_review(
+            scoped_run, "initial_diagnosis", runtime.json.dumps(analyst_json), {}, 0.0
+        )
+        scoped_batch = scoped_db.add_idea_batch(scoped_review, parsed_batch["ideas"])
+        scoped_idea = scoped_batch["idea_ids"][0]
+        scoped_exp = scoped_db.start_experiment(
+            scoped_run, "scope test", "", "", "scope smoke", scoped_idea
+        )
+        scoped_db.record_replay_call(
+            scoped_run,
+            scoped_exp,
+            "replay_scope_reference",
+            "working_files/reference/bad_reference.py",
+            {
+                "summary": {"games_total": 1, "games_valid": 0, "games_invalid": 1},
+                "matches": [{
+                    "episode": "scope-reference",
+                    "valid": False,
+                    "original_v20_margin": -1.0,
+                    "candidate_margin": None,
+                    "margin_improvement": None,
+                    "result": None,
+                    "action_divergences": None,
+                    "elapsed_seconds": 0.001,
+                    "error": "SyntaxError: invalid syntax",
+                }],
+            },
+            runtime.utcnow(),
+            0.001,
+        )
+        reference_failure = runtime.candidate_code_failure_evidence(
+            scoped_db, scoped_idea
+        )
+        assert reference_failure["candidate_code_failure"] is False
+
+        scoped_exp2 = scoped_db.start_experiment(
+            scoped_run, "scope candidate test", "", "", "scope candidate smoke", scoped_idea
+        )
+        scoped_db.record_replay_call(
+            scoped_run,
+            scoped_exp2,
+            "replay_scope_candidate",
+            "workspace/candidates/scope_candidate.py",
+            {
+                "summary": {"games_total": 1, "games_valid": 0, "games_invalid": 1},
+                "matches": [{
+                    "episode": "scope-candidate",
+                    "valid": False,
+                    "original_v20_margin": -1.0,
+                    "candidate_margin": None,
+                    "margin_improvement": None,
+                    "result": None,
+                    "action_divergences": None,
+                    "elapsed_seconds": 0.001,
+                    "error": "SyntaxError: invalid syntax",
+                }],
+            },
+            runtime.utcnow(),
+            0.001,
+        )
+        generated_failure = runtime.candidate_code_failure_evidence(
+            scoped_db, scoped_idea
+        )
+        assert generated_failure["candidate_code_failure"] is True
+        assert generated_failure["matched_errors"][0]["candidate"].startswith(
+            "workspace/candidates/"
+        )
+
         # Recoverable candidate runtime errors close only the failed attempt,
         # keep the same idea RUNNING, and allow a fresh experiment attempt.
         retry_db = runtime.ResearchDB(Path(tmp) / "retry_attempt.sqlite3")
