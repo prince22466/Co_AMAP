@@ -61,6 +61,7 @@ v2 research-memory contract:
 - Model-written candidate policies may execute only through static_replay_candidate.
 - Every replayed candidate MUST be a durable artifact under workspace/candidates/. Use write_candidate_file to create it before replay. Never evaluate ephemeral code, descriptive candidate strings, or arbitrary files elsewhere in v23.
 - Treat workspace/candidates/<name>.py or .ipynb plus its SHA-256 as the immutable experiment artifact. Keep rejected as well as successful candidates for lineage and branching.
+- An assigned idea is not complete until the exact durable candidate has been plugged into static replay and produced at least one valid measured replay result. If finish_experiment returns execution-contract feedback, do not move on or merely explain; continue the SAME idea, create/fix the candidate, replay it correctly, inspect the result, and call finish_experiment again.
 - When execution is enabled, do not stop at analysis or planning. You must create/select a concrete candidate, start an experiment, execute at least one static replay, analyze the measured result, and finish the experiment unless a concrete runtime error or budget stop blocks execution.
 - A rejected candidate is evidence, not a blocker. If the durable goal is unmet, continue with the next justified experiment.
 - The supplied ENGINEER CONTEXT PACK is the canonical starting context for assigned work.
@@ -1041,12 +1042,109 @@ def start_experiment(ctx: RunContextWrapper[AppContext], hypothesis: str, candid
     )
     return j({"experiment_id": eid, "idea_id": ctx.context.active_idea_id or None})
 
+def experiment_execution_contract(db: ResearchDB, experiment_id: str) -> dict[str, Any]:
+    """Check whether an experiment has durable code and valid measured replay evidence."""
+    row = db.db.execute(
+        """SELECT experiment_id,idea_id,status,candidate,candidate_sha256,
+                  replay_calls,replay_cases
+           FROM experiments WHERE experiment_id=?""",
+        (experiment_id,),
+    ).fetchone()
+    if row is None:
+        return {"ok": False, "error": "unknown experiment_id: " + experiment_id}
+
+    measured = int(db.db.execute(
+        """SELECT COUNT(*) FROM replays
+           WHERE experiment_id=? AND valid=1
+             AND result IN ('WIN','LOSS','TIE')
+             AND candidate_margin IS NOT NULL
+             AND margin_improvement IS NOT NULL""",
+        (experiment_id,),
+    ).fetchone()[0])
+    valid = int(db.db.execute(
+        "SELECT COUNT(*) FROM replays WHERE experiment_id=? AND valid=1",
+        (experiment_id,),
+    ).fetchone()[0])
+
+    missing = []
+    if not row["candidate"]:
+        missing.append("durable candidate path")
+    if not row["candidate_sha256"]:
+        missing.append("bound candidate SHA-256")
+    if int(row["replay_calls"] or 0) < 1:
+        missing.append("at least one static replay call")
+    if int(row["replay_cases"] or 0) < 1:
+        missing.append("at least one replay case")
+    if valid < 1:
+        missing.append("at least one valid replay case")
+    if measured < 1:
+        missing.append("at least one valid measured WIN/LOSS/TIE result with margins")
+
+    return {
+        "ok": not missing,
+        "experiment_id": experiment_id,
+        "idea_id": row["idea_id"],
+        "candidate": row["candidate"],
+        "candidate_sha256": row["candidate_sha256"],
+        "replay_calls": int(row["replay_calls"] or 0),
+        "replay_cases": int(row["replay_cases"] or 0),
+        "valid_replay_cases": valid,
+        "measured_replay_cases": measured,
+        "missing": missing,
+    }
+
+
 @function_tool
 def finish_experiment(ctx: RunContextWrapper[AppContext], experiment_id: str, status: str, conclusion: str) -> str:
-    """Finish an experiment: SUPPORTED, REJECTED, UNRESOLVED, or ERROR."""
+    """Finish only after durable candidate code produced valid measured replay evidence.
+
+    ERROR is reserved for a concrete runtime/environment failure that prevents the
+    normal idea -> code -> replay -> measured result lifecycle.
+    """
     status = status.upper()
     if status not in {"SUPPORTED","REJECTED","UNRESOLVED","ERROR"}:
         return j({"error":"invalid status"})
+
+    if status != "ERROR":
+        contract = experiment_execution_contract(ctx.context.db, experiment_id)
+        if contract.get("error"):
+            return j(contract)
+
+        artifact_error = None
+        candidate = str(contract.get("candidate") or "")
+        if candidate:
+            candidate_rel, candidate_error = validate_candidate_path(
+                ctx.context.local, candidate, allow_empty=False
+            )
+            if candidate_error:
+                artifact_error = candidate_error
+            else:
+                candidate_path = ctx.context.local._read_path(candidate_rel)
+                actual_sha = hashlib.sha256(candidate_path.read_bytes()).hexdigest()
+                if actual_sha != contract.get("candidate_sha256"):
+                    artifact_error = (
+                        "candidate artifact changed after replay; create a new immutable "
+                        "candidate file and replay it before finishing"
+                    )
+
+        if not contract["ok"] or artifact_error:
+            feedback = {
+                "error": "experiment execution contract incomplete",
+                "experiment_id": experiment_id,
+                "idea_id": contract.get("idea_id"),
+                "missing": contract.get("missing", []),
+                "artifact_error": artifact_error,
+                "feedback": (
+                    "Do not finish or move to another idea. Continue the SAME assigned idea. "
+                    "Create/fix a durable candidate with write_candidate_file under "
+                    "workspace/candidates/, plug that exact candidate into "
+                    "static_replay_candidate, obtain at least one valid measured replay "
+                    "result, inspect the replay evidence, then call finish_experiment again."
+                ),
+            }
+            ctx.context.log.event("experiment_finish_rejected", feedback)
+            return j(feedback)
+
     out = ctx.context.db.finish_experiment(experiment_id, status, conclusion)
     ctx.context.log.event("experiment_finish", out)
     return j(out)
@@ -2035,12 +2133,43 @@ def main():
             status="DONE"
             break
 
-        continuation=(
-            "Continue the SAME research task and session. The durable goal is still "
-            "unmet. The controller will assign the next pending analyst idea. Use prior "
-            "measured results as evidence, implement only the assigned idea, execute "
-            "static replay, and record the conclusion. Do not invent an unqueued idea."
-        )
+        unfinished = None
+        if next_idea:
+            current = db.current_work_idea()
+            if (
+                current
+                and current.get("idea_id") == next_idea.get("idea_id")
+                and current.get("status") == "RUNNING"
+                and current.get("experiment_id")
+            ):
+                unfinished = experiment_execution_contract(
+                    db, str(current["experiment_id"])
+                )
+
+        if unfinished and not unfinished.get("ok"):
+            continuation=(
+                "RETRY FEEDBACK: the previous Engineer cycle did not complete the "
+                "required idea -> durable code -> plug into static replay -> valid measured "
+                "result lifecycle. Continue the SAME assigned idea and experiment; do NOT "
+                "advance to another idea. Missing requirements: "
+                + ", ".join(unfinished.get("missing", []))
+                + ". Create/fix the candidate with write_candidate_file under "
+                  "workspace/candidates/, run static_replay_candidate with that exact "
+                  "artifact until at least one valid measured replay result exists, inspect "
+                  "the result, then call finish_experiment again."
+            )
+            log.event("engineer_retry_feedback", {
+                "idea_id": current.get("idea_id"),
+                "experiment_id": current.get("experiment_id"),
+                "missing": unfinished.get("missing", []),
+            })
+        else:
+            continuation=(
+                "Continue the SAME research task and session. The durable goal is still "
+                "unmet. The controller will assign the next pending analyst idea. Use prior "
+                "measured results as evidence, implement only the assigned idea, execute "
+                "static replay, and record the conclusion. Do not invent an unqueued idea."
+            )
 
     elapsed=time.monotonic()-started
     if status=="DONE" and args.allow_exec:
