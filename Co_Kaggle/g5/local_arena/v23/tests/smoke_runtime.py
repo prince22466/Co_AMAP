@@ -479,6 +479,51 @@ def main() -> int:
         assert complete["measured_replay_cases"] == 1
         assert complete["candidate_sha256"] == contract_sha
 
+        # ERROR must not bypass the lifecycle without concrete runtime evidence.
+        error_db = runtime.ResearchDB(Path(tmp) / "error_contract.sqlite3")
+        error_run = "run_error_contract"
+        error_db.start_run(
+            error_run, "error-contract-session", "error contract smoke", "smoke-model"
+        )
+        error_eid = error_db.start_experiment(
+            error_run, "error evidence required", "", "", "error smoke"
+        )
+        no_evidence = runtime.experiment_runtime_error_evidence(error_db, error_eid, "")
+        assert no_evidence["ok"] is False
+        assert no_evidence["replay_error_cases"] == 0
+        blocker_evidence = runtime.experiment_runtime_error_evidence(
+            error_db, error_eid, "replay interpreter unavailable"
+        )
+        assert blocker_evidence["ok"] is True
+
+        error_db.record_replay_call(
+            error_run,
+            error_eid,
+            "replay_error_contract",
+            "workspace/candidates/error.py",
+            {
+                "summary": {"games_total": 1, "games_valid": 0, "games_invalid": 1},
+                "matches": [{
+                    "episode": "error-case",
+                    "valid": False,
+                    "original_v20_margin": -1.0,
+                    "candidate_margin": None,
+                    "margin_improvement": None,
+                    "result": None,
+                    "action_divergences": None,
+                    "elapsed_seconds": 0.001,
+                    "error": "RuntimeError: synthetic replay failure",
+                }],
+            },
+            runtime.utcnow(),
+            0.001,
+        )
+        replay_error_evidence = runtime.experiment_runtime_error_evidence(
+            error_db, error_eid, ""
+        )
+        assert replay_error_evidence["ok"] is True
+        assert replay_error_evidence["replay_error_cases"] == 1
+
         assert len(parsed_batch["ideas"]) == 10
 
         invalid_attempt_id = batch_db.record_analyst_attempt(
