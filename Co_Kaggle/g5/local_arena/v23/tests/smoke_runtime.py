@@ -324,6 +324,50 @@ def main() -> int:
         assert bounded_obj["truncated"] is True
         assert bounded_obj["original_chars"] > 3000
         assert len(bounded_obj["preview"]) == 3000
+        # Regression: a huge single-line JSON/history artifact must never be
+        # echoed back as a tool result. The local file may be large; the model
+        # receives only bounded previews/metadata.
+        large_root = Path(tmp) / "large_tool_root"
+        large_root.mkdir(parents=True, exist_ok=True)
+        large_jsonl = large_root / "history.jsonl"
+        large_jsonl.write_text(
+            runtime.json.dumps({"history": "x" * 12_000_000}) + "\n",
+            encoding="utf-8",
+        )
+        local = object.__new__(runtime.LocalTools)
+        local.root = large_root.resolve()
+        local.workspace = (large_root / "workspace").resolve()
+        local.allow_exec = False
+        local.log = None
+        large_summary = local.summarize_jsonl("history.jsonl", tail_rows=1)
+        large_summary_raw = runtime.json.dumps(large_summary)
+        assert large_summary["file_bytes"] > 10_000_000
+        assert large_summary["raw_tail_omitted"] is True
+        assert large_summary["tail_previews"][0]["truncated"] is True
+        assert len(large_summary_raw) < 20_000
+
+        api_cap_regression = runtime.j_bounded(
+            {"payload": "z" * 12_000_000}, max_chars=24_000
+        )
+        assert len(api_cap_regression) < 30_000
+
+        # Malformed-but-valid replay JSON must normalize instead of crashing DB/runtime code.
+        normalized = runtime.normalize_replay_result([])
+        assert normalized["error"] == "static replay child returned non-object JSON"
+        assert normalized["matches"] == []
+        assert normalized["summary"] == {}
+
+        normalized = runtime.normalize_replay_result({"matches": None, "summary": []})
+        assert normalized["matches"] == []
+        assert normalized["summary"] == {}
+        assert "error" in normalized
+
+        normalized = runtime.normalize_replay_result({
+            "matches": [None, "bad", 7, {"episode": "ok", "valid": True}],
+            "summary": {"games_total": 1},
+        })
+        assert normalized["matches"] == [{"episode": "ok", "valid": True}]
+        assert normalized["malformed_matches_dropped"] == 3
         assert len(parsed_batch["ideas"]) == 10
 
         invalid_attempt_id = batch_db.record_analyst_attempt(
