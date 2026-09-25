@@ -202,7 +202,11 @@ def forecast(obs):
 
 def animal_plan(obs,projected):
     # Produce a desired {tile: animal_type} layout on the fixed animal ROUTES.
-    # Future prices now read the 720-turn hourly forecast at day-boundary turns.
+    # Logic: keep already-placed route animals, allocate owned-but-unplaced animals to free
+    # route slots, then on days 3..17 consider additional animals. Each species is scored
+    # by projected product revenue + fertilizer value - wheat feed - LABOR_COST - purchase
+    # cost. Expansion is capped by HERD_LIMIT and stops below HERD_THRESHOLD. A local copy
+    # of projected inventory is updated after each choice to model its future supply impact.
     f=obs['farms'][obs['player']];day=obs['day'];plan={}
     for row in ROUTES:
         for p in row:
@@ -220,32 +224,27 @@ def animal_plan(obs,projected):
         if p in plan or tile(f,p)=='LOCKED':continue
         if len(plan)>=HERD_LIMIT:break
         scores=[]
-        start_day=day+1
+        start=day+1
         for a,(cost,product,first,interval,units) in ANIMALS.items():
-            event_days=list(range(start_day+first,30,interval))
-            event_turns=[d*TURNS_PER_DAY for d in event_days]
-            income=sum(units*price(product,projected[product][t]+units/2) for t in event_turns)
-            income+=sum(
-                FERT_FACTOR*price('FERTILIZER',projected['FERTILIZER'][d*TURNS_PER_DAY])
-                -price('WHEAT',projected['WHEAT'][d*TURNS_PER_DAY])-LABOR_COST
-                for d in range(start_day,29)
-            )
-            scores.append((income-cost,a,event_turns,product,units))
-        score,a,event_turns,product,units=max(scores)
+            events=list(range(start+first,30,interval))
+            income=sum(units*price(product,projected[product][d]+units/2) for d in events)
+            income+=sum(FERT_FACTOR*price('FERTILIZER',projected['FERTILIZER'][d])-price('WHEAT',projected['WHEAT'][d])-LABOR_COST for d in range(start,29))
+            scores.append((income-cost,a,events,product,units))
+        score,a,events,product,units=max(scores)
         if score<HERD_THRESHOLD:break
         plan[p]=a
-
-        # Feed marginal supply from this newly planned animal back into the local
-        # hourly inventory forecast so later animal choices see its price impact.
-        for event_turn in event_turns:
-            for t in range(event_turn,SEASON_TURNS):projected[product][t]+=units
-        for t in range(start_day*TURNS_PER_DAY,SEASON_TURNS):
-            projected['FERTILIZER'][t]+=max(0,t//TURNS_PER_DAY-start_day)*FERT_FACTOR
+        for d in events:
+            for at in range(d,31):projected[product][at]+=units
+        for at in range(start,31):projected['FERTILIZER'][at]+=(at-start)*FERT_FACTOR
     return plan
 
 def crop_plan(obs,projected,animal):
     # Produce a desired {tile: crop_type} layout for unlocked tiles outside ANIMAL_POINTS.
-    # Crop economics now sample projected market inventory on the absolute turn timeline.
+    # Existing crops are preserved. Days 0..3 use a fixed 13-WHEAT/6-MELON opening; later
+    # candidates are scored from projected future sale value - seed/fertilizer cost,
+    # normalized by production duration and adjusted by crop-specific heuristic multipliers.
+    # Owned seeds receive a small bonus, and projected supply is updated after each choice.
+    # Note: the `animal` argument is currently unused; exclusion uses fixed ANIMAL_POINTS.
     f=obs['farms'][obs['player']];day=obs['day'];seeds=obs['private']['seeds'];plan={}
     points=[(x,y) for y in range(10) for x in range(10) if tile(f,(x,y))!='LOCKED' and (x,y) not in ANIMAL_POINTS]
     points.sort(key=lambda p:(dist(p,nearest_shed(p)),p[1],p[0]))
@@ -262,11 +261,10 @@ def crop_plan(obs,projected,animal):
         else:
             scores=[]
             for c,(cost,base,events,last) in CROPS.items():
-                future=[(day+age,(day+age)*TURNS_PER_DAY,n) for age,n in events if day+age<=29]
+                future=[(day+age,n) for age,n in events if day+age<=29]
                 if not future:continue
-                fert_turn=min(SEASON_TURNS-1,(day+8)*TURNS_PER_DAY)
-                fert=(len(future)*.65*price('FERTILIZER',projected['FERTILIZER'][fert_turn])) if c in ('STRAWBERRY','TOMATO') else 0
-                rev=sum(n*price(c,projected[c][at_turn]+n/2) for at_day,at_turn,n in future)-cost-fert
+                fert=(len(future)*.65*price('FERTILIZER',projected['FERTILIZER'][min(29,day+8)])) if c in ('STRAWBERRY','TOMATO') else 0
+                rev=sum(n*price(c,projected[c][at]+n/2) for at,n in future)-cost-fert
                 duration=future[-1][0]-day+1
                 score=rev/duration
                 if c=='STRAWBERRY':score*=1.6
@@ -278,12 +276,9 @@ def crop_plan(obs,projected,animal):
             if not scores:continue
             c=max(scores)[1]
         plan[p]=c
-
-        # Make later crop choices see crops already selected in this planning pass.
         for age,n in CROPS[c][2]:
-            event_day=day+age;event_turn=event_day*TURNS_PER_DAY
-            if event_turn>=SEASON_TURNS:continue
-            for t in range(event_turn,SEASON_TURNS):projected[c][t]+=n
+            at=day+age
+            for future in range(at,31):projected[c][future]+=n
     return plan
 
 def fert_value(t,day,prices):
@@ -978,7 +973,13 @@ def agent(obs):
     elif OPP_STYLE=='TRADER' and obs['day']==0 and obs['hour']>=2:
         other=obs['farms'][1-obs['player']]
         OPP_STYLE='TRADER_SEEDER' if other['money']<1000 else 'TRADER_CHURN'
-    projected,net_flow=forecast(obs)
+    hourly_projected,net_flow=forecast(obs)
+    # Keep animal_plan() and crop_plan() unchanged for this experiment. They expect
+    # projected[item][day], so sample the hourly forecast at each day boundary.
+    projected={
+        c:[hourly_projected[c][min(SEASON_TURNS-1,d*TURNS_PER_DAY)] for d in range(31)]
+        for c in hourly_projected
+    }
     animal=animal_plan(obs,projected)
     crops=crop_plan(obs,projected,animal)
     actions=unit_actions(obs,animal,crops)
