@@ -909,6 +909,23 @@ def run_python(ctx: RunContextWrapper[AppContext], script: str, args: list[str] 
     """Run an existing non-workspace v23 Python file with a bounded timeout."""
     return j_bounded(ctx.context.local.run_python(script, args, timeout_seconds), 24000)
 
+def validate_candidate_path(local: LocalTools, candidate: str) -> tuple[str, str | None]:
+    """Return canonical candidate path or a validation error."""
+    candidate = candidate.strip()
+    if not candidate:
+        return "", None
+    try:
+        candidate_path = local._read_path(candidate)
+    except Exception as exc:
+        return "", f"{type(exc).__name__}: {exc}"
+    if not candidate_path.is_file() or candidate_path.suffix not in {".py", ".ipynb"}:
+        return "", (
+            "candidate must be empty or an existing .py/.ipynb path under v23; "
+            "use hypothesis/notes for descriptive text"
+        )
+    return str(candidate_path.relative_to(local.root)), None
+
+
 @function_tool
 def start_experiment(ctx: RunContextWrapper[AppContext], hypothesis: str, candidate: str = "",
                      parent_candidate: str = "", notes: str = "") -> str:
@@ -917,17 +934,9 @@ def start_experiment(ctx: RunContextWrapper[AppContext], hypothesis: str, candid
     candidate is optional. When provided, it must be an existing executable
     .py/.ipynb path under v23; descriptive text belongs in hypothesis/notes.
     """
-    candidate = candidate.strip()
-    if candidate:
-        try:
-            candidate_path = ctx.context.local._read_path(candidate)
-        except Exception as exc:
-            return j({"error": f"{type(exc).__name__}: {exc}"})
-        if not candidate_path.is_file() or candidate_path.suffix not in {".py", ".ipynb"}:
-            return j({
-                "error": "candidate must be empty or an existing .py/.ipynb path under v23; use hypothesis/notes for descriptive text"
-            })
-        candidate = str(candidate_path.relative_to(ctx.context.local.root))
+    candidate, candidate_error = validate_candidate_path(ctx.context.local, candidate)
+    if candidate_error:
+        return j({"error": candidate_error})
 
     eid = ctx.context.db.start_experiment(
         ctx.context.run_id, hypothesis, candidate, parent_candidate, notes,
