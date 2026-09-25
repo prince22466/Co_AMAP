@@ -71,7 +71,8 @@ v2 research-memory contract:
 - After four consecutive rejected experiments with no wins and no positive mean margin improvement, treat the search as stagnant: abandon the current tweak family, re-inspect raw loss evidence, and move to a different causal layer (for example worker actions/task ranking/logistics/planning/inventory/market). Do not keep making parameter variants of the same idea.
 - Do not use one fixed 5-game screen forever. Rotate or stratify screening histories when a screen repeatedly rejects candidates, and periodically run the strongest candidate family on all 25 histories because local replay is cheaper than additional model reasoning.
 - Only call report_blocker for a concrete runtime/environment failure that makes further research impossible without external intervention.
-- SELF-CORRECTION IS REQUIRED for generated candidate-code failures. When static_replay_candidate returns candidate_repair_required=true, inspect the returned error, close that attempt with finish_experiment(..., ERROR, ...), call start_experiment again for the SAME idea, write a NEW corrected candidate artifact, and replay it. Repeat this repair loop until replay produces a valid measured result or a truly external blocker exists.
+- SELF-CORRECTION IS REQUIRED only for agent-generated candidate artifacts under workspace/candidates/. When static_replay_candidate returns candidate_repair_required=true, inspect the returned error, close that attempt with finish_experiment(..., ERROR, ...), call start_experiment again for the SAME idea, write a NEW corrected candidate artifact under workspace/candidates/, and replay it. Repeat this repair loop until replay produces a valid measured result or a truly external blocker exists.
+- Never edit, rewrite, or self-correct user/project-supplied reference files such as working_files/, replay/, agent/, v20 source/notebooks, or any repository file outside workspace/candidates/. Treat those as read-only inputs. If such an external/reference file is actually broken, report the concrete blocker instead of modifying it.
 - FP16 is mandatory for candidate floating-point model weights, activations, tensors, and learned numeric compute. Integer/boolean/schema-mandated types are exempt. Do not emit float32, float64, double, or bfloat16 candidate model/tensor code unless a backend operation is provably unsupported in FP16; any such exception must be narrowly scoped, documented, and converted back to FP16 immediately.
 """
 
@@ -1446,7 +1447,11 @@ def candidate_code_failure_evidence(db: ResearchDB, idea_id: str | None) -> dict
         }
         errors.append(item)
         low = err.casefold()
-        if any(marker in low for marker in _CANDIDATE_CODE_ERROR_MARKERS):
+        candidate = str(row["candidate"] or "").replace("\\", "/")
+        generated_candidate = candidate.startswith("workspace/candidates/")
+        if generated_candidate and any(
+            marker in low for marker in _CANDIDATE_CODE_ERROR_MARKERS
+        ):
             matched.append(item)
     return {
         "candidate_code_failure": bool(matched),
@@ -1466,22 +1471,20 @@ def report_blocker(ctx: RunContextWrapper[AppContext], failed_step: str, reason:
     repair = candidate_code_failure_evidence(
         ctx.context.db, ctx.context.active_idea_id or None
     )
-    combined = (failed_step + " " + reason).casefold()
-    looks_like_candidate_code = (
-        repair["candidate_code_failure"]
-        or any(marker in combined for marker in _CANDIDATE_CODE_ERROR_MARKERS)
-    )
-    if ctx.context.active_idea_id and looks_like_candidate_code:
+    # Only persisted failures from an agent-generated workspace/candidates artifact
+    # trigger self-repair. A SyntaxError mentioned in working_files/ or another
+    # supplied/reference file must not cause the agent to rewrite that file.
+    if ctx.context.active_idea_id and repair["candidate_code_failure"]:
         feedback = {
             "error":"generated candidate-code failure is recoverable, not a global blocker",
             "idea_id":ctx.context.active_idea_id,
             "candidate_code_errors":repair.get("matched_errors", []),
             "feedback":(
-                "Self-correct the generated code. Keep the SAME idea. Close the failed "
-                "attempt with finish_experiment(..., ERROR, ...), call start_experiment "
-                "again to get a NEW experiment_id, write a NEW corrected candidate file, "
-                "and replay it. Do not stop the autonomous run for a fixable candidate "
-                "SyntaxError/import/name/load error."
+                "Self-correct only the generated workspace/candidates artifact. Keep the "
+                "SAME idea. Close the failed attempt with finish_experiment(..., ERROR, ...), "
+                "call start_experiment again to get a NEW experiment_id, write a NEW corrected "
+                "candidate file under workspace/candidates/, and replay it. Never modify "
+                "working_files/ or other supplied repository/reference files."
             ),
         }
         ctx.context.log.event("blocker_rejected_candidate_repair", feedback)
