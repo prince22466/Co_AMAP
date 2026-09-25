@@ -560,6 +560,7 @@ class LocalTools:
     def write_workspace_file(
         self, path: str, content: str, overwrite: bool = False
     ) -> dict[str, Any]:
+        """Write ordinary model-authored workspace text with a conservative size cap."""
         target = self._write_path(path)
         if target.exists() and not overwrite:
             return {"error": f"already exists: {path}; set overwrite=true deliberately"}
@@ -568,3 +569,43 @@ class LocalTools:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
         return {"path": str(target.relative_to(self.workspace)), "chars": len(content)}
+
+    def write_derived_candidate_file(
+        self, path: str, content: str, overwrite: bool = False
+    ) -> dict[str, Any]:
+        """Write a controller-derived full-policy candidate under workspace/candidates.
+
+        This path is intentionally separate from write_workspace_file: a v20-derived
+        candidate may legitimately exceed the generic 200k model-text cap because it
+        contains the checked-in baseline's embedded model. The model supplies only the
+        small function replacement; Python expands that replacement into the full policy.
+        """
+        target = self._write_path(path)
+        candidates_root = (self.workspace / "candidates").resolve()
+        try:
+            target.relative_to(candidates_root)
+        except ValueError:
+            return {"error": "derived candidates must live under workspace/candidates"}
+        if target.suffix.lower() != ".py":
+            return {"error": "derived candidate must be a .py file"}
+        if target.exists() and not overwrite:
+            return {"error": f"already exists: {path}; set overwrite=true deliberately"}
+
+        # Bounded, but sized for the checked-in v20 source plus future modest growth.
+        max_chars = 16_000_000
+        if len(content) > max_chars:
+            return {
+                "error": (
+                    "derived candidate exceeds the 16M-character safety limit; "
+                    "inspect baseline expansion before retrying"
+                ),
+                "chars": len(content),
+                "max_chars": max_chars,
+            }
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+        return {
+            "path": str(target.relative_to(self.workspace)),
+            "chars": len(content),
+            "write_kind": "derived_full_policy_candidate",
+        }
