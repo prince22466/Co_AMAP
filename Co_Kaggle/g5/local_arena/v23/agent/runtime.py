@@ -1018,11 +1018,19 @@ def write_workspace_file(ctx: RunContextWrapper[AppContext], path: str, content:
     return j_bounded(ctx.context.local.write_workspace_file(path, content, overwrite), 8000)
 
 
-V20_BASELINE_NOTEBOOK = Path("working_files/submission_nb/kaggriculture-sub_v20.ipynb")
+V20_BASELINE_NOTEBOOK = (
+    Path(__file__).resolve().parents[1]
+    / "working_files"
+    / "submission_nb"
+    / "kaggriculture-sub_v20.ipynb"
+)
 
 
 def _v20_baseline_source(local: LocalTools) -> str:
-    path = local._read_path(str(V20_BASELINE_NOTEBOOK))
+    # The v20 baseline is a checked-in read-only research input. Resolve it from
+    # runtime.py's canonical v23 location rather than LocalTools.root, which tests
+    # may deliberately redirect to an isolated temporary workspace.
+    path = V20_BASELINE_NOTEBOOK
     notebook = json.loads(path.read_text(encoding="utf-8"))
     found = []
     for cell in notebook.get("cells", []):
@@ -1172,7 +1180,7 @@ def write_v20_candidate_file(
     out.update({
         "candidate": candidate,
         "sha256": hashlib.sha256(candidate_path.read_bytes()).hexdigest(),
-        "baseline": str(V20_BASELINE_NOTEBOOK),
+        "baseline": "working_files/submission_nb/kaggriculture-sub_v20.ipynb",
         "baseline_sha256": hashlib.sha256(baseline.encode("utf-8")).hexdigest(),
         "changed_functions": changed_functions,
         "v20_derived_validation": validation,
