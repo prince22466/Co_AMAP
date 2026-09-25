@@ -11,6 +11,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -37,6 +38,52 @@ MAX_TOOL_CHARS = 24000
 MAX_READ_LINES = 400
 MAX_SEARCH_FILES = 2000
 MAX_EXEC_SECONDS = 300
+
+
+def _read_binary_tail(handle, max_bytes: int) -> tuple[str, bool]:
+    """Read at most max_bytes from the end of a temporary binary stream."""
+    max_bytes = max(1024, int(max_bytes))
+    handle.flush()
+    handle.seek(0, os.SEEK_END)
+    size = handle.tell()
+    start = max(0, size - max_bytes)
+    handle.seek(start)
+    data = handle.read(max_bytes)
+    return data.decode("utf-8", errors="replace"), start > 0
+
+
+def run_subprocess_bounded_output(
+    argv: list[str], *, cwd: Path, timeout: int, env: dict[str, str],
+    stdout_bytes: int = MAX_TOOL_CHARS, stderr_bytes: int = MAX_TOOL_CHARS,
+) -> dict[str, Any]:
+    """Run a child with stdout/stderr spooled to disk and bounded in-memory tails."""
+    with tempfile.TemporaryFile(mode="w+b") as stdout_file, \
+         tempfile.TemporaryFile(mode="w+b") as stderr_file:
+        try:
+            completed = subprocess.run(
+                argv,
+                cwd=cwd,
+                stdout=stdout_file,
+                stderr=stderr_file,
+                timeout=timeout,
+                env=env,
+            )
+            timed_out = False
+            returncode = completed.returncode
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            returncode = None
+
+        stdout, stdout_truncated = _read_binary_tail(stdout_file, stdout_bytes)
+        stderr, stderr_truncated = _read_binary_tail(stderr_file, stderr_bytes)
+        return {
+            "returncode": returncode,
+            "timed_out": timed_out,
+            "stdout": stdout,
+            "stderr": stderr,
+            "stdout_truncated": stdout_truncated,
+            "stderr_truncated": stderr_truncated,
+        }
 
 SYSTEM_PROMPT = """You are the v23 research engineer for the local Kaggriculture arena.
 
@@ -442,30 +489,25 @@ class LocalTools:
         }
         child_env["PYTHONUNBUFFERED"] = "1"
         started = time.monotonic()
-        try:
-            completed = subprocess.run(
-                [sys.executable, str(target), *argv],
-                cwd=self.root,
-                capture_output=True,
-                text=True,
-                timeout=timeout_seconds,
-                env=child_env,
-            )
-            return {
-                "returncode": completed.returncode,
-                "elapsed_seconds": round(time.monotonic() - started, 3),
-                "stdout": self._truncate(completed.stdout),
-                "stderr": self._truncate(completed.stderr),
-            }
-        except subprocess.TimeoutExpired as exc:
-            stdout = exc.stdout if isinstance(exc.stdout, str) else ""
-            stderr = exc.stderr if isinstance(exc.stderr, str) else ""
-            return {
-                "error": "timeout",
-                "timeout_seconds": timeout_seconds,
-                "stdout": self._truncate(stdout),
-                "stderr": self._truncate(stderr),
-            }
+        completed = run_subprocess_bounded_output(
+            [sys.executable, str(target), *argv],
+            cwd=self.root,
+            timeout=timeout_seconds,
+            env=child_env,
+            stdout_bytes=MAX_TOOL_CHARS,
+            stderr_bytes=MAX_TOOL_CHARS,
+        )
+        result = {
+            "returncode": completed["returncode"],
+            "elapsed_seconds": round(time.monotonic() - started, 3),
+            "stdout": self._truncate(completed["stdout"]),
+            "stderr": self._truncate(completed["stderr"]),
+            "stdout_truncated": completed["stdout_truncated"],
+            "stderr_truncated": completed["stderr_truncated"],
+        }
+        if completed["timed_out"]:
+            result.update({"error": "timeout", "timeout_seconds": timeout_seconds})
+        return result
 
     def write_workspace_file(
         self, path: str, content: str, overwrite: bool = False
