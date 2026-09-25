@@ -1142,7 +1142,9 @@ def static_replay_candidate(ctx: RunContextWrapper[AppContext], candidate: str, 
             cwd=ctx.context.local.root,
             timeout=300,
             env=child_env,
-            stdout_bytes=2_000_000,
+            # Replay runner emits one marker-prefixed JSON line; known payloads can exceed 32 MB.
+            # Keep a hard ceiling high enough to preserve that line without unbounded RAM growth.
+            stdout_bytes=64_000_000,
             stderr_bytes=64_000,
         )
         if completed["timed_out"]:
