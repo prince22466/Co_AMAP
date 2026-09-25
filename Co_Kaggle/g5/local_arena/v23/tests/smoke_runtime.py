@@ -712,13 +712,13 @@ def main() -> int:
             exp2, "workspace/candidates/idea1.py",
             runtime.hashlib.sha256(b"candidate two").hexdigest()
         )
-        assert same_path["error"] == "candidate must be new for each idea"
+        assert same_path["error"] == "candidate must be new for each experiment attempt"
         assert same_path["same_path"] is True
 
         same_sha = uniqueness_db.bind_candidate(
             exp2, "workspace/candidates/idea2.py", sha1
         )
-        assert same_sha["error"] == "candidate must be new for each idea"
+        assert same_sha["error"] == "candidate must be new for each experiment attempt"
         assert same_sha["same_sha256"] is True
 
         unique_bind = uniqueness_db.bind_candidate(
