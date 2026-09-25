@@ -16,11 +16,17 @@ CROPS={
  'MELON':(80,250,((10,6),),10)}
 ANIMALS={'COW':(400,'MILK',8,2,3),'SHEEP':(500,'WOOL',6,3,4),'GOOSE':(300,'EGG',4,1,2)}
 
-SHOPS={'BAKERY':('WHEAT','EGG'),'PIZZA_SHOP':('MILK','TOMATO','WHEAT'),
- 'BRUNCH_SPOT':('EGG','WHEAT','STRAWBERRY'),'YARN_STORE':('WOOL','WOOL'),
- 'ICE_CREAM_SHOP':('STRAWBERRY','MILK','WHEAT'),'PET_CAFE':('CARROT','CARROT'),
- 'SMOOTHIE_SHOP':('STRAWBERRY','MILK'),
- 'FARMERS_MARKET':('WHEAT','CARROT','TOMATO','STRAWBERRY')}
+# Per-shop demand on each town consumption tick.
+# Values are {product: units_consumed}. Single-product shops consume 2x.
+SHOPS={
+ 'BAKERY':{'WHEAT':1,'EGG':1},
+ 'PIZZA_SHOP':{'MILK':1,'TOMATO':1,'WHEAT':1},
+ 'BRUNCH_SPOT':{'EGG':1,'WHEAT':1,'STRAWBERRY':1},
+ 'YARN_STORE':{'WOOL':2},
+ 'ICE_CREAM_SHOP':{'STRAWBERRY':1,'MILK':1,'WHEAT':1},
+ 'PET_CAFE':{'CARROT':2},
+ 'SMOOTHIE_SHOP':{'STRAWBERRY':1,'MILK':1},
+ 'FARMERS_MARKET':{'WHEAT':1,'CARROT':1,'TOMATO':1,'STRAWBERRY':1}}
 
 ROUTES=(((4,4),(4,3),(4,2)),((3,4),(3,3),(2,3)),((5,4),(5,3)),((6,4),(6,3)),((4,5),(3,5)),((4,6),(3,6)))
 ANIMAL_POINTS={p for route in ROUTES for p in route}
@@ -123,19 +129,18 @@ def forecast(obs):
     projected={c:[float(items[c])]*SEASON_TURNS for c in items}
 
     # Exact demand from currently unlocked shops. Duplicate shop names in shops
-    # are counted independently. SHOPS encodes single-product 2x demand by listing
-    # that product twice (YARN_STORE and PET_CAFE).
+    # are counted independently, and SHOPS stores the per-product quantity explicitly.
     current_shop_demand={c:0. for c in items}
     for shop in shops:
-        for c in SHOPS[shop]:
-            if c in current_shop_demand:current_shop_demand[c]+=1.
+        for c,n in SHOPS[shop].items():
+            if c in current_shop_demand:current_shop_demand[c]+=n
 
     # Expected demand contribution of one future random shop instance per shop tick.
     # Unlocks are drawn uniformly with replacement from the eight shop types.
     expected_shop_demand={c:0. for c in items}
     for products in SHOPS.values():
-        for c in products:
-            if c in expected_shop_demand:expected_shop_demand[c]+=1./len(SHOPS)
+        for c,n in products.items():
+            if c in expected_shop_demand:expected_shop_demand[c]+=n/len(SHOPS)
 
     # Shops unlock at the start of days 3,6,9,... after the preceding end-of-day
     # refresh. Existing shops already includes unlocks visible at the current step.
