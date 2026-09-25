@@ -62,6 +62,7 @@ v2 research-memory contract:
 - Every replayed candidate MUST be a durable artifact under workspace/candidates/. Use write_candidate_file to create it before replay. Never evaluate ephemeral code, descriptive candidate strings, or arbitrary files elsewhere in v23.
 - Treat workspace/candidates/<name>.py or .ipynb plus its SHA-256 as the immutable experiment artifact. Keep rejected as well as successful candidates for lineage and branching.
 - An assigned idea is not complete until the exact durable candidate has been plugged into static replay and produced at least one valid measured replay result. If finish_experiment returns execution-contract feedback, do not move on or merely explain; continue the SAME idea, create/fix the candidate, replay it correctly, inspect the result, and call finish_experiment again.
+- ERROR is not an escape hatch from the execution contract. Use ERROR only when concrete runtime evidence exists: a persisted replay error for this experiment or a blocker recorded through report_blocker. If ERROR is rejected, continue the SAME idea and complete code -> replay -> result.
 - When execution is enabled, do not stop at analysis or planning. You must create/select a concrete candidate, start an experiment, execute at least one static replay, analyze the measured result, and finish the experiment unless a concrete runtime error or budget stop blocks execution.
 - A rejected candidate is evidence, not a blocker. If the durable goal is unmet, continue with the next justified experiment.
 - The supplied ENGINEER CONTEXT PACK is the canonical starting context for assigned work.
@@ -1094,6 +1095,33 @@ def experiment_execution_contract(db: ResearchDB, experiment_id: str) -> dict[st
     }
 
 
+def experiment_runtime_error_evidence(db: ResearchDB, experiment_id: str,
+                                      blocker_reason: str = "") -> dict[str, Any]:
+    """Return concrete evidence that justifies terminating an experiment as ERROR."""
+    row = db.db.execute(
+        "SELECT experiment_id,idea_id FROM experiments WHERE experiment_id=?",
+        (experiment_id,),
+    ).fetchone()
+    if row is None:
+        return {"ok": False, "error": "unknown experiment_id: " + experiment_id}
+
+    replay_errors = int(db.db.execute(
+        """SELECT COUNT(*) FROM replays
+           WHERE experiment_id=?
+             AND COALESCE(TRIM(error),'') != ''""",
+        (experiment_id,),
+    ).fetchone()[0])
+
+    blocker = str(blocker_reason or "").strip()
+    return {
+        "ok": replay_errors > 0 or bool(blocker),
+        "experiment_id": experiment_id,
+        "idea_id": row["idea_id"],
+        "replay_error_cases": replay_errors,
+        "blocker_reason": blocker,
+    }
+
+
 @function_tool
 def finish_experiment(ctx: RunContextWrapper[AppContext], experiment_id: str, status: str, conclusion: str) -> str:
     """Finish only after durable candidate code produced valid measured replay evidence.
@@ -1105,7 +1133,32 @@ def finish_experiment(ctx: RunContextWrapper[AppContext], experiment_id: str, st
     if status not in {"SUPPORTED","REJECTED","UNRESOLVED","ERROR"}:
         return j({"error":"invalid status"})
 
-    if status != "ERROR":
+    if status == "ERROR":
+        error_evidence = experiment_runtime_error_evidence(
+            ctx.context.db, experiment_id, ctx.context.blocker_reason
+        )
+        if error_evidence.get("error"):
+            return j(error_evidence)
+        if not error_evidence["ok"]:
+            feedback = {
+                "error": "ERROR status requires concrete runtime evidence",
+                "experiment_id": experiment_id,
+                "idea_id": error_evidence.get("idea_id"),
+                "replay_error_cases": error_evidence.get("replay_error_cases", 0),
+                "blocker_reason": error_evidence.get("blocker_reason", ""),
+                "feedback": (
+                    "Do not mark this idea ERROR or move on. No persisted replay error "
+                    "or recorded blocker proves a runtime failure. Continue the SAME "
+                    "assigned idea: create/fix the durable candidate with "
+                    "write_candidate_file, plug it into static_replay_candidate, obtain "
+                    "a valid measured replay result, inspect the evidence, then finish "
+                    "the experiment normally. If a concrete environment/runtime failure "
+                    "truly prevents execution, call report_blocker first."
+                ),
+            }
+            ctx.context.log.event("experiment_error_rejected", feedback)
+            return j(feedback)
+    else:
         contract = experiment_execution_contract(ctx.context.db, experiment_id)
         if contract.get("error"):
             return j(contract)
