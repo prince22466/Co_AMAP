@@ -350,6 +350,24 @@ def main() -> int:
             {"payload": "z" * 12_000_000}, max_chars=24_000
         )
         assert len(api_cap_regression) < 30_000
+
+        # Malformed-but-valid replay JSON must normalize instead of crashing DB/runtime code.
+        normalized = runtime.normalize_replay_result([])
+        assert normalized["error"] == "static replay child returned non-object JSON"
+        assert normalized["matches"] == []
+        assert normalized["summary"] == {}
+
+        normalized = runtime.normalize_replay_result({"matches": None, "summary": []})
+        assert normalized["matches"] == []
+        assert normalized["summary"] == {}
+        assert "error" in normalized
+
+        normalized = runtime.normalize_replay_result({
+            "matches": [None, "bad", 7, {"episode": "ok", "valid": True}],
+            "summary": {"games_total": 1},
+        })
+        assert normalized["matches"] == [{"episode": "ok", "valid": True}]
+        assert normalized["malformed_matches_dropped"] == 3
         assert len(parsed_batch["ideas"]) == 10
 
         invalid_attempt_id = batch_db.record_analyst_attempt(
