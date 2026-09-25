@@ -1170,7 +1170,7 @@ def write_v20_candidate_file(
     except Exception as exc:
         return j({"error":f"{type(exc).__name__}: {exc}"})
 
-    out = ctx.context.local.write_workspace_file(
+    out = ctx.context.local.write_derived_candidate_file(
         str(Path("candidates") / filename), candidate_source, overwrite
     )
     if "error" in out:
