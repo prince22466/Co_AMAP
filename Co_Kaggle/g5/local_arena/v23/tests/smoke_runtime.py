@@ -550,6 +550,17 @@ def main() -> int:
         assert retry_work is not None
         assert retry_work["idea_id"] == retry_idea
         assert retry_work["status"] == "RUNNING"
+        assert retry_work["resume_existing"] is False
+        assert retry_work["repair_after_error"] is True
+        assert retry_work["previous_experiment_status"] == "ERROR"
+
+        repair_context = build_engineer_context(
+            retry_db, retry_work, max_chars=8000
+        )
+        assert repair_context["assigned_idea"]["repair_after_error"] is True
+        assert "Generated candidate-code failures are repair tasks" in (
+            repair_context["execution_policy"]["self_correction"]
+        )
 
         attempt2 = retry_db.start_experiment(
             retry_run, "repairable candidate retry", "", "", "attempt two", retry_idea
