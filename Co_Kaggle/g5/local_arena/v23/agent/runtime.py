@@ -175,6 +175,10 @@ class ResearchDB:
           review_id TEXT PRIMARY KEY, run_id TEXT, created_at TEXT, trigger TEXT,
           experiments_seen INTEGER, replay_cases_seen INTEGER,
           analyst_output TEXT, usage_json TEXT, conservative_cost_usd REAL);
+        CREATE TABLE IF NOT EXISTS analyst_attempts(
+          attempt_id TEXT PRIMARY KEY, run_id TEXT, created_at TEXT, trigger TEXT,
+          status TEXT, analyst_output TEXT, error TEXT,
+          usage_json TEXT, conservative_cost_usd REAL);
         CREATE TABLE IF NOT EXISTS research_ideas(
           idea_id TEXT PRIMARY KEY, review_id TEXT, batch_index INTEGER,
           title TEXT, hypothesis TEXT, causal_layer TEXT, components_json TEXT,
@@ -611,6 +615,25 @@ class ResearchDB:
                 "experiments":experiments,
             })
         return out
+
+    def record_analyst_attempt(self, run_id, trigger, status,
+                               analyst_output="", error="", usage=None,
+                               conservative_cost_usd=0.0):
+        aid = "attempt_" + uuid.uuid4().hex[:10]
+        self.db.execute(
+            """INSERT INTO analyst_attempts(
+                 attempt_id,run_id,created_at,trigger,status,analyst_output,
+                 error,usage_json,conservative_cost_usd)
+               VALUES(?,?,?,?,?,?,?,?,?)""",
+            (
+                aid, run_id, utcnow(), trigger, status,
+                analyst_output or "", error or "",
+                json.dumps(usage or {}, sort_keys=True),
+                float(conservative_cost_usd),
+            ),
+        )
+        self.db.commit()
+        return aid
 
     def record_strategy_review(self, run_id, trigger, analyst_output,
                                usage=None, conservative_cost_usd=0.0):
@@ -1251,6 +1274,12 @@ def parse_args():
         choices=["none","low","medium","high","xhigh","max"],
         help="Reasoning effort for performance analysis / improvement ideation.",
     )
+    p.add_argument(
+        "--analyst-max-output-tokens",
+        type=int,
+        default=4000,
+        help="Output budget for the 10-idea Analyst JSON batch.",
+    )
     p.add_argument("--max-turns",type=int,default=12); p.add_argument("--max-output-tokens",type=int,default=2500)
     p.add_argument("--allow-exec",action="store_true"); p.add_argument("--session-id",default=DEFAULT_SESSION_ID)
     p.add_argument("--session-history-limit",type=int,default=80)
@@ -1325,6 +1354,7 @@ def main():
     args.api_key = None
     if not 1<=args.max_turns<=50: raise SystemExit("--max-turns must be 1..50")
     if not 256<=args.max_output_tokens<=20000: raise SystemExit("--max-output-tokens must be 256..20000")
+    if not 1200<=args.analyst_max_output_tokens<=12000: raise SystemExit("--analyst-max-output-tokens must be 1200..12000")
     if not 1<=args.session_history_limit<=500: raise SystemExit("--session-history-limit must be 1..500")
     if not 0<args.session_budget_usd<=args.total_budget_usd: raise SystemExit("invalid budget ceilings")
     inp_price,out_price=pricing_for(args)
@@ -1341,6 +1371,7 @@ def main():
             "session_id":args.session_id,"max_turns":args.max_turns,
             "analyst_model":analyst_model,
             "analyst_reasoning_effort":args.analyst_reasoning_effort,
+            "analyst_max_output_tokens":args.analyst_max_output_tokens,
             "replay_python":replay_python or None,
             "tracing_enabled":not args.disable_tracing,"trace_sensitive_data":False}
     log=RunLog(WORKSPACE,config); local=LocalTools(allow_exec=args.allow_exec,log=log)
@@ -1364,7 +1395,7 @@ def main():
       model=analyst_model,
       model_settings=ModelSettings(
         reasoning=Reasoning(effort=args.analyst_reasoning_effort),
-        max_tokens=min(args.max_output_tokens,1200),
+        max_tokens=args.analyst_max_output_tokens,
         verbosity="low",
         parallel_tool_calls=False,
         store=False,
@@ -1387,6 +1418,7 @@ def main():
     usage={"requests":0,"input_tokens":0,"cached_tokens":0,"cache_write_tokens":0,
            "output_tokens":0,"reasoning_tokens":0,"total_tokens":0}
     cycle = 0
+    analyst_failures = 0
     continuation = prompt
     latest_review = db.latest_strategy_review()
     strategy_guidance = (
@@ -1492,7 +1524,12 @@ def main():
                 budget,args.model,usage,inp_price,out_price
             )
 
+            parsed_review=None
             if analyst_error:
+                db.record_analyst_attempt(
+                    run_id,review_trigger,"ERROR",analyst_output,analyst_error,
+                    analyst_usage,analyst_cost
+                )
                 log.event("specialist_review_error", {
                     "role":"performance_analyst",
                     "trigger":review_trigger,
@@ -1504,18 +1541,28 @@ def main():
                     status="BUDGET_STOP"
                     output=analyst_error
                     break
+                analyst_failures += 1
             elif analyst_output:
                 try:
                     parsed_review=parse_analyst_batch(analyst_output)
                 except Exception as exc:
+                    parse_error="invalid analyst batch: "+str(exc)
+                    db.record_analyst_attempt(
+                        run_id,review_trigger,"INVALID",analyst_output,parse_error,
+                        analyst_usage,analyst_cost
+                    )
                     log.event("specialist_review_error", {
                         "role":"performance_analyst",
                         "trigger":review_trigger,
-                        "error":"invalid analyst batch: "+str(exc),
+                        "error":parse_error,
                         "raw_output":analyst_output[:4000],
                     })
-                    parsed_review=None
+                    analyst_failures += 1
                 if parsed_review is not None:
+                    db.record_analyst_attempt(
+                        run_id,review_trigger,"VALID",analyst_output,"",
+                        analyst_usage,analyst_cost
+                    )
                     review_id=db.record_strategy_review(
                         run_id,review_trigger,analyst_output,
                         analyst_usage,analyst_cost
@@ -1524,12 +1571,14 @@ def main():
                         review_id,parsed_review["ideas"]
                     )
                     if "error" in batch_out:
+                        analyst_failures += 1
                         log.event("specialist_review_error", {
                             "role":"performance_analyst",
                             "trigger":review_trigger,
                             "error":batch_out["error"],
                         })
                     else:
+                        analyst_failures = 0
                         strategy_guidance=analyst_output
                         new_strategy_review=analyst_output
                         log.event("specialist_review_finish", {
@@ -1543,6 +1592,25 @@ def main():
                             "usage":analyst_usage,
                             "conservative_cost_usd":analyst_cost,
                         })
+            else:
+                db.record_analyst_attempt(
+                    run_id,review_trigger,"INVALID","",
+                    "analyst returned empty output",analyst_usage,analyst_cost
+                )
+                analyst_failures += 1
+
+            if analyst_failures >= 2:
+                status="ERROR"
+                output=(
+                    "Performance Analyst failed to produce a valid 10-idea batch "
+                    "twice in this run. Inspect analyst_attempts and run events before retrying."
+                )
+                log.event("autonomous_stop", {
+                    "reason":"analyst_batch_invalid",
+                    "failures":analyst_failures,
+                    "trigger":review_trigger,
+                })
+                break
 
             if not budget.can_call():
                 status="BUDGET_STOP"
@@ -1568,14 +1636,21 @@ def main():
 
         next_idea = db.current_work_idea() if args.allow_exec else None
         if args.allow_exec and next_idea is None:
-            # Invalid/empty analyst output will be retried by the review trigger
-            # on the next controller pass instead of letting the engineer improvise.
-            continuation=(
-                "No pending analyst idea is available. Inspect project_status only; "
-                "do not invent an untracked experiment. The controller will request "
-                "another analyst batch."
-            )
+            # Do not spend an Engineer model call when no valid Analyst idea exists.
             app.active_idea_id=""
+            continuation=(
+                "No valid Analyst idea is queued. Retry the Analyst bootstrap; "
+                "do not call the Experiment Engineer."
+            )
+            try:
+                progress_snapshot = build_progress_snapshot(db)
+                append_progress_files(local.root, progress_snapshot, utcnow())
+                log.event("progress_snapshot", progress_snapshot)
+            except Exception as exc:
+                log.event("progress_snapshot_error", {
+                    "error": type(exc).__name__ + ": " + str(exc)
+                })
+            continue
         else:
             app.active_idea_id=next_idea["idea_id"] if next_idea else ""
 
