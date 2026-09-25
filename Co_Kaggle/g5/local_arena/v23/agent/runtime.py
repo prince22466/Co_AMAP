@@ -746,7 +746,9 @@ class ResearchDB:
           "api_requests": int(r["requests"]), "input_tokens": int(r["input_tokens"]),
           "cached_tokens": int(r["cached_tokens"]), "output_tokens": int(r["output_tokens"]),
           "reasoning_tokens": int(r["reasoning_tokens"]), "total_tokens": int(r["total_tokens"]),
-          "conservative_cost_usd": float(r["cost"]), "experiments_total": int(e["n"]),
+          "conservative_cost_usd": float(r["cost"]),
+          "analyst_attempts_total": int(self.db.execute("SELECT COUNT(*) FROM analyst_attempts").fetchone()[0]),
+          "experiments_total": int(e["n"]),
           "experiments_supported": int(e["supported"]), "experiments_rejected": int(e["rejected"]),
           "replay_cases_total": int(self.db.execute("SELECT COUNT(*) FROM replays").fetchone()[0]),
           "goal": ({**dict(goal),
@@ -1837,7 +1839,9 @@ def main():
                 "valid_replay_cases": valid_replays,
                 "open_experiments": open_experiments,
             })
-    cost=conservative_cost_usd(usage,inp_price,out_price)
+    # budget.session accumulates each model call at that model's own pricing.
+    # Repricing aggregate Luna+Sol tokens at executor prices would under-report cost.
+    cost=float(budget.session.estimated_cost_usd)
     db.finish_run(run_id,status,usage,cost,output,elapsed)
     try:
         final_progress = build_progress_snapshot(db)
