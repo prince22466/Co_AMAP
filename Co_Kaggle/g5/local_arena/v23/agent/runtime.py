@@ -59,6 +59,8 @@ v2 research-memory contract:
 - Call set_goal when the task has an explicit numeric target. If the target is defined over a fixed corpus (for example wins across all 25 histories), set min_games_total to that corpus size so a subset cannot satisfy the final goal.
 - Goal completion comes only from structured replay metrics, never prose.
 - Model-written candidate policies may execute only through static_replay_candidate.
+- Every replayed candidate MUST be a durable artifact under workspace/candidates/. Use write_candidate_file to create it before replay. Never evaluate ephemeral code, descriptive candidate strings, or arbitrary files elsewhere in v23.
+- Treat workspace/candidates/<name>.py or .ipynb plus its SHA-256 as the immutable experiment artifact. Keep rejected as well as successful candidates for lineage and branching.
 - When execution is enabled, do not stop at analysis or planning. You must create/select a concrete candidate, start an experiment, execute at least one static replay, analyze the measured result, and finish the experiment unless a concrete runtime error or budget stop blocks execution.
 - A rejected candidate is evidence, not a blocker. If the durable goal is unmet, continue with the next justified experiment.
 - The supplied ENGINEER CONTEXT PACK is the canonical starting context for assigned work.
@@ -948,27 +950,64 @@ def summarize_jsonl(ctx: RunContextWrapper[AppContext], path: str, tail_rows: in
 
 @function_tool
 def write_workspace_file(ctx: RunContextWrapper[AppContext], path: str, content: str, overwrite: bool = False) -> str:
-    """Write only under v23/workspace."""
+    """Write only under v23/workspace. Use write_candidate_file for executable candidates."""
     return j_bounded(ctx.context.local.write_workspace_file(path, content, overwrite), 8000)
+
+
+@function_tool
+def write_candidate_file(ctx: RunContextWrapper[AppContext], filename: str, content: str,
+                         overwrite: bool = False) -> str:
+    """Create a durable executable candidate under workspace/candidates/."""
+    filename = filename.strip()
+    if not filename or Path(filename).name != filename:
+        return j({"error":"filename must be a simple file name, not a path"})
+    suffix = Path(filename).suffix.lower()
+    if suffix not in {".py", ".ipynb"}:
+        return j({"error":"candidate filename must end in .py or .ipynb"})
+    out = ctx.context.local.write_workspace_file(
+        str(Path("candidates") / filename), content, overwrite
+    )
+    if "error" in out:
+        return j(out)
+    candidate = "workspace/" + out["path"]
+    candidate_path = ctx.context.local._read_path(candidate)
+    out["candidate"] = candidate
+    out["sha256"] = hashlib.sha256(candidate_path.read_bytes()).hexdigest()
+    ctx.context.log.event("candidate_artifact_written", {
+        "candidate": candidate,
+        "sha256": out["sha256"],
+        "chars": out["chars"],
+    })
+    return j_bounded(out, 8000)
 
 @function_tool
 def run_python(ctx: RunContextWrapper[AppContext], script: str, args: list[str] | None = None, timeout_seconds: int = 120) -> str:
     """Run an existing non-workspace v23 Python file with a bounded timeout."""
     return j_bounded(ctx.context.local.run_python(script, args, timeout_seconds), 24000)
 
-def validate_candidate_path(local: LocalTools, candidate: str) -> tuple[str, str | None]:
-    """Return canonical candidate path or a validation error."""
+def validate_candidate_path(local: LocalTools, candidate: str,
+                            allow_empty: bool = True) -> tuple[str, str | None]:
+    """Return a canonical durable candidate path or a validation error."""
     candidate = candidate.strip()
     if not candidate:
-        return "", None
+        if allow_empty:
+            return "", None
+        return "", "candidate is required; create one with write_candidate_file first"
     try:
         candidate_path = local._read_path(candidate)
     except Exception as exc:
         return "", f"{type(exc).__name__}: {exc}"
-    if not candidate_path.is_file() or candidate_path.suffix not in {".py", ".ipynb"}:
+    if not candidate_path.is_file() or candidate_path.suffix.lower() not in {".py", ".ipynb"}:
         return "", (
-            "candidate must be empty or an existing .py/.ipynb path under v23; "
-            "use hypothesis/notes for descriptive text"
+            "candidate must be an existing .py/.ipynb artifact under workspace/candidates/"
+        )
+    candidates_root = (local.workspace / "candidates").resolve()
+    try:
+        candidate_path.relative_to(candidates_root)
+    except ValueError:
+        return "", (
+            "candidate must live under workspace/candidates/; "
+            "create it with write_candidate_file"
         )
     return str(candidate_path.relative_to(local.root)), None
 
@@ -978,8 +1017,9 @@ def start_experiment(ctx: RunContextWrapper[AppContext], hypothesis: str, candid
                      parent_candidate: str = "", notes: str = "") -> str:
     """Create a durable experiment record before candidate evaluation.
 
-    candidate is optional. When provided, it must be an existing executable
-    .py/.ipynb path under v23; descriptive text belongs in hypothesis/notes.
+    candidate is optional at experiment creation. When provided, it must already
+    be a durable executable artifact under workspace/candidates/. Descriptive text
+    belongs in hypothesis/notes.
     """
     candidate, candidate_error = validate_candidate_path(ctx.context.local, candidate)
     if candidate_error:
@@ -1170,14 +1210,12 @@ def static_replay_candidate(ctx: RunContextWrapper[AppContext], candidate: str, 
     if experiment is None:
         return j({"error":"unknown experiment_id: " + experiment_id})
 
-    try:
-        candidate_path = ctx.context.local._read_path(candidate)
-    except Exception as exc:
-        return j({"error":f"{type(exc).__name__}: {exc}"})
-    if not candidate_path.is_file() or candidate_path.suffix not in {".py",".ipynb"}:
-        return j({"error":"candidate must be an existing .py or .ipynb under v23"})
-
-    candidate_rel = str(candidate_path.relative_to(ctx.context.local.root))
+    candidate_rel, candidate_error = validate_candidate_path(
+        ctx.context.local, candidate, allow_empty=False
+    )
+    if candidate_error:
+        return j({"error": candidate_error})
+    candidate_path = ctx.context.local._read_path(candidate_rel)
     candidate_sha256 = hashlib.sha256(candidate_path.read_bytes()).hexdigest()
     bound = ctx.context.db.bind_candidate(
         experiment_id, candidate_rel, candidate_sha256
@@ -1581,7 +1619,7 @@ def main():
       max_tokens=args.max_output_tokens,verbosity="low",parallel_tool_calls=False,
       store=False,prompt_cache_options={"mode":"implicit","ttl":"30m"},
       retry=model_retry_settings()),
-      tools=[list_tree,read_text,search_text,summarize_jsonl,write_workspace_file,run_python,
+      tools=[list_tree,read_text,search_text,summarize_jsonl,write_workspace_file,write_candidate_file,run_python,
              start_experiment,finish_experiment,set_goal,project_status,idea_dossier,
              report_blocker,static_replay_candidate])
     analyst_agent=Agent[AppContext](
