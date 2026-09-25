@@ -777,6 +777,19 @@ def main() -> int:
         assert len(tiny_validation["missing_v20_functions"]) > 0
         assert tiny_validation["retained_size_ratio"] < 0.75
 
+        # Full baseline-derived candidates may exceed the generic 200k text cap.
+        large_derived = "x" * 250_000
+        generic_large = tool_local.write_workspace_file(
+            "large_generic.txt", large_derived
+        )
+        assert "200k-character" in generic_large["error"]
+        derived_large = tool_local.write_derived_candidate_file(
+            "candidates/large_derived.py", large_derived
+        )
+        assert "error" not in derived_large
+        assert derived_large["chars"] == 250_000
+        assert derived_large["write_kind"] == "derived_full_policy_candidate"
+
         # Function patching must reject invented/non-v20 function names.
         try:
             runtime._replace_v20_functions(
