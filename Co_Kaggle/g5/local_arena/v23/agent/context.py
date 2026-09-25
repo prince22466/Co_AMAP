@@ -194,8 +194,15 @@ def build_engineer_context(
         "execution_policy": {
             "scope": "Implement only the assigned idea.",
             "resume": (
-                "If resume_existing is true, continue the existing experiment_id "
-                "instead of creating duplicate work."
+                "If resume_existing is true, continue the existing RUNNING experiment_id. "
+                "If repair_after_error is true, the previous experiment is closed and immutable: "
+                "diagnose its replay error, call start_experiment again for the SAME idea, "
+                "write a NEW corrected candidate artifact, and replay again."
+            ),
+            "self_correction": (
+                "Generated candidate-code failures are repair tasks, not blockers. Use the "
+                "previous experiment/replay error in existing_lineage to correct the code. "
+                "Repeat fresh experiment attempts until a valid measured replay result exists."
             ),
             "evidence": (
                 "After replay, verify idea_dossier before finishing the experiment."
