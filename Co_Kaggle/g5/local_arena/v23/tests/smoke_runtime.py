@@ -730,6 +730,14 @@ def main() -> int:
 
         assert len(parsed_batch["ideas"]) == 10
 
+        # Autonomous recovery policy regression: invalid Analyst batches must
+        # schedule self-correction rather than terminate after two failures.
+        runtime_source = Path(runtime.__file__).read_text(encoding="utf-8")
+        assert "if analyst_failures >= 2:" not in runtime_source
+        assert "analyst_self_correction_scheduled" in runtime_source
+        assert "SELF-CORRECTION REQUIRED" in runtime_source
+        assert "do NOT reuse the failed experiment" in runtime_source
+
         invalid_attempt_id = batch_db.record_analyst_attempt(
             batch_run,
             "initial_diagnosis",
