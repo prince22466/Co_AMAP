@@ -41,6 +41,7 @@ from .support import (
     DEFAULT_MODEL, DEFAULT_SESSION_BUDGET_USD, DEFAULT_TOTAL_BUDGET_USD,
     LEDGER_PATH, MODEL_PRICING_USD_PER_M, SYSTEM_PROMPT as V1_SYSTEM_PROMPT,
     WORKSPACE, BudgetLedger, LocalTools, RunLog, Usage as LegacyUsage,
+    run_subprocess_bounded_output,
 )
 
 STATE_DB = WORKSPACE / "experiments.sqlite3"
@@ -812,6 +813,34 @@ def j_bounded(x, max_chars=12000):
         "instruction": "Narrow the next analysis query instead of requesting the full payload again.",
     })
 
+def normalize_replay_result(value: Any) -> dict[str, Any]:
+    """Normalize replay child JSON so malformed-but-valid payloads cannot crash runtime logic."""
+    if not isinstance(value, dict):
+        return {
+            "error": "static replay child returned non-object JSON",
+            "payload_type": type(value).__name__,
+            "matches": [],
+            "summary": {},
+        }
+
+    result = dict(value)
+    matches = result.get("matches", [])
+    if not isinstance(matches, list):
+        result["error"] = result.get("error") or "static replay matches must be a list"
+        result["matches"] = []
+    else:
+        clean_matches = [row for row in matches if isinstance(row, dict)]
+        dropped = len(matches) - len(clean_matches)
+        result["matches"] = clean_matches
+        if dropped:
+            result["malformed_matches_dropped"] = dropped
+
+    summary = result.get("summary", {})
+    if not isinstance(summary, dict):
+        result["error"] = result.get("error") or "static replay summary must be an object"
+        result["summary"] = {}
+    return result
+
 
 class BudgetStopError(RuntimeError):
     """Normal autonomous stop when a configured API budget ceiling is reached."""
@@ -1108,40 +1137,47 @@ def static_replay_candidate(ctx: RunContextWrapper[AppContext], candidate: str, 
         )
         argv.extend(["--record-dir", str(record_dir)])
     try:
-        completed = subprocess.run(
+        completed = run_subprocess_bounded_output(
             argv,
             cwd=ctx.context.local.root,
-            capture_output=True,
-            text=True,
             timeout=300,
             env=child_env,
+            stdout_bytes=2_000_000,
+            stderr_bytes=64_000,
         )
-        marker = "__V23_RESULT__"
-        payload_line = next(
-            (line[len(marker):] for line in reversed(completed.stdout.splitlines())
-             if line.startswith(marker)),
-            None,
-        )
-        if payload_line is None:
+        if completed["timed_out"]:
             result = {
-                "error":"static replay child did not emit a result marker",
-                "returncode":completed.returncode,
-                "stdout":completed.stdout[-4000:],
-                "stderr":completed.stderr[-4000:],
+                "error":"static replay timeout",
+                "timeout_seconds":300,
+                "stdout":completed["stdout"][-4000:],
+                "stderr":completed["stderr"][-4000:],
+                "stdout_truncated":completed["stdout_truncated"],
+                "stderr_truncated":completed["stderr_truncated"],
             }
         else:
-            result = json.loads(payload_line)
-            if completed.returncode != 0 and "error" not in result:
-                result["error"] = f"static replay child exited {completed.returncode}"
-    except subprocess.TimeoutExpired as exc:
-        result = {
-            "error":"static replay timeout",
-            "timeout_seconds":300,
-            "stdout":exc.stdout[-4000:] if isinstance(exc.stdout,str) else "",
-            "stderr":exc.stderr[-4000:] if isinstance(exc.stderr,str) else "",
-        }
+            marker = "__V23_RESULT__"
+            payload_line = next(
+                (line[len(marker):] for line in reversed(completed["stdout"].splitlines())
+                 if line.startswith(marker)),
+                None,
+            )
+            if payload_line is None:
+                result = {
+                    "error":"static replay child did not emit a result marker",
+                    "returncode":completed["returncode"],
+                    "stdout":completed["stdout"][-4000:],
+                    "stderr":completed["stderr"][-4000:],
+                    "stdout_truncated":completed["stdout_truncated"],
+                    "stderr_truncated":completed["stderr_truncated"],
+                }
+            else:
+                result = normalize_replay_result(json.loads(payload_line))
+                if completed["returncode"] != 0 and "error" not in result:
+                    result["error"] = f"static replay child exited {completed['returncode']}"
     except Exception as exc:
-        result = {"error":f"{type(exc).__name__}: {exc}"}
+        result = {"error":f"{type(exc).__name__}: {exc}", "matches": [], "summary": {}}
+
+    result = normalize_replay_result(result)
 
     elapsed = time.monotonic() - started
     summary = ctx.context.db.record_replay_call(
