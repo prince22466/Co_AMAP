@@ -569,14 +569,26 @@ def main() -> int:
         )
         assert reference_failure["candidate_code_failure"] is False
 
+        # Close the reference-file attempt as a recoverable test fixture so
+        # start_experiment creates a genuinely fresh attempt for the same idea.
+        scoped_db.finish_experiment(
+            scoped_exp, "ERROR", "reference fixture complete", retry_same_idea=True
+        )
         scoped_exp2 = scoped_db.start_experiment(
             scoped_run, "scope candidate test", "", "", "scope candidate smoke", scoped_idea
         )
+        assert scoped_exp2 != scoped_exp
+        scoped_candidate = "workspace/candidates/scope_candidate.py"
+        scoped_sha = runtime.hashlib.sha256(b"scope candidate").hexdigest()
+        scoped_bound = scoped_db.bind_candidate(
+            scoped_exp2, scoped_candidate, scoped_sha
+        )
+        assert "error" not in scoped_bound
         scoped_db.record_replay_call(
             scoped_run,
             scoped_exp2,
             "replay_scope_candidate",
-            "workspace/candidates/scope_candidate.py",
+            scoped_candidate,
             {
                 "summary": {"games_total": 1, "games_valid": 0, "games_invalid": 1},
                 "matches": [{
