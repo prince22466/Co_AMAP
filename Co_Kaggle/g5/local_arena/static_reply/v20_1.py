@@ -51,6 +51,18 @@ V16_MIX=(7,4,0)
 V16_FINAL_HANDS=10
 V16_FINAL_BONUS=160
 
+# Global game-clock constants for the 30-day, 24-turn/day season.
+TURNS_PER_DAY=24
+SEASON_TURNS=720
+SHOP_INTERVAL=4
+CENTER_INTERVAL=24
+SHOP_UNLOCK_TURNS=3*TURNS_PER_DAY
+MAX_SHOPS=8
+
+# Absolute turn counter for this agent instance. agent(obs) resets it at the
+# opening observation and advances it once after every call.
+STEP=0
+
 def price(item, inventory):
     # Heuristic market-price model used by the crop/animal planners. Inventory 10,000 is
     # treated as the equilibrium point (d == 0). Scarcity (d < 0) raises the estimate;
@@ -103,10 +115,8 @@ def forecast(obs):
     # This first hourly version intentionally keeps the old production assumptions
     # coarse, but places them on the real turn timeline. Future work can improve the
     # sell-delay/opponent models without changing the 720-turn forecast interface.
-    TURNS_PER_DAY=24;SEASON_TURNS=720
-    SHOP_INTERVAL=4;CENTER_INTERVAL=24
-    SHOP_UNLOCK_TURNS=3*TURNS_PER_DAY;MAX_SHOPS=8
-    day=obs['day'];hour=obs['hour'];step=day*TURNS_PER_DAY+hour
+    global STEP
+    day=obs['day'];hour=obs['hour'];step=STEP
     items=obs['market']['inventory'];shops=obs['town']['unlocked_shops']
 
     net_flow={c:[0.]*SEASON_TURNS for c in items}
@@ -193,7 +203,6 @@ def forecast(obs):
 def animal_plan(obs,projected):
     # Produce a desired {tile: animal_type} layout on the fixed animal ROUTES.
     # Future prices now read the 720-turn hourly forecast at day-boundary turns.
-    TURNS_PER_DAY=24;SEASON_TURNS=720
     f=obs['farms'][obs['player']];day=obs['day'];plan={}
     for row in ROUTES:
         for p in row:
@@ -237,7 +246,6 @@ def animal_plan(obs,projected):
 def crop_plan(obs,projected,animal):
     # Produce a desired {tile: crop_type} layout for unlocked tiles outside ANIMAL_POINTS.
     # Crop economics now sample projected market inventory on the absolute turn timeline.
-    TURNS_PER_DAY=24;SEASON_TURNS=720
     f=obs['farms'][obs['player']];day=obs['day'];seeds=obs['private']['seeds'];plan={}
     points=[(x,y) for y in range(10) for x in range(10) if tile(f,(x,y))!='LOCKED' and (x,y) not in ANIMAL_POINTS]
     points.sort(key=lambda p:(dist(p,nearest_shed(p)),p[1],p[0]))
@@ -958,9 +966,10 @@ def market_orders(obs,animal,crops,actions):
     return orders[:10]
 
 def agent(obs):
-    global OPP_STYLE
+    global OPP_STYLE,STEP
     if obs['day']==0 and obs['hour']==0:
         OPP_STYLE=None
+        STEP=0
     elif OPP_STYLE is None and obs['day']==0 and obs['hour']>0:
         other=obs['farms'][1-obs['player']]
         if other['hires_today']==0 and other['money']>2000:OPP_STYLE='TRADER'
@@ -973,4 +982,6 @@ def agent(obs):
     animal=animal_plan(obs,projected)
     crops=crop_plan(obs,projected,animal)
     actions=unit_actions(obs,animal,crops)
-    return dict(farmer=actions[0],hands=actions[1:],market=market_orders(obs,animal,crops,actions))
+    result=dict(farmer=actions[0],hands=actions[1:],market=market_orders(obs,animal,crops,actions))
+    STEP+=1
+    return result
