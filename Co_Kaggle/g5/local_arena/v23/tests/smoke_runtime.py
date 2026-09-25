@@ -793,7 +793,8 @@ def main() -> int:
         assert "if analyst_failures >= 2:" not in runtime_source
         assert "analyst_self_correction_scheduled" in runtime_source
         assert "SELF-CORRECTION REQUIRED" in runtime_source
-        assert "do NOT reuse the failed experiment" in runtime_source
+        assert "engineer_repair_feedback" in runtime_source
+        assert "start_experiment to create a NEW experiment attempt" in runtime_source
 
         invalid_attempt_id = batch_db.record_analyst_attempt(
             batch_run,
