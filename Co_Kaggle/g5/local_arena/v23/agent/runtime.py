@@ -853,32 +853,32 @@ class BudgetHooks(RunHooks[AppContext]):
 @function_tool
 def list_tree(ctx: RunContextWrapper[AppContext], path: str, max_depth: int = 2, max_entries: int = 200) -> str:
     """List a bounded v23 subtree."""
-    return j(ctx.context.local.list_tree(path, max_depth, max_entries))
+    return j_bounded(ctx.context.local.list_tree(path, max_depth, max_entries), 12000)
 
 @function_tool
 def read_text(ctx: RunContextWrapper[AppContext], path: str, start_line: int = 1, max_lines: int = 200) -> str:
     """Read a narrow UTF-8 range from a v23 file."""
-    return j(ctx.context.local.read_text(path, start_line, max_lines))
+    return j_bounded(ctx.context.local.read_text(path, start_line, max_lines), 24000)
 
 @function_tool
 def search_text(ctx: RunContextWrapper[AppContext], query: str, path: str = ".", max_matches: int = 40) -> str:
     """Search bounded v23 text files."""
-    return j(ctx.context.local.search_text(query, path, max_matches))
+    return j_bounded(ctx.context.local.search_text(query, path, max_matches), 16000)
 
 @function_tool
 def summarize_jsonl(ctx: RunContextWrapper[AppContext], path: str, tail_rows: int = 20) -> str:
     """Summarize local JSONL without sending the full log."""
-    return j(ctx.context.local.summarize_jsonl(path, tail_rows))
+    return j_bounded(ctx.context.local.summarize_jsonl(path, tail_rows), 16000)
 
 @function_tool
 def write_workspace_file(ctx: RunContextWrapper[AppContext], path: str, content: str, overwrite: bool = False) -> str:
     """Write only under v23/workspace."""
-    return j(ctx.context.local.write_workspace_file(path, content, overwrite))
+    return j_bounded(ctx.context.local.write_workspace_file(path, content, overwrite), 8000)
 
 @function_tool
 def run_python(ctx: RunContextWrapper[AppContext], script: str, args: list[str] | None = None, timeout_seconds: int = 120) -> str:
     """Run an existing non-workspace v23 Python file with a bounded timeout."""
-    return j(ctx.context.local.run_python(script, args, timeout_seconds))
+    return j_bounded(ctx.context.local.run_python(script, args, timeout_seconds), 24000)
 
 @function_tool
 def start_experiment(ctx: RunContextWrapper[AppContext], hypothesis: str, candidate: str = "",
@@ -930,13 +930,13 @@ def set_goal(ctx: RunContextWrapper[AppContext], metric: str, operator: str, tar
 @function_tool
 def project_status(ctx: RunContextWrapper[AppContext]) -> str:
     """Return durable project usage, experiment, replay, and goal status."""
-    return j(ctx.context.db.project_status())
+    return j_bounded(ctx.context.db.project_status(), 12000)
 
 @function_tool
 def research_progress(ctx: RunContextWrapper[AppContext]) -> str:
     """Return the canonical compact research progress snapshot."""
     try:
-        return j(build_progress_snapshot(ctx.context.db))
+        return j_bounded(build_progress_snapshot(ctx.context.db), 10000)
     except Exception as exc:
         return j({"error":f"{type(exc).__name__}: {exc}"})
 
@@ -1168,7 +1168,37 @@ def static_replay_candidate(ctx: RunContextWrapper[AppContext], candidate: str, 
         "child_returncode": result.get("returncode"),
         "replay_python": ctx.context.replay_python,
     })
-    return j(result)
+    # Full replay details/traces remain in SQLite and game_record_path files.
+    # Never send the full replay payload back into model context.
+    compact_matches = []
+    for row in result.get("matches", []) if isinstance(result, dict) else []:
+        compact_matches.append({
+            "episode": row.get("episode"),
+            "valid": row.get("valid"),
+            "result": row.get("result"),
+            "original_v20_margin": row.get("original_v20_margin"),
+            "candidate_margin": row.get("candidate_margin"),
+            "margin_improvement": row.get("margin_improvement"),
+            "action_divergences": row.get("action_divergences"),
+            "first_action_divergence": row.get("first_action_divergence"),
+            "game_record_path": row.get("game_record_path"),
+            "error": row.get("error"),
+        })
+    model_result = {
+        "protocol": result.get("protocol") if isinstance(result, dict) else None,
+        "precision_audit": result.get("precision_audit") if isinstance(result, dict) else None,
+        "summary": summary,
+        "matches": compact_matches,
+        "replay_call_id": call_id,
+        "idea_id": experiment["idea_id"],
+        "candidate": candidate_rel,
+        "candidate_sha256": candidate_sha256,
+        "elapsed_seconds": round(elapsed, 3),
+        "goal_reached": reached,
+        "error": result.get("error") if isinstance(result, dict) else None,
+        "detail_policy": "Use idea_dossier or game_record_path for targeted drill-down; full traces are not returned to model context.",
+    }
+    return j_bounded(model_result, 24000)
 
 
 def conservative_cost_usd(usage, input_price, output_price):
@@ -1451,7 +1481,11 @@ def main():
         cluster_loss_histories,evaluate_hypothesis_evidence,idea_dossier
       ],
     )
-    session=SQLiteSession(args.session_id,str(SESSION_DB))
+    # Durable research state lives in experiments.sqlite3/context packs.
+    # Use a fresh model conversation per process run so one oversized historical
+    # tool output cannot poison all future requests for the logical research session.
+    model_session_id = args.session_id + "-" + run_id
+    session=SQLiteSession(model_session_id,str(SESSION_DB))
     prompt=("Research task:\n"+args.task+"\n\nExecution enabled: "+str(args.allow_exec)+
             ". Conservative per-run ceiling: USD "+format(args.session_budget_usd,".2f")+
             "; remaining project ledger: USD "+format(budget.remaining_total(),".4f")+
@@ -1897,6 +1931,7 @@ def main():
     print(output); print("\n[v23 observability]")
     print(j({"run_id":run_id,"elapsed_seconds":round(elapsed,3),"usage":usage,
              "conservative_cost_usd":round(cost,8),"session_id":args.session_id,
+             "model_session_id":model_session_id,
              "autonomous_cycles":cycle,"goal":latest_goal_state(db),
              "analyst_model":analyst_model,
              "analyst_reasoning_effort":args.analyst_reasoning_effort,
