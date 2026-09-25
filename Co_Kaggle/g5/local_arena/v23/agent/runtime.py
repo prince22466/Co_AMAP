@@ -1977,6 +1977,7 @@ def main():
            "output_tokens":0,"reasoning_tokens":0,"total_tokens":0}
     cycle = 0
     analyst_failures = 0
+    analyst_repair_feedback = ""
     continuation = prompt
     latest_review = db.latest_strategy_review()
     strategy_guidance = (
@@ -2045,6 +2046,13 @@ def main():
                 "performance. Produce exactly 10 structurally distinct test ideas in the "
                 "required JSON schema."
             )
+            if analyst_repair_feedback:
+                analyst_prompt += (
+                    "\n\nSELF-CORRECTION REQUIRED. Your previous Analyst attempt was "
+                    "invalid. Correct the output instead of abandoning the research run. "
+                    "Return a complete replacement batch that satisfies the schema exactly. "
+                    "Validation/runtime feedback:\n" + analyst_repair_feedback
+                )
             try:
                 analyst_result=Runner.run_sync(
                     analyst_agent,
@@ -2102,6 +2110,10 @@ def main():
                     output=analyst_error
                     break
                 analyst_failures += 1
+                analyst_repair_feedback = (
+                    "Previous Analyst call failed before producing a valid batch: "
+                    + analyst_error[:4000]
+                )
             elif analyst_output:
                 try:
                     parsed_review=parse_analyst_batch(analyst_output)
@@ -2118,6 +2130,11 @@ def main():
                         "raw_output":analyst_output[:4000],
                     })
                     analyst_failures += 1
+                    analyst_repair_feedback = (
+                        parse_error[:3000]
+                        + "\nPrevious invalid output (bounded):\n"
+                        + analyst_output[:5000]
+                    )
                 if parsed_review is not None:
                     db.record_analyst_attempt(
                         run_id,review_trigger,"VALID",analyst_output,"",
@@ -2132,6 +2149,11 @@ def main():
                     )
                     if "error" in batch_out:
                         analyst_failures += 1
+                        analyst_repair_feedback = (
+                            "Batch persistence/validation rejected the Analyst output: "
+                            + str(batch_out["error"])[:4000]
+                            + "\nReturn a corrected complete 10-idea batch."
+                        )
                         log.event("specialist_review_error", {
                             "role":"performance_analyst",
                             "trigger":review_trigger,
@@ -2139,6 +2161,7 @@ def main():
                         })
                     else:
                         analyst_failures = 0
+                        analyst_repair_feedback = ""
                         strategy_guidance=analyst_output
                         new_strategy_review=analyst_output
                         log.event("specialist_review_finish", {
@@ -2158,19 +2181,17 @@ def main():
                     "analyst returned empty output",analyst_usage,analyst_cost
                 )
                 analyst_failures += 1
-
-            if analyst_failures >= 2:
-                status="ERROR"
-                output=(
-                    "Performance Analyst failed to produce a valid 10-idea batch "
-                    "twice in this run. Inspect analyst_attempts and run events before retrying."
+                analyst_repair_feedback = (
+                    "Previous Analyst attempt returned empty output. Return exactly one "
+                    "complete replacement JSON batch containing 10 valid ideas."
                 )
-                log.event("autonomous_stop", {
-                    "reason":"analyst_batch_invalid",
+
+            if analyst_failures:
+                log.event("analyst_self_correction_scheduled", {
                     "failures":analyst_failures,
                     "trigger":review_trigger,
+                    "feedback":analyst_repair_feedback[:5000],
                 })
-                break
 
             if not budget.can_call():
                 status="BUDGET_STOP"
@@ -2356,24 +2377,45 @@ def main():
             break
 
         unfinished = None
+        repair_after_error = False
         if next_idea:
             current = db.current_work_idea()
+            repair_after_error = bool(
+                current
+                and current.get("idea_id") == next_idea.get("idea_id")
+                and current.get("repair_after_error")
+            )
             if (
                 current
                 and current.get("idea_id") == next_idea.get("idea_id")
                 and current.get("status") == "RUNNING"
                 and current.get("experiment_id")
+                and not repair_after_error
             ):
                 unfinished = experiment_execution_contract(
                     db, str(current["experiment_id"])
                 )
 
-        if unfinished and not unfinished.get("ok"):
+        if repair_after_error:
+            continuation=(
+                "SELF-CORRECTION FEEDBACK: the previous immutable candidate attempt failed "
+                "with generated-code/runtime evidence. Continue the SAME assigned idea, but "
+                "do NOT reuse or edit the failed artifact and do NOT reuse the failed "
+                "experiment. Inspect the prior replay error in the Engineer context, call "
+                "start_experiment to create a NEW experiment attempt, write a NEW corrected "
+                "artifact under workspace/candidates/, replay it, and repeat repair attempts "
+                "until a valid measured result exists."
+            )
+            log.event("engineer_repair_feedback", {
+                "idea_id": current.get("idea_id") if current else None,
+                "previous_experiment_id": current.get("experiment_id") if current else None,
+            })
+        elif unfinished and not unfinished.get("ok"):
             continuation=(
                 "RETRY FEEDBACK: the previous Engineer cycle did not complete the "
                 "required idea -> durable code -> plug into static replay -> valid measured "
-                "result lifecycle. Continue the SAME assigned idea and experiment; do NOT "
-                "advance to another idea. Missing requirements: "
+                "result lifecycle. Continue the SAME assigned idea and current RUNNING "
+                "experiment; do NOT advance to another idea. Missing requirements: "
                 + ", ".join(unfinished.get("missing", []))
                 + ". Create/fix the candidate with write_candidate_file under "
                   "workspace/candidates/, run static_replay_candidate with that exact "
