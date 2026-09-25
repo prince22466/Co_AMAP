@@ -825,6 +825,27 @@ def main() -> int:
         assert "blocker_rejected_v20_source_access" in runtime_source
         assert "list_v20_functions" in runtime_source
         assert "read_v20_function" in runtime_source
+        class FakeIncompleteError(Exception):
+            pass
+
+        incomplete = FakeIncompleteError(
+            "ModelBehaviorError: Responses stream ended with terminal event "
+            "response.incomplete. status=incomplete; "
+            "incomplete_details=IncompleteDetails(reason='max_output_tokens')."
+        )
+        # Name-sensitive path is covered by source marker regression below; the
+        # helper must not misclassify unrelated exceptions just because they mention limits.
+        assert runtime.recoverable_model_generation_error(
+            type("ModelBehaviorError", (Exception,), {})(
+                "response.incomplete status=incomplete "
+                "IncompleteDetails(reason='max_output_tokens')"
+            )
+        ) is True
+        assert runtime.recoverable_model_generation_error(
+            RuntimeError("ordinary replay failure")
+        ) is False
+        assert "engineer_generation_retry_scheduled" in runtime_source
+        assert "engineer_generation_self_correction" in runtime_source
 
         invalid_attempt_id = batch_db.record_analyst_attempt(
             batch_run,

@@ -74,6 +74,7 @@ v2 research-memory contract:
 - Do not use one fixed 5-game screen forever. Rotate or stratify screening histories when a screen repeatedly rejects candidates, and periodically run the strongest candidate family on all 25 histories because local replay is cheaper than additional model reasoning.
 - Only call report_blocker for a concrete runtime/environment failure that makes further research impossible without external intervention.
 - SELF-CORRECTION IS REQUIRED only for agent-generated candidate artifacts under workspace/candidates/. When static_replay_candidate returns candidate_repair_required=true, inspect the returned error, close that attempt with finish_experiment(..., ERROR, ...), call start_experiment again for the SAME idea, write a NEW corrected candidate artifact under workspace/candidates/, and replay it. Repeat this repair loop until replay produces a valid measured result or a truly external blocker exists.
+- If the controller reports that the prior model response was incomplete or hit max_output_tokens/max turns, treat it as a recoverable generation failure. Resume the SAME durable work, minimize prose, use tools first, and finish the pending action. Never report a blocker solely because a model response was truncated.
 - Never edit, rewrite, or self-correct user/project-supplied reference files such as working_files/, replay/, agent/, v20 source/notebooks, or any repository file outside workspace/candidates/. Treat those as read-only inputs. If such an external/reference file is actually broken, report the concrete blocker instead of modifying it.
 - FP16 is mandatory for candidate floating-point model weights, activations, tensors, and learned numeric compute. Integer/boolean/schema-mandated types are exempt. Do not emit float32, float64, double, or bfloat16 candidate model/tensor code unless a backend operation is provably unsupported in FP16; any such exception must be narrowly scoped, documented, and converted back to FP16 immediately.
 """
@@ -2208,6 +2209,23 @@ def resolve_replay_python(value: str | None) -> str:
     )
 
 
+def recoverable_model_generation_error(exc: Exception) -> bool:
+    """Return True for model-generation failures that should be retried in-loop."""
+    name = type(exc).__name__.lower()
+    text = (type(exc).__name__ + ": " + str(exc)).lower()
+    if name == "maxturnsexceeded":
+        return True
+    markers = (
+        "response.incomplete",
+        "status=incomplete",
+        "max_output_tokens",
+        "incomplete_details",
+        "reason='max_output_tokens'",
+        'reason="max_output_tokens"',
+    )
+    return "modelbehaviorerror" in name and any(marker in text for marker in markers)
+
+
 def model_pricing(model: str, explicit_input=None, explicit_output=None):
     if (explicit_input is None) != (explicit_output is None):
         raise SystemExit("pass both explicit token prices")
@@ -2319,6 +2337,7 @@ def main():
     cycle = 0
     analyst_failures = 0
     analyst_repair_feedback = ""
+    engineer_generation_failures = 0
     continuation = prompt
     latest_review = db.latest_strategy_review()
     strategy_guidance = (
@@ -2645,6 +2664,7 @@ def main():
                 "experiment_id": next_idea.get("experiment_id") if next_idea else None,
             },
         )
+        recoverable_generation_error = False
         try:
             result=Runner.run_sync(
               agent, cycle_prompt, context=app, session=session,
@@ -2660,6 +2680,7 @@ def main():
             )
             cycle_output=str(result.final_output or "")
             cycle_usage=usage_dict(result.context_wrapper.usage)
+            engineer_generation_failures = 0
             log.communication(
                 "experiment_engineer",
                 "controller",
@@ -2683,7 +2704,6 @@ def main():
                     "idea_id": next_idea.get("idea_id") if next_idea else None,
                 },
             )
-            exc_name=type(exc).__name__
             if isinstance(exc, BudgetStopError):
                 add_usage(usage, cycle_usage)
                 cycle_cost=conservative_cost_usd(cycle_usage,inp_price,out_price)
@@ -2699,7 +2719,38 @@ def main():
                     "reason":"budget_hook","cycle":cycle,"detail":cycle_output
                 })
                 break
-            if exc_name not in {"MaxTurnsExceeded"}:
+
+            if recoverable_model_generation_error(exc):
+                engineer_generation_failures += 1
+                recoverable_generation_error = True
+                continuation = (
+                    "SELF-CORRECTION REQUIRED: the previous Engineer model response "
+                    "was incomplete because it hit its generation/turn limit. Preserve "
+                    "the SAME assigned idea and any durable experiment/candidate state. "
+                    "Do not restart analysis and do not report a blocker. Resume from "
+                    "the current durable state, use tools first, keep prose extremely "
+                    "short, and complete the next required action (repair/replay/finish). "
+                    "Previous runtime error: " + cycle_output[:3000]
+                )
+                log.event("engineer_generation_retry_scheduled", {
+                    "cycle":cycle,
+                    "idea_id":next_idea.get("idea_id") if next_idea else None,
+                    "experiment_id":next_idea.get("experiment_id") if next_idea else None,
+                    "failures":engineer_generation_failures,
+                    "error":cycle_output[:5000],
+                })
+                log.communication(
+                    "controller",
+                    "experiment_engineer",
+                    "engineer_generation_self_correction",
+                    continuation,
+                    {
+                        "cycle":cycle,
+                        "failures":engineer_generation_failures,
+                        "idea_id":next_idea.get("idea_id") if next_idea else None,
+                    },
+                )
+            else:
                 status="ERROR"
                 output=cycle_output
                 add_usage(usage, cycle_usage)
@@ -2724,6 +2775,19 @@ def main():
         budget.session.add(delta); budget.total.add(delta)
         persist_budget_ledger(budget,args.model,usage,inp_price,out_price)
         output=cycle_output or output
+
+        if recoverable_generation_error:
+            try:
+                progress_snapshot = build_progress_snapshot(db)
+                append_progress_files(local.root, progress_snapshot, utcnow())
+                log.event("progress_snapshot", progress_snapshot)
+            except Exception as snapshot_exc:
+                log.event("progress_snapshot_error", {
+                    "error": type(snapshot_exc).__name__ + ": " + str(snapshot_exc)
+                })
+            # Keep active_idea_id and durable state intact; next loop rehydrates
+            # current_work_idea and resumes the same attempt/repair sequence.
+            continue
 
         app.active_idea_id=""
         goal=latest_goal_state(db)
