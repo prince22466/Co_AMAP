@@ -200,9 +200,12 @@ def build_engineer_context(
                 "write a NEW corrected candidate artifact, and replay again."
             ),
             "self_correction": (
-                "Generated candidate-code failures are repair tasks, not blockers. Use the "
-                "previous experiment/replay error in existing_lineage to correct the code. "
-                "Repeat fresh experiment attempts until a valid measured replay result exists."
+                "Generated candidate-code failures are repair tasks, not blockers. Repair only "
+                "agent-generated artifacts under workspace/candidates/. Treat working_files/ "
+                "and every repository/reference input outside workspace/candidates/ as read-only. "
+                "Use the previous experiment/replay error in existing_lineage to create a NEW "
+                "corrected candidate artifact, and repeat fresh experiment attempts until a "
+                "valid measured replay result exists."
             ),
             "evidence": (
                 "After replay, verify idea_dossier before finishing the experiment."
