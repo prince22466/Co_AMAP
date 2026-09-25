@@ -63,6 +63,7 @@ v2 research-memory contract:
 - Treat workspace/candidates/<name>.py or .ipynb plus its SHA-256 as the immutable experiment artifact. Keep rejected as well as successful candidates for lineage and branching.
 - An assigned idea is not complete until the exact durable candidate has been plugged into static replay and produced at least one valid measured replay result. If finish_experiment returns execution-contract feedback, do not move on or merely explain; continue the SAME idea, create/fix the candidate, replay it correctly, inspect the result, and call finish_experiment again.
 - ERROR is not an escape hatch from the execution contract. Use ERROR only when concrete runtime evidence exists: a persisted replay error for this experiment or a blocker recorded through report_blocker. If ERROR is rejected, continue the SAME idea and complete code -> replay -> result.
+- Every new idea must produce a new candidate artifact AND new candidate content. Reusing a path or SHA-256 already bound to a different idea is rejected. Derive from prior work if useful, but make a real idea-specific code change and save it as a new workspace/candidates/ artifact before replay.
 - When execution is enabled, do not stop at analysis or planning. You must create/select a concrete candidate, start an experiment, execute at least one static replay, analyze the measured result, and finish the experiment unless a concrete runtime error or budget stop blocks execution.
 - A rejected candidate is evidence, not a blocker. If the durable goal is unmet, continue with the next justified experiment.
 - The supplied ENGINEER CONTEXT PACK is the canonical starting context for assigned work.
@@ -399,6 +400,45 @@ class ResearchDB:
             return {"error":"candidate path changed within experiment","expected_candidate":row["candidate"],"actual_candidate":candidate}
         if row["candidate_sha256"] and row["candidate_sha256"] != candidate_sha256:
             return {"error":"candidate content changed within experiment","candidate":candidate,"expected_sha256":row["candidate_sha256"],"actual_sha256":candidate_sha256}
+
+        # A new analyst idea must produce genuinely new candidate code. Reusing
+        # either the same artifact path or byte-identical content from another
+        # idea would make the experiment a replay of old work rather than a test
+        # of the newly assigned idea.
+        if row["idea_id"]:
+            reused = self.db.execute(
+                """SELECT experiment_id,idea_id,candidate,candidate_sha256
+                   FROM experiments
+                   WHERE idea_id IS NOT NULL
+                     AND idea_id != ?
+                     AND experiment_id != ?
+                     AND (
+                         candidate = ?
+                         OR candidate_sha256 = ?
+                     )
+                   ORDER BY started_at ASC
+                   LIMIT 1""",
+                (row["idea_id"], experiment_id, candidate, candidate_sha256),
+            ).fetchone()
+            if reused is not None:
+                same_path = reused["candidate"] == candidate
+                same_sha = reused["candidate_sha256"] == candidate_sha256
+                return {
+                    "error":"candidate must be new for each idea",
+                    "idea_id":row["idea_id"],
+                    "candidate":candidate,
+                    "candidate_sha256":candidate_sha256,
+                    "reused_from_idea_id":reused["idea_id"],
+                    "reused_from_experiment_id":reused["experiment_id"],
+                    "same_path":bool(same_path),
+                    "same_sha256":bool(same_sha),
+                    "feedback":(
+                        "Do not reuse another idea's candidate. Continue the SAME assigned "
+                        "idea, make a real idea-specific code change, save it as a new file "
+                        "under workspace/candidates/, then replay that new artifact."
+                    ),
+                }
+
         self.db.execute(
             "UPDATE experiments SET candidate=COALESCE(candidate,?), candidate_sha256=COALESCE(candidate_sha256,?) WHERE experiment_id=?",
             (candidate,candidate_sha256,experiment_id),
