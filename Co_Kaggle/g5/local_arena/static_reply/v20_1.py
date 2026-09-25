@@ -198,7 +198,11 @@ def forecast(obs):
         for t in range(step,SEASON_TURNS):
             projected[c][t]=running
             running+=net_flow[c][t]
-    return projected,net_flow
+    daily_projected={
+        c:[projected[c][min(SEASON_TURNS-1,d*TURNS_PER_DAY)] for d in range(31)]
+        for c in projected
+    }
+    return daily_projected,net_flow
 
 def animal_plan(obs,projected):
     # Produce a desired {tile: animal_type} layout on the fixed animal ROUTES.
@@ -973,13 +977,7 @@ def agent(obs):
     elif OPP_STYLE=='TRADER' and obs['day']==0 and obs['hour']>=2:
         other=obs['farms'][1-obs['player']]
         OPP_STYLE='TRADER_SEEDER' if other['money']<1000 else 'TRADER_CHURN'
-    hourly_projected,net_flow=forecast(obs)
-    # Keep animal_plan() and crop_plan() unchanged for this experiment. They expect
-    # projected[item][day], so sample the hourly forecast at each day boundary.
-    projected={
-        c:[hourly_projected[c][min(SEASON_TURNS-1,d*TURNS_PER_DAY)] for d in range(31)]
-        for c in hourly_projected
-    }
+    projected,demand=forecast(obs)
     animal=animal_plan(obs,projected)
     crops=crop_plan(obs,projected,animal)
     actions=unit_actions(obs,animal,crops)
