@@ -758,6 +758,20 @@ def main() -> int:
         assert "agent" in v20_functions
         assert len(v20_functions) > 5
 
+        # Exact function-level source access must work independently of raw
+        # notebook serialization/truncation so repair attempts can inspect v20.
+        forecast_source, forecast_node = runtime._v20_function_source(
+            tool_local, "forecast"
+        )
+        assert forecast_node.name == "forecast"
+        assert forecast_source.lstrip().startswith("def forecast(")
+        assert "return" in forecast_source
+        try:
+            runtime._v20_function_source(tool_local, "definitely_not_v20")
+            raise AssertionError("unknown v20 function lookup should fail")
+        except ValueError as exc:
+            assert "unknown v20 top-level function" in str(exc)
+
         agent_node = v20_functions["agent"]
         v20_lines = v20_source.splitlines(keepends=True)
         original_agent = "".join(
@@ -808,6 +822,9 @@ def main() -> int:
         assert "SELF-CORRECTION REQUIRED" in runtime_source
         assert "engineer_repair_feedback" in runtime_source
         assert "start_experiment to create a NEW experiment attempt" in runtime_source
+        assert "blocker_rejected_v20_source_access" in runtime_source
+        assert "list_v20_functions" in runtime_source
+        assert "read_v20_function" in runtime_source
 
         invalid_attempt_id = batch_db.record_analyst_attempt(
             batch_run,
