@@ -70,6 +70,10 @@ MAX_SHOPS=8
 OPP_SHED_RATIO=0.8
 OPP_SHED_FALLBACK=2
 
+# Simple forecast-only WHEAT reserve heuristic. Each player's daily herd demand is
+# modeled as visible herd size + this reserve allowance.
+HERD_WHEAT_RESERVE=3
+
 # Absolute turn counter for this agent instance. agent(obs) resets it at the
 # opening observation and advances it once after every call.
 STEP=0
@@ -208,13 +212,15 @@ def forecast(obs):
     # After goods reach the opponent shed, assume efficient selling, so shed arrival
     # is also the estimated market-arrival turn. Hidden stock already in the shed is
     # handled separately above by OPP_SHED_RATIO / OPP_SHED_FALLBACK.
-    herd=0
-    for farm in obs['farms']:
-        for row in farm['tiles']:
-            for tile_state in row:
-                if isinstance(tile_state,dict) and 'animal' in tile_state:herd+=1
-
+    own_herd=sum(
+        1 for row in own_farm['tiles'] for tile_state in row
+        if isinstance(tile_state,dict) and 'animal' in tile_state
+    )
     opp_farm=obs['farms'][1-player]
+    opp_herd=sum(
+        1 for row in opp_farm['tiles'] for tile_state in row
+        if isinstance(tile_state,dict) and 'animal' in tile_state
+    )
     opp_positions=[tuple(opp_farm['farmer'])]+[tuple(p) for p in opp_farm['hands']]
 
     def opp_market_turn(p,ready_turn,include_worker_approach=False):
@@ -368,16 +374,16 @@ def forecast(obs):
                 if at<SEASON_TURNS:net_flow[crop][at]+=units
 
     # =========================================================================
-    # LEGACY INTERNAL-CONSUMPTION HEURISTIC: ANIMAL FEED / WHEAT
+    # DEMAND: HERD WHEAT
     # =========================================================================
-    # This is NOT town/shop market demand. It retains v20's old herd-to-wheat
-    # heuristic as a negative market flow until we replace it with a buy-deficit model.
-    # Express it as one daily flow
-    # rather than subtracting a fractional amount continuously across a day.
-    if 'WHEAT' in net_flow and herd:
+    # Simple symmetric heuristic: each player's daily WHEAT demand is its currently
+    # visible herd size plus HERD_WHEAT_RESERVE. This is intentionally a coarse
+    # market-demand approximation for ablation, not a private-inventory simulation.
+    if 'WHEAT' in net_flow:
+        daily_herd_wheat=own_herd+HERD_WHEAT_RESERVE+opp_herd+HERD_WHEAT_RESERVE
         first_feed=((step//TURNS_PER_DAY)+1)*TURNS_PER_DAY
         for t in range(first_feed,SEASON_TURNS,TURNS_PER_DAY):
-            net_flow['WHEAT'][t]-=herd
+            net_flow['WHEAT'][t]-=daily_herd_wheat
 
     # =========================================================================
     # PROJECTION: NET FLOW -> PROJECTED MARKET INVENTORY
