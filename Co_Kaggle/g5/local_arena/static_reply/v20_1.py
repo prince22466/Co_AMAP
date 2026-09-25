@@ -123,7 +123,7 @@ def forecast(obs):
     #
     # net_flow[item][t] is the estimated change to shared market inventory during
     # absolute turn t: positive values add market supply, negative values consume it.
-    # projected[item][t] is the estimated market inventory at the START of turn t,
+    # projected_turn[item][t] is the estimated market inventory at the START of turn t,
     # before that turn's market orders and town consumption. This matches engine order:
     # player market orders execute first, then town/shop demand for the same step.
     #
@@ -135,7 +135,7 @@ def forecast(obs):
     items=obs['market']['inventory'];shops=obs['town']['unlocked_shops']
 
     net_flow={c:[0.]*SEASON_TURNS for c in items}
-    projected={c:[float(items[c])]*SEASON_TURNS for c in items}
+    projected_turn={c:[float(items[c])]*SEASON_TURNS for c in items}
 
     # =========================================================================
     # DEMAND: TOWN CENTER + SHOPS
@@ -392,13 +392,17 @@ def forecast(obs):
     for c in items:
         running=float(items[c])
         for t in range(step,SEASON_TURNS):
-            projected[c][t]=running
+            projected_turn[c][t]=running
             running+=net_flow[c][t]
-    daily_projected={
-        c:[projected[c][min(SEASON_TURNS-1,d*TURNS_PER_DAY)] for d in range(31)]
-        for c in projected
+
+    # Planner-facing contract: projected[product][day] is the projected shared-market
+    # inventory for that absolute season day. animal_plan() and crop_plan() both index
+    # this dictionary by absolute day and pass the inventory value into price().
+    projected={
+        c:[projected_turn[c][min(SEASON_TURNS-1,d*TURNS_PER_DAY)] for d in range(31)]
+        for c in projected_turn
     }
-    return daily_projected,net_flow
+    return projected,net_flow
 
 def animal_plan(obs,projected):
     # Produce a desired {tile: animal_type} layout on the fixed animal ROUTES.
