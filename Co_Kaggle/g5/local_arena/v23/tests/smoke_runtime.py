@@ -417,6 +417,68 @@ def main() -> int:
         )
         assert candidate == ""
         assert error and "write_candidate_file" in error
+
+        # An experiment may not be considered complete until durable code is
+        # bound and at least one valid measured replay result is persisted.
+        contract_db = runtime.ResearchDB(Path(tmp) / "execution_contract.sqlite3")
+        contract_run = "run_execution_contract"
+        contract_db.start_run(
+            contract_run, "contract-session", "contract smoke", "smoke-model"
+        )
+        contract_eid = contract_db.start_experiment(
+            contract_run, "must execute before finish", "", "", "contract smoke"
+        )
+        incomplete = runtime.experiment_execution_contract(contract_db, contract_eid)
+        assert incomplete["ok"] is False
+        assert "durable candidate path" in incomplete["missing"]
+        assert "at least one static replay call" in incomplete["missing"]
+        assert "at least one valid measured WIN/LOSS/TIE result with margins" in incomplete["missing"]
+
+        contract_candidate = tool_local.workspace / "candidates" / "contract.py"
+        contract_candidate.write_text(
+            "def agent(obs):\n    return []\n", encoding="utf-8"
+        )
+        contract_sha = runtime.hashlib.sha256(contract_candidate.read_bytes()).hexdigest()
+        bound = contract_db.bind_candidate(
+            contract_eid, "workspace/candidates/contract.py", contract_sha
+        )
+        assert "error" not in bound
+        contract_db.record_replay_call(
+            contract_run,
+            contract_eid,
+            "replay_contract",
+            "workspace/candidates/contract.py",
+            {
+                "summary": {
+                    "games_total": 1,
+                    "games_valid": 1,
+                    "wins": 0,
+                    "losses": 1,
+                    "margin_worsened_cases": 0,
+                    "mean_margin_improvement": 5.0,
+                    "best_margin_improvement": 5.0,
+                },
+                "matches": [{
+                    "episode": "contract",
+                    "valid": True,
+                    "original_v20_margin": -10.0,
+                    "candidate_margin": -5.0,
+                    "margin_improvement": 5.0,
+                    "result": "LOSS",
+                    "action_divergences": 1,
+                    "elapsed_seconds": 0.001,
+                    "error": "",
+                }],
+            },
+            runtime.utcnow(),
+            0.001,
+        )
+        complete = runtime.experiment_execution_contract(contract_db, contract_eid)
+        assert complete["ok"] is True
+        assert complete["valid_replay_cases"] == 1
+        assert complete["measured_replay_cases"] == 1
+        assert complete["candidate_sha256"] == contract_sha
+
         assert len(parsed_batch["ideas"]) == 10
 
         invalid_attempt_id = batch_db.record_analyst_attempt(
