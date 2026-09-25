@@ -383,24 +383,40 @@ def main() -> int:
         import replay.runner as replay_runner
         assert callable(replay_runner._plain)
 
-        # Candidate descriptions must never poison immutable experiment binding.
+        # Candidate descriptions and arbitrary v23 files must never become replay artifacts.
         tool_local = object.__new__(runtime.LocalTools)
         tool_local.root = Path(tmp).resolve()
         tool_local.workspace = (Path(tmp) / "workspace").resolve()
+        tool_local.workspace.mkdir(parents=True, exist_ok=True)
         tool_local.allow_exec = False
         tool_local.log = None
-        candidate_file = Path(tmp) / "candidate.py"
-        candidate_file.write_text("def agent(obs):\n    return []\n", encoding="utf-8")
 
         candidate, error = runtime.validate_candidate_path(
             tool_local, "descriptive candidate text"
         )
         assert candidate == ""
-        assert error and "existing .py/.ipynb path" in error
+        assert error and "workspace/candidates" in error
 
+        outside = Path(tmp) / "candidate.py"
+        outside.write_text("def agent(obs):\n    return []\n", encoding="utf-8")
         candidate, error = runtime.validate_candidate_path(tool_local, "candidate.py")
-        assert candidate == "candidate.py"
+        assert candidate == ""
+        assert error and "workspace/candidates" in error
+
+        durable = tool_local.workspace / "candidates" / "candidate.py"
+        durable.parent.mkdir(parents=True, exist_ok=True)
+        durable.write_text("def agent(obs):\n    return []\n", encoding="utf-8")
+        candidate, error = runtime.validate_candidate_path(
+            tool_local, "workspace/candidates/candidate.py"
+        )
+        assert candidate == "workspace/candidates/candidate.py"
         assert error is None
+
+        candidate, error = runtime.validate_candidate_path(
+            tool_local, "", allow_empty=False
+        )
+        assert candidate == ""
+        assert error and "write_candidate_file" in error
         assert len(parsed_batch["ideas"]) == 10
 
         invalid_attempt_id = batch_db.record_analyst_attempt(
