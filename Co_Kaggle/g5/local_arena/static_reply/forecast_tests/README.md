@@ -16,6 +16,21 @@ The difference between the two forecast outputs isolates the behavior caused by 
 event while holding market inventory, clock, worker positions, and every unrelated
 observation field constant.
 
+The suite keeps an independent test specification for the season clock, shop demand,
+shed geometry, COW production, and crop schedules. Expected values do not call the
+agent's `dist()`, `nearest_shed()`, `SHOPS`, `ANIMALS`, or `CROPS` values when
+computing event deltas. This prevents a production bug from being copied into the
+expected result.
+
+Every forecast invocation also validates the output contract:
+
+- `net_flow[product]` has exactly 720 turn entries;
+- `projected[product]` has exactly 31 absolute-day entries;
+- product-key sets match live market inventory;
+- daily projected deltas equal cumulative turn-level `net_flow` deltas at day
+  boundaries;
+- the fixed replay's `day/hour` clock matches history step 0..719 exactly.
+
 ## Current event tests
 
 ### SHOP_OPEN
@@ -72,8 +87,9 @@ The suite isolates only the held-yield field and requires:
 - future recurring crop production to remain unchanged;
 - zero delta for unrelated products/turns.
 
-In the first replay run, all four event suites passed: shop opens, clean COW placements,
-clean crop placements, and ongoing-crop yield changes.
+In the reviewed replay run, all four event suites plus the fixture/contract test passed:
+shop opens, clean COW placements, clean crop placements, ongoing-crop yield changes,
+and clock/output/projection invariants.
 
 ## Run
 
