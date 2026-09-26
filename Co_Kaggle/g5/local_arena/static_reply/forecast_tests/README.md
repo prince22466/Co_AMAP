@@ -44,6 +44,37 @@ The suite requires:
 The report prints the MILK supply turns, WHEAT demand turns, and daily projected MILK
 inventory delta.
 
+
+### OPP_CROP_APPEAR
+
+Detects clean opponent crop placements where the previous tile had no crop or animal.
+
+The suite requires:
+
+- visible `yield_units`, if already present in the observation, to enter supply at the
+  current harvest/transport ETA;
+- remaining production of the currently visible crop to enter only at its scheduled
+  production day plus efficient shed-delivery ETA;
+- one-time crops to subtract already-visible held yield from their later scheduled total;
+- ongoing TOMATO/STRAWBERRY production to use the forecast's current 1/2-unit
+  well-cared/fertilization rule;
+- zero `net_flow` delta for unrelated products/turns.
+
+### OPP_YIELD_CHANGE
+
+Detects TOMATO/STRAWBERRY `yield_units` changes while crop identity and planted day
+remain unchanged.
+
+The suite isolates only the held-yield field and requires:
+
+- a yield increase to add exactly that many units at the current visible-yield arrival ETA;
+- a harvest/disappearance to remove exactly that many forecast units from that ETA;
+- future recurring crop production to remain unchanged;
+- zero delta for unrelated products/turns.
+
+In the first replay run, all four event suites passed: shop opens, clean COW placements,
+clean crop placements, and ongoing-crop yield changes.
+
 ## Run
 
 From `Co_Kaggle/g5`:
