@@ -135,16 +135,19 @@ def totals(private):
         for c,n in inv.items():result[c]=result.get(c,0)+n
     return result
 
-def post_action_shed(obs,actions):
-    """Predict the shed seen by the market after this turn's worker actions.
+def post_action_market_inventory(obs,actions):
+    """Predict market-visible shed contents and sell-reserve totals after worker actions.
 
-    The environment applies the farmer first and then hands in list order before market
-    orders. Mirror only operations that can mutate shed contents: PICKUP removes items;
-    DROP deposits inventory up to shed capacity; PLACE deposits the requested amount when
-    used at a shed-access tile. Seeds never live in the shed.
+    Worker actions execute before market orders. Mirror shed transfers exactly enough for
+    SELL availability, and reduce reserve totals for irreversible same-turn consumption
+    or loss: FEED consumes one WHEAT, FERTILIZE consumes one FERTILIZER, and DROP overflow
+    past shed capacity is discarded. Pure transfers (PICKUP/PLACE/DROP that fits) do not
+    change the reserve total.
     """
     f=obs['farms'][obs['player']];p=obs['private']
-    positions=[f['farmer']]+f['hands'];invs=p['inventories'];held=dict(p['shed'])
+    positions=[f['farmer']]+f['hands'];invs=p['inventories']
+    held=dict(p['shed']);reserve_total=totals(p)
+
     for i,a in enumerate(actions):
         if i>=len(positions) or i>=len(invs) or not isinstance(a,list) or not a:continue
         pos=tuple(positions[i]);inv=invs[i];op=a[0]
@@ -160,12 +163,15 @@ def post_action_shed(obs,actions):
 
         if op=='DROP':
             if pos not in SHED:continue
-            # Match the engine's per-item capacity accounting. Overflow is not sellable.
+            # DROP removes the whole worker inventory; anything beyond shed capacity
+            # is destroyed, so subtract that overflow from the reserve total as well.
             for item,n in inv.items():
                 if n<=0:continue
                 room=max(0,SHED_CAPACITY-sum(held.values()))
                 take=min(n,room)
                 if take>0:held[item]=held.get(item,0)+take
+                lost=n-take
+                if lost>0:reserve_total[item]=max(0,reserve_total.get(item,0)-lost)
             continue
 
         if op=='PLACE':
@@ -183,8 +189,22 @@ def post_action_shed(obs,actions):
             room=max(0,SHED_CAPACITY-sum(held.values()))
             n=min(n,room)
             if n>0:held[item]=held.get(item,0)+n
-    return held
+            continue
 
+        if op=='FEED':
+            t=tile(f,pos)
+            if (inv.get('WHEAT',0)>0 and isinstance(t,dict) and
+                    t.get('animal') in ANIMALS and not t.get('fed_today',False)):
+                reserve_total['WHEAT']=max(0,reserve_total.get('WHEAT',0)-1)
+            continue
+
+        if op=='FERTILIZE':
+            t=tile(f,pos)
+            if (inv.get('FERTILIZER',0)>0 and isinstance(t,dict) and 'crop' in t and
+                    t.get('fertilized_until_day',-1)<obs['day']):
+                reserve_total['FERTILIZER']=max(0,reserve_total.get('FERTILIZER',0)-1)
+
+    return held,reserve_total
 
 # =============================================================================
 # PRODUCTION SIGNALS
@@ -1213,7 +1233,9 @@ def market_orders(obs,signals,actions):
     # this turn's worker actions, because market orders execute afterward.
     # -------------------------------------------------------------------------
     f=obs['farms'][obs['player']];p=obs['private'];day=obs['day'];hour=obs['hour'];prices=obs['market']['prices']
-    cash=f['money'];orders=[];held=post_action_shed(obs,actions);total=totals(p)
+    cash=f['money'];orders=[]
+    held,sell_total=post_action_market_inventory(obs,actions)
+    total=totals(p)
     live=sum(1 for row in f['tiles'] for t in row if isinstance(t,dict) and 'animal' in t)
 
     # -------------------------------------------------------------------------
@@ -1225,8 +1247,8 @@ def market_orders(obs,signals,actions):
     reserve_fert=0 if day<10 or day==29 else 4
     for c in SELLABLE_PRODUCTS:
         n=held.get(c,0)
-        if c=='WHEAT':n=min(n,max(0,total.get(c,0)-reserve_wheat))
-        if c=='FERTILIZER':n=min(n,max(0,total.get(c,0)-reserve_fert))
+        if c=='WHEAT':n=min(n,max(0,sell_total.get(c,0)-reserve_wheat))
+        if c=='FERTILIZER':n=min(n,max(0,sell_total.get(c,0)-reserve_fert))
         if n:
             orders.append(['SELL',c,n]);cash+=n*max(1,prices[c]*.8)
     # -------------------------------------------------------------------------
