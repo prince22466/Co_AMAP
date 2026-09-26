@@ -377,14 +377,17 @@ def animal_plan(obs,projected):
 
 
 def crop_plan(obs,signals):
-    """Map owned seeds onto currently empty crop tiles.
+    """Plan owned seeds on empty tiles and include crops/weeds for worker maintenance.
 
-    This function is deliberately limited to planting decisions:
+    New planting decisions:
       - read seeds already owned in obs['private']['seeds'];
       - find empty, unlocked crop tiles outside ANIMAL_POINTS;
       - if every seed fits, plan every seed;
       - if seeds exceed empty tiles, keep only the highest-ranked seeds according to
         the ordering already supplied by production_signals().
+
+    Then include existing crops and weed tiles outside ANIMAL_POINTS so unit_actions()
+    can generate maintenance tasks even when no seeds or empty tiles remain.
 
     Seed purchasing belongs to market_orders(), not to this planner. The game stores
     seeds in private['seeds'], separately from the ordinary private['shed'] inventory.
@@ -398,15 +401,14 @@ def crop_plan(obs,signals):
     # -------------------------------------------------------------------------
     empty=[
         (x,y)
-        for y in range(10)
-        for x in range(10)
-        if tile(f,(x,y)) is None and (x,y) not in ANIMAL_POINTS
+        for y,row in enumerate(f['tiles'])
+        for x,t in enumerate(row)
+        if t is None and (x,y) not in ANIMAL_POINTS
     ]
     # Prefer tiles nearer the shed; coordinates provide deterministic tie-breaking.
     empty.sort(key=lambda p:(dist(p,nearest_shed(p)),p[1],p[0]))
 
     total_seeds=sum(seeds.values())
-    if not empty or total_seeds<=0:return plan
 
     # -------------------------------------------------------------------------
     # Stage 2: decide which owned seeds receive tiles.
@@ -442,6 +444,20 @@ def crop_plan(obs,signals):
     # -------------------------------------------------------------------------
     for pos,crop in zip(empty,selected):
         plan[pos]=crop
+
+    # Stage 4: include occupied crop/weed tiles for unit_actions() to inspect.
+    points=[(x,y) for y,row in enumerate(f['tiles']) for x,t in enumerate(row)
+            if t!='LOCKED' and (x,y) not in ANIMAL_POINTS]
+    points.sort(key=lambda p:(dist(p,nearest_shed(p)),p[1],p[0]))
+    for p in points:
+        t=tile(f,p)
+        if not isinstance(t,dict):continue
+        if 'crop' in t:
+            plan[p]=t['crop']
+        elif t.get('kind')=='WEED':
+            # The crop name is a placeholder: unit_actions() issues DIG for weeds
+            # before reading it. Actual planting is planned once the tile is empty.
+            plan[p]='WHEAT'
     return plan
 
 def fert_value(t,day,prices):
