@@ -43,7 +43,9 @@ SHED_CAPACITY=100
 SELLABLE_PRODUCTS=('MILK','WOOL','STRAWBERRY','MELON','EGG','TOMATO','CARROT','FERTILIZER','WHEAT')
 PASS=['PASS']
 # Maximum number of animals the planner should place on route tiles.
-HERD_LIMIT=17 # empirical evident from the number of herds of winners in v20 loss cases 
+HERD_LIMIT=17 # empirical evident from the number of herds of winners in v20 loss cases
+# Preserve working capital while signal-driven procurement buys new producers.
+PROCUREMENT_CASH_RESERVE=100 
 OPP_STYLE=None
 # Legacy opponent-style tuning tuple. In this v20 file it is never read, so its values
 # have no runtime effect and the tuple-component semantics cannot be recovered from v20.
@@ -1178,16 +1180,15 @@ def start_plan(obs,cash=None,slots=10):
     if not goose_done:tail.append(['BUY_ANIMAL','GOOSE',1])
     return tail[:slots]
 
-def market_orders(obs,animal,crops,actions):
+def market_orders(obs,signals,actions):
     # Build the rule-based market order list (maximum 10 orders). First simulate the shed
     # after current worker PICKUP/DROP/PLACE actions, then emit SELL orders for available
     # products while reserving wheat for the herd and fertilizer for crops.
     # Day 0/hour 0 is a fixed 10-order opening. Otherwise, remaining slots are considered in
     # this order: HIRE (early hours, target hand count, Fibonacci hire cost), BUY_PRODUCT
-    # WHEAT, BUY_LAND, BUY_ANIMAL toward animal_plan(), then BUY_PRODUCT FERTILIZER when
-    # fert_value() indicates demand. Outside start_plan(), this PR intentionally does not
-    # add seed-shortage purchasing; crop_plan() only maps seeds already owned onto empty tiles.
-    # Every stage checks cash and
+    # WHEAT, BUY_LAND, ranked signal-driven BUY_SEED/BUY_ANIMAL procurement, then
+    # BUY_PRODUCT FERTILIZER. Dynamic producer procurement starts after day 0 so the fixed
+    # opening remains authoritative. Every stage checks cash and
     # order capacity; earlier SELL/HIRE orders can consume slots needed by later purchases,
     # and the final `orders[:10]` enforces the engine limit defensively.
     f=obs['farms'][obs['player']];p=obs['private'];day=obs['day'];hour=obs['hour'];prices=obs['market']['prices']
@@ -1236,16 +1237,53 @@ def market_orders(obs,animal,crops,actions):
         empty_threshold,landcost=land_policy[lands]
         if empty_tiles<empty_threshold and cash>=landcost and len(orders)<10:
             orders.append(['BUY_LAND']);cash-=landcost
-    desired={a:0 for a in ANIMALS}
-    for pos,a in animal.items():desired[a]+=1
-    counts={a:total.get(a,0) for a in ANIMALS}
-    for row in f['tiles']:
-        for t in row:
-            if isinstance(t,dict) and 'animal' in t:counts[t['animal']]+=1
-    for a in ('COW','SHEEP','GOOSE'):
-        buy_deadline=17
-        if desired[a]>counts[a] and day<=buy_deadline and cash>ANIMALS[a][0]+50 and len(orders)<10:
-            orders.append(['BUY_ANIMAL',a,1]);cash-=ANIMALS[a][0]
+    # Buy new producers greedily in production_signals() rank order. The signal already
+    # accounts for owned seeds/unplaced animals; floor() avoids buying for a fractional
+    # residual shortage smaller than one complete producer-equivalent.
+    if day>0 and len(orders)<10:
+        crop_slots=sum(
+            1 for y,row in enumerate(f['tiles']) for x,t in enumerate(row)
+            if t is None and (x,y) not in ANIMAL_POINTS
+        )
+        crop_slots=max(0,crop_slots-sum(int(p['seeds'].get(c,0)) for c in CROPS))
+
+        unlocked_animal_slots=sum(1 for pos in ANIMAL_POINTS if tile(f,pos)!='LOCKED')
+        placed_animals=sum(
+            1 for row in f['tiles'] for t in row
+            if isinstance(t,dict) and t.get('animal') in ANIMALS
+        )
+        owned_unplaced_animals=sum(int(total.get(a,0)) for a in ANIMALS)
+        animal_slots=max(
+            0,
+            min(HERD_LIMIT,unlocked_animal_slots)-placed_animals-owned_unplaced_animals
+        )
+
+        for signal in signals:
+            if len(orders)>=10:break
+            if not signal.get('actionable'):continue
+            gap=signal.get('producer_equivalent_gap',0.)
+            if not math.isfinite(gap):continue
+            needed=int(math.floor(gap))
+            if needed<=0:continue
+
+            producer=signal['producer']
+            spendable=max(0,cash-PROCUREMENT_CASH_RESERVE)
+            if producer in CROPS:
+                cost=CROPS[producer][0]
+                affordable=int(spendable//cost)
+                n=min(needed,crop_slots,affordable)
+                if n<=0:continue
+                orders.append(['BUY_SEED',producer,n])
+                cash-=n*cost
+                crop_slots-=n
+            elif producer in ANIMALS:
+                cost=ANIMALS[producer][0]
+                affordable=int(spendable//cost)
+                n=min(needed,animal_slots,affordable)
+                if n<=0:continue
+                orders.append(['BUY_ANIMAL',producer,n])
+                cash-=n*cost
+                animal_slots-=n
     # Keep fertilizer stock sized to all crops currently growing on our land.
     # fert_value() still decides where/when fertilizer is actually applied in unit_actions().
     fert_need=sum(
@@ -1275,6 +1313,6 @@ def agent(obs):
     animal=animal_plan(obs,environment_signals)
     crops=crop_plan(obs,environment_signals)
     actions=unit_actions(obs,animal,crops)
-    result=dict(farmer=actions[0],hands=actions[1:],market=market_orders(obs,animal,crops,actions))
+    result=dict(farmer=actions[0],hands=actions[1:],market=market_orders(obs,environment_signals,actions))
     STEP+=1
     return result
