@@ -6,6 +6,10 @@ on:
       - "Co_Kaggle/g5/local_arena/static_reply/v20_1.py"
       - "Co_Kaggle/g5/local_arena/static_reply/forecast_tests/**"
       - "Co_Kaggle/g5/game_history/v20/111548564.json"
+      - "Co_Kaggle/g5/game_history/v20/111549675.json"
+      - "Co_Kaggle/g5/game_history/v20/111551968.json"
+      - "Co_Kaggle/g5/game_history/v20/111553265.json"
+      - "Co_Kaggle/g5/game_history/v20/111587965.json"
       - ".github/workflows/v20-1-forecast-events.yml"
   push:
     branches:
@@ -14,6 +18,10 @@ on:
       - "Co_Kaggle/g5/local_arena/static_reply/v20_1.py"
       - "Co_Kaggle/g5/local_arena/static_reply/forecast_tests/**"
       - "Co_Kaggle/g5/game_history/v20/111548564.json"
+      - "Co_Kaggle/g5/game_history/v20/111549675.json"
+      - "Co_Kaggle/g5/game_history/v20/111551968.json"
+      - "Co_Kaggle/g5/game_history/v20/111553265.json"
+      - "Co_Kaggle/g5/game_history/v20/111587965.json"
       - ".github/workflows/v20-1-forecast-events.yml"
   workflow_dispatch:
 
@@ -30,43 +38,15 @@ jobs:
           sparse-checkout: |
             Co_Kaggle/g5/local_arena/static_reply/v20_1.py
             Co_Kaggle/g5/local_arena/static_reply/forecast_tests
-            Co_Kaggle/g5/game_history/v20
+            Co_Kaggle/g5/game_history/v20/111548564.json
+            Co_Kaggle/g5/game_history/v20/111549675.json
+            Co_Kaggle/g5/game_history/v20/111551968.json
+            Co_Kaggle/g5/game_history/v20/111553265.json
+            Co_Kaggle/g5/game_history/v20/111587965.json
           sparse-checkout-cone-mode: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Scan v20 histories for opponent TOMATO coverage
-        working-directory: Co_Kaggle/g5
-        run: |
-          python - <<'PY'
-          import json
-          from pathlib import Path
-
-          root=Path("game_history/v20")
-          for path in sorted(root.glob("*.json")):
-              h=json.loads(path.read_text())
-              final=h["steps"][-1]
-              rewards=[float(final[i]["reward"]) for i in (0,1)]
-              if rewards[0]==rewards[1]:
-                  continue
-              seat=0 if rewards[0]<rewards[1] else 1
-              opp=1-seat
-              placements=0
-              yield_changes=0
-              for i in range(1,len(h["steps"])):
-                  prev=h["steps"][i-1][seat]["observation"]["farms"][opp]["tiles"]
-                  cur=h["steps"][i][seat]["observation"]["farms"][opp]["tiles"]
-                  for y,row in enumerate(cur):
-                      for x,t in enumerate(row):
-                          p=prev[y][x]
-                          if isinstance(t,dict) and t.get("crop")=="TOMATO":
-                              if not (isinstance(p,dict) and ("crop" in p or "animal" in p)):
-                                  placements+=1
-                              if isinstance(p,dict) and p.get("crop")=="TOMATO" and p.get("planted_day")==t.get("planted_day") and p.get("yield_units",0)!=t.get("yield_units",0):
-                                  yield_changes+=1
-              if placements or yield_changes:
-                  print(path.name, "placements", placements, "yield_changes", yield_changes)
-          PY
-      - name: Run one-history forecast event suite
+      - name: Run five-history forecast event suite
         working-directory: Co_Kaggle/g5
         run: python local_arena/static_reply/forecast_tests/test_v20_1_history_events.py -v
