@@ -120,6 +120,23 @@ def totals(private):
     return result
 
 
+# =============================================================================
+# PRODUCTION SIGNALS
+# =============================================================================
+# This subsystem converts the currently observable game state into normalized
+# "need more production" signals.  It is intentionally separate from crop/animal
+# execution: the helpers below only measure demand, production capacity, and shortage.
+#
+# Internal flow:
+#   1) define which products can be produced and which producer creates each one;
+#   2) estimate known remaining hard demand;
+#   3) estimate remaining output from existing/new producers;
+#   4) assemble demand-capacity gaps and normalize them into comparable scores.
+
+
+# -----------------------------------------------------------------------------
+# Production-signal product universe and producer mapping
+# -----------------------------------------------------------------------------
 # Products for which the production signal service can recommend a producer.
 # Crop names map to seeds of the same name; animal products map to their animal.
 PRODUCTION_PRODUCTS=tuple(CROPS)+('MILK','WOOL','EGG')
@@ -129,6 +146,10 @@ PRODUCT_PRODUCER={
     'MILK':'COW','WOOL':'SHEEP','EGG':'GOOSE',
 }
 
+
+# -----------------------------------------------------------------------------
+# Remaining hard-demand model
+# -----------------------------------------------------------------------------
 def _remaining_hard_demand(obs):
     """Known remaining consumption: Town + open shops + observable animal WHEAT feed."""
     step=obs['day']*TURNS_PER_DAY+obs['hour'];day=obs['day']
@@ -162,6 +183,13 @@ def _remaining_hard_demand(obs):
     demand['WHEAT']+=feed
     return demand
 
+
+# -----------------------------------------------------------------------------
+# Producer-capacity models
+# -----------------------------------------------------------------------------
+# These helpers express future output in product units.  Existing producers and a
+# hypothetical newly acquired producer are measured on the same basis so the final
+# signal can express shortage in "additional producer equivalents".
 def _animal_remaining_capacity(animal,placed_day,day):
     """Future well-cared output of one existing/newly placed animal."""
     _,_,first,interval,units=ANIMALS[animal]
@@ -199,6 +227,10 @@ def _current_crop_remaining_capacity(tile_state,day,step):
     if repeat_day<30:total+=_new_crop_stream_capacity(crop,repeat_day,step)
     return total
 
+
+# -----------------------------------------------------------------------------
+# Signal assembly and ranking
+# -----------------------------------------------------------------------------
 def production_signals(obs):
     """Rank products by known remaining demand versus observable production capacity.
 
@@ -211,6 +243,7 @@ def production_signals(obs):
     score = 1-exp(-N), where N is the positive shortage measured in units of one
     additional producer acquired now. Higher score means stronger production need.
     """
+    # Stage 1: compute remaining hard demand and initialize per-product capacity buckets.
     day=obs['day'];step=day*TURNS_PER_DAY+obs['hour'];player=obs['player']
     hard_demand=_remaining_hard_demand(obs)
     breakdown={
@@ -218,12 +251,13 @@ def production_signals(obs):
         for p in PRODUCTION_PRODUCTS
     }
 
-    # Finished goods already under our control count directly against future need.
+    # Stage 2: finished goods already under our control count directly against future need.
     owned=totals(obs['private'])
     for product in PRODUCTION_PRODUCTS:
         breakdown[product]['owned_stock']=float(owned.get(product,0))
 
-    # Public farm state from BOTH players is observable market-production capacity.
+    # Stage 3: public farm state from BOTH players contributes observable production
+    # capacity: ready yield plus remaining output from currently deployed assets.
     for farm in obs['farms']:
         for row in farm['tiles']:
             for tile_state in row:
@@ -242,8 +276,8 @@ def production_signals(obs):
                         tile_state,day,step
                     )
 
-    # Our uncommitted producers count as immediate capacity: seeds are assumed planted
-    # now; unplaced animals are assumed placed now. Opponent equivalents are private.
+    # Stage 4: count our uncommitted producers as immediate capacity. Seeds are assumed
+    # planted now; unplaced animals are assumed placed now. Opponent equivalents are private.
     seeds=obs['private']['seeds']
     for crop in CROPS:
         count=seeds.get(crop,0)
@@ -258,6 +292,8 @@ def production_signals(obs):
                 animal,day,day
             )
 
+    # Stage 5: convert each product's unit shortage into "new producer equivalents",
+    # then squash it to [0,1] so crop and animal products share a comparable need score.
     results=[]
     for product in PRODUCTION_PRODUCTS:
         capacity=sum(breakdown[product].values())
@@ -292,10 +328,14 @@ def production_signals(obs):
             'capacity_breakdown':dict(breakdown[product]),
         })
 
+    # Stage 6: highest production need first; product name is the deterministic tie-breaker.
     results.sort(key=lambda x:(-x['score'],x['product']))
     return results
 
 
+# =============================================================================
+# PRODUCTION PLANNERS
+# =============================================================================
 def animal_plan(obs,projected):
     # Produce a desired {tile: animal_type} layout on the fixed animal ROUTES.
     # Logic: keep already-placed route animals, allocate owned-but-unplaced animals to free
@@ -345,37 +385,71 @@ def crop_plan(obs,projected,animal):
     # and projected supply is updated after each planned planting.
     # Note: the `animal` argument is currently unused; exclusion uses fixed ANIMAL_POINTS.
     f=obs['farms'][obs['player']];day=obs['day'];seeds=obs['private']['seeds'];plan={}
+
+    # -------------------------------------------------------------------------
+    # Stage 1: discover plantable crop slots and define deterministic visit order.
+    # -------------------------------------------------------------------------
+    # Animal route tiles are excluded here. Locked land is excluded as well. Occupied
+    # tiles remain in `points` for stable geometry/order, then are skipped in Stage 3.
     points=[(x,y) for y in range(10) for x in range(10) if tile(f,(x,y))!='LOCKED' and (x,y) not in ANIMAL_POINTS]
     points.sort(key=lambda p:(dist(p,nearest_shed(p)),p[1],p[0]))
-    # Preserve a cheap productive opening before switching to the market forecast.
+
+    # -------------------------------------------------------------------------
+    # Stage 2: define the fixed early-game crop geometry.
+    # -------------------------------------------------------------------------
+    # Preserve the existing cheap productive opening: among the upper-left candidate
+    # slots, reserve the first 13 for WHEAT and the next 6 for MELON.
     opening=[p for p in points if p[0]<5 and p[1]<5]
     opening.sort(key=lambda p:(p[1],p[0]))
     wheat=set(opening[:13]);melon=set(opening[13:19])
+
+    # -------------------------------------------------------------------------
+    # Stage 3: choose a crop for each currently empty candidate slot.
+    # -------------------------------------------------------------------------
     for p in points:
+        # Existing crops, weeds, structures, etc. are operational state handled elsewhere.
         if tile(f,p) is not None:continue
+
+        # Stage 3a: during days 0..3, honor the fixed WHEAT/MELON opening assignment.
         if day<=3 and p in wheat|melon:
             c='WHEAT' if p in wheat else 'MELON'
         else:
+            # Stage 3b: after the fixed opening (or outside its reserved slots), score
+            # every crop using the current legacy projected-inventory economics.
             scores=[]
             for c,(cost,base,events,last) in CROPS.items():
+                # Remaining harvest events if this crop is planted today.
                 future=[(day+age,n) for age,n in events if day+age<=29]
                 if not future:continue
+
+                # Project sale value minus seed/fertilizer cost, then normalize by the
+                # time until the crop's final remaining harvest.
                 fert=(len(future)*.65*price('FERTILIZER',projected['FERTILIZER'][min(29,day+8)])) if c in ('STRAWBERRY','TOMATO') else 0
                 rev=sum(n*price(c,projected[c][at]+n/2) for at,n in future)-cost-fert
                 duration=future[-1][0]-day+1
                 score=rev/duration
+
+                # Legacy crop-specific preference multipliers and owned-seed bonus.
                 if c=='STRAWBERRY':score*=1.6
                 elif c=='TOMATO':score*=0.6
                 elif c=='WHEAT':score*=2
                 if day<4 and c=='WHEAT':score*=1.7
                 if seeds.get(c,0)>0:score+=cost/duration*.6
                 scores.append((score,c))
+
             if not scores:continue
             c=max(scores)[1]
+
+        # ---------------------------------------------------------------------
+        # Stage 4: commit the selected crop and update the local projected supply.
+        # ---------------------------------------------------------------------
+        # Updating `projected` after each slot makes later slot choices see the output
+        # already planned by earlier slots, avoiding completely independent decisions.
         plan[p]=c
         for age,n in CROPS[c][2]:
             at=day+age
             for future in range(at,31):projected[c][future]+=n
+
     return plan
 
 
