@@ -1074,85 +1074,55 @@ def unit_actions(obs,animal,crops):
 
 
 def start_plan(obs,cash=None,slots=10):
-    """Return the remaining day-0 opening commands in one fixed order.
+    """Return the fixed day-0 opening purchases in one exact order.
 
-    Canonical order:
+    Canonical sequence:
       6 x HIRE
-      13 WHEAT
-      2 COW
-      2 CARROT
-      3 STRAWBERRY
-      1 MELON
-      1 SHEEP
-      1 GOOSE
+      BUY_SEED WHEAT 13
+      BUY_ANIMAL COW 2
+      BUY_SEED CARROT 2
+      BUY_SEED STRAWBERRY 3
+      BUY_SEED MELON 1
+      BUY_ANIMAL SHEEP 1
+      BUY_ANIMAL GOOSE 1
 
-    The engine accepts at most 10 market commands per turn, so the sequence may span
-    multiple day-0 turns. We infer completed opening commands from current state and
-    always continue from the first still-missing command.
+    The first 10 commands fit through STRAWBERRY. The remaining MELON/SHEEP/GOOSE
+    commands are completed on later day-0 turns.
     """
-    f=obs['farms'][obs['player']];p=obs['private'];day=obs['day']
+    f=obs['farms'][obs['player']];p=obs['private'];day=obs['day'];hour=obs['hour']
     if day!=0 or slots<=0:return []
-    if cash is None:cash=f['money']
 
-    # Current realized opening quantities. Seeds count both unplanted inventory and crops
-    # already planted; animals count both stored and already placed animals.
-    planted={c:0 for c in OPENING_CROP_TARGET}
-    animal_count={a:0 for a in ANIMALS}
+    opening=[
+        ['HIRE'],['HIRE'],['HIRE'],['HIRE'],['HIRE'],['HIRE'],
+        ['BUY_SEED','WHEAT',13],
+        ['BUY_ANIMAL','COW',2],
+        ['BUY_SEED','CARROT',2],
+        ['BUY_SEED','STRAWBERRY',3],
+        ['BUY_SEED','MELON',1],
+        ['BUY_ANIMAL','SHEEP',1],
+        ['BUY_ANIMAL','GOOSE',1],
+    ]
+
+    # Hour 0 always emits the beginning of the exact sequence.
+    if hour==0:return opening[:slots]
+
+    # Later day-0 turns only need to complete the tail. Count both stored and already
+    # deployed assets so a completed command is not repeated after planting/placement.
+    melon_done=p['seeds'].get('MELON',0)>0
+    sheep_done=totals(p).get('SHEEP',0)>0
+    goose_done=totals(p).get('GOOSE',0)>0
     for row in f['tiles']:
         for t in row:
             if not isinstance(t,dict):continue
-            crop=t.get('crop')
-            if crop in planted:planted[crop]+=1
-            animal=t.get('animal')
-            if animal in animal_count:animal_count[animal]+=1
+            if t.get('crop')=='MELON':melon_done=True
+            if t.get('animal')=='SHEEP':sheep_done=True
+            if t.get('animal')=='GOOSE':goose_done=True
 
-    seed_have={c:p['seeds'].get(c,0)+planted[c] for c in OPENING_CROP_TARGET}
-    owned=totals(p)
-    for a in animal_count:animal_count[a]+=owned.get(a,0)
-
-    orders=[]
-
-    # 1) HIRE commands.
-    missing_hires=max(0,6-f['hires_today'])
-    for _ in range(missing_hires):
-        if len(orders)>=slots:break
-        orders.append(['HIRE'])
-
-    if len(orders)>=slots:return orders
-
-    # 2) Remaining purchases in the exact requested sequence.
-    purchase_sequence=(
-        ('SEED','WHEAT',13),
-        ('ANIMAL','COW',2),
-        ('SEED','CARROT',2),
-        ('SEED','STRAWBERRY',3),
-        ('SEED','MELON',1),
-        ('ANIMAL','SHEEP',1),
-        ('ANIMAL','GOOSE',1),
-    )
-
-    for kind,item,target in purchase_sequence:
-        if len(orders)>=slots:break
-        if kind=='SEED':
-            missing=max(0,target-seed_have[item])
-            if missing<=0:continue
-            cost=CROPS[item][0]
-            affordable=int(max(0,cash)//cost)
-            n=min(missing,affordable)
-            if n<=0:break
-            orders.append(['BUY_SEED',item,n]);cash-=n*cost
-            seed_have[item]+=n
-        else:
-            missing=max(0,target-animal_count[item])
-            if missing<=0:continue
-            cost=ANIMALS[item][0]
-            affordable=int(max(0,cash)//cost)
-            n=min(missing,affordable)
-            if n<=0:break
-            orders.append(['BUY_ANIMAL',item,n]);cash-=n*cost
-            animal_count[item]+=n
-
-    return orders
+    tail=[]
+    if not melon_done:tail.append(['BUY_SEED','MELON',1])
+    if not sheep_done:tail.append(['BUY_ANIMAL','SHEEP',1])
+    if not goose_done:tail.append(['BUY_ANIMAL','GOOSE',1])
+    return tail[:slots]
 
 def market_orders(obs,animal,crops,actions,signals):
     # Build the rule-based market order list (maximum 10 orders). First account for goods
