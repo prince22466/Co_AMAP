@@ -118,6 +118,182 @@ def totals(private):
         for c,n in inv.items():result[c]=result.get(c,0)+n
     return result
 
+
+# Products for which the production signal service can recommend a producer.
+# Crop names map to seeds of the same name; animal products map to their animal.
+PRODUCTION_PRODUCTS=tuple(CROPS)+('MILK','WOOL','EGG')
+PRODUCT_PRODUCER={
+    'WHEAT':'WHEAT','CARROT':'CARROT','TOMATO':'TOMATO',
+    'STRAWBERRY':'STRAWBERRY','MELON':'MELON',
+    'MILK':'COW','WOOL':'SHEEP','EGG':'GOOSE',
+}
+
+def _remaining_hard_demand(obs):
+    """Known remaining consumption: Town + open shops + observable animal WHEAT feed."""
+    step=obs['day']*TURNS_PER_DAY+obs['hour'];day=obs['day']
+    town_ticks=sum(1 for t in range(step,SEASON_TURNS) if t%CENTER_INTERVAL==0)
+    shop_ticks=sum(1 for t in range(step,SEASON_TURNS) if t%SHOP_INTERVAL==0)
+    shop_per_tick={p:0. for p in PRODUCTION_PRODUCTS}
+    for shop in obs['town']['unlocked_shops']:
+        for product,units in SHOPS[shop].items():
+            if product in shop_per_tick:shop_per_tick[product]+=units
+    demand={
+        p:float(town_ticks+shop_ticks*shop_per_tick[p])
+        for p in PRODUCTION_PRODUCTS
+    }
+
+    # Every visible animal consumes one WHEAT per day. If it has already been fed today,
+    # only future days remain; otherwise include today as well. This mirrors the signal
+    # service's use of both farms' visible animal production capacity.
+    future_days=max(0,29-day)
+    feed=0.
+    for farm in obs['farms']:
+        for row in farm['tiles']:
+            for tile_state in row:
+                if isinstance(tile_state,dict) and 'animal' in tile_state:
+                    feed+=future_days+(0 if tile_state.get('fed_today',False) else 1)
+
+    # Our unplaced animals are counted below as immediately deployable production
+    # capacity, so include their corresponding feed obligation here as well.
+    owned=totals(obs['private'])
+    placement_days=max(0,30-day)
+    feed+=placement_days*sum(owned.get(animal,0) for animal in ANIMALS)
+    demand['WHEAT']+=feed
+    return demand
+
+def _animal_remaining_capacity(animal,placed_day,day):
+    """Future well-cared output of one existing/newly placed animal."""
+    _,_,first,interval,units=ANIMALS[animal]
+    first_day=placed_day+first
+    return float(sum(
+        units for at_day in range(max(day+1,first_day),30)
+        if (at_day-first_day)%interval==0
+    ))
+
+def _new_crop_stream_capacity(crop,plant_day,step):
+    """Output from a crop planted on plant_day, repeating same crop after final harvest."""
+    _,_,events,last=CROPS[crop]
+    total=0.
+    cycle_day=plant_day
+    while cycle_day<30:
+        for age,units in events:
+            at_day=cycle_day+age
+            if at_day<30 and at_day*TURNS_PER_DAY>step:total+=units
+        next_cycle=cycle_day+last
+        if next_cycle<=cycle_day or next_cycle>=30:break
+        cycle_day=next_cycle
+    return total
+
+def _current_crop_remaining_capacity(tile_state,day,step):
+    """Visible crop output plus assumed same-crop replacement after its final harvest."""
+    crop=tile_state['crop'];planted=tile_state['planted_day']
+    _,_,events,last=CROPS[crop]
+    total=0.
+    for age,units in events:
+        at_day=planted+age
+        if at_day<30 and at_day*TURNS_PER_DAY>step:total+=units
+    # Once the current crop finishes, treat the tile as continuing the same production
+    # line. If its final harvest is already available/past, assume immediate replant now.
+    repeat_day=max(day,planted+last)
+    if repeat_day<30:total+=_new_crop_stream_capacity(crop,repeat_day,step)
+    return total
+
+def production_signals(obs):
+    """Rank products by known remaining demand versus observable production capacity.
+
+    This is deliberately a signaling service, not a market-inventory forecast:
+      - hard demand = Town + shops already unlocked at this turn;
+      - capacity = our observable stock + public ready yield + public current/repeating
+        crop/animal production + our owned seeds/unplaced animals;
+      - opponent hidden inventory and future unknown shops are excluded.
+
+    score = 1-exp(-N), where N is the positive shortage measured in units of one
+    additional producer acquired now. Higher score means stronger production need.
+    """
+    day=obs['day'];step=day*TURNS_PER_DAY+obs['hour'];player=obs['player']
+    hard_demand=_remaining_hard_demand(obs)
+    breakdown={
+        p:{'owned_stock':0.,'ready_yield':0.,'current_assets':0.,'owned_producers':0.}
+        for p in PRODUCTION_PRODUCTS
+    }
+
+    # Finished goods already under our control count directly against future need.
+    owned=totals(obs['private'])
+    for product in PRODUCTION_PRODUCTS:
+        breakdown[product]['owned_stock']=float(owned.get(product,0))
+
+    # Public farm state from BOTH players is observable market-production capacity.
+    for farm in obs['farms']:
+        for row in farm['tiles']:
+            for tile_state in row:
+                if not isinstance(tile_state,dict):continue
+                held=float(tile_state.get('yield_units',0))
+                if 'animal' in tile_state:
+                    animal=tile_state['animal'];product=ANIMALS[animal][1]
+                    breakdown[product]['ready_yield']+=held
+                    breakdown[product]['current_assets']+=_animal_remaining_capacity(
+                        animal,tile_state['placed_day'],day
+                    )
+                if 'crop' in tile_state:
+                    crop=tile_state['crop']
+                    breakdown[crop]['ready_yield']+=held
+                    breakdown[crop]['current_assets']+=_current_crop_remaining_capacity(
+                        tile_state,day,step
+                    )
+
+    # Our uncommitted producers count as immediate capacity: seeds are assumed planted
+    # now; unplaced animals are assumed placed now. Opponent equivalents are private.
+    seeds=obs['private']['seeds']
+    for crop in CROPS:
+        count=seeds.get(crop,0)
+        if count:
+            breakdown[crop]['owned_producers']+=count*_new_crop_stream_capacity(
+                crop,day,step
+            )
+    for animal,(_,product,_,_,_) in ANIMALS.items():
+        count=owned.get(animal,0)
+        if count:
+            breakdown[product]['owned_producers']+=count*_animal_remaining_capacity(
+                animal,day,day
+            )
+
+    results=[]
+    for product in PRODUCTION_PRODUCTS:
+        capacity=sum(breakdown[product].values())
+        demand=hard_demand[product]
+        gap=max(0.,demand-capacity)
+        producer=PRODUCT_PRODUCER[product]
+        if product in CROPS:
+            one_new=_new_crop_stream_capacity(product,day,step)
+        else:
+            one_new=_animal_remaining_capacity(producer,day,day)
+
+        if gap<=0:
+            producer_gap=0.
+            score=0.
+        elif one_new>0:
+            producer_gap=gap/one_new
+            score=1-math.exp(-producer_gap)
+        else:
+            producer_gap=math.inf
+            score=1.
+
+        results.append({
+            'product':product,
+            'producer':producer,
+            'score':score,
+            'actionable':one_new>0,
+            'hard_demand':demand,
+            'capacity':capacity,
+            'gap':gap,
+            'new_producer_capacity':one_new,
+            'producer_equivalent_gap':producer_gap,
+            'capacity_breakdown':dict(breakdown[product]),
+        })
+
+    results.sort(key=lambda x:(-x['score'],x['product']))
+    return results
+
 def forecast(obs):
     # Hour-aware market forecast over all 720 turns.
     #
