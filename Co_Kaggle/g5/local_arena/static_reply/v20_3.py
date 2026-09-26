@@ -375,92 +375,73 @@ def animal_plan(obs,projected):
     return plan
 
 
-def crop_plan(obs,projected,animal):
-    # Produce a {tile: crop_type} plan only for currently empty, unlocked farmland outside
-    # ANIMAL_POINTS. Existing crops and weeds are not part of this planner: unit_actions()
-    # scans those tile states directly for maintenance/harvest/DIG work. Days 0..3 keep the
-    # fixed 13-WHEAT/6-MELON opening geometry; later empty slots are scored from projected
-    # future sale value - seed/fertilizer cost, normalized by production duration and
-    # adjusted by crop-specific heuristic multipliers. Owned seeds receive a small bonus,
-    # and projected supply is updated after each planned planting.
-    # Note: the `animal` argument is currently unused; exclusion uses fixed ANIMAL_POINTS.
-    f=obs['farms'][obs['player']];day=obs['day'];seeds=obs['private']['seeds'];plan={}
+def crop_plan(obs,signals):
+    """Map owned seeds onto currently empty crop tiles.
+
+    This function is deliberately limited to planting decisions:
+      - read seeds already owned in obs['private']['seeds'];
+      - find empty, unlocked crop tiles outside ANIMAL_POINTS;
+      - if every seed fits, plan every seed;
+      - if seeds exceed empty tiles, keep only the highest-ranked seeds according to
+        the ordering already supplied by production_signals().
+
+    Seed purchasing belongs to market_orders(), not to this planner. The game stores
+    seeds in private['seeds'], separately from the ordinary private['shed'] inventory.
+    """
+    f=obs['farms'][obs['player']]
+    seeds={crop:int(obs['private']['seeds'].get(crop,0)) for crop in CROPS}
+    plan={}
 
     # -------------------------------------------------------------------------
-    # Stage 1: discover plantable crop slots and define deterministic visit order.
+    # Stage 1: find truly empty crop-eligible tiles.
     # -------------------------------------------------------------------------
-    # Animal route tiles are excluded here. Locked land is excluded as well. Occupied
-    # tiles remain in `points` for stable geometry/order, then are skipped in Stage 3.
-    points=[(x,y) for y in range(10) for x in range(10) if tile(f,(x,y))!='LOCKED' and (x,y) not in ANIMAL_POINTS]
-    points.sort(key=lambda p:(dist(p,nearest_shed(p)),p[1],p[0]))
+    empty=[
+        (x,y)
+        for y in range(10)
+        for x in range(10)
+        if tile(f,(x,y)) is None and (x,y) not in ANIMAL_POINTS
+    ]
+    # Prefer tiles nearer the shed; coordinates provide deterministic tie-breaking.
+    empty.sort(key=lambda p:(dist(p,nearest_shed(p)),p[1],p[0]))
 
-    # -------------------------------------------------------------------------
-    # Stage 2: define the fixed early-game crop geometry.
-    # -------------------------------------------------------------------------
-    # `opening` is the list of crop-eligible coordinates inside the initial upper-left
-    # 5x5 land quadrant. The quadrant has 25 tiles; 6 are reserved by ANIMAL_POINTS,
-    # leaving exactly 19 crop slots. Sort them row-major so crop-to-tile assignment is
-    # deterministic, then divide those 19 coordinates into the fixed opening mix:
-    # 13 WHEAT + 3 STRAWBERRY + 2 CARROT + 1 MELON.
-    opening=[p for p in points if p[0]<5 and p[1]<5]
-    opening.sort(key=lambda p:(p[1],p[0]))
-    wheat=set(opening[:13])
-    strawberry=set(opening[13:16])
-    carrot=set(opening[16:18])
-    melon=set(opening[18:19])
+    total_seeds=sum(seeds.values())
+    if not empty or total_seeds<=0:return plan
 
     # -------------------------------------------------------------------------
-    # Stage 3: choose a crop for each currently empty candidate slot.
+    # Stage 2: decide which owned seeds receive tiles.
     # -------------------------------------------------------------------------
-    for p in points:
-        # Existing crops, weeds, structures, etc. are operational state handled elsewhere.
-        if tile(f,p) is not None:continue
+    selected=[]
 
-        # Stage 3a: during days 0..3, honor the fixed diversified opening assignment.
-        if day<=3 and p in wheat|strawberry|carrot|melon:
-            if p in wheat:c='WHEAT'
-            elif p in strawberry:c='STRAWBERRY'
-            elif p in carrot:c='CARROT'
-            else:c='MELON'
-        else:
-            # Stage 3b: after the fixed opening (or outside its reserved slots), score
-            # every crop using the current legacy projected-inventory economics.
-            scores=[]
-            for c,(cost,base,events,last) in CROPS.items():
-                # Remaining harvest events if this crop is planted today.
-                future=[(day+age,n) for age,n in events if day+age<=29]
-                if not future:continue
+    if total_seeds<=len(empty):
+        # Enough land for every seed: ranking is irrelevant because no seed is excluded.
+        # CROPS insertion order is used only to make tile assignment deterministic.
+        for crop in CROPS:
+            selected.extend([crop]*seeds[crop])
+    else:
+        # Scarce land: production_signals() already returns highest-need products first.
+        # Filter that ranking to crop types we actually own, then consume seed counts in
+        # rank order until every empty tile has been assigned.
+        signal_rank={
+            entry['product']:rank
+            for rank,entry in enumerate(signals)
+            if entry.get('product') in CROPS
+        }
+        ranked_crops=sorted(
+            (crop for crop,count in seeds.items() if count>0),
+            key=lambda crop:(signal_rank.get(crop,len(signal_rank)),crop),
+        )
+        slots=len(empty)
+        for crop in ranked_crops:
+            take=min(seeds[crop],slots-len(selected))
+            selected.extend([crop]*take)
+            if len(selected)>=slots:break
 
-                # Project sale value minus seed/fertilizer cost, then normalize by the
-                # time until the crop's final remaining harvest.
-                fert=(len(future)*.65*price('FERTILIZER',projected['FERTILIZER'][min(29,day+8)])) if c in ('STRAWBERRY','TOMATO') else 0
-                rev=sum(n*price(c,projected[c][at]+n/2) for at,n in future)-cost-fert
-                duration=future[-1][0]-day+1
-                score=rev/duration
-
-                # Legacy crop-specific preference multipliers and owned-seed bonus.
-                if c=='STRAWBERRY':score*=1.6
-                elif c=='TOMATO':score*=0.6
-                elif c=='WHEAT':score*=2
-                if day<4 and c=='WHEAT':score*=1.7
-                if seeds.get(c,0)>0:score+=cost/duration*.6
-                scores.append((score,c))
-
-            if not scores:continue
-            c=max(scores)[1]
-
-        # ---------------------------------------------------------------------
-        # Stage 4: commit the selected crop and update the local projected supply.
-        # ---------------------------------------------------------------------
-        # Updating `projected` after each slot makes later slot choices see the output
-        # already planned by earlier slots, avoiding completely independent decisions.
-        plan[p]=c
-        for age,n in CROPS[c][2]:
-            at=day+age
-            for future in range(at,31):projected[c][future]+=n
-
+    # -------------------------------------------------------------------------
+    # Stage 3: pair selected seeds with the empty tiles.
+    # -------------------------------------------------------------------------
+    for pos,crop in zip(empty,selected):
+        plan[pos]=crop
     return plan
-
 
 def fert_value(t,day,prices):
     # Approximate the marginal value of fertilizing a crop now. Only TOMATO/STRAWBERRY are
@@ -1068,14 +1049,15 @@ def unit_actions(obs,animal,crops):
     return [a or PASS for a in actions]
 
 
-def market_orders(obs,animal,crops,actions):
+def market_orders(obs,animal,crops,actions,signals):
     # Build the rule-based market order list (maximum 10 orders). First account for goods
     # that current worker DROP/PLACE actions will move into the shed, then emit SELL orders
     # for available products while reserving wheat for the herd and fertilizer for crops.
     # Day 0/hour 0 is a fixed 10-order opening. Otherwise, remaining slots are considered in
     # this order: HIRE (early hours, target hand count, Fibonacci hire cost), BUY_PRODUCT
-    # WHEAT, BUY_LAND, BUY_ANIMAL toward animal_plan(), BUY_SEED toward crop_plan(), then
-    # BUY_PRODUCT FERTILIZER when fert_value() indicates demand. Every stage checks cash and
+    # WHEAT, BUY_LAND, BUY_ANIMAL toward animal_plan(), BUY_SEED from production_signals(),
+    # then BUY_PRODUCT FERTILIZER when fert_value() indicates demand. crop_plan() never
+    # requests purchases; it only maps seeds already owned onto empty tiles. Every stage checks cash and
     # order capacity; earlier SELL/HIRE orders can consume slots needed by later purchases,
     # and the final `orders[:10]` enforces the engine limit defensively.
     f=obs['farms'][obs['player']];p=obs['private'];day=obs['day'];hour=obs['hour'];prices=obs['market']['prices']
@@ -1131,14 +1113,29 @@ def market_orders(obs,animal,crops,actions):
         buy_deadline=17
         if desired[a]>counts[a] and day<=buy_deadline and cash>ANIMALS[a][0]+50 and len(orders)<10:
             orders.append(['BUY_ANIMAL',a,1]);cash-=ANIMALS[a][0]
-    needs={}
-    for pos,c in crops.items():
-        t=tile(f,pos)
-        if (t is None or (isinstance(t,dict) and t.get('kind')=='WEED')) and hour<17:needs[c]=needs.get(c,0)+1
-    seed_order=lambda kv:(0 if OPP_STYLE=='V16' and day==0 and kv[0]=='MELON' else 1,CROPS[kv[0]][0])
-    for c,n in sorted(needs.items(),key=seed_order):
-        n=min(max(0,n-p['seeds'].get(c,0)),int(max(0,cash-80)//CROPS[c][0]))
-        if n and len(orders)<10:orders.append(['BUY_SEED',c,n]);cash-=n*CROPS[c][0]
+    # Seed acquisition is separate from crop_plan(). Existing seeds are already counted
+    # by production_signals(), so producer_equivalent_gap is the number of additional
+    # producers still needed after current stock/assets/seeds. Buy only for crop-eligible
+    # empty slots not already coverable by owned seeds.
+    empty_crop_slots=sum(
+        1
+        for y in range(10)
+        for x in range(10)
+        if tile(f,(x,y)) is None and (x,y) not in ANIMAL_POINTS
+    )
+    unfilled_slots=max(0,empty_crop_slots-sum(p['seeds'].get(c,0) for c in CROPS))
+    if hour<17 and unfilled_slots>0:
+        for signal in signals:
+            c=signal.get('product')
+            if c not in CROPS or not signal.get('actionable') or signal.get('gap',0)<=0:continue
+            producer_gap=signal.get('producer_equivalent_gap',0)
+            if not math.isfinite(producer_gap) or producer_gap<=0:continue
+            n=min(unfilled_slots,max(1,math.ceil(producer_gap)))
+            n=min(n,int(max(0,cash-80)//CROPS[c][0]))
+            if n<=0:continue
+            if len(orders)>=10:break
+            orders.append(['BUY_SEED',c,n]);cash-=n*CROPS[c][0];unfilled_slots-=n
+            if unfilled_slots<=0:break
     fert_need=0
     for row in f['tiles']:
         for t in row:
@@ -1166,6 +1163,6 @@ def agent(obs):
     animal=animal_plan(obs,environment_signals)
     crops=crop_plan(obs,environment_signals)
     actions=unit_actions(obs,animal,crops)
-    result=dict(farmer=actions[0],hands=actions[1:],market=market_orders(obs,animal,crops,actions))
+    result=dict(farmer=actions[0],hands=actions[1:],market=market_orders(obs,animal,crops,actions,environment_signals))
     STEP+=1
     return result
