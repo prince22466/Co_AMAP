@@ -225,6 +225,203 @@ class ProductionSignalTests(unittest.TestCase):
         self.assertEqual(set(seen),set(CROPS))
         self.assertGreater(strict_score_drops,0)
 
+
+    def test_public_animal_yield_events_move_capacity_by_visible_yield_delta(self):
+        """Real yield changes on either public farm move only observable product capacity."""
+        seen=Counter()
+        strict_score_moves=0
+        total_events=0
+        for name,history,seat in self.cases:
+            for step in range(1,SEASON_TURNS):
+                prev=observation(history,step-1,seat)
+                obs=observation(history,step,seat)
+                for farm_i in (0,1):
+                    prev_tiles=prev["farms"][farm_i]["tiles"]
+                    for y,row in enumerate(obs["farms"][farm_i]["tiles"]):
+                        for x,tile in enumerate(row):
+                            old=prev_tiles[y][x]
+                            if not isinstance(tile,dict) or not isinstance(old,dict):continue
+                            animal=tile.get("animal")
+                            if not animal or old.get("animal")!=animal:continue
+                            if old.get("placed_day")!=tile.get("placed_day"):continue
+                            before=old.get("yield_units",0);after=tile.get("yield_units",0)
+                            if before==after:continue
+                            product=ANIMAL_PRODUCT[animal];seen[animal]+=1;total_events+=1
+
+                            counter=copy.deepcopy(obs)
+                            counter["farms"][farm_i]["tiles"][y][x]["yield_units"]=before
+                            actual=by_product(self.agent.production_signals(obs))
+                            baseline=by_product(self.agent.production_signals(counter))
+
+                            assert_close(
+                                self,
+                                actual[product]["capacity"]-baseline[product]["capacity"],
+                                after-before,
+                                f"{name} step={step} {animal} yield {before}->{after}",
+                            )
+                            assert_close(self,actual[product]["hard_demand"],baseline[product]["hard_demand"])
+                            if after>before:
+                                self.assertLessEqual(actual[product]["score"],baseline[product]["score"]+EPS)
+                            else:
+                                self.assertGreaterEqual(actual[product]["score"]+EPS,baseline[product]["score"])
+                            if abs(actual[product]["score"]-baseline[product]["score"])>EPS:
+                                strict_score_moves+=1
+
+        self.assertEqual(set(seen),set(ANIMAL_PRODUCT))
+        self.assertGreater(total_events,0)
+        self.assertGreater(strict_score_moves,0)
+        print(f"[signal events] animal yield changes={total_events} by_type={dict(seen)}")
+
+    def test_public_crop_yield_events_move_capacity_by_visible_yield_delta(self):
+        """Real crop yield changes on either public farm move observable capacity exactly."""
+        seen=Counter()
+        strict_score_moves=0
+        total_events=0
+        for name,history,seat in self.cases:
+            for step in range(1,SEASON_TURNS):
+                prev=observation(history,step-1,seat)
+                obs=observation(history,step,seat)
+                for farm_i in (0,1):
+                    prev_tiles=prev["farms"][farm_i]["tiles"]
+                    for y,row in enumerate(obs["farms"][farm_i]["tiles"]):
+                        for x,tile in enumerate(row):
+                            old=prev_tiles[y][x]
+                            if not isinstance(tile,dict) or not isinstance(old,dict):continue
+                            crop=tile.get("crop")
+                            if crop not in CROPS or old.get("crop")!=crop:continue
+                            if old.get("planted_day")!=tile.get("planted_day"):continue
+                            before=old.get("yield_units",0);after=tile.get("yield_units",0)
+                            if before==after:continue
+                            seen[crop]+=1;total_events+=1
+
+                            counter=copy.deepcopy(obs)
+                            counter["farms"][farm_i]["tiles"][y][x]["yield_units"]=before
+                            actual=by_product(self.agent.production_signals(obs))
+                            baseline=by_product(self.agent.production_signals(counter))
+
+                            assert_close(
+                                self,
+                                actual[crop]["capacity"]-baseline[crop]["capacity"],
+                                after-before,
+                                f"{name} step={step} {crop} yield {before}->{after}",
+                            )
+                            assert_close(self,actual[crop]["hard_demand"],baseline[crop]["hard_demand"])
+                            if after>before:
+                                self.assertLessEqual(actual[crop]["score"],baseline[crop]["score"]+EPS)
+                            else:
+                                self.assertGreaterEqual(actual[crop]["score"]+EPS,baseline[crop]["score"])
+                            if abs(actual[crop]["score"]-baseline[crop]["score"])>EPS:
+                                strict_score_moves+=1
+
+        self.assertEqual(set(seen),set(CROPS))
+        self.assertGreater(total_events,0)
+        self.assertGreater(strict_score_moves,0)
+        print(f"[signal events] crop yield changes={total_events} by_type={dict(seen)}")
+
+    def test_own_seed_count_events_move_only_owned_producer_capacity(self):
+        """Real seed inventory changes move the corresponding crop capacity in the same direction."""
+        seen=Counter()
+        total_events=0
+        for name,history,seat in self.cases:
+            for step in range(1,SEASON_TURNS):
+                prev=observation(history,step-1,seat)
+                obs=observation(history,step,seat)
+                for crop in CROPS:
+                    before=prev["private"]["seeds"].get(crop,0)
+                    after=obs["private"]["seeds"].get(crop,0)
+                    if before==after:continue
+                    seen[crop]+=1;total_events+=1
+
+                    counter=copy.deepcopy(obs)
+                    counter["private"]["seeds"][crop]=before
+                    actual=by_product(self.agent.production_signals(obs))
+                    baseline=by_product(self.agent.production_signals(counter))
+                    capacity_delta=actual[crop]["capacity"]-baseline[crop]["capacity"]
+
+                    assert_close(self,actual[crop]["hard_demand"],baseline[crop]["hard_demand"])
+                    if after>before:
+                        self.assertGreaterEqual(capacity_delta,-EPS)
+                        self.assertLessEqual(actual[crop]["score"],baseline[crop]["score"]+EPS)
+                    else:
+                        self.assertLessEqual(capacity_delta,EPS)
+                        self.assertGreaterEqual(actual[crop]["score"]+EPS,baseline[crop]["score"])
+
+        self.assertGreater(total_events,0)
+        print(f"[signal events] own seed changes={total_events} by_type={dict(seen)}")
+
+    def test_own_finished_stock_events_move_capacity_one_for_one(self):
+        """Observed own product inventory changes contribute one-for-one to capacity."""
+        seen=Counter()
+        total_events=0
+        for name,history,seat in self.cases:
+            for step in range(1,SEASON_TURNS):
+                prev=observation(history,step-1,seat)
+                obs=observation(history,step,seat)
+
+                def private_total(o,product):
+                    n=o["private"]["shed"].get(product,0)
+                    n+=sum(inv.get(product,0) for inv in o["private"]["inventories"])
+                    return n
+
+                for product in PRODUCTS:
+                    before=private_total(prev,product)
+                    after=private_total(obs,product)
+                    if before==after:continue
+                    seen[product]+=1;total_events+=1
+
+                    counter=copy.deepcopy(obs)
+                    counter["private"]["shed"][product]=before
+                    for inv in counter["private"]["inventories"]:
+                        inv.pop(product,None)
+
+                    actual=by_product(self.agent.production_signals(obs))
+                    baseline=by_product(self.agent.production_signals(counter))
+                    assert_close(
+                        self,
+                        actual[product]["capacity"]-baseline[product]["capacity"],
+                        after-before,
+                        f"{name} step={step} {product} owned {before}->{after}",
+                    )
+                    assert_close(self,actual[product]["hard_demand"],baseline[product]["hard_demand"])
+                    if after>before:
+                        self.assertLessEqual(actual[product]["score"],baseline[product]["score"]+EPS)
+                    else:
+                        self.assertGreaterEqual(actual[product]["score"]+EPS,baseline[product]["score"])
+
+        self.assertGreater(total_events,0)
+        print(f"[signal events] own finished-stock changes={total_events} by_type={dict(seen)}")
+
+    def test_new_visible_animal_adds_wheat_feed_demand_signal(self):
+        """Every new visible animal should create additional remaining WHEAT hard demand."""
+        seen=Counter()
+        checked=0
+        for name,history,seat in self.cases:
+            for step in range(1,SEASON_TURNS):
+                prev=observation(history,step-1,seat)
+                obs=observation(history,step,seat)
+                for farm_i in (0,1):
+                    prev_tiles=prev["farms"][farm_i]["tiles"]
+                    for y,row in enumerate(obs["farms"][farm_i]["tiles"]):
+                        for x,tile in enumerate(row):
+                            if not isinstance(tile,dict) or "animal" not in tile:continue
+                            old=prev_tiles[y][x]
+                            if isinstance(old,dict) and ("animal" in old or "crop" in old):continue
+                            animal=tile["animal"];seen[animal]+=1;checked+=1
+
+                            counter=copy.deepcopy(obs)
+                            counter["farms"][farm_i]["tiles"][y][x].pop("animal",None)
+                            actual=by_product(self.agent.production_signals(obs))
+                            baseline=by_product(self.agent.production_signals(counter))
+
+                            self.assertGreater(
+                                actual["WHEAT"]["hard_demand"],
+                                baseline["WHEAT"]["hard_demand"],
+                                f"{name} step={step} new {animal} must increase WHEAT feed demand",
+                            )
+
+        self.assertEqual(set(seen),set(ANIMAL_PRODUCT))
+        self.assertGreater(checked,0)
+
     def test_seed_to_planted_is_capacity_neutral_at_same_turn(self):
         """A seed assumed planted immediately should not create a score jump when planted."""
         name,history,seat=self.cases[0]
