@@ -36,6 +36,8 @@ ANIMAL_POINTS={p for route in ROUTES for p in route}
 # used for PICKUP/DROP/PLACE decisions and as routing targets via nearest_shed().
 SHED=((4,4),(5,4),(4,5),(5,5))
 PASS=['PASS']
+# Maximum number of animals the planner should place on route tiles.
+HERD_LIMIT=13
 OPP_STYLE=None
 # Legacy opponent-style tuning tuple. In this v20 file it is never read, so its values
 # have no runtime effect and the tuple-component semantics cannot be recovered from v20.
