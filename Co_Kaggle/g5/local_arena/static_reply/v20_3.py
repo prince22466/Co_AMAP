@@ -1101,15 +1101,16 @@ def start_plan(obs,cash=None,slots=10):
     if not goose_done:tail.append(['BUY_ANIMAL','GOOSE',1])
     return tail[:slots]
 
-def market_orders(obs,animal,crops,actions,signals):
+def market_orders(obs,animal,crops,actions):
     # Build the rule-based market order list (maximum 10 orders). First account for goods
     # that current worker DROP/PLACE actions will move into the shed, then emit SELL orders
     # for available products while reserving wheat for the herd and fertilizer for crops.
     # Day 0/hour 0 is a fixed 10-order opening. Otherwise, remaining slots are considered in
     # this order: HIRE (early hours, target hand count, Fibonacci hire cost), BUY_PRODUCT
-    # WHEAT, BUY_LAND, BUY_ANIMAL toward animal_plan(), BUY_SEED from production_signals(),
-    # then BUY_PRODUCT FERTILIZER when fert_value() indicates demand. crop_plan() never
-    # requests purchases; it only maps seeds already owned onto empty tiles. Every stage checks cash and
+    # WHEAT, BUY_LAND, BUY_ANIMAL toward animal_plan(), then BUY_PRODUCT FERTILIZER when
+    # fert_value() indicates demand. Outside start_plan(), this PR intentionally does not
+    # add seed-shortage purchasing; crop_plan() only maps seeds already owned onto empty tiles.
+    # Every stage checks cash and
     # order capacity; earlier SELL/HIRE orders can consume slots needed by later purchases,
     # and the final `orders[:10]` enforces the engine limit defensively.
     f=obs['farms'][obs['player']];p=obs['private'];day=obs['day'];hour=obs['hour'];prices=obs['market']['prices']
@@ -1169,32 +1170,6 @@ def market_orders(obs,animal,crops,actions,signals):
         buy_deadline=17
         if desired[a]>counts[a] and day<=buy_deadline and cash>ANIMALS[a][0]+50 and len(orders)<10:
             orders.append(['BUY_ANIMAL',a,1]);cash-=ANIMALS[a][0]
-    # Seed acquisition is separate from crop_plan(). Existing seeds are already counted
-    # by production_signals(), so producer_equivalent_gap is the number of additional
-    # producers still needed after current stock/assets/seeds. Buy only for crop-eligible
-    # empty slots not already coverable by owned seeds.
-    empty_crop_slots=sum(
-        1
-        for y in range(10)
-        for x in range(10)
-        if tile(f,(x,y)) is None and (x,y) not in ANIMAL_POINTS
-    )
-    unfilled_slots=max(0,empty_crop_slots-sum(p['seeds'].get(c,0) for c in CROPS))
-    if day>0 and hour<17 and unfilled_slots>0:
-        for signal in signals:
-            c=signal.get('product')
-            if c not in CROPS or not signal.get('actionable') or signal.get('gap',0)<=0:continue
-            # producer_equivalent_gap expresses the remaining shortage as a number of
-            # additional producers. Example: 2.4 means roughly three more crop tiles are
-            # needed, so round up when converting the signal into a seed-purchase quantity.
-            producer_gap=signal.get('producer_equivalent_gap',0)
-            if not math.isfinite(producer_gap) or producer_gap<=0:continue
-            n=min(unfilled_slots,max(1,math.ceil(producer_gap)))
-            n=min(n,int(max(0,cash-80)//CROPS[c][0]))
-            if n<=0:continue
-            if len(orders)>=10:break
-            orders.append(['BUY_SEED',c,n]);cash-=n*CROPS[c][0];unfilled_slots-=n
-            if unfilled_slots<=0:break
     fert_need=0
     for row in f['tiles']:
         for t in row:
@@ -1222,6 +1197,6 @@ def agent(obs):
     animal=animal_plan(obs,environment_signals)
     crops=crop_plan(obs,environment_signals)
     actions=unit_actions(obs,animal,crops)
-    result=dict(farmer=actions[0],hands=actions[1:],market=market_orders(obs,animal,crops,actions,environment_signals))
+    result=dict(farmer=actions[0],hands=actions[1:],market=market_orders(obs,animal,crops,actions))
     STEP+=1
     return result
