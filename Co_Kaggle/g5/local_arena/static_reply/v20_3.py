@@ -331,12 +331,12 @@ def production_signals(obs):
 # =============================================================================
 # PRODUCTION PLANNERS
 # =============================================================================
-def animal_plan(obs):
-    """Map already-owned animals onto the fixed animal route slots.
+def animal_plan(obs,signals):
+    """Place owned animals whose producers appear in the top five ranked signals.
 
     Keep animals already placed on route tiles, then assign animals from the shed and
-    worker inventories to the nearest unlocked unused route slots. This planner does not
-    forecast profitability or plan additional animal purchases.
+    worker inventories in signal order to the nearest empty route slots (or matching
+    empty animal structures). Other owned animals wait; no purchases are planned here.
     """
     f=obs['farms'][obs['player']]
     plan={}
@@ -351,11 +351,23 @@ def animal_plan(obs):
     # Prefer route slots nearest to the shed.
     slots=sorted(ANIMAL_POINTS,key=lambda p:(dist(p,nearest_shed(p)),p))
 
+    # Only animal producers in the top five signals qualify for new placement.
+    ranked_animals=list(dict.fromkeys(
+        entry['producer'] for entry in signals[:5]
+        if entry.get('producer') in ANIMALS
+    ))
     # Assign animals already owned but not placed: shed + worker inventories.
     stock=totals(obs['private'])
-    for a in ANIMALS:
+    for a in ranked_animals:
         for _ in range(stock.get(a,0)):
-            p=next((p for p in slots if p not in plan and tile(f,p)!='LOCKED'),None)
+            if len(plan)>=HERD_LIMIT:return plan
+            kind='COOP' if a=='GOOSE' else 'PASTURE'
+            p=next((p for p in slots if p not in plan and (
+                tile(f,p) is None or (
+                    isinstance(tile(f,p),dict) and tile(f,p).get('kind')==kind
+                    and not tile(f,p).get('animal') and 'crop' not in tile(f,p)
+                )
+            )),None)
             if p is None:
                 break
             plan[p]=a
@@ -1199,7 +1211,7 @@ def agent(obs):
         other=obs['farms'][1-obs['player']]
         OPP_STYLE='TRADER_SEEDER' if other['money']<1000 else 'TRADER_CHURN'
     environment_signals=production_signals(obs)
-    animal=animal_plan(obs)
+    animal=animal_plan(obs,environment_signals)
     crops=crop_plan(obs,environment_signals)
     actions=unit_actions(obs,animal,crops)
     result=dict(farmer=actions[0],hands=actions[1:],market=market_orders(obs,animal,crops,actions))
