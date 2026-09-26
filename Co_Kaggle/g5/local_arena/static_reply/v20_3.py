@@ -37,6 +37,10 @@ ANIMAL_POINTS={p for route in ROUTES for p in route}
 # The shed occupies the central 2x2 tiles. These coordinates are the transfer interface
 # used for PICKUP/DROP/PLACE decisions and as routing targets via nearest_shed().
 SHED=((4,4),(5,4),(4,5),(5,5))
+# The official environment defaults the non-seed shed capacity to 100.
+SHED_CAPACITY=100
+# Preserve v20_3's sell priority while making the sellable product universe explicit.
+SELLABLE_PRODUCTS=('MILK','WOOL','STRAWBERRY','MELON','EGG','TOMATO','CARROT','FERTILIZER','WHEAT')
 PASS=['PASS']
 # Maximum number of animals the planner should place on route tiles.
 HERD_LIMIT=17 # empirical evident from the number of herds of winners in v20 loss cases 
@@ -113,6 +117,56 @@ def totals(private):
     for inv in private['inventories']:
         for c,n in inv.items():result[c]=result.get(c,0)+n
     return result
+
+def post_action_shed(obs,actions):
+    """Predict the shed seen by the market after this turn's worker actions.
+
+    The environment applies the farmer first and then hands in list order before market
+    orders. Mirror only operations that can mutate shed contents: PICKUP removes items;
+    DROP deposits inventory up to shed capacity; PLACE deposits the requested amount when
+    used at a shed-access tile. Seeds never live in the shed.
+    """
+    f=obs['farms'][obs['player']];p=obs['private']
+    positions=[f['farmer']]+f['hands'];invs=p['inventories'];held=dict(p['shed'])
+    for i,a in enumerate(actions):
+        if i>=len(positions) or i>=len(invs) or not isinstance(a,list) or not a:continue
+        pos=tuple(positions[i]);inv=invs[i];op=a[0]
+
+        if op=='PICKUP':
+            if pos not in SHED or len(a)<2:continue
+            try:n=int(a[2]) if len(a)>=3 else 1
+            except (TypeError,ValueError):continue
+            if n<=0:continue
+            item=a[1];take=min(n,held.get(item,0))
+            if take>0:held[item]-=take
+            continue
+
+        if op=='DROP':
+            if pos not in SHED:continue
+            # Match the engine's per-item capacity accounting. Overflow is not sellable.
+            for item,n in inv.items():
+                if n<=0:continue
+                room=max(0,SHED_CAPACITY-sum(held.values()))
+                take=min(n,room)
+                if take>0:held[item]=held.get(item,0)+take
+            continue
+
+        if op=='PLACE':
+            if pos not in SHED or len(a)<2:continue
+            item=a[1]
+            # Animal PLACE on a matching structure is farm placement, not a shed deposit.
+            structure='COOP' if item=='GOOSE' else 'PASTURE'
+            t=tile(f,pos)
+            if item in ANIMALS and isinstance(t,dict) and t.get('kind')==structure and 'animal' not in t:
+                continue
+            try:n=int(a[2]) if len(a)>=3 else 1
+            except (TypeError,ValueError):continue
+            if n<=0:continue
+            n=min(n,inv.get(item,0))
+            room=max(0,SHED_CAPACITY-sum(held.values()))
+            n=min(n,room)
+            if n>0:held[item]=held.get(item,0)+n
+    return held
 
 
 # =============================================================================
@@ -1137,16 +1191,11 @@ def market_orders(obs,animal,crops,actions):
     # order capacity; earlier SELL/HIRE orders can consume slots needed by later purchases,
     # and the final `orders[:10]` enforces the engine limit defensively.
     f=obs['farms'][obs['player']];p=obs['private'];day=obs['day'];hour=obs['hour'];prices=obs['market']['prices']
-    cash=f['money'];orders=[];held=dict(p['shed']);total=totals(p)
-    for i,a in enumerate(actions):
-        if a[0]=='DROP':
-            for c,n in p['inventories'][i].items():held[c]=held.get(c,0)+n
-        elif a[0]=='PLACE' and a[1] not in ANIMALS and tuple(([f['farmer']]+f['hands'])[i]) in SHED:
-            c=a[1];held[c]=held.get(c,0)+min(a[2],p['inventories'][i].get(c,0))
+    cash=f['money'];orders=[];held=post_action_shed(obs,actions);total=totals(p)
     live=sum(1 for row in f['tiles'] for t in row if isinstance(t,dict) and 'animal' in t)
     reserve_wheat=0 if day==29 else max(4,live+2)
     reserve_fert=0 if day<10 or day==29 else 4
-    for c in ('MILK','WOOL','STRAWBERRY','MELON','EGG','TOMATO','CARROT','FERTILIZER','WHEAT'):
+    for c in SELLABLE_PRODUCTS:
         n=held.get(c,0)
         if c=='WHEAT':n=min(n,max(0,total.get(c,0)-reserve_wheat))
         if c=='FERTILIZER':n=min(n,max(0,total.get(c,0)-reserve_fert))
