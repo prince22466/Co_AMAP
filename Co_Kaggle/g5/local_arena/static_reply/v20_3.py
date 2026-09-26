@@ -36,16 +36,6 @@ ANIMAL_POINTS={p for route in ROUTES for p in route}
 # used for PICKUP/DROP/PLACE decisions and as routing targets via nearest_shed().
 SHED=((4,4),(5,4),(4,5),(5,5))
 PASS=['PASS']
-# Maximum size of the desired animal plan. animal_plan() stops adding new animals once
-# existing/planned animals fill 13 route slots.
-HERD_LIMIT=13
-FERT_FACTOR=0.8
-# Heuristic daily labor/maintenance penalty used only when animal_plan() estimates
-# the economics of adding an animal. It is not a fee charged by the game engine.
-LABOR_COST=20
-# Minimum projected net score required for animal_plan() to expand the herd. If the
-# best candidate animal is below 200, planning stops adding animals.
-HERD_THRESHOLD=200
 OPP_STYLE=None
 # Legacy opponent-style tuning tuple. In this v20 file it is never read, so its values
 # have no runtime effect and the tuple-component semantics cannot be recovered from v20.
@@ -337,42 +327,35 @@ def production_signals(obs):
 # =============================================================================
 # PRODUCTION PLANNERS
 # =============================================================================
-def animal_plan(obs,projected):
-    # Produce a desired {tile: animal_type} layout on the fixed animal ROUTES.
-    # Logic: keep already-placed route animals, allocate owned-but-unplaced animals to free
-    # route slots, then on days 3..17 consider additional animals. Each species is scored
-    # by projected product revenue + fertilizer value - wheat feed - LABOR_COST - purchase
-    # cost. Expansion is capped by HERD_LIMIT and stops below HERD_THRESHOLD. A local copy
-    # of projected inventory is updated after each choice to model its future supply impact.
-    f=obs['farms'][obs['player']];day=obs['day'];plan={}
+def animal_plan(obs):
+    """Map already-owned animals onto the fixed animal route slots.
+
+    Keep animals already placed on route tiles, then assign animals from the shed and
+    worker inventories to the nearest unlocked unused route slots. This planner does not
+    forecast profitability or plan additional animal purchases.
+    """
+    f=obs['farms'][obs['player']]
+    plan={}
+
+    # Keep animals already placed on route tiles.
     for row in ROUTES:
         for p in row:
             t=tile(f,p)
-            if isinstance(t,dict) and t.get('animal'):plan[p]=t['animal']
+            if isinstance(t,dict) and t.get('animal'):
+                plan[p]=t['animal']
+
+    # Prefer route slots nearest to the shed.
     slots=sorted(ANIMAL_POINTS,key=lambda p:(dist(p,nearest_shed(p)),p))
+
+    # Assign animals already owned but not placed: shed + worker inventories.
     stock=totals(obs['private'])
     for a in ANIMALS:
         for _ in range(stock.get(a,0)):
             p=next((p for p in slots if p not in plan and tile(f,p)!='LOCKED'),None)
-            if p is not None:plan[p]=a
-    if day<3 or day>17:return plan
-    projected={c:list(v) for c,v in projected.items()}
-    for p in slots:
-        if p in plan or tile(f,p)=='LOCKED':continue
-        if len(plan)>=HERD_LIMIT:break
-        scores=[]
-        start=day+1
-        for a,(cost,product,first,interval,units) in ANIMALS.items():
-            events=list(range(start+first,30,interval))
-            income=sum(units*price(product,projected[product][d]+units/2) for d in events)
-            income+=sum(FERT_FACTOR*price('FERTILIZER',projected['FERTILIZER'][d])-price('WHEAT',projected['WHEAT'][d])-LABOR_COST for d in range(start,29))
-            scores.append((income-cost,a,events,product,units))
-        score,a,events,product,units=max(scores)
-        if score<HERD_THRESHOLD:break
-        plan[p]=a
-        for d in events:
-            for at in range(d,31):projected[product][at]+=units
-        for at in range(start,31):projected['FERTILIZER'][at]+=(at-start)*FERT_FACTOR
+            if p is None:
+                break
+            plan[p]=a
+
     return plan
 
 
@@ -1212,7 +1195,7 @@ def agent(obs):
         other=obs['farms'][1-obs['player']]
         OPP_STYLE='TRADER_SEEDER' if other['money']<1000 else 'TRADER_CHURN'
     environment_signals=production_signals(obs)
-    animal=animal_plan(obs,environment_signals)
+    animal=animal_plan(obs)
     crops=crop_plan(obs,environment_signals)
     actions=unit_actions(obs,animal,crops)
     result=dict(farmer=actions[0],hands=actions[1:],market=market_orders(obs,animal,crops,actions))
