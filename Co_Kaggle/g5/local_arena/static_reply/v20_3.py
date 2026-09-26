@@ -949,40 +949,31 @@ def unit_actions(obs,animal,crops):
         p=min(targets,key=lambda p:dist(pos,p));a=missing[p]
         reserved.add(p);shed[a]-=1;actions[i]=['PICKUP',a,1];free.remove(i)
     tasks=[];available=dict(private['seeds']);unfed=0;fert_needed=0
-
-    # Planting tasks come only from crop_plan(): every entry is an empty tile paired with
-    # a seed that is already owned. crop_plan() is not responsible for existing crops.
     for p,c in crops.items():
-        if tile(f,p) is None and hour<24 and available.get(c,0)>0:
-            tasks.append((p,['PLANT',c],100 if day==0 else 120,None));available[c]-=1
-
-    # Existing-crop operations come directly from current farm state, independently of
-    # crop_plan(). Scan every tile so planted crops continue to be maintained even when
-    # crop_plan() returns {} because there are no seeds or no empty crop slots.
-    for y,row in enumerate(f['tiles']):
-        for x,t in enumerate(row):
-            p=(x,y)
-            if p in ANIMAL_POINTS or not isinstance(t,dict):continue
-            if t.get('kind')=='WEED':
-                tasks.append((p,['DIG'],35,None));continue
-            if 'crop' not in t:continue
-
-            c=t['crop'];age=day-t['planted_day'];held=t['yield_units'];ongoing=c in ('STRAWBERRY','TOMATO')
-            harvest=held>0 and ((ongoing and (held>=2 or day>=28)) or (not ongoing and age>=(2 if c=='WHEAT' and day<10 else CROPS[c][3])))
-            if harvest and (ongoing or t['watered_today'] or age>CROPS[c][3]):
-                deadline_weight=V16_FINAL_BONUS if OPP_STYLE=='V16' else 40
-                deadline_bonus=deadline_weight*dist(p,nearest_shed(p)) if day==29 else 0
-                tasks.append((p,['HARVEST'],120+min(200,held*prices[c]/8)+deadline_bonus,None));continue
-            if ongoing and age>=(2 if c=='WHEAT' and day<10 else CROPS[c][3]) and not held:
-                tasks.append((p,['DIG'],40,None));continue
-            if not t['watered_today'] and (t['consecutive_unwatered'] or (ongoing and any(age+1==a for a,n in CROPS[c][2])) or (not ongoing and age>=2)):
-                weight=50 if not t['consecutive_unwatered'] else 100
-                if hour>=16:weight*=3
-                if harvest:weight=250
-                tasks.append((p,['WATER'],weight,None))
-            benefit=fert_value(t,day,prices)
-            if benefit>10:
-                fert_needed+=1;tasks.append((p,['FERTILIZE'],90+min(100,benefit/5),'FERTILIZER'))
+        t=tile(f,p)
+        if t is None:
+            if hour<24 and available.get(c,0)>0:
+                tasks.append((p,['PLANT',c],100 if day==0 else 120,None));available[c]-=1
+            continue
+        if not isinstance(t,dict):continue
+        if t.get('kind')=='WEED':tasks.append((p,['DIG'],35,None));continue
+        if 'crop' not in t:continue
+        c=t['crop'];age=day-t['planted_day'];held=t['yield_units'];ongoing=c in ('STRAWBERRY','TOMATO')
+        harvest=held>0 and ((ongoing and (held>=2 or day>=28)) or (not ongoing and age>=(2 if c=='WHEAT' and day<10 else CROPS[c][3])))
+        if harvest and (ongoing or t['watered_today'] or age>CROPS[c][3]):
+            deadline_weight=V16_FINAL_BONUS if OPP_STYLE=='V16' else 40
+            deadline_bonus=deadline_weight*dist(p,nearest_shed(p)) if day==29 else 0
+            tasks.append((p,['HARVEST'],120+min(200,held*prices[c]/8)+deadline_bonus,None));continue
+        if ongoing and age>=(2 if c=='WHEAT' and day<10 else CROPS[c][3]) and not held:
+            tasks.append((p,['DIG'],40,None));continue
+        if not t['watered_today'] and (t['consecutive_unwatered'] or (ongoing and any(age+1==a for a,n in CROPS[c][2])) or (not ongoing and age>=2)):
+            weight=50 if not t['consecutive_unwatered'] else 100
+            if hour>=16:weight*=3
+            if harvest:weight=250
+            tasks.append((p,['WATER'],weight,None))
+        benefit=fert_value(t,day,prices)
+        if benefit>10:
+            fert_needed+=1;tasks.append((p,['FERTILIZE'],90+min(100,benefit/5),'FERTILIZER'))
     for y,row in enumerate(f['tiles']):
         for x,t in enumerate(row):
             if not isinstance(t,dict) or 'animal' not in t:continue
