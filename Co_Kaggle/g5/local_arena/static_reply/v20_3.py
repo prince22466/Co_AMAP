@@ -1229,9 +1229,13 @@ def market_orders(obs,animal,crops,actions):
     if day<29 and total.get('WHEAT',0)<wheat_need:
         n=min(wheat_need-total.get('WHEAT',0),int(max(0,cash-10)//(prices['WHEAT']+3)))
         if n>0 and len(orders)<10:orders.append(['BUY_PRODUCT','WHEAT',n]);cash-=n*(prices['WHEAT']+3)
-    lands=len(f['unlocked_quadrants']);landcost=1000 if lands==1 else 2000
-    if lands<3 and 3<=day<=15 and hour<18 and cash>landcost+500 and len(orders)<10:
-        orders.append(['BUY_LAND']);cash-=landcost
+    lands=len(f['unlocked_quadrants'])
+    empty_tiles=sum(1 for row in f['tiles'] for t in row if t is None)
+    land_policy={1:(3,1000),2:(5,2000),3:(5,4000)}
+    if lands in land_policy:
+        empty_threshold,landcost=land_policy[lands]
+        if empty_tiles<empty_threshold and cash>=landcost and len(orders)<10:
+            orders.append(['BUY_LAND']);cash-=landcost
     desired={a:0 for a in ANIMALS}
     for pos,a in animal.items():desired[a]+=1
     counts={a:total.get(a,0) for a in ANIMALS}
