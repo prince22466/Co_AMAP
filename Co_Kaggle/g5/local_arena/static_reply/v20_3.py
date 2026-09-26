@@ -1179,9 +1179,9 @@ def start_plan(obs,cash=None,slots=10):
     return tail[:slots]
 
 def market_orders(obs,animal,crops,actions):
-    # Build the rule-based market order list (maximum 10 orders). First account for goods
-    # that current worker DROP/PLACE actions will move into the shed, then emit SELL orders
-    # for available products while reserving wheat for the herd and fertilizer for crops.
+    # Build the rule-based market order list (maximum 10 orders). First simulate the shed
+    # after current worker PICKUP/DROP/PLACE actions, then emit SELL orders for available
+    # products while reserving wheat for the herd and fertilizer for crops.
     # Day 0/hour 0 is a fixed 10-order opening. Otherwise, remaining slots are considered in
     # this order: HIRE (early hours, target hand count, Fibonacci hire cost), BUY_PRODUCT
     # WHEAT, BUY_LAND, BUY_ANIMAL toward animal_plan(), then BUY_PRODUCT FERTILIZER when
