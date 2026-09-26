@@ -330,13 +330,12 @@ def production_signals(obs):
 # PRODUCTION PLANNERS
 # =============================================================================
 def animal_plan(obs,signals):
-    """Plan already-owned animals onto the fixed animal route slots.
+    """Place already-owned animals when their producer appears in the top 5 signals.
 
-    Existing animals already placed on route tiles stay where they are. Animals in the
-    shed or carried by workers are candidates for the remaining unlocked route slots.
-    If every owned animal fits, place them all. If owned animals exceed available capacity,
-    use production_signals() ranking to choose which species receive the limited slots.
-    This planner does not request or score additional animal purchases.
+    Existing animals already placed on route tiles stay in the plan. For new placements,
+    inspect only the already-ranked top five production signals. Keep animal producers
+    (COW/SHEEP/GOOSE) in that signal order, then place all owned unplaced animals of those
+    species from the shed and worker inventories onto available animal-route slots.
     """
     f=obs['farms'][obs['player']]
     plan={}
@@ -351,7 +350,20 @@ def animal_plan(obs,signals):
                 plan[p]=t['animal']
 
     # -------------------------------------------------------------------------
-    # Stage 2: find route slots available for already-owned, unplaced animals.
+    # Stage 2: extract animal species from only the top 5 ranked signals.
+    # -------------------------------------------------------------------------
+    ranked_animals=[]
+    for entry in signals[:5]:
+        animal=entry.get('producer')
+        if animal in ANIMALS and animal not in ranked_animals:
+            ranked_animals.append(animal)
+
+    # No animal demand in the top five: do not place any additional animals.
+    if not ranked_animals:
+        return plan
+
+    # -------------------------------------------------------------------------
+    # Stage 3: find available animal-route slots, nearest shed first.
     # -------------------------------------------------------------------------
     slots=[
         p for p in ANIMAL_POINTS
@@ -362,41 +374,19 @@ def animal_plan(obs,signals):
     if capacity<=0:
         return plan
 
+    # -------------------------------------------------------------------------
+    # Stage 4: place owned animals of the ranked species.
+    # totals() = shed + farmer/hand inventories, so only already-owned animals are used.
+    # -------------------------------------------------------------------------
     stock=totals(obs['private'])
-    owned={animal:int(stock.get(animal,0)) for animal in ANIMALS}
-    total_owned=sum(owned.values())
-
-    # -------------------------------------------------------------------------
-    # Stage 3: choose which owned animals receive the available slots.
-    # -------------------------------------------------------------------------
     selected=[]
+    for animal in ranked_animals:
+        count=int(stock.get(animal,0))
+        take=min(count,capacity-len(selected))
+        selected.extend([animal]*take)
+        if len(selected)>=capacity:
+            break
 
-    if total_owned<=capacity:
-        # Enough slots for every owned animal; signal ranking cannot exclude anything.
-        # ANIMALS insertion order keeps placement deterministic.
-        for animal in ANIMALS:
-            selected.extend([animal]*owned[animal])
-    else:
-        # Scarce animal space: production_signals() is already sorted by need.
-        # Animal-product signals expose their producer as COW/SHEEP/GOOSE.
-        signal_rank={
-            entry['producer']:rank
-            for rank,entry in enumerate(signals)
-            if entry.get('producer') in ANIMALS
-        }
-        ranked_animals=sorted(
-            (animal for animal,count in owned.items() if count>0),
-            key=lambda animal:(signal_rank.get(animal,len(signal_rank)),animal),
-        )
-        for animal in ranked_animals:
-            take=min(owned[animal],capacity-len(selected))
-            selected.extend([animal]*take)
-            if len(selected)>=capacity:
-                break
-
-    # -------------------------------------------------------------------------
-    # Stage 4: pair selected animals with route slots nearest to the shed.
-    # -------------------------------------------------------------------------
     for pos,animal in zip(slots,selected):
         plan[pos]=animal
 
