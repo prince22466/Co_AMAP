@@ -965,8 +965,8 @@ def unit_actions(obs,animal,crops):
     # crop_plan() returns {} because there are no seeds or no empty crop slots.
     for y,row in enumerate(f['tiles']):
         for x,t in enumerate(row):
-            if not isinstance(t,dict):continue
             p=(x,y)
+            if p in ANIMAL_POINTS or not isinstance(t,dict):continue
             if t.get('kind')=='WEED':
                 tasks.append((p,['DIG'],35,None));continue
             if 'crop' not in t:continue
@@ -1063,6 +1063,44 @@ def unit_actions(obs,animal,crops):
     return [a or PASS for a in actions]
 
 
+def start_plan(obs,cash=None,slots=10):
+    """Return the fixed day-0 market opening commands.
+
+    Hour 0 uses the packed 10-command opening. Later day-0 turns only complete any
+    missing seeds from OPENING_SEEDS, counting both seeds still owned and crops already
+    planted so consumed seeds are not purchased twice.
+    """
+    f=obs['farms'][obs['player']];p=obs['private'];day=obs['day'];hour=obs['hour']
+    if day!=0 or slots<=0:return []
+
+    if hour==0:
+        opening=[
+            ['HIRE'],['HIRE'],['HIRE'],['HIRE'],['HIRE'],['HIRE'],
+            ['BUY_SEED','WHEAT',13],
+            ['BUY_ANIMAL','COW',2],
+            ['BUY_ANIMAL','SHEEP',2],
+            ['BUY_SEED','STRAWBERRY',3],
+        ]
+        return opening[:slots]
+
+    if cash is None:cash=f['money']
+    orders=[]
+    planted={c:0 for c in OPENING_SEEDS}
+    for row in f['tiles']:
+        for t in row:
+            if isinstance(t,dict) and t.get('crop') in planted:planted[t['crop']]+=1
+
+    for c,target in OPENING_SEEDS.items():
+        have=p['seeds'].get(c,0)+planted[c]
+        missing=max(0,target-have)
+        if missing<=0:continue
+        affordable=int(max(0,cash-20)//CROPS[c][0])
+        n=min(missing,affordable)
+        if n<=0 or len(orders)>=slots:continue
+        orders.append(['BUY_SEED',c,n]);cash-=n*CROPS[c][0]
+    return orders
+
+
 def market_orders(obs,animal,crops,actions,signals):
     # Build the rule-based market order list (maximum 10 orders). First account for goods
     # that current worker DROP/PLACE actions will move into the shed, then emit SELL orders
@@ -1091,32 +1129,15 @@ def market_orders(obs,animal,crops,actions,signals):
         if n:
             orders.append(['SELL',c,n]);cash+=n*max(1,prices[c]*.8)
     if day==0 and hour==0:
-        # Each inner list below is one market command executed on this turn:
-        #   ['HIRE']                    -> hire one farm hand for the day;
-        #   ['BUY_SEED', crop, n]       -> buy n seeds of that crop;
-        #   ['BUY_ANIMAL', animal, n]   -> buy n animals for later placement.
-        # The engine accepts at most 10 market commands per player per turn. Six HIRE
-        # commands + two animal purchases therefore leave two seed-purchase commands.
-        # Buy the slow STRAWBERRY hedge immediately with WHEAT; the normal seed-purchase
-        # path picks up the planned 2 CARROT + 1 MELON on the following turn.
-        return [['HIRE'], ['HIRE'], ['HIRE'], ['HIRE'], ['HIRE'], ['HIRE'], ['BUY_SEED', 'WHEAT', 13], ['BUY_ANIMAL', 'COW', 2], ['BUY_ANIMAL', 'SHEEP', 2], ['BUY_SEED', 'STRAWBERRY', 3]]
+        return start_plan(obs,cash,10)
 
-    # Complete the fixed opening mix on later day-0 turns. Count both seeds still waiting
-    # in private['seeds'] and crops already planted so we never rebuy a seed just because a
-    # worker consumed it. This normally buys the deferred 2 CARROT + 1 MELON after hour 0.
-    if day==0:
-        planted={c:0 for c in OPENING_SEEDS}
-        for row in f['tiles']:
-            for t in row:
-                if isinstance(t,dict) and t.get('crop') in planted:planted[t['crop']]+=1
-        for c,target in OPENING_SEEDS.items():
-            have=p['seeds'].get(c,0)+planted[c]
-            missing=max(0,target-have)
-            if missing<=0:continue
-            affordable=int(max(0,cash-20)//CROPS[c][0])
-            n=min(missing,affordable)
-            if n<=0 or len(orders)>=10:continue
-            orders.append(['BUY_SEED',c,n]);cash-=n*CROPS[c][0]
+    # start_plan() owns the fixed opening policy; market_orders() only appends the
+    # remaining day-0 opening purchases into whatever order capacity is still available.
+    if day==0 and len(orders)<10:
+        opening_orders=start_plan(obs,cash,10-len(orders))
+        for order in opening_orders:
+            orders.append(order)
+            if order[0]=='BUY_SEED':cash-=order[2]*CROPS[order[1]][0]
 
     desired_hands=7 if len(f['unlocked_quadrants'])==1 else 11 if len(f['unlocked_quadrants'])==2 else 11
     if day<3:desired_hands=6
