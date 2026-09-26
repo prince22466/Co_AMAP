@@ -1095,15 +1095,18 @@ def start_plan(obs,cash=None,slots=10):
         ]
         return opening[:slots]
 
-    # Count seed purchases already realized either as unplanted seeds or planted crops.
-    # This prevents a seed from being bought twice after crop_plan()/unit_actions consumes it.
-    planted={c:0 for c in START_SEED_BUYS}
+    # Complete the desired opening crop stock, not the raw purchase-count dictionary.
+    # Example: if the start state already contains 10 WHEAT, a 13-WHEAT crop target means
+    # exactly 3 more WHEAT seeds must be bought. Count planted crops as consumed seeds so
+    # those purchases are not repeated after crop_plan()/unit_actions uses them.
+    planted={c:0 for c in OPENING_CROP_TARGET}
     for row in f['tiles']:
         for t in row:
             if isinstance(t,dict) and t.get('crop') in planted:planted[t['crop']]+=1
 
-    # STRAWBERRY was bought at hour 0. Later turns complete the other seed targets.
-    for c,target in START_SEED_BUYS.items():
+    # STRAWBERRY was bought at hour 0. Later turns complete whatever is still missing from
+    # the 13 WHEAT / 3 STRAWBERRY / 2 CARROT / 1 MELON opening crop target.
+    for c,target in OPENING_CROP_TARGET.items():
         have=p['seeds'].get(c,0)+planted[c]
         missing=max(0,target-have)
         if missing<=0:continue
