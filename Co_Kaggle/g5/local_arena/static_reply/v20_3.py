@@ -15,6 +15,11 @@ CROPS={
  'TOMATO':(50,60,((8,2),(9,2),(10,2),(11,2)),11),
  'STRAWBERRY':(100,120,((10,2),(12,2),(14,2),(16,2)),16),
  'MELON':(80,250,((10,6),),10)}
+
+# Fixed first-quadrant seed target. crop_plan() does not enforce this geometry; it only
+# plants seeds already owned. market_orders() is responsible for acquiring this opening mix.
+OPENING_SEEDS={'WHEAT':13,'STRAWBERRY':3,'CARROT':2,'MELON':1}
+
 ANIMALS={'COW':(400,'MILK',8,2,3),'SHEEP':(500,'WOOL',6,3,4),'GOOSE':(300,'EGG',4,1,2)}
 
 # Per-shop demand on each town consumption tick.
@@ -1086,6 +1091,24 @@ def market_orders(obs,animal,crops,actions,signals):
         # Buy the slow STRAWBERRY hedge immediately with WHEAT; the normal seed-purchase
         # path picks up the planned 2 CARROT + 1 MELON on the following turn.
         return [['HIRE'], ['HIRE'], ['HIRE'], ['HIRE'], ['HIRE'], ['HIRE'], ['BUY_SEED', 'WHEAT', 13], ['BUY_ANIMAL', 'COW', 2], ['BUY_ANIMAL', 'SHEEP', 2], ['BUY_SEED', 'STRAWBERRY', 3]]
+
+    # Complete the fixed opening mix on later day-0 turns. Count both seeds still waiting
+    # in private['seeds'] and crops already planted so we never rebuy a seed just because a
+    # worker consumed it. This normally buys the deferred 2 CARROT + 1 MELON after hour 0.
+    if day==0:
+        planted={c:0 for c in OPENING_SEEDS}
+        for row in f['tiles']:
+            for t in row:
+                if isinstance(t,dict) and t.get('crop') in planted:planted[t['crop']]+=1
+        for c,target in OPENING_SEEDS.items():
+            have=p['seeds'].get(c,0)+planted[c]
+            missing=max(0,target-have)
+            if missing<=0:continue
+            affordable=int(max(0,cash-20)//CROPS[c][0])
+            n=min(missing,affordable)
+            if n<=0 or len(orders)>=10:continue
+            orders.append(['BUY_SEED',c,n]);cash-=n*CROPS[c][0]
+
     desired_hands=7 if len(f['unlocked_quadrants'])==1 else 11 if len(f['unlocked_quadrants'])==2 else 11
     if day<3:desired_hands=6
     elif day==29 and OPP_STYLE=='V16':desired_hands=min(desired_hands,V16_FINAL_HANDS)
@@ -1124,7 +1147,7 @@ def market_orders(obs,animal,crops,actions,signals):
         if tile(f,(x,y)) is None and (x,y) not in ANIMAL_POINTS
     )
     unfilled_slots=max(0,empty_crop_slots-sum(p['seeds'].get(c,0) for c in CROPS))
-    if hour<17 and unfilled_slots>0:
+    if day>0 and hour<17 and unfilled_slots>0:
         for signal in signals:
             c=signal.get('product')
             if c not in CROPS or not signal.get('actionable') or signal.get('gap',0)<=0:continue
