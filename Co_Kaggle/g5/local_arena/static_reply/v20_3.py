@@ -16,20 +16,6 @@ CROPS={
  'STRAWBERRY':(100,120,((10,2),(12,2),(14,2),(16,2)),16),
  'MELON':(80,250,((10,6),),10)}
 
-# Canonical day-0 opening command sequence. start_plan() preserves this exact order and
-# emits as many commands as the current turn's market-order budget allows.
-START_PLAN_COMMANDS=(
-    (['HIRE'],6),
-    (['BUY_SEED','WHEAT',13],1),
-    (['BUY_ANIMAL','COW',2],1),
-    (['BUY_SEED','CARROT',2],1),
-    (['BUY_SEED','STRAWBERRY',3],1),
-    (['BUY_SEED','MELON',1],1),
-    (['BUY_ANIMAL','SHEEP',1],1),
-    (['BUY_ANIMAL','GOOSE',1],1),
-)
-OPENING_CROP_TARGET={'WHEAT':13,'STRAWBERRY':3,'CARROT':2,'MELON':1}
-
 ANIMALS={'COW':(400,'MILK',8,2,3),'SHEEP':(500,'WOOL',6,3,4),'GOOSE':(300,'EGG',4,1,2)}
 
 # Per-shop demand on each town consumption tick.
