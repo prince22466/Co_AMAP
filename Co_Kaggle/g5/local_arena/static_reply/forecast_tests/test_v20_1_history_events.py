@@ -133,6 +133,53 @@ def find_clean_opponent_animal_events(history, seat, animal=None):
     return events
 
 
+
+def find_clean_opponent_crop_events(history, seat):
+    opponent = 1 - seat
+    events = []
+    for i in range(1, len(history["steps"])):
+        prev_obs = observation(history, i - 1, seat)
+        obs = observation(history, i, seat)
+        prev_tiles = prev_obs["farms"][opponent]["tiles"]
+        tiles = obs["farms"][opponent]["tiles"]
+        for y, row in enumerate(tiles):
+            for x, tile_state in enumerate(row):
+                if not isinstance(tile_state, dict) or "crop" not in tile_state:
+                    continue
+                previous = prev_tiles[y][x]
+                if public_asset(previous):
+                    continue
+                events.append((i, prev_obs, obs, x, y, previous, tile_state))
+    return events
+
+
+def find_opponent_ongoing_yield_events(history, seat):
+    opponent = 1 - seat
+    events = []
+    for i in range(1, len(history["steps"])):
+        prev_obs = observation(history, i - 1, seat)
+        obs = observation(history, i, seat)
+        prev_tiles = prev_obs["farms"][opponent]["tiles"]
+        tiles = obs["farms"][opponent]["tiles"]
+        for y, row in enumerate(tiles):
+            for x, tile_state in enumerate(row):
+                previous = prev_tiles[y][x]
+                if not isinstance(tile_state, dict) or not isinstance(previous, dict):
+                    continue
+                crop = tile_state.get("crop")
+                if crop not in ("TOMATO", "STRAWBERRY"):
+                    continue
+                if previous.get("crop") != crop:
+                    continue
+                if previous.get("planted_day") != tile_state.get("planted_day"):
+                    continue
+                before = previous.get("yield_units", 0)
+                after = tile_state.get("yield_units", 0)
+                if before == after:
+                    continue
+                events.append((i, prev_obs, obs, x, y, before, after, tile_state))
+    return events
+
 class ForecastOneHistoryEventTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -286,6 +333,143 @@ class ForecastOneHistoryEventTests(unittest.TestCase):
             print(f"    net_flow_delta[{product}]={milk_points[:10]}")
             print(f"    net_flow_delta[WHEAT]={wheat_points[:10]}")
             print(f"    projected_delta[{product}]={projected_milk[:8]}")
+
+
+    def test_new_opponent_crop_changes_only_that_crop_future_supply(self):
+        """A clean opponent crop placement adds exactly its modeled public future supply."""
+        agent = self.agent
+        events = find_clean_opponent_crop_events(self.history, self.seat)
+        self.assertGreater(len(events), 0, "history contains no clean opponent crop placement")
+
+        opponent = 1 - self.seat
+        print(f"\n[history={HISTORY_PATH.name}] opponent={opponent} clean crop events={len(events)}")
+
+        for i, prev_obs, obs, x, y, previous, crop_state in events:
+            step = absolute_turn(agent, obs)
+            counterfactual = copy.deepcopy(obs)
+            counterfactual["farms"][opponent]["tiles"][y][x] = copy.deepcopy(previous)
+
+            projected_actual, flow_actual = run_forecast(agent, obs)
+            projected_before, flow_before = run_forecast(agent, counterfactual)
+            delta_flow = subtract_series(flow_actual, flow_before)
+            delta_projected = subtract_series(projected_actual, projected_before)
+
+            expected = {
+                product: [0.0] * agent.SEASON_TURNS
+                for product in flow_actual
+            }
+
+            crop = crop_state["crop"]
+            planted = crop_state["planted_day"]
+            ongoing = crop in ("TOMATO", "STRAWBERRY")
+            held = crop_state.get("yield_units", 0)
+            p = (x, y)
+            opp_farm = obs["farms"][opponent]
+            positions = [tuple(opp_farm["farmer"])] + [
+                tuple(pos) for pos in opp_farm["hands"]
+            ]
+
+            if held:
+                approach = min(agent.dist(pos, p) for pos in positions) if positions else 0
+                at = step + approach + agent.dist(p, agent.nearest_shed(p)) + 1
+                if at < agent.SEASON_TURNS:
+                    expected[crop][at] += held
+
+            for age, scheduled_units in agent.CROPS[crop][2]:
+                at_day = planted + age
+                ready_turn = at_day * agent.TURNS_PER_DAY
+                if ready_turn <= step or at_day >= 30:
+                    continue
+                if ongoing:
+                    units = 2 if crop_state.get("fertilized_until_day", -1) >= at_day else 1
+                else:
+                    units = max(0, scheduled_units - held)
+                if not units:
+                    continue
+                at = ready_turn + agent.dist(p, agent.nearest_shed(p)) + 1
+                if at < agent.SEASON_TURNS:
+                    expected[crop][at] += units
+
+            for product_name in delta_flow:
+                for t, (actual_value, expected_value) in enumerate(
+                    zip(delta_flow[product_name], expected[product_name])
+                ):
+                    assert_close(
+                        self,
+                        actual_value,
+                        expected_value,
+                        f"OPP_CROP step={step} t={t} product={product_name}",
+                    )
+
+            flow_points = nonzero_points(delta_flow[crop])
+            projected_points = nonzero_points(delta_projected[crop])
+            print(
+                f"  OPP_CROP_APPEAR history_step={i} turn={step} "
+                f"day={obs['day']} hour={obs['hour']} tile=({x},{y}) "
+                f"crop={crop} planted_day={planted}"
+            )
+            print(f"    net_flow_delta[{crop}]={flow_points[:12]}")
+            print(f"    projected_delta[{crop}]={projected_points[:8]}")
+
+    def test_opponent_ongoing_yield_change_moves_visible_supply_only(self):
+        """TOMATO/STRAWBERRY yield changes affect only visible held-supply ETA."""
+        agent = self.agent
+        events = find_opponent_ongoing_yield_events(self.history, self.seat)
+        self.assertGreater(len(events), 0, "history contains no opponent ongoing-crop yield changes")
+
+        opponent = 1 - self.seat
+        print(
+            f"\n[history={HISTORY_PATH.name}] opponent={opponent} "
+            f"ongoing-yield events={len(events)}"
+        )
+
+        for i, prev_obs, obs, x, y, before, after, crop_state in events:
+            step = absolute_turn(agent, obs)
+            counterfactual = copy.deepcopy(obs)
+            counterfactual["farms"][opponent]["tiles"][y][x]["yield_units"] = before
+
+            projected_actual, flow_actual = run_forecast(agent, obs)
+            projected_before, flow_before = run_forecast(agent, counterfactual)
+            delta_flow = subtract_series(flow_actual, flow_before)
+            delta_projected = subtract_series(projected_actual, projected_before)
+
+            crop = crop_state["crop"]
+            p = (x, y)
+            opp_farm = obs["farms"][opponent]
+            positions = [tuple(opp_farm["farmer"])] + [
+                tuple(pos) for pos in opp_farm["hands"]
+            ]
+            approach = min(agent.dist(pos, p) for pos in positions) if positions else 0
+            arrival = step + approach + agent.dist(p, agent.nearest_shed(p)) + 1
+            delta_units = after - before
+
+            expected = {
+                product: [0.0] * agent.SEASON_TURNS
+                for product in flow_actual
+            }
+            if arrival < agent.SEASON_TURNS:
+                expected[crop][arrival] = float(delta_units)
+
+            for product_name in delta_flow:
+                for t, (actual_value, expected_value) in enumerate(
+                    zip(delta_flow[product_name], expected[product_name])
+                ):
+                    assert_close(
+                        self,
+                        actual_value,
+                        expected_value,
+                        f"OPP_YIELD step={step} t={t} product={product_name}",
+                    )
+
+            projected_points = nonzero_points(delta_projected[crop])
+            print(
+                f"  OPP_YIELD_CHANGE history_step={i} turn={step} "
+                f"day={obs['day']} hour={obs['hour']} tile=({x},{y}) "
+                f"crop={crop} yield={before}->{after} "
+                f"arrival={arrival} flow_delta={delta_units:+g}"
+            )
+            print(f"    projected_delta[{crop}]={projected_points[:8]}")
+
 
 
 if __name__ == "__main__":
