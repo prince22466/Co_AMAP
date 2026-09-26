@@ -312,7 +312,7 @@ class ForecastOneHistoryEventTests(unittest.TestCase):
                 f"history step {i} does not match observation day/hour",
             )
 
-    def test_shop_open_events_change_demand_exactly_until_next_unlock(self):
+    def test_shop_open_events_change_full_season_demand_exactly(self):
         """A newly opened shop must immediately add its known product demand."""
         agent = self.agent
         events = find_shop_events(self.history, self.seat)
