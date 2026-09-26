@@ -3,93 +3,134 @@
 This directory tests `v20_1.forecast()` as a black box. The production forecast
 function is not modified or instrumented.
 
-The first suite uses one real replay:
+## Replay fixtures
 
-`game_history/v20/111548564.json`
+The suite uses five real v20 histories:
 
-For every event, the harness evaluates two observations at the exact same game time:
+- `111548564.json`
+- `111549675.json`
+- `111551968.json`
+- `111553265.json`
+- `111587965.json`
+
+The fifth history was selected specifically to add real opponent TOMATO behavior; the
+first four plus the original history did not contain opponent TOMATO events.
+
+For every detected event, the harness evaluates two observations at the exact same game
+time:
 
 1. the real observation after the event;
-2. a counterfactual copy with only that event reverted.
+2. a counterfactual copy with only that event field removed/reverted.
 
-The difference between the two forecast outputs isolates the behavior caused by the
-event while holding market inventory, clock, worker positions, and every unrelated
-observation field constant.
+The output delta therefore isolates the forecast response to that event while market
+inventory, time, worker positions, and unrelated observation state remain fixed.
 
-The suite keeps an independent test specification for the season clock, shop demand,
-shed geometry, COW production, and crop schedules. Expected values do not call the
-agent's `dist()`, `nearest_shed()`, `SHOPS`, `ANIMALS`, or `CROPS` values when
-computing event deltas. This prevents a production bug from being copied into the
-expected result.
+## Independent specification
 
-Every forecast invocation also validates the output contract:
+Expected values do not reuse production forecast helpers for the quantities under test.
+The suite keeps independent definitions for:
 
+- 24 turns/day and the 720-turn season;
+- shop demand, shop cadence, unlock cadence, and the 8-shop cap;
+- shed geometry and Manhattan transport distance;
+- COW/SHEEP/GOOSE product, first-production day, interval, and well-cared output;
+- WHEAT/CARROT/TOMATO/STRAWBERRY/MELON production schedules.
+
+This avoids a tautological test where a bug in `forecast()` is copied into the expected
+answer.
+
+Every forecast invocation also verifies:
+
+- product-key sets match live market inventory;
 - `net_flow[product]` has exactly 720 turn entries;
 - `projected[product]` has exactly 31 absolute-day entries;
-- product-key sets match live market inventory;
+- each replay's `day/hour` clock matches history steps 0..719;
 - daily projected deltas equal cumulative turn-level `net_flow` deltas at day
-  boundaries;
-- the fixed replay's `day/hour` clock matches history step 0..719 exactly.
+  boundaries.
 
-## Current event tests
+## Event coverage
 
-### SHOP_OPEN
+### SHOP_OPEN — all shop types
 
-Detects newly unlocked shop instances from consecutive replay observations.
+Every real shop opening in all five histories is isolated.
 
-Until the next shop-unlock boundary, the suite requires:
+The suite checks the exact full-season demand delta:
 
-- each added shop product to reduce `net_flow` by its exact demand quantity;
-- the change to occur only on the 4-turn shop-consumption ticks;
-- unrelated products and non-shop ticks to have zero delta.
+- newly known shop demand appears on each 4-turn shop tick;
+- unrelated products and non-shop turns remain unchanged;
+- after future unlock boundaries, the reduction in unknown future-shop slots is also
+  included in the expected delta.
 
-The report also prints the resulting daily `projected` inventory deltas.
+Latest run: **40 shop events**, covering all eight shop types.
 
-### OPP_COW_APPEAR
+### OPP_ANIMAL_APPEAR — all animal types
 
-Detects clean opponent COW placements where the previous tile had no crop or animal.
+Clean opponent placements are detected where the previous tile had no crop or animal.
 
-The suite requires:
+For COW, SHEEP, and GOOSE the suite checks:
 
-- +3 MILK on every modeled future well-cared cow production event, shifted by the
-  current forecast's efficient shed-delivery ETA;
-- -1 WHEAT on every future daily herd-demand tick;
-- zero `net_flow` delta for unrelated products/turns.
+- visible held yield at its estimated harvest/transport arrival turn;
+- all future well-cared production events;
+- exactly one additional WHEAT demand unit on each future daily herd tick;
+- zero flow delta for unrelated products/turns.
 
-The report prints the MILK supply turns, WHEAT demand turns, and daily projected MILK
-inventory delta.
+Latest run: **85 placements**:
+`COW=38, SHEEP=30, GOOSE=17`.
 
+### OPP_ANIMAL_YIELD_CHANGE — all animal types
 
-### OPP_CROP_APPEAR
+For an existing animal with unchanged identity/placed day, every `yield_units` change
+is isolated.
 
-Detects clean opponent crop placements where the previous tile had no crop or animal.
+The suite requires the exact yield delta to move at the current visible-yield arrival
+ETA while recurring future animal production remains unchanged.
 
-The suite requires:
+Latest run: **1,415 yield events**:
+`COW=688, SHEEP=382, GOOSE=345`.
 
-- visible `yield_units`, if already present in the observation, to enter supply at the
-  current harvest/transport ETA;
-- remaining production of the currently visible crop to enter only at its scheduled
-  production day plus efficient shed-delivery ETA;
-- one-time crops to subtract already-visible held yield from their later scheduled total;
-- ongoing TOMATO/STRAWBERRY production to use the forecast's current 1/2-unit
-  well-cared/fertilization rule;
-- zero `net_flow` delta for unrelated products/turns.
+### OPP_CROP_APPEAR — all crop types
 
-### OPP_YIELD_CHANGE
+Clean opponent crop placements are tested for WHEAT, CARROT, TOMATO, STRAWBERRY, and
+MELON.
 
-Detects TOMATO/STRAWBERRY `yield_units` changes while crop identity and planted day
-remain unchanged.
+The suite checks:
 
-The suite isolates only the held-yield field and requires:
+- visible held yield at harvest/transport ETA;
+- remaining production of the currently visible crop only;
+- one-time crops subtract currently held yield from the later scheduled total;
+- ongoing TOMATO/STRAWBERRY use the current 1/2-unit fertilization rule;
+- no replacement crop is invented;
+- unrelated product/turn flow remains zero.
 
-- a yield increase to add exactly that many units at the current visible-yield arrival ETA;
-- a harvest/disappearance to remove exactly that many forecast units from that ETA;
-- future recurring crop production to remain unchanged;
-- zero delta for unrelated products/turns.
+Latest run: **1,190 placements**:
+`WHEAT=783, CARROT=176, TOMATO=10, STRAWBERRY=164, MELON=57`.
 
-In the reviewed replay run, all four event suites plus the fixture/contract test passed:
-shop opens, clean COW placements, clean crop placements, ongoing-crop yield changes,
-and clock/output/projection invariants.
+### OPP_CROP_YIELD_CHANGE — all crop types
+
+For an unchanged crop identity/planted day, every `yield_units` transition is isolated.
+
+The suite checks:
+
+- visible-yield increase/disappearance at its estimated arrival ETA;
+- ongoing crop future production remains unchanged;
+- for one-time crops, the future scheduled remainder changes inversely with already
+  visible held yield.
+
+Latest run: **3,687 yield events**:
+`WHEAT=1727, CARROT=302, TOMATO=80, STRAWBERRY=1293, MELON=285`.
+
+## Latest validation
+
+The locked five-history suite passed:
+
+```text
+Ran 6 tests in 91.220s
+OK
+```
+
+This validates the behavior of the current forecast model. It does not prove that model
+assumptions such as the 80% opponent hidden-shed prior are empirically optimal; those
+belong in a separate forecast-accuracy/backtesting layer.
 
 ## Run
 
@@ -99,12 +140,5 @@ From `Co_Kaggle/g5`:
 python local_arena/static_reply/forecast_tests/test_v20_1_history_events.py -v
 ```
 
-The next event families should use the same same-time-counterfactual pattern:
-
-- opponent/own crop placement;
-- visible yield increase and harvest disappearance;
-- own shed and carried-inventory changes;
-- opponent worker movement when visible yield exists;
-- fertilization-state changes;
-- new sheep/goose placement;
-- day, center-consumption, and future-shop boundaries.
+CI runs on relevant pull requests, relevant pushes to `main`, and manual dispatch, with
+sparse checkout limited to `v20_1.py`, the tests, and the five replay fixtures.
