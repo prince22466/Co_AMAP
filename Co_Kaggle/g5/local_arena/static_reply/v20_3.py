@@ -157,7 +157,7 @@ def post_action_shed(obs,actions):
             # Animal PLACE on a matching structure is farm placement, not a shed deposit.
             structure='COOP' if item=='GOOSE' else 'PASTURE'
             t=tile(f,pos)
-            if item in ANIMALS and isinstance(t,dict) and t.get('kind')==structure and 'animal' not in t:
+            if item in ANIMALS and isinstance(t,dict) and t.get('kind')==structure and not t.get('animal'):
                 continue
             try:n=int(a[2]) if len(a)>=3 else 1
             except (TypeError,ValueError):continue
