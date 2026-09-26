@@ -129,18 +129,37 @@ PRODUCT_PRODUCER={
 }
 
 def _remaining_hard_demand(obs):
-    """Known Town + currently unlocked-shop demand from now through season end."""
-    step=obs['day']*TURNS_PER_DAY+obs['hour']
+    """Known remaining consumption: Town + open shops + observable animal WHEAT feed."""
+    step=obs['day']*TURNS_PER_DAY+obs['hour'];day=obs['day']
     town_ticks=sum(1 for t in range(step,SEASON_TURNS) if t%CENTER_INTERVAL==0)
     shop_ticks=sum(1 for t in range(step,SEASON_TURNS) if t%SHOP_INTERVAL==0)
     shop_per_tick={p:0. for p in PRODUCTION_PRODUCTS}
     for shop in obs['town']['unlocked_shops']:
         for product,units in SHOPS[shop].items():
             if product in shop_per_tick:shop_per_tick[product]+=units
-    return {
+    demand={
         p:float(town_ticks+shop_ticks*shop_per_tick[p])
         for p in PRODUCTION_PRODUCTS
     }
+
+    # Every visible animal consumes one WHEAT per day. If it has already been fed today,
+    # only future days remain; otherwise include today as well. This mirrors the signal
+    # service's use of both farms' visible animal production capacity.
+    future_days=max(0,29-day)
+    feed=0.
+    for farm in obs['farms']:
+        for row in farm['tiles']:
+            for tile_state in row:
+                if isinstance(tile_state,dict) and 'animal' in tile_state:
+                    feed+=future_days+(0 if tile_state.get('fed_today',False) else 1)
+
+    # Our unplaced animals are counted below as immediately deployable production
+    # capacity, so include their corresponding feed obligation here as well.
+    owned=totals(obs['private'])
+    placement_days=max(0,30-day)
+    feed+=placement_days*sum(owned.get(animal,0) for animal in ANIMALS)
+    demand['WHEAT']+=feed
+    return demand
 
 def _animal_remaining_capacity(animal,placed_day,day):
     """Future well-cared output of one existing/newly placed animal."""
