@@ -445,7 +445,9 @@ def crop_plan(obs,signals):
     for pos,crop in zip(empty,selected):
         plan[pos]=crop
 
+    # -------------------------------------------------------------------------
     # Stage 4: include occupied crop/weed tiles for unit_actions() to inspect.
+    # -------------------------------------------------------------------------
     points=[(x,y) for y,row in enumerate(f['tiles']) for x,t in enumerate(row)
             if t!='LOCKED' and (x,y) not in ANIMAL_POINTS]
     points.sort(key=lambda p:(dist(p,nearest_shed(p)),p[1],p[0]))
