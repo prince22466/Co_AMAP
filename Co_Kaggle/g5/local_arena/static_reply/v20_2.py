@@ -443,11 +443,13 @@ def animal_plan(obs,projected):
     return plan
 
 def crop_plan(obs,projected,animal):
-    # Produce a desired {tile: crop_type} layout for unlocked tiles outside ANIMAL_POINTS.
-    # Existing crops are preserved. Days 0..3 use a fixed 13-WHEAT/6-MELON opening; later
-    # candidates are scored from projected future sale value - seed/fertilizer cost,
-    # normalized by production duration and adjusted by crop-specific heuristic multipliers.
-    # Owned seeds receive a small bonus, and projected supply is updated after each choice.
+    # Produce a {tile: crop_type} plan only for currently empty, unlocked farmland outside
+    # ANIMAL_POINTS. Existing crops and weeds are not part of this planner: unit_actions()
+    # scans those tile states directly for maintenance/harvest/DIG work. Days 0..3 keep the
+    # fixed 13-WHEAT/6-MELON opening geometry; later empty slots are scored from projected
+    # future sale value - seed/fertilizer cost, normalized by production duration and
+    # adjusted by crop-specific heuristic multipliers. Owned seeds receive a small bonus,
+    # and projected supply is updated after each planned planting.
     # Note: the `animal` argument is currently unused; exclusion uses fixed ANIMAL_POINTS.
     f=obs['farms'][obs['player']];day=obs['day'];seeds=obs['private']['seeds'];plan={}
     points=[(x,y) for y in range(10) for x in range(10) if tile(f,(x,y))!='LOCKED' and (x,y) not in ANIMAL_POINTS]
@@ -457,9 +459,7 @@ def crop_plan(obs,projected,animal):
     opening.sort(key=lambda p:(p[1],p[0]))
     wheat=set(opening[:13]);melon=set(opening[13:19])
     for p in points:
-        t=tile(f,p)
-        if isinstance(t,dict) and 'crop' in t:plan[p]=t['crop'];continue
-        if isinstance(t,dict) and t.get('kind') not in ('WEED',):continue
+        if tile(f,p) is not None:continue
         if day<=3 and p in wheat|melon:
             c='WHEAT' if p in wheat else 'MELON'
         else:
@@ -990,31 +990,36 @@ def unit_actions(obs,animal,crops):
         p=min(targets,key=lambda p:dist(pos,p));a=missing[p]
         reserved.add(p);shed[a]-=1;actions[i]=['PICKUP',a,1];free.remove(i)
     tasks=[];available=dict(private['seeds']);unfed=0;fert_needed=0
+    # crop_plan() contains only empty slots that should receive a new seed.
     for p,c in crops.items():
-        t=tile(f,p)
-        if t is None:
-            if hour<24 and available.get(c,0)>0:
-                tasks.append((p,['PLANT',c],100 if day==0 else 120,None));available[c]-=1
-            continue
-        if not isinstance(t,dict):continue
-        if t.get('kind')=='WEED':tasks.append((p,['DIG'],35,None));continue
-        if 'crop' not in t:continue
-        c=t['crop'];age=day-t['planted_day'];held=t['yield_units'];ongoing=c in ('STRAWBERRY','TOMATO')
-        harvest=held>0 and ((ongoing and (held>=2 or day>=28)) or (not ongoing and age>=(2 if c=='WHEAT' and day<10 else CROPS[c][3])))
-        if harvest and (ongoing or t['watered_today'] or age>CROPS[c][3]):
-            deadline_weight=V16_FINAL_BONUS if OPP_STYLE=='V16' else 40
-            deadline_bonus=deadline_weight*dist(p,nearest_shed(p)) if day==29 else 0
-            tasks.append((p,['HARVEST'],120+min(200,held*prices[c]/8)+deadline_bonus,None));continue
-        if ongoing and age>=(2 if c=='WHEAT' and day<10 else CROPS[c][3]) and not held:
-            tasks.append((p,['DIG'],40,None));continue
-        if not t['watered_today'] and (t['consecutive_unwatered'] or (ongoing and any(age+1==a for a,n in CROPS[c][2])) or (not ongoing and age>=2)):
-            weight=50 if not t['consecutive_unwatered'] else 100
-            if hour>=16:weight*=3
-            if harvest:weight=250
-            tasks.append((p,['WATER'],weight,None))
-        benefit=fert_value(t,day,prices)
-        if benefit>10:
-            fert_needed+=1;tasks.append((p,['FERTILIZE'],90+min(100,benefit/5),'FERTILIZER'))
+        if tile(f,p) is None and hour<24 and available.get(c,0)>0:
+            tasks.append((p,['PLANT',c],100 if day==0 else 120,None));available[c]-=1
+
+    # Existing plants and weeds are operational state, not planting-plan entries. Scan the
+    # farm directly so watering/fertilizing/harvesting/DIG decisions are independent of
+    # crop_plan().
+    for y,row in enumerate(f['tiles']):
+        for x,t in enumerate(row):
+            p=(x,y)
+            if p in ANIMAL_POINTS or not isinstance(t,dict):continue
+            if t.get('kind')=='WEED':tasks.append((p,['DIG'],35,None));continue
+            if 'crop' not in t:continue
+            c=t['crop'];age=day-t['planted_day'];held=t['yield_units'];ongoing=c in ('STRAWBERRY','TOMATO')
+            harvest=held>0 and ((ongoing and (held>=2 or day>=28)) or (not ongoing and age>=(2 if c=='WHEAT' and day<10 else CROPS[c][3])))
+            if harvest and (ongoing or t['watered_today'] or age>CROPS[c][3]):
+                deadline_weight=V16_FINAL_BONUS if OPP_STYLE=='V16' else 40
+                deadline_bonus=deadline_weight*dist(p,nearest_shed(p)) if day==29 else 0
+                tasks.append((p,['HARVEST'],120+min(200,held*prices[c]/8)+deadline_bonus,None));continue
+            if ongoing and age>=(2 if c=='WHEAT' and day<10 else CROPS[c][3]) and not held:
+                tasks.append((p,['DIG'],40,None));continue
+            if not t['watered_today'] and (t['consecutive_unwatered'] or (ongoing and any(age+1==a for a,n in CROPS[c][2])) or (not ongoing and age>=2)):
+                weight=50 if not t['consecutive_unwatered'] else 100
+                if hour>=16:weight*=3
+                if harvest:weight=250
+                tasks.append((p,['WATER'],weight,None))
+            benefit=fert_value(t,day,prices)
+            if benefit>10:
+                fert_needed+=1;tasks.append((p,['FERTILIZE'],90+min(100,benefit/5),'FERTILIZER'))
     for y,row in enumerate(f['tiles']):
         for x,t in enumerate(row):
             if not isinstance(t,dict) or 'animal' not in t:continue
@@ -1148,8 +1153,7 @@ def market_orders(obs,animal,crops,actions):
             orders.append(['BUY_ANIMAL',a,1]);cash-=ANIMALS[a][0]
     needs={}
     for pos,c in crops.items():
-        t=tile(f,pos)
-        if (t is None or (isinstance(t,dict) and t.get('kind')=='WEED')) and hour<17:needs[c]=needs.get(c,0)+1
+        if tile(f,pos) is None and hour<17:needs[c]=needs.get(c,0)+1
     seed_order=lambda kv:(0 if OPP_STYLE=='V16' and day==0 and kv[0]=='MELON' else 1,CROPS[kv[0]][0])
     for c,n in sorted(needs.items(),key=seed_order):
         n=min(max(0,n-p['seeds'].get(c,0)),int(max(0,cash-80)//CROPS[c][0]))
