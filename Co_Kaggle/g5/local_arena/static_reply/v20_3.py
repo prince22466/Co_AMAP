@@ -16,11 +16,18 @@ CROPS={
  'STRAWBERRY':(100,120,((10,2),(12,2),(14,2),(16,2)),16),
  'MELON':(80,250,((10,6),),10)}
 
-# Opening purchase targets are separate from the final crop mix. The opening buys only
-# 3 WHEAT because the start state already supplies the rest of the wheat needed for the
-# 13-WHEAT crop target. crop_plan() itself only plants seeds actually owned.
-START_SEED_BUYS={'WHEAT':3,'STRAWBERRY':3,'CARROT':2,'MELON':1}
-START_ANIMAL_BUYS={'COW':2,'SHEEP':1,'GOOSE':1}
+# Canonical day-0 opening command sequence. start_plan() preserves this exact order and
+# emits as many commands as the current turn's market-order budget allows.
+START_PLAN_COMMANDS=(
+    (['HIRE'],6),
+    (['BUY_SEED','WHEAT',13],1),
+    (['BUY_ANIMAL','COW',2],1),
+    (['BUY_SEED','CARROT',2],1),
+    (['BUY_SEED','STRAWBERRY',3],1),
+    (['BUY_SEED','MELON',1],1),
+    (['BUY_ANIMAL','SHEEP',1],1),
+    (['BUY_ANIMAL','GOOSE',1],1),
+)
 OPENING_CROP_TARGET={'WHEAT':13,'STRAWBERRY':3,'CARROT':2,'MELON':1}
 
 ANIMALS={'COW':(400,'MILK',8,2,3),'SHEEP':(500,'WOOL',6,3,4),'GOOSE':(300,'EGG',4,1,2)}
@@ -1067,53 +1074,84 @@ def unit_actions(obs,animal,crops):
 
 
 def start_plan(obs,cash=None,slots=10):
-    """Return the fixed day-0 opening purchases that still need to be issued.
+    """Return the remaining day-0 opening commands in one fixed order.
 
-    Opening purchase targets:
-      seeds   = 3 WHEAT + 3 STRAWBERRY + 2 CARROT + 1 MELON
-      animals = 2 COW + 1 SHEEP + 1 GOOSE
+    Canonical order:
+      6 x HIRE
+      13 WHEAT
+      2 COW
+      2 CARROT
+      3 STRAWBERRY
+      1 MELON
+      1 SHEEP
+      1 GOOSE
 
-    Hour 0 keeps the six-HIRE opening. With only 10 market commands available, that leaves
-    four purchase commands: the three animal species plus STRAWBERRY, whose long growth
-    latency makes it the seed purchase worth issuing immediately. Later day-0 calls finish
-    the remaining seed purchases without rebuying seeds that were already planted.
+    The engine accepts at most 10 market commands per turn, so the sequence may span
+    multiple day-0 turns. We infer completed opening commands from current state and
+    always continue from the first still-missing command.
     """
-    f=obs['farms'][obs['player']];p=obs['private'];day=obs['day'];hour=obs['hour']
+    f=obs['farms'][obs['player']];p=obs['private'];day=obs['day']
     if day!=0 or slots<=0:return []
     if cash is None:cash=f['money']
 
-    orders=[]
-
-    if hour==0:
-        # Six workers + three animal-species orders + one slow-crop seed order = 10.
-        opening=[
-            ['HIRE'],['HIRE'],['HIRE'],['HIRE'],['HIRE'],['HIRE'],
-            ['BUY_ANIMAL','COW',START_ANIMAL_BUYS['COW']],
-            ['BUY_ANIMAL','SHEEP',START_ANIMAL_BUYS['SHEEP']],
-            ['BUY_ANIMAL','GOOSE',START_ANIMAL_BUYS['GOOSE']],
-            ['BUY_SEED','STRAWBERRY',START_SEED_BUYS['STRAWBERRY']],
-        ]
-        return opening[:slots]
-
-    # Complete the desired opening crop stock, not the raw purchase-count dictionary.
-    # Example: if the start state already contains 10 WHEAT, a 13-WHEAT crop target means
-    # exactly 3 more WHEAT seeds must be bought. Count planted crops as consumed seeds so
-    # those purchases are not repeated after crop_plan()/unit_actions uses them.
+    # Current realized opening quantities. Seeds count both unplanted inventory and crops
+    # already planted; animals count both stored and already placed animals.
     planted={c:0 for c in OPENING_CROP_TARGET}
+    animal_count={a:0 for a in ANIMALS}
     for row in f['tiles']:
         for t in row:
-            if isinstance(t,dict) and t.get('crop') in planted:planted[t['crop']]+=1
+            if not isinstance(t,dict):continue
+            crop=t.get('crop')
+            if crop in planted:planted[crop]+=1
+            animal=t.get('animal')
+            if animal in animal_count:animal_count[animal]+=1
 
-    # STRAWBERRY was bought at hour 0. Later turns complete whatever is still missing from
-    # the 13 WHEAT / 3 STRAWBERRY / 2 CARROT / 1 MELON opening crop target.
-    for c,target in OPENING_CROP_TARGET.items():
-        have=p['seeds'].get(c,0)+planted[c]
-        missing=max(0,target-have)
-        if missing<=0:continue
-        affordable=int(max(0,cash-20)//CROPS[c][0])
-        n=min(missing,affordable)
-        if n<=0 or len(orders)>=slots:continue
-        orders.append(['BUY_SEED',c,n]);cash-=n*CROPS[c][0]
+    seed_have={c:p['seeds'].get(c,0)+planted[c] for c in OPENING_CROP_TARGET}
+    owned=totals(p)
+    for a in animal_count:animal_count[a]+=owned.get(a,0)
+
+    orders=[]
+
+    # 1) HIRE commands.
+    missing_hires=max(0,6-f['hires_today'])
+    for _ in range(missing_hires):
+        if len(orders)>=slots:break
+        orders.append(['HIRE'])
+
+    if len(orders)>=slots:return orders
+
+    # 2) Remaining purchases in the exact requested sequence.
+    purchase_sequence=(
+        ('SEED','WHEAT',13),
+        ('ANIMAL','COW',2),
+        ('SEED','CARROT',2),
+        ('SEED','STRAWBERRY',3),
+        ('SEED','MELON',1),
+        ('ANIMAL','SHEEP',1),
+        ('ANIMAL','GOOSE',1),
+    )
+
+    for kind,item,target in purchase_sequence:
+        if len(orders)>=slots:break
+        if kind=='SEED':
+            missing=max(0,target-seed_have[item])
+            if missing<=0:continue
+            cost=CROPS[item][0]
+            affordable=int(max(0,cash)//cost)
+            n=min(missing,affordable)
+            if n<=0:break
+            orders.append(['BUY_SEED',item,n]);cash-=n*cost
+            seed_have[item]+=n
+        else:
+            missing=max(0,target-animal_count[item])
+            if missing<=0:continue
+            cost=ANIMALS[item][0]
+            affordable=int(max(0,cash)//cost)
+            n=min(missing,affordable)
+            if n<=0:break
+            orders.append(['BUY_ANIMAL',item,n]);cash-=n*cost
+            animal_count[item]+=n
+
     return orders
 
 def market_orders(obs,animal,crops,actions,signals):
@@ -1155,6 +1193,7 @@ def market_orders(obs,animal,crops,actions,signals):
             # start_plan() returns commands only; market_orders() maintains its own running
             # cash estimate so later purchases in this same turn cannot overspend it.
             if order[0]=='BUY_SEED':cash-=order[2]*CROPS[order[1]][0]
+            elif order[0]=='BUY_ANIMAL':cash-=order[2]*ANIMALS[order[1]][0]
 
     desired_hands=7 if len(f['unlocked_quadrants'])==1 else 11 if len(f['unlocked_quadrants'])==2 else 11
     if day<3:desired_hands=6
