@@ -91,10 +91,6 @@ OPP_SHED_FALLBACK=2
 # modeled as visible herd size + this reserve allowance.
 HERD_WHEAT_RESERVE=3
 
-# Absolute turn counter for this agent instance. agent(obs) resets it at the
-# opening observation and advances it once after every call.
-STEP=0
-
 def price(item, inventory):
     # Heuristic market-price model used by the crop/animal planners. Inventory 10,000 is
     # treated as the equilibrium point (d == 0). Scarcity (d < 0) raises the estimate;
@@ -1376,22 +1372,35 @@ def market_orders(obs,signals,actions):
     return orders[:10]
 
 def agent(obs):
-    global OPP_STYLE,STEP
+    global OPP_STYLE
+
+    # -------------------------------------------------------------------------
+    # 1. GAME / OPPONENT STATE
+    # -------------------------------------------------------------------------
+    # Only the V16 archetype still changes active policy behavior. All other
+    # opponents share the normal path, so avoid carrying dead trader subtypes.
     if obs['day']==0 and obs['hour']==0:
         OPP_STYLE=None
-        STEP=0
     elif OPP_STYLE is None and obs['day']==0 and obs['hour']>0:
         other=obs['farms'][1-obs['player']]
-        if other['hires_today']==0 and other['money']>2000:OPP_STYLE='TRADER'
-        elif other['hires_today']==5 and 20<=other['money']<120:OPP_STYLE='V16'
-        else:OPP_STYLE='NORMAL'
-    elif OPP_STYLE=='TRADER' and obs['day']==0 and obs['hour']>=2:
-        other=obs['farms'][1-obs['player']]
-        OPP_STYLE='TRADER_SEEDER' if other['money']<1000 else 'TRADER_CHURN'
+        OPP_STYLE='V16' if other['hires_today']==5 and 20<=other['money']<120 else 'NORMAL'
+
+    # -------------------------------------------------------------------------
+    # 2. PLAN THIS TURN
+    # -------------------------------------------------------------------------
     environment_signals=production_signals(obs)
     animal=animal_plan(obs,environment_signals)
     crops=crop_plan(obs,environment_signals)
+
+    # -------------------------------------------------------------------------
+    # 3. EXECUTE WORKERS, THEN PLAN MARKET ORDERS
+    # -------------------------------------------------------------------------
+    # Market planning must follow worker planning because it simulates this
+    # turn's PICKUP/DROP/PLACE/consumption actions before deciding what can sell.
     actions=unit_actions(obs,animal,crops)
-    result=dict(farmer=actions[0],hands=actions[1:],market=market_orders(obs,environment_signals,actions))
-    STEP+=1
-    return result
+    market=market_orders(obs,environment_signals,actions)
+
+    # -------------------------------------------------------------------------
+    # 4. RETURN ENVIRONMENT ACTION
+    # -------------------------------------------------------------------------
+    return dict(farmer=actions[0],hands=actions[1:],market=market)
