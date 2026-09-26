@@ -30,7 +30,7 @@ SHOPS={
  'SMOOTHIE_SHOP':{'STRAWBERRY':1,'MILK':1},
  'FARMERS_MARKET':{'WHEAT':1,'CARROT':1,'TOMATO':1,'STRAWBERRY':1}}
 
-ROUTES=(((4,4),(4,3),(4,2)),((3,4),(3,3),(2,3)),((5,4),(5,3)),((6,4),(6,3)),((4,5),(3,5)),((4,6),(3,6)))
+ROUTES=(((4,4),(4,3),(2,4)),((3,4),(3,3),(2,3)),((5,4),(5,3)),((6,4),(6,3)),((4,5),(3,5)),((4,6),(3,6)))
 ANIMAL_POINTS={p for route in ROUTES for p in route}
 # The shed occupies the central 2x2 tiles. These coordinates are the transfer interface
 # used for PICKUP/DROP/PLACE decisions and as routing targets via nearest_shed().
