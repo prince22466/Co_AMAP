@@ -33,6 +33,7 @@ SPEC_TURNS_PER_DAY = 24
 SPEC_SEASON_TURNS = 720
 SPEC_SHOP_INTERVAL = 4
 SPEC_SHOP_UNLOCK_TURNS = 72
+SPEC_MAX_SHOPS = 8
 SPEC_SHED = ((4, 4), (5, 4), (4, 5), (5, 5))
 SPEC_SHOPS = {
     "BAKERY": {"WHEAT": 1, "EGG": 1},
@@ -291,6 +292,7 @@ class ForecastOneHistoryEventTests(unittest.TestCase):
         self.assertEqual(agent.SEASON_TURNS, SPEC_SEASON_TURNS)
         self.assertEqual(agent.SHOP_INTERVAL, SPEC_SHOP_INTERVAL)
         self.assertEqual(agent.SHOP_UNLOCK_TURNS, SPEC_SHOP_UNLOCK_TURNS)
+        self.assertEqual(agent.MAX_SHOPS, SPEC_MAX_SHOPS)
         self.assertEqual(tuple(agent.SHED), SPEC_SHED)
         self.assertEqual(agent.SHOPS, SPEC_SHOPS)
         self.assertEqual(
@@ -338,17 +340,40 @@ class ForecastOneHistoryEventTests(unittest.TestCase):
                     if product in added_demand:
                         added_demand[product] += units
 
-            # Before the NEXT unlock, future-shop uncertainty is identical in both
-            # forecasts. The only difference must therefore be exact demand from the
-            # shop(s) that just became known.
-            next_unlock = min(
-                SPEC_SEASON_TURNS,
-                ((step // SPEC_SHOP_UNLOCK_TURNS) + 1) * SPEC_SHOP_UNLOCK_TURNS,
-            )
-            for t in range(step, next_unlock):
+            # Validate the whole remaining season, including the subtle late-season
+            # effect where observing one more real shop leaves one fewer unknown future
+            # shop slot. Until that extra baseline-only unlock occurs, the delta is just
+            # the exact newly known shop demand. Afterwards, reduced uncertainty partly
+            # offsets that demand according to the expected random-shop mix.
+            expected_random_shop_demand = {
+                product: sum(
+                    products.get(product, 0) for products in SPEC_SHOPS.values()
+                ) / len(SPEC_SHOPS)
+                for product in obs["market"]["inventory"]
+            }
+            first_unlock = (
+                (step // SPEC_SHOP_UNLOCK_TURNS) + 1
+            ) * SPEC_SHOP_UNLOCK_TURNS
+            actual_future_unlocks = list(
+                range(first_unlock, SPEC_SEASON_TURNS, SPEC_SHOP_UNLOCK_TURNS)
+            )[: max(0, SPEC_MAX_SHOPS - len(obs["town"]["unlocked_shops"]))]
+            baseline_future_unlocks = list(
+                range(first_unlock, SPEC_SEASON_TURNS, SPEC_SHOP_UNLOCK_TURNS)
+            )[: max(0, SPEC_MAX_SHOPS - len(counterfactual["town"]["unlocked_shops"]))]
+
+            for t in range(step, SPEC_SEASON_TURNS):
                 shop_tick = t % SPEC_SHOP_INTERVAL == 0
+                actual_new = sum(unlock <= t for unlock in actual_future_unlocks)
+                baseline_new = sum(unlock <= t for unlock in baseline_future_unlocks)
+                future_count_delta = actual_new - baseline_new
                 for product in delta_flow:
-                    expected = -added_demand.get(product, 0.0) if shop_tick else 0.0
+                    expected = 0.0
+                    if shop_tick:
+                        expected = -(
+                            added_demand.get(product, 0.0)
+                            + future_count_delta
+                            * expected_random_shop_demand.get(product, 0.0)
+                        )
                     assert_close(
                         self,
                         delta_flow[product][t],
@@ -360,6 +385,7 @@ class ForecastOneHistoryEventTests(unittest.TestCase):
             assert_projection_delta_consistent(
                 self, delta_flow, delta_projected, step
             )
+            next_unlock = min(SPEC_SEASON_TURNS, first_unlock)
             ticks = sum(
                 1 for t in range(step, next_unlock)
                 if t % SPEC_SHOP_INTERVAL == 0
