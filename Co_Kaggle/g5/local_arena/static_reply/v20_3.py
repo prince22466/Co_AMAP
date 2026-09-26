@@ -45,7 +45,22 @@ PASS=['PASS']
 # Maximum number of animals the planner should place on route tiles.
 HERD_LIMIT=17 # empirical evident from the number of herds of winners in v20 loss cases
 # Preserve working capital while signal-driven procurement buys new producers.
-PROCUREMENT_CASH_RESERVE=100 
+PROCUREMENT_CASH_RESERVE=100
+
+# Latest in-game day on which a new producer may be purchased. These gates prevent
+# high late-season shortage signals from buying producers that have too little time
+# left to mature and generate useful output before the season ends.
+LATEST_BUY_DAY={
+    'WHEAT':24,
+    'CARROT':25,
+    'TOMATO':20,
+    'STRAWBERRY':18,
+    'MELON':18,
+    'COW':20,
+    'SHEEP':22,
+    'GOOSE':22,
+}
+
 OPP_STYLE=None
 # Legacy opponent-style tuning tuple. In this v20 file it is never read, so its values
 # have no runtime effect and the tuple-component semantics cannot be recovered from v20.
@@ -1238,8 +1253,9 @@ def market_orders(obs,signals,actions):
         if empty_tiles<empty_threshold and cash>=landcost and len(orders)<10:
             orders.append(['BUY_LAND']);cash-=landcost
     # Buy new producers greedily in production_signals() rank order. The signal already
-    # accounts for owned seeds/unplaced animals; floor() avoids buying for a fractional
-    # residual shortage smaller than one complete producer-equivalent.
+    # accounts for owned seeds/unplaced animals. Producer-specific latest-buy-day gates
+    # reject late purchases before cash/space allocation, and floor() avoids buying for a
+    # fractional residual shortage smaller than one complete producer-equivalent.
     if day>0 and len(orders)<10:
         crop_slots=sum(
             1 for y,row in enumerate(f['tiles']) for x,t in enumerate(row)
@@ -1261,12 +1277,15 @@ def market_orders(obs,signals,actions):
         for signal in signals:
             if len(orders)>=10:break
             if not signal.get('actionable'):continue
+
+            producer=signal['producer']
+            if day>LATEST_BUY_DAY.get(producer,29):continue
+
             gap=signal.get('producer_equivalent_gap',0.)
             if not math.isfinite(gap):continue
             needed=int(math.floor(gap))
             if needed<=0:continue
 
-            producer=signal['producer']
             spendable=max(0,cash-PROCUREMENT_CASH_RESERVE)
             if producer in CROPS:
                 cost=CROPS[producer][0]
