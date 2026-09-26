@@ -397,7 +397,10 @@ def crop_plan(obs,projected,animal):
     # -------------------------------------------------------------------------
     # Stage 2: define the fixed early-game crop geometry.
     # -------------------------------------------------------------------------
-    # Use all 19 upper-left opening crop slots with a diversified fixed mix:
+    # `opening` is the list of crop-eligible coordinates inside the initial upper-left
+    # 5x5 land quadrant. The quadrant has 25 tiles; 6 are reserved by ANIMAL_POINTS,
+    # leaving exactly 19 crop slots. Sort them row-major so crop-to-tile assignment is
+    # deterministic, then divide those 19 coordinates into the fixed opening mix:
     # 13 WHEAT + 3 STRAWBERRY + 2 CARROT + 1 MELON.
     opening=[p for p in points if p[0]<5 and p[1]<5]
     opening.sort(key=lambda p:(p[1],p[0]))
@@ -1092,9 +1095,14 @@ def market_orders(obs,animal,crops,actions):
         if n:
             orders.append(['SELL',c,n]);cash+=n*max(1,prices[c]*.8)
     if day==0 and hour==0:
-        # The 10-order cap leaves two opening seed-order slots after 6 hires + 2 animal
-        # orders. Buy the slow STRAWBERRY hedge immediately with WHEAT; the normal seed
-        # purchase path picks up the planned 2 CARROT + 1 MELON on the following turn.
+        # Each inner list below is one market command executed on this turn:
+        #   ['HIRE']                    -> hire one farm hand for the day;
+        #   ['BUY_SEED', crop, n]       -> buy n seeds of that crop;
+        #   ['BUY_ANIMAL', animal, n]   -> buy n animals for later placement.
+        # The engine accepts at most 10 market commands per player per turn. Six HIRE
+        # commands + two animal purchases therefore leave two seed-purchase commands.
+        # Buy the slow STRAWBERRY hedge immediately with WHEAT; the normal seed-purchase
+        # path picks up the planned 2 CARROT + 1 MELON on the following turn.
         return [['HIRE'], ['HIRE'], ['HIRE'], ['HIRE'], ['HIRE'], ['HIRE'], ['BUY_SEED', 'WHEAT', 13], ['BUY_ANIMAL', 'COW', 2], ['BUY_ANIMAL', 'SHEEP', 2], ['BUY_SEED', 'STRAWBERRY', 3]]
     desired_hands=7 if len(f['unlocked_quadrants'])==1 else 11 if len(f['unlocked_quadrants'])==2 else 11
     if day<3:desired_hands=6
