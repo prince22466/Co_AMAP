@@ -125,7 +125,7 @@ class ProductionSignalTests(unittest.TestCase):
                         assert_close(self,x["score"],1.0)
                         self.assertFalse(x["actionable"])
 
-    def test_hard_demand_is_only_town_plus_currently_open_shops(self):
+    def test_hard_demand_is_town_open_shops_plus_visible_animal_feed(self):
         for name,history,seat in self.cases:
             for step in (0,73,301,619):
                 obs=observation(history,step,seat)
@@ -135,8 +135,24 @@ class ProductionSignalTests(unittest.TestCase):
                 per_tick={p:0 for p in PRODUCTS}
                 for shop in obs["town"]["unlocked_shops"]:
                     for p,n in SHOP_SPEC[shop].items():per_tick[p]+=n
+                feed=0
+                future_days=max(0,29-obs["day"])
+                for farm in obs["farms"]:
+                    for row in farm["tiles"]:
+                        for tile in row:
+                            if isinstance(tile,dict) and "animal" in tile:
+                                feed+=future_days+(0 if tile.get("fed_today",False) else 1)
+                owned_animals=0
+                for animal in ANIMAL_PRODUCT:
+                    owned_animals+=obs["private"]["shed"].get(animal,0)
+                    owned_animals+=sum(
+                        inv.get(animal,0) for inv in obs["private"]["inventories"]
+                    )
+                feed+=(30-obs["day"])*owned_animals
+
                 for p in PRODUCTS:
                     expected=town_ticks+shop_ticks*per_tick[p]
+                    if p=="WHEAT":expected+=feed
                     assert_close(self,signals[p]["hard_demand"],expected,f"{name} {step} {p}")
 
     def test_shop_open_increases_only_hard_demand_side_of_signal(self):
