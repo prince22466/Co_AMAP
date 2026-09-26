@@ -1246,10 +1246,12 @@ def market_orders(obs,animal,crops,actions):
         buy_deadline=17
         if desired[a]>counts[a] and day<=buy_deadline and cash>ANIMALS[a][0]+50 and len(orders)<10:
             orders.append(['BUY_ANIMAL',a,1]);cash-=ANIMALS[a][0]
-    fert_need=0
-    for row in f['tiles']:
-        for t in row:
-            if isinstance(t,dict) and 'crop' in t and fert_value(t,day,prices)>10:fert_need+=1
+    # Keep fertilizer stock sized to all crops currently growing on our land.
+    # fert_value() still decides where/when fertilizer is actually applied in unit_actions().
+    fert_need=sum(
+        1 for row in f['tiles'] for t in row
+        if isinstance(t,dict) and 'crop' in t
+    )
     target=min(24,fert_need+3) if fert_need else 0
     if total.get('FERTILIZER',0)<target and day<29 and len(orders)<10:
         n=min(target-total.get('FERTILIZER',0),int(max(0,cash-100)//(prices['FERTILIZER']+3)))
