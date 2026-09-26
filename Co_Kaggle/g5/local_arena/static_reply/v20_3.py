@@ -331,12 +331,13 @@ def production_signals(obs):
 # =============================================================================
 # PRODUCTION PLANNERS
 # =============================================================================
-def animal_plan(obs):
-    """Map already-owned animals onto the fixed animal route slots.
+def animal_plan(obs,signals):
+    """Place already-owned animals when their producer appears in the top 5 signals.
 
-    Keep animals already placed on route tiles, then assign animals from the shed and
-    worker inventories to the nearest unlocked unused route slots. This planner does not
-    forecast profitability or plan additional animal purchases.
+    Existing animals already placed on route tiles stay in the plan. For new placements,
+    inspect only the already-ranked top five production signals. Keep animal producers
+    (COW/SHEEP/GOOSE) in that signal order, then place all owned unplaced animals of those
+    species from the shed and worker inventories onto available animal-route slots.
     """
     f=obs['farms'][obs['player']]
     plan={}
@@ -348,17 +349,39 @@ def animal_plan(obs):
             if isinstance(t,dict) and t.get('animal'):
                 plan[p]=t['animal']
 
-    # Prefer route slots nearest to the shed.
-    slots=sorted(ANIMAL_POINTS,key=lambda p:(dist(p,nearest_shed(p)),p))
+    # Extract animal species from only the top 5 ranked signals.
+    ranked_animals=[]
+    for entry in signals[:5]:
+        animal=entry.get('producer')
+        if animal in ANIMALS and animal not in ranked_animals:
+            ranked_animals.append(animal)
 
-    # Assign animals already owned but not placed: shed + worker inventories.
+    # No animal producer in the top five: do not place any additional animals.
+    if not ranked_animals:
+        return plan
+
+    # Find available animal-route slots, nearest shed first.
+    slots=[
+        p for p in ANIMAL_POINTS
+        if p not in plan and tile(f,p)!='LOCKED'
+    ]
+    slots.sort(key=lambda p:(dist(p,nearest_shed(p)),p))
+    capacity=min(len(slots),max(0,HERD_LIMIT-len(plan)))
+    if capacity<=0:
+        return plan
+
+    # totals() combines shed + farmer/hand inventories.
     stock=totals(obs['private'])
-    for a in ANIMALS:
-        for _ in range(stock.get(a,0)):
-            p=next((p for p in slots if p not in plan and tile(f,p)!='LOCKED'),None)
-            if p is None:
-                break
-            plan[p]=a
+    selected=[]
+    for animal in ranked_animals:
+        count=int(stock.get(animal,0))
+        take=min(count,capacity-len(selected))
+        selected.extend([animal]*take)
+        if len(selected)>=capacity:
+            break
+
+    for pos,animal in zip(slots,selected):
+        plan[pos]=animal
 
     return plan
 
@@ -1199,7 +1222,7 @@ def agent(obs):
         other=obs['farms'][1-obs['player']]
         OPP_STYLE='TRADER_SEEDER' if other['money']<1000 else 'TRADER_CHURN'
     environment_signals=production_signals(obs)
-    animal=animal_plan(obs)
+    animal=animal_plan(obs,environment_signals)
     crops=crop_plan(obs,environment_signals)
     actions=unit_actions(obs,animal,crops)
     result=dict(farmer=actions[0],hands=actions[1:],market=market_orders(obs,animal,crops,actions))
