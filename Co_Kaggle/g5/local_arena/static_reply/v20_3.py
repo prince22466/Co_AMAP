@@ -1200,15 +1200,26 @@ def market_orders(obs,signals,actions):
     # after current worker PICKUP/DROP/PLACE actions, then emit SELL orders for available
     # products while reserving wheat for the herd and fertilizer for crops.
     # Day 0/hour 0 is a fixed 10-order opening. Otherwise, remaining slots are considered in
-    # this order: HIRE (early hours, target hand count, Fibonacci hire cost), BUY_PRODUCT
-    # WHEAT, BUY_LAND, ranked signal-driven BUY_SEED/BUY_ANIMAL procurement, then
-    # BUY_PRODUCT FERTILIZER. Dynamic producer procurement starts after day 0 so the fixed
-    # opening remains authoritative. Every stage checks cash and
+    # this order: HIRE (early hours, target hand count, Fibonacci hire cost), BUY_LAND,
+    # ranked signal-driven BUY_SEED/BUY_ANIMAL procurement, then BUY_PRODUCT FERTILIZER.
+    # WHEAT has no special BUY_PRODUCT path: feed demand is already included in
+    # production_signals(), so WHEAT shortages compete normally via BUY_SEED. Dynamic
+    # producer procurement starts after day 0 so the fixed opening remains authoritative.
+    # Every stage checks cash and
     # order capacity; earlier SELL/HIRE orders can consume slots needed by later purchases,
     # and the final `orders[:10]` enforces the engine limit defensively.
+    # -------------------------------------------------------------------------
+    # SETUP — snapshot cash/inventory and predict what the shed contains after
+    # this turn's worker actions, because market orders execute afterward.
+    # -------------------------------------------------------------------------
     f=obs['farms'][obs['player']];p=obs['private'];day=obs['day'];hour=obs['hour'];prices=obs['market']['prices']
     cash=f['money'];orders=[];held=post_action_shed(obs,actions);total=totals(p)
     live=sum(1 for row in f['tiles'] for t in row if isinstance(t,dict) and 'animal' in t)
+
+    # -------------------------------------------------------------------------
+    # 1. SELL — liquidate immediately sellable goods first, while keeping the
+    # configured WHEAT/FERTILIZER reserves. Sale proceeds fund later priorities.
+    # -------------------------------------------------------------------------
     reserve_wheat=0 if day==29 else max(4,live+2)
     reserve_fert=0 if day<10 or day==29 else 4
     for c in SELLABLE_PRODUCTS:
@@ -1217,9 +1228,17 @@ def market_orders(obs,signals,actions):
         if c=='FERTILIZER':n=min(n,max(0,total.get(c,0)-reserve_fert))
         if n:
             orders.append(['SELL',c,n]);cash+=n*max(1,prices[c]*.8)
+    # -------------------------------------------------------------------------
+    # FIRST-TURN OVERRIDE — the fixed opening plan is authoritative. Any SELL
+    # orders computed above are intentionally discarded on day 0 / hour 0.
+    # -------------------------------------------------------------------------
     if day==0 and hour==0:
         return start_plan(obs,cash,10)
 
+    # -------------------------------------------------------------------------
+    # DAY-0 OPENING TAIL — after the first turn, finish any MELON/SHEEP/GOOSE
+    # opening purchases that did not fit inside the first 10 market-order slots.
+    # -------------------------------------------------------------------------
     # start_plan() owns the fixed opening policy; market_orders() only appends the
     # remaining day-0 opening purchases into whatever order capacity is still available.
     if day==0 and len(orders)<10:
@@ -1231,6 +1250,10 @@ def market_orders(obs,signals,actions):
             if order[0]=='BUY_SEED':cash-=order[2]*CROPS[order[1]][0]
             elif order[0]=='BUY_ANIMAL':cash-=order[2]*ANIMALS[order[1]][0]
 
+    # -------------------------------------------------------------------------
+    # 2. HIRE — fill the current hand target before spending on land or producers.
+    # Existing timing, Fibonacci cost, and cash-buffer rules are preserved.
+    # -------------------------------------------------------------------------
     desired_hands=7 if len(f['unlocked_quadrants'])==1 else 11 if len(f['unlocked_quadrants'])==2 else 11
     if day<3:desired_hands=6
     elif day==29 and OPP_STYLE=='V16':desired_hands=min(desired_hands,V16_FINAL_HANDS)
@@ -1241,10 +1264,10 @@ def market_orders(obs,signals,actions):
             cost=fib[hires]
             if len(orders)>=10 or cash<cost+20:break
             orders.append(['HIRE']);cash-=cost;hires+=1
-    wheat_need=max(4,live+2)
-    if day<29 and total.get('WHEAT',0)<wheat_need:
-        n=min(wheat_need-total.get('WHEAT',0),int(max(0,cash-10)//(prices['WHEAT']+3)))
-        if n>0 and len(orders)<10:orders.append(['BUY_PRODUCT','WHEAT',n]);cash-=n*(prices['WHEAT']+3)
+    # -------------------------------------------------------------------------
+    # 3. BUY LAND — expand only when free tiles fall below the capacity threshold.
+    # Land gets priority over new seeds/animals once the expansion rule triggers.
+    # -------------------------------------------------------------------------
     lands=len(f['unlocked_quadrants'])
     empty_tiles=sum(1 for row in f['tiles'] for t in row if t is None)
     land_policy={1:(3,1000),2:(5,2000),3:(5,4000)}
@@ -1252,6 +1275,11 @@ def market_orders(obs,signals,actions):
         empty_threshold,landcost=land_policy[lands]
         if empty_tiles<empty_threshold and cash>=landcost and len(orders)<10:
             orders.append(['BUY_LAND']);cash-=landcost
+    # -------------------------------------------------------------------------
+    # 4. BUY SEEDS / ANIMALS — walk production_signals() from highest need to
+    # lowest. Apply producer deadline, floor(gap), deployment-space, cash-reserve,
+    # and 10-order constraints before emitting BUY_SEED / BUY_ANIMAL.
+    # -------------------------------------------------------------------------
     # Buy new producers greedily in production_signals() rank order. The signal already
     # accounts for owned seeds/unplaced animals. Producer-specific latest-buy-day gates
     # reject late purchases before cash/space allocation, and floor() avoids buying for a
@@ -1303,6 +1331,10 @@ def market_orders(obs,signals,actions):
                 orders.append(['BUY_ANIMAL',producer,n])
                 cash-=n*cost
                 animal_slots-=n
+    # -------------------------------------------------------------------------
+    # 5. BUY FERTILIZER — last priority. Size stock from every crop currently on
+    # our land, then buy only the shortage if cash/order capacity still remains.
+    # -------------------------------------------------------------------------
     # Keep fertilizer stock sized to all crops currently growing on our land.
     # fert_value() still decides where/when fertilizer is actually applied in unit_actions().
     fert_need=sum(
@@ -1313,6 +1345,9 @@ def market_orders(obs,signals,actions):
     if total.get('FERTILIZER',0)<target and day<29 and len(orders)<10:
         n=min(target-total.get('FERTILIZER',0),int(max(0,cash-100)//(prices['FERTILIZER']+3)))
         if n:orders.append(['BUY_PRODUCT','FERTILIZER',n])
+    # -------------------------------------------------------------------------
+    # FINALIZE — enforce the engine's maximum of 10 market orders.
+    # -------------------------------------------------------------------------
     return orders[:10]
 
 def agent(obs):
