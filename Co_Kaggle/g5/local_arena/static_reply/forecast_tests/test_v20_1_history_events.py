@@ -1,13 +1,9 @@
 #!/usr/bin/env python3
-"""Black-box event tests for v20_1.forecast() using one real v20 replay.
+"""Black-box event tests for v20_1.forecast() across five real v20 replays.
 
-The forecast implementation itself is not modified or instrumented. Each test finds a
-real state transition in game_history/v20/111548564.json, then builds a same-time
-counterfactual by reverting only that event. The delta between the two forecast outputs
-therefore exposes the behavior attributable to that event.
-
-Run:
-    python local_arena/static_reply/forecast_tests/test_v20_1_history_events.py -v
+forecast() itself is not modified or instrumented. For every detected event, the suite
+runs the real observation and a same-turn counterfactual that changes only the event
+field. The forecast delta is then checked against an independent test specification.
 """
 from __future__ import annotations
 
@@ -23,18 +19,25 @@ HERE = Path(__file__).resolve().parent
 STATIC_REPLY = HERE.parent
 G5_ROOT = HERE.parents[2]
 AGENT_PATH = STATIC_REPLY / "v20_1.py"
-HISTORY_PATH = G5_ROOT / "game_history" / "v20" / "111548564.json"
+HISTORY_DIR = G5_ROOT / "game_history" / "v20"
+HISTORY_NAMES = (
+    "111548564.json",
+    "111549675.json",
+    "111551968.json",
+    "111553265.json",
+    "111557916.json",
+)
 EPS = 1e-9
 
-# Independent test specification. Expected behavior deliberately does NOT read these
-# quantities from v20_1.py, otherwise a bad production constant/helper could be copied
-# into the expected result and make a broken forecast pass its own regression test.
+# Independent forecast specification. Expected results deliberately do not use the
+# production module's SHOPS/ANIMALS/CROPS/dist/nearest_shed helpers.
 SPEC_TURNS_PER_DAY = 24
 SPEC_SEASON_TURNS = 720
 SPEC_SHOP_INTERVAL = 4
 SPEC_SHOP_UNLOCK_TURNS = 72
 SPEC_MAX_SHOPS = 8
 SPEC_SHED = ((4, 4), (5, 4), (4, 5), (5, 5))
+
 SPEC_SHOPS = {
     "BAKERY": {"WHEAT": 1, "EGG": 1},
     "PIZZA_SHOP": {"MILK": 1, "TOMATO": 1, "WHEAT": 1},
@@ -45,19 +48,19 @@ SPEC_SHOPS = {
     "SMOOTHIE_SHOP": {"STRAWBERRY": 1, "MILK": 1},
     "FARMERS_MARKET": {"WHEAT": 1, "CARROT": 1, "TOMATO": 1, "STRAWBERRY": 1},
 }
-SPEC_COW = {"product": "MILK", "first_day": 8, "interval_days": 2, "units": 3}
+
+SPEC_ANIMALS = {
+    "COW": {"product": "MILK", "first_day": 8, "interval_days": 2, "units": 3},
+    "SHEEP": {"product": "WOOL", "first_day": 6, "interval_days": 3, "units": 4},
+    "GOOSE": {"product": "EGG", "first_day": 4, "interval_days": 1, "units": 2},
+}
+
 SPEC_CROPS = {
     "WHEAT": {"ongoing": False, "events": ((4, 4),)},
     "CARROT": {"ongoing": False, "events": ((3, 3),)},
     "TOMATO": {"ongoing": True, "events": ((8, 1), (9, 1), (10, 1), (11, 1))},
     "STRAWBERRY": {"ongoing": True, "events": ((10, 1), (12, 1), (14, 1), (16, 1))},
     "MELON": {"ongoing": False, "events": ((10, 6),)},
-}
-EXPECTED_EVENT_COUNTS = {
-    "shop_open": 8,
-    "clean_opponent_cow": 8,
-    "clean_opponent_crop": 236,
-    "opponent_ongoing_yield": 260,
 }
 
 
@@ -70,11 +73,13 @@ def load_agent():
     return module
 
 
-def load_history():
-    history = json.loads(HISTORY_PATH.read_text(encoding="utf-8"))
-    steps = history["steps"]
-    if len(steps) != 720:
-        raise AssertionError(f"expected 720 steps, got {len(steps)}")
+def load_history(name):
+    path = HISTORY_DIR / name
+    history = json.loads(path.read_text(encoding="utf-8"))
+    if len(history["steps"]) != SPEC_SEASON_TURNS:
+        raise AssertionError(
+            f"{name}: expected {SPEC_SEASON_TURNS} steps, got {len(history['steps'])}"
+        )
     return history
 
 
@@ -90,7 +95,7 @@ def observation(history, history_step, seat):
     return copy.deepcopy(history["steps"][history_step][seat]["observation"])
 
 
-def absolute_turn(_agent, obs):
+def absolute_turn(obs):
     return int(obs["day"]) * SPEC_TURNS_PER_DAY + int(obs["hour"])
 
 
@@ -100,6 +105,13 @@ def manhattan(a, b):
 
 def shed_distance(p):
     return min(manhattan(p, shed) for shed in SPEC_SHED)
+
+
+def assert_close(testcase, actual, expected, msg):
+    testcase.assertTrue(
+        math.isclose(actual, expected, abs_tol=EPS, rel_tol=0.0),
+        f"{msg}: actual={actual}, expected={expected}",
+    )
 
 
 def assert_forecast_shape(projected, net_flow, items):
@@ -125,9 +137,7 @@ def assert_forecast_shape(projected, net_flow, items):
 
 
 def run_forecast(agent, obs):
-    # forecast() reads global STEP but does not advance it. Set it from the observation
-    # so baseline and counterfactual runs are evaluated at exactly the same game time.
-    agent.STEP = absolute_turn(agent, obs)
+    agent.STEP = absolute_turn(obs)
     projected, net_flow = agent.forecast(copy.deepcopy(obs))
     assert_forecast_shape(projected, net_flow, obs["market"]["inventory"])
     return projected, net_flow
@@ -152,26 +162,20 @@ def subtract_series(actual, baseline):
     return result
 
 
-def assert_close(testcase, actual, expected, msg):
-    testcase.assertTrue(
-        math.isclose(actual, expected, abs_tol=EPS, rel_tol=0.0),
-        f"{msg}: actual={actual}, expected={expected}",
-    )
-
-
 def assert_projection_delta_consistent(testcase, delta_flow, delta_projected, step):
     """Daily projected delta must equal cumulative turn-flow delta before that day."""
     testcase.assertEqual(set(delta_flow), set(delta_projected))
     for product in delta_flow:
         testcase.assertEqual(len(delta_flow[product]), SPEC_SEASON_TURNS)
         testcase.assertEqual(len(delta_projected[product]), 31)
+        running = 0.0
         for day in range(31):
             sample_turn = min(SPEC_SEASON_TURNS - 1, day * SPEC_TURNS_PER_DAY)
-            expected = (
-                0.0
-                if sample_turn <= step
-                else sum(delta_flow[product][step:sample_turn])
-            )
+            if sample_turn <= step:
+                expected = 0.0
+            else:
+                running = sum(delta_flow[product][step:sample_turn])
+                expected = running
             assert_close(
                 testcase,
                 delta_projected[product][day],
@@ -180,8 +184,22 @@ def assert_projection_delta_consistent(testcase, delta_flow, delta_projected, st
             )
 
 
-def nonzero_points(series, eps=EPS):
-    return [(i, value) for i, value in enumerate(series) if abs(value) > eps]
+def assert_flow_exact(testcase, delta_flow, expected, label):
+    testcase.assertEqual(set(delta_flow), set(expected))
+    for product in delta_flow:
+        testcase.assertEqual(len(delta_flow[product]), SPEC_SEASON_TURNS)
+        testcase.assertEqual(len(expected[product]), SPEC_SEASON_TURNS)
+        for t in range(SPEC_SEASON_TURNS):
+            assert_close(
+                testcase,
+                delta_flow[product][t],
+                expected[product][t],
+                f"{label} t={t} product={product}",
+            )
+
+
+def empty_expected(flow):
+    return {product: [0.0] * SPEC_SEASON_TURNS for product in flow}
 
 
 def added_shops(prev_obs, obs):
@@ -198,7 +216,7 @@ def public_asset(tile_state):
 
 def find_shop_events(history, seat):
     events = []
-    for i in range(1, len(history["steps"])):
+    for i in range(1, SPEC_SEASON_TURNS):
         prev_obs = observation(history, i - 1, seat)
         obs = observation(history, i, seat)
         added = added_shops(prev_obs, obs)
@@ -207,54 +225,29 @@ def find_shop_events(history, seat):
     return events
 
 
-def find_clean_opponent_animal_events(history, seat, animal=None):
+def find_clean_opponent_asset_events(history, seat, asset_key):
     opponent = 1 - seat
     events = []
-    for i in range(1, len(history["steps"])):
+    for i in range(1, SPEC_SEASON_TURNS):
         prev_obs = observation(history, i - 1, seat)
         obs = observation(history, i, seat)
         prev_tiles = prev_obs["farms"][opponent]["tiles"]
         tiles = obs["farms"][opponent]["tiles"]
         for y, row in enumerate(tiles):
             for x, tile_state in enumerate(row):
-                if not isinstance(tile_state, dict) or "animal" not in tile_state:
-                    continue
-                if animal is not None and tile_state["animal"] != animal:
-                    continue
-                previous = prev_tiles[y][x]
-                # Keep the first suite strictly attributable to one new animal. If the
-                # previous tile held another crop/animal, reverting the transition would
-                # mix two forecast effects and is intentionally excluded here.
-                if public_asset(previous):
-                    continue
-                events.append((i, prev_obs, obs, x, y, previous, tile_state))
-    return events
-
-
-
-def find_clean_opponent_crop_events(history, seat):
-    opponent = 1 - seat
-    events = []
-    for i in range(1, len(history["steps"])):
-        prev_obs = observation(history, i - 1, seat)
-        obs = observation(history, i, seat)
-        prev_tiles = prev_obs["farms"][opponent]["tiles"]
-        tiles = obs["farms"][opponent]["tiles"]
-        for y, row in enumerate(tiles):
-            for x, tile_state in enumerate(row):
-                if not isinstance(tile_state, dict) or "crop" not in tile_state:
+                if not isinstance(tile_state, dict) or asset_key not in tile_state:
                     continue
                 previous = prev_tiles[y][x]
                 if public_asset(previous):
                     continue
-                events.append((i, prev_obs, obs, x, y, previous, tile_state))
+                events.append((i, obs, x, y, tile_state))
     return events
 
 
-def find_opponent_ongoing_yield_events(history, seat):
+def find_opponent_yield_events(history, seat, asset_key):
     opponent = 1 - seat
     events = []
-    for i in range(1, len(history["steps"])):
+    for i in range(1, SPEC_SEASON_TURNS):
         prev_obs = observation(history, i - 1, seat)
         obs = observation(history, i, seat)
         prev_tiles = prev_obs["farms"][opponent]["tiles"]
@@ -264,29 +257,31 @@ def find_opponent_ongoing_yield_events(history, seat):
                 previous = prev_tiles[y][x]
                 if not isinstance(tile_state, dict) or not isinstance(previous, dict):
                     continue
-                crop = tile_state.get("crop")
-                if crop not in ("TOMATO", "STRAWBERRY"):
+                asset = tile_state.get(asset_key)
+                if asset is None or previous.get(asset_key) != asset:
                     continue
-                if previous.get("crop") != crop:
-                    continue
-                if previous.get("planted_day") != tile_state.get("planted_day"):
+                placed_key = "placed_day" if asset_key == "animal" else "planted_day"
+                if previous.get(placed_key) != tile_state.get(placed_key):
                     continue
                 before = previous.get("yield_units", 0)
                 after = tile_state.get("yield_units", 0)
                 if before == after:
                     continue
-                events.append((i, prev_obs, obs, x, y, before, after, tile_state))
+                events.append((i, obs, x, y, before, after, tile_state))
     return events
 
-class ForecastOneHistoryEventTests(unittest.TestCase):
+
+class ForecastMultiHistoryEventTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.agent = load_agent()
-        cls.history = load_history()
-        cls.seat = losing_seat(cls.history)
+        cls.cases = []
+        for name in HISTORY_NAMES:
+            history = load_history(name)
+            cls.cases.append((name, history, losing_seat(history)))
 
     def test_fixture_clock_and_model_spec(self):
-        """The fixed replay and independent test specification must remain coherent."""
+        """All five fixtures and the independent model specification remain coherent."""
         agent = self.agent
         self.assertEqual(agent.TURNS_PER_DAY, SPEC_TURNS_PER_DAY)
         self.assertEqual(agent.SEASON_TURNS, SPEC_SEASON_TURNS)
@@ -295,360 +290,364 @@ class ForecastOneHistoryEventTests(unittest.TestCase):
         self.assertEqual(agent.MAX_SHOPS, SPEC_MAX_SHOPS)
         self.assertEqual(tuple(agent.SHED), SPEC_SHED)
         self.assertEqual(agent.SHOPS, SPEC_SHOPS)
-        self.assertEqual(
-            {
-                "product": agent.ANIMALS["COW"][1],
-                "first_day": agent.ANIMALS["COW"][2],
-                "interval_days": agent.ANIMALS["COW"][3],
-                "units": agent.ANIMALS["COW"][4],
-            },
-            SPEC_COW,
-        )
-        for i in range(len(self.history["steps"])):
-            obs = observation(self.history, i, self.seat)
-            self.assertEqual(
-                absolute_turn(agent, obs),
-                i,
-                f"history step {i} does not match observation day/hour",
-            )
+
+        actual_animals = {
+            animal: {
+                "product": cfg[1],
+                "first_day": cfg[2],
+                "interval_days": cfg[3],
+                "units": cfg[4],
+            }
+            for animal, cfg in agent.ANIMALS.items()
+        }
+        self.assertEqual(actual_animals, SPEC_ANIMALS)
+
+        for name, history, seat in self.cases:
+            for i in range(SPEC_SEASON_TURNS):
+                obs = observation(history, i, seat)
+                self.assertEqual(
+                    absolute_turn(obs),
+                    i,
+                    f"{name}: history step {i} != observation day/hour",
+                )
 
     def test_shop_open_events_change_full_season_demand_exactly(self):
-        """A newly opened shop must immediately add its known product demand."""
-        agent = self.agent
-        events = find_shop_events(self.history, self.seat)
-        self.assertEqual(
-            len(events), EXPECTED_EVENT_COUNTS["shop_open"],
-            "shop event extractor changed for the fixed history fixture",
-        )
+        seen_shops = Counter()
+        total_events = 0
 
-        print(f"\n[history={HISTORY_PATH.name}] seat={self.seat} shop events={len(events)}")
-        for i, prev_obs, obs, added in events:
-            step = absolute_turn(agent, obs)
-            counterfactual = copy.deepcopy(obs)
-            counterfactual["town"]["unlocked_shops"] = copy.deepcopy(
-                prev_obs["town"]["unlocked_shops"]
-            )
+        for name, history, seat in self.cases:
+            events = find_shop_events(history, seat)
+            self.assertGreater(len(events), 0, f"{name}: no shop-open events")
+            total_events += len(events)
 
-            projected_actual, flow_actual = run_forecast(agent, obs)
-            projected_before, flow_before = run_forecast(agent, counterfactual)
-            delta_flow = subtract_series(flow_actual, flow_before)
-            delta_projected = subtract_series(projected_actual, projected_before)
+            for i, _prev_obs, obs, added in events:
+                step = absolute_turn(obs)
+                counterfactual = copy.deepcopy(obs)
+                previous_shops = list(obs["town"]["unlocked_shops"])
+                for shop in added:
+                    previous_shops.remove(shop)
+                    seen_shops[shop] += 1
+                counterfactual["town"]["unlocked_shops"] = previous_shops
 
-            added_demand = {c: 0.0 for c in obs["market"]["inventory"]}
-            for shop in added:
-                for product, units in SPEC_SHOPS[shop].items():
-                    if product in added_demand:
-                        added_demand[product] += units
+                projected_actual, flow_actual = run_forecast(self.agent, obs)
+                projected_before, flow_before = run_forecast(self.agent, counterfactual)
+                delta_flow = subtract_series(flow_actual, flow_before)
+                delta_projected = subtract_series(projected_actual, projected_before)
 
-            # Validate the whole remaining season, including the subtle late-season
-            # effect where observing one more real shop leaves one fewer unknown future
-            # shop slot. Until that extra baseline-only unlock occurs, the delta is just
-            # the exact newly known shop demand. Afterwards, reduced uncertainty partly
-            # offsets that demand according to the expected random-shop mix.
-            expected_random_shop_demand = {
-                product: sum(
-                    products.get(product, 0) for products in SPEC_SHOPS.values()
-                ) / len(SPEC_SHOPS)
-                for product in obs["market"]["inventory"]
-            }
-            first_unlock = (
-                (step // SPEC_SHOP_UNLOCK_TURNS) + 1
-            ) * SPEC_SHOP_UNLOCK_TURNS
-            actual_future_unlocks = list(
-                range(first_unlock, SPEC_SEASON_TURNS, SPEC_SHOP_UNLOCK_TURNS)
-            )[: max(0, SPEC_MAX_SHOPS - len(obs["town"]["unlocked_shops"]))]
-            baseline_future_unlocks = list(
-                range(first_unlock, SPEC_SEASON_TURNS, SPEC_SHOP_UNLOCK_TURNS)
-            )[: max(0, SPEC_MAX_SHOPS - len(counterfactual["town"]["unlocked_shops"]))]
+                added_demand = {c: 0.0 for c in obs["market"]["inventory"]}
+                for shop in added:
+                    for product, units in SPEC_SHOPS[shop].items():
+                        if product in added_demand:
+                            added_demand[product] += units
 
-            for t in range(step, SPEC_SEASON_TURNS):
-                shop_tick = t % SPEC_SHOP_INTERVAL == 0
-                actual_new = sum(unlock <= t for unlock in actual_future_unlocks)
-                baseline_new = sum(unlock <= t for unlock in baseline_future_unlocks)
-                future_count_delta = actual_new - baseline_new
-                for product in delta_flow:
-                    expected = 0.0
-                    if shop_tick:
-                        expected = -(
+                expected_random = {
+                    product: sum(
+                        products.get(product, 0) for products in SPEC_SHOPS.values()
+                    ) / len(SPEC_SHOPS)
+                    for product in obs["market"]["inventory"]
+                }
+                first_unlock = (
+                    (step // SPEC_SHOP_UNLOCK_TURNS) + 1
+                ) * SPEC_SHOP_UNLOCK_TURNS
+                actual_unlocks = list(
+                    range(first_unlock, SPEC_SEASON_TURNS, SPEC_SHOP_UNLOCK_TURNS)
+                )[: max(0, SPEC_MAX_SHOPS - len(obs["town"]["unlocked_shops"]))]
+                baseline_unlocks = list(
+                    range(first_unlock, SPEC_SEASON_TURNS, SPEC_SHOP_UNLOCK_TURNS)
+                )[: max(0, SPEC_MAX_SHOPS - len(counterfactual["town"]["unlocked_shops"]))]
+
+                expected = empty_expected(flow_actual)
+                for t in range(step, SPEC_SEASON_TURNS):
+                    if t % SPEC_SHOP_INTERVAL:
+                        continue
+                    actual_new = sum(unlock <= t for unlock in actual_unlocks)
+                    baseline_new = sum(unlock <= t for unlock in baseline_unlocks)
+                    future_count_delta = actual_new - baseline_new
+                    for product in expected:
+                        expected[product][t] = -(
                             added_demand.get(product, 0.0)
-                            + future_count_delta
-                            * expected_random_shop_demand.get(product, 0.0)
+                            + future_count_delta * expected_random.get(product, 0.0)
                         )
-                    assert_close(
-                        self,
-                        delta_flow[product][t],
-                        expected,
-                        f"SHOP_OPEN step={step} t={t} product={product}",
-                    )
 
-            demand_per_tick = sum(added_demand.values())
-            assert_projection_delta_consistent(
-                self, delta_flow, delta_projected, step
-            )
-            next_unlock = min(SPEC_SEASON_TURNS, first_unlock)
-            ticks = sum(
-                1 for t in range(step, next_unlock)
-                if t % SPEC_SHOP_INTERVAL == 0
-            )
-            affected = {c: n for c, n in added_demand.items() if n}
-            projected_changes = {
-                c: nonzero_points(delta_projected[c])
-                for c in affected
-                if nonzero_points(delta_projected[c])
-            }
-            print(
-                f"  SHOP_OPEN history_step={i} turn={step} "
-                f"day={obs['day']} hour={obs['hour']} added={added} "
-                f"demand/tick=+{demand_per_tick:g} by_product={affected} "
-                f"ticks_before_next_unlock={ticks}"
-            )
-            for product, points in projected_changes.items():
-                print(f"    projected_delta[{product}]={points[:6]}")
+                assert_flow_exact(
+                    self, delta_flow, expected, f"{name} SHOP_OPEN step={step}"
+                )
+                assert_projection_delta_consistent(
+                    self, delta_flow, delta_projected, step
+                )
 
-    def test_new_opponent_cow_changes_milk_supply_and_wheat_demand(self):
-        """A clean opponent COW placement exposes both future MILK supply and +1 herd demand."""
-        agent = self.agent
-        events = find_clean_opponent_animal_events(
-            self.history, self.seat, animal="COW"
-        )
+            print(f"[{name}] shop-open events={len(events)}")
+
         self.assertEqual(
-            len(events), EXPECTED_EVENT_COUNTS["clean_opponent_cow"],
-            "COW event extractor changed for the fixed history fixture",
+            set(seen_shops),
+            set(SPEC_SHOPS),
+            f"five histories did not cover every shop type: {seen_shops}",
         )
+        print(f"[all histories] shop events={total_events} by_type={dict(seen_shops)}")
 
-        opponent = 1 - self.seat
-        print(f"\n[history={HISTORY_PATH.name}] opponent={opponent} clean COW events={len(events)}")
+    def test_opponent_animal_appear_events_all_species(self):
+        seen = Counter()
+        total_events = 0
 
-        for i, prev_obs, obs, x, y, previous, cow_state in events:
-            step = absolute_turn(agent, obs)
-            counterfactual = copy.deepcopy(obs)
-            counter_tile = copy.deepcopy(cow_state)
-            counter_tile.pop("animal", None)
-            counterfactual["farms"][opponent]["tiles"][y][x] = counter_tile
+        for name, history, seat in self.cases:
+            opponent = 1 - seat
+            events = find_clean_opponent_asset_events(history, seat, "animal")
+            total_events += len(events)
 
-            projected_actual, flow_actual = run_forecast(agent, obs)
-            projected_before, flow_before = run_forecast(agent, counterfactual)
-            delta_flow = subtract_series(flow_actual, flow_before)
-            delta_projected = subtract_series(projected_actual, projected_before)
+            for i, obs, x, y, animal_state in events:
+                animal = animal_state["animal"]
+                seen[animal] += 1
+                cfg = SPEC_ANIMALS[animal]
+                step = absolute_turn(obs)
+                p = (x, y)
 
-            expected = {
-                product: [0.0] * SPEC_SEASON_TURNS
-                for product in flow_actual
-            }
+                counterfactual = copy.deepcopy(obs)
+                counterfactual["farms"][opponent]["tiles"][y][x].pop("animal", None)
 
-            # One additional visible animal adds exactly one unit to the simple daily
-            # herd-WHEAT forecast. The +3 reserve is per player, so it does not change
-            # when the herd increases from N to N+1.
-            if "WHEAT" in expected:
+                projected_actual, flow_actual = run_forecast(self.agent, obs)
+                projected_before, flow_before = run_forecast(self.agent, counterfactual)
+                delta_flow = subtract_series(flow_actual, flow_before)
+                delta_projected = subtract_series(projected_actual, projected_before)
+                expected = empty_expected(flow_actual)
+
+                # One additional animal adds exactly one WHEAT unit to each daily herd tick.
                 first_feed = ((step // SPEC_TURNS_PER_DAY) + 1) * SPEC_TURNS_PER_DAY
                 for t in range(first_feed, SPEC_SEASON_TURNS, SPEC_TURNS_PER_DAY):
                     expected["WHEAT"][t] -= 1.0
 
-            animal_cfg = SPEC_COW
-            product = animal_cfg["product"]
-            held = cow_state.get("yield_units", 0)
-            p = (x, y)
-            opp_farm = obs["farms"][opponent]
-            positions = [tuple(opp_farm["farmer"])] + [
-                tuple(pos) for pos in opp_farm["hands"]
-            ]
+                product = cfg["product"]
+                held = animal_state.get("yield_units", 0)
+                positions = [tuple(obs["farms"][opponent]["farmer"])] + [
+                    tuple(pos) for pos in obs["farms"][opponent]["hands"]
+                ]
+                if held:
+                    approach = min(manhattan(pos, p) for pos in positions)
+                    at = step + approach + shed_distance(p) + 1
+                    if at < SPEC_SEASON_TURNS:
+                        expected[product][at] += held
 
-            # Visible yield already on the new animal tile uses worker approach + harvest
-            # + efficient transport, exactly as forecast() currently models it.
-            if held:
-                approach = min(manhattan(pos, p) for pos in positions) if positions else 0
-                at = step + approach + shed_distance(p) + 1
-                if at < SPEC_SEASON_TURNS:
-                    expected[product][at] += held
+                first_day = animal_state["placed_day"] + cfg["first_day"]
+                for at_day in range(max(int(obs["day"]) + 1, first_day), 30):
+                    if (at_day - first_day) % cfg["interval_days"]:
+                        continue
+                    at = at_day * SPEC_TURNS_PER_DAY + shed_distance(p) + 1
+                    if at < SPEC_SEASON_TURNS:
+                        expected[product][at] += cfg["units"]
 
-            # Future well-cared cow production: +3 MILK per event, then efficient
-            # harvest/transport to the shed/market.
-            first_day = cow_state["placed_day"] + animal_cfg["first_day"]
-            for at_day in range(max(int(obs["day"]) + 1, first_day), 30):
-                if (at_day - first_day) % animal_cfg["interval_days"]:
-                    continue
-                ready_turn = at_day * SPEC_TURNS_PER_DAY
-                at = ready_turn + shed_distance(p) + 1
-                if at < SPEC_SEASON_TURNS:
-                    expected[product][at] += animal_cfg["units"]
+                assert_flow_exact(
+                    self,
+                    delta_flow,
+                    expected,
+                    f"{name} OPP_{animal}_APPEAR step={step}",
+                )
+                assert_projection_delta_consistent(
+                    self, delta_flow, delta_projected, step
+                )
 
-            for product_name in delta_flow:
-                for t, (actual_value, expected_value) in enumerate(
-                    zip(delta_flow[product_name], expected[product_name])
-                ):
-                    assert_close(
-                        self,
-                        actual_value,
-                        expected_value,
-                        f"OPP_COW step={step} t={t} product={product_name}",
-                    )
+            print(f"[{name}] clean opponent animal appearances={len(events)}")
 
-            assert_projection_delta_consistent(
-                self, delta_flow, delta_projected, step
-            )
-            milk_points = nonzero_points(delta_flow[product])
-            wheat_points = nonzero_points(delta_flow.get("WHEAT", []))
-            projected_milk = nonzero_points(delta_projected[product])
-            print(
-                f"  OPP_COW_APPEAR history_step={i} turn={step} "
-                f"day={obs['day']} hour={obs['hour']} tile=({x},{y}) "
-                f"placed_day={cow_state['placed_day']}"
-            )
-            print(f"    net_flow_delta[{product}]={milk_points[:10]}")
-            print(f"    net_flow_delta[WHEAT]={wheat_points[:10]}")
-            print(f"    projected_delta[{product}]={projected_milk[:8]}")
-
-
-    def test_new_opponent_crop_changes_only_that_crop_future_supply(self):
-        """A clean opponent crop placement adds exactly its modeled public future supply."""
-        agent = self.agent
-        events = find_clean_opponent_crop_events(self.history, self.seat)
         self.assertEqual(
-            len(events), EXPECTED_EVENT_COUNTS["clean_opponent_crop"],
-            "crop event extractor changed for the fixed history fixture",
+            set(seen),
+            set(SPEC_ANIMALS),
+            f"five histories did not cover every animal type: {seen}",
         )
+        print(f"[all histories] animal appearances={total_events} by_type={dict(seen)}")
 
-        opponent = 1 - self.seat
-        print(f"\n[history={HISTORY_PATH.name}] opponent={opponent} clean crop events={len(events)}")
+    def test_opponent_animal_yield_changes_all_species(self):
+        seen = Counter()
+        total_events = 0
 
-        for i, prev_obs, obs, x, y, previous, crop_state in events:
-            step = absolute_turn(agent, obs)
-            counterfactual = copy.deepcopy(obs)
-            counter_tile = copy.deepcopy(crop_state)
-            counter_tile.pop("crop", None)
-            counterfactual["farms"][opponent]["tiles"][y][x] = counter_tile
+        for name, history, seat in self.cases:
+            opponent = 1 - seat
+            events = find_opponent_yield_events(history, seat, "animal")
+            total_events += len(events)
 
-            projected_actual, flow_actual = run_forecast(agent, obs)
-            projected_before, flow_before = run_forecast(agent, counterfactual)
-            delta_flow = subtract_series(flow_actual, flow_before)
-            delta_projected = subtract_series(projected_actual, projected_before)
+            for i, obs, x, y, before, after, animal_state in events:
+                animal = animal_state["animal"]
+                seen[animal] += 1
+                product = SPEC_ANIMALS[animal]["product"]
+                step = absolute_turn(obs)
+                p = (x, y)
 
-            expected = {
-                product: [0.0] * SPEC_SEASON_TURNS
-                for product in flow_actual
-            }
+                counterfactual = copy.deepcopy(obs)
+                counterfactual["farms"][opponent]["tiles"][y][x]["yield_units"] = before
 
-            crop = crop_state["crop"]
-            planted = crop_state["planted_day"]
-            crop_spec = SPEC_CROPS[crop]
-            ongoing = crop_spec["ongoing"]
-            held = crop_state.get("yield_units", 0)
-            p = (x, y)
-            opp_farm = obs["farms"][opponent]
-            positions = [tuple(opp_farm["farmer"])] + [
-                tuple(pos) for pos in opp_farm["hands"]
-            ]
+                projected_actual, flow_actual = run_forecast(self.agent, obs)
+                projected_before, flow_before = run_forecast(self.agent, counterfactual)
+                delta_flow = subtract_series(flow_actual, flow_before)
+                delta_projected = subtract_series(projected_actual, projected_before)
+                expected = empty_expected(flow_actual)
 
-            if held:
-                approach = min(manhattan(pos, p) for pos in positions) if positions else 0
-                at = step + approach + shed_distance(p) + 1
-                if at < SPEC_SEASON_TURNS:
-                    expected[crop][at] += held
+                positions = [tuple(obs["farms"][opponent]["farmer"])] + [
+                    tuple(pos) for pos in obs["farms"][opponent]["hands"]
+                ]
+                approach = min(manhattan(pos, p) for pos in positions)
+                arrival = step + approach + shed_distance(p) + 1
+                if arrival < SPEC_SEASON_TURNS:
+                    expected[product][arrival] += after - before
 
-            for age, scheduled_units in crop_spec["events"]:
-                at_day = planted + age
-                ready_turn = at_day * SPEC_TURNS_PER_DAY
-                if ready_turn <= step or at_day >= 30:
-                    continue
-                if ongoing:
-                    units = 2 if crop_state.get("fertilized_until_day", -1) >= at_day else 1
-                else:
-                    units = max(0, scheduled_units - held)
-                if not units:
-                    continue
-                at = ready_turn + shed_distance(p) + 1
-                if at < SPEC_SEASON_TURNS:
-                    expected[crop][at] += units
+                assert_flow_exact(
+                    self,
+                    delta_flow,
+                    expected,
+                    f"{name} OPP_{animal}_YIELD step={step}",
+                )
+                assert_projection_delta_consistent(
+                    self, delta_flow, delta_projected, step
+                )
 
-            for product_name in delta_flow:
-                for t, (actual_value, expected_value) in enumerate(
-                    zip(delta_flow[product_name], expected[product_name])
-                ):
-                    assert_close(
-                        self,
-                        actual_value,
-                        expected_value,
-                        f"OPP_CROP step={step} t={t} product={product_name}",
-                    )
+            print(f"[{name}] opponent animal-yield changes={len(events)}")
 
-            assert_projection_delta_consistent(
-                self, delta_flow, delta_projected, step
-            )
-            flow_points = nonzero_points(delta_flow[crop])
-            projected_points = nonzero_points(delta_projected[crop])
-            print(
-                f"  OPP_CROP_APPEAR history_step={i} turn={step} "
-                f"day={obs['day']} hour={obs['hour']} tile=({x},{y}) "
-                f"crop={crop} planted_day={planted}"
-            )
-            print(f"    net_flow_delta[{crop}]={flow_points[:12]}")
-            print(f"    projected_delta[{crop}]={projected_points[:8]}")
-
-    def test_opponent_ongoing_yield_change_moves_visible_supply_only(self):
-        """TOMATO/STRAWBERRY yield changes affect only visible held-supply ETA."""
-        agent = self.agent
-        events = find_opponent_ongoing_yield_events(self.history, self.seat)
         self.assertEqual(
-            len(events), EXPECTED_EVENT_COUNTS["opponent_ongoing_yield"],
-            "yield event extractor changed for the fixed history fixture",
+            set(seen),
+            set(SPEC_ANIMALS),
+            f"five histories did not cover yield changes for every animal type: {seen}",
         )
+        print(f"[all histories] animal-yield events={total_events} by_type={dict(seen)}")
 
-        opponent = 1 - self.seat
-        print(
-            f"\n[history={HISTORY_PATH.name}] opponent={opponent} "
-            f"ongoing-yield events={len(events)}"
+    def test_opponent_crop_appear_events_all_types(self):
+        seen = Counter()
+        total_events = 0
+
+        for name, history, seat in self.cases:
+            opponent = 1 - seat
+            events = find_clean_opponent_asset_events(history, seat, "crop")
+            total_events += len(events)
+
+            for i, obs, x, y, crop_state in events:
+                crop = crop_state["crop"]
+                seen[crop] += 1
+                crop_spec = SPEC_CROPS[crop]
+                step = absolute_turn(obs)
+                p = (x, y)
+
+                counterfactual = copy.deepcopy(obs)
+                counterfactual["farms"][opponent]["tiles"][y][x].pop("crop", None)
+
+                projected_actual, flow_actual = run_forecast(self.agent, obs)
+                projected_before, flow_before = run_forecast(self.agent, counterfactual)
+                delta_flow = subtract_series(flow_actual, flow_before)
+                delta_projected = subtract_series(projected_actual, projected_before)
+                expected = empty_expected(flow_actual)
+
+                held = crop_state.get("yield_units", 0)
+                positions = [tuple(obs["farms"][opponent]["farmer"])] + [
+                    tuple(pos) for pos in obs["farms"][opponent]["hands"]
+                ]
+                if held:
+                    approach = min(manhattan(pos, p) for pos in positions)
+                    at = step + approach + shed_distance(p) + 1
+                    if at < SPEC_SEASON_TURNS:
+                        expected[crop][at] += held
+
+                planted = crop_state["planted_day"]
+                for age, scheduled_units in crop_spec["events"]:
+                    at_day = planted + age
+                    ready_turn = at_day * SPEC_TURNS_PER_DAY
+                    if ready_turn <= step or at_day >= 30:
+                        continue
+                    if crop_spec["ongoing"]:
+                        units = (
+                            2
+                            if crop_state.get("fertilized_until_day", -1) >= at_day
+                            else 1
+                        )
+                    else:
+                        units = max(0, scheduled_units - held)
+                    if not units:
+                        continue
+                    at = ready_turn + shed_distance(p) + 1
+                    if at < SPEC_SEASON_TURNS:
+                        expected[crop][at] += units
+
+                assert_flow_exact(
+                    self,
+                    delta_flow,
+                    expected,
+                    f"{name} OPP_{crop}_APPEAR step={step}",
+                )
+                assert_projection_delta_consistent(
+                    self, delta_flow, delta_projected, step
+                )
+
+            print(f"[{name}] clean opponent crop appearances={len(events)}")
+
+        self.assertEqual(
+            set(seen),
+            set(SPEC_CROPS),
+            f"five histories did not cover every crop type: {seen}",
         )
+        print(f"[all histories] crop appearances={total_events} by_type={dict(seen)}")
 
-        for i, prev_obs, obs, x, y, before, after, crop_state in events:
-            step = absolute_turn(agent, obs)
-            counterfactual = copy.deepcopy(obs)
-            counterfactual["farms"][opponent]["tiles"][y][x]["yield_units"] = before
+    def test_opponent_crop_yield_changes_all_types(self):
+        seen = Counter()
+        total_events = 0
 
-            projected_actual, flow_actual = run_forecast(agent, obs)
-            projected_before, flow_before = run_forecast(agent, counterfactual)
-            delta_flow = subtract_series(flow_actual, flow_before)
-            delta_projected = subtract_series(projected_actual, projected_before)
+        for name, history, seat in self.cases:
+            opponent = 1 - seat
+            events = find_opponent_yield_events(history, seat, "crop")
+            total_events += len(events)
 
-            crop = crop_state["crop"]
-            p = (x, y)
-            opp_farm = obs["farms"][opponent]
-            positions = [tuple(opp_farm["farmer"])] + [
-                tuple(pos) for pos in opp_farm["hands"]
-            ]
-            approach = min(manhattan(pos, p) for pos in positions) if positions else 0
-            arrival = step + approach + shed_distance(p) + 1
-            delta_units = after - before
+            for i, obs, x, y, before, after, crop_state in events:
+                crop = crop_state["crop"]
+                seen[crop] += 1
+                crop_spec = SPEC_CROPS[crop]
+                step = absolute_turn(obs)
+                p = (x, y)
 
-            expected = {
-                product: [0.0] * SPEC_SEASON_TURNS
-                for product in flow_actual
-            }
-            if arrival < SPEC_SEASON_TURNS:
-                expected[crop][arrival] = float(delta_units)
+                counterfactual = copy.deepcopy(obs)
+                counterfactual["farms"][opponent]["tiles"][y][x]["yield_units"] = before
 
-            for product_name in delta_flow:
-                for t, (actual_value, expected_value) in enumerate(
-                    zip(delta_flow[product_name], expected[product_name])
-                ):
-                    assert_close(
-                        self,
-                        actual_value,
-                        expected_value,
-                        f"OPP_YIELD step={step} t={t} product={product_name}",
-                    )
+                projected_actual, flow_actual = run_forecast(self.agent, obs)
+                projected_before, flow_before = run_forecast(self.agent, counterfactual)
+                delta_flow = subtract_series(flow_actual, flow_before)
+                delta_projected = subtract_series(projected_actual, projected_before)
+                expected = empty_expected(flow_actual)
 
-            assert_projection_delta_consistent(
-                self, delta_flow, delta_projected, step
-            )
-            projected_points = nonzero_points(delta_projected[crop])
-            print(
-                f"  OPP_YIELD_CHANGE history_step={i} turn={step} "
-                f"day={obs['day']} hour={obs['hour']} tile=({x},{y}) "
-                f"crop={crop} yield={before}->{after} "
-                f"arrival={arrival} flow_delta={delta_units:+g}"
-            )
-            print(f"    projected_delta[{crop}]={projected_points[:8]}")
+                positions = [tuple(obs["farms"][opponent]["farmer"])] + [
+                    tuple(pos) for pos in obs["farms"][opponent]["hands"]
+                ]
+                approach = min(manhattan(pos, p) for pos in positions)
+                arrival = step + approach + shed_distance(p) + 1
+                if arrival < SPEC_SEASON_TURNS:
+                    expected[crop][arrival] += after - before
 
+                # For one-time crops, visible held yield is subtracted from the later
+                # scheduled total. Changing yield_units therefore changes both the
+                # visible-supply ETA and any still-future remainder.
+                if not crop_spec["ongoing"]:
+                    planted = crop_state["planted_day"]
+                    for age, scheduled_units in crop_spec["events"]:
+                        at_day = planted + age
+                        ready_turn = at_day * SPEC_TURNS_PER_DAY
+                        if ready_turn <= step or at_day >= 30:
+                            continue
+                        before_remaining = max(0, scheduled_units - before)
+                        after_remaining = max(0, scheduled_units - after)
+                        remainder_delta = after_remaining - before_remaining
+                        if remainder_delta:
+                            at = ready_turn + shed_distance(p) + 1
+                            if at < SPEC_SEASON_TURNS:
+                                expected[crop][at] += remainder_delta
+
+                assert_flow_exact(
+                    self,
+                    delta_flow,
+                    expected,
+                    f"{name} OPP_{crop}_YIELD step={step}",
+                )
+                assert_projection_delta_consistent(
+                    self, delta_flow, delta_projected, step
+                )
+
+            print(f"[{name}] opponent crop-yield changes={len(events)}")
+
+        self.assertEqual(
+            set(seen),
+            set(SPEC_CROPS),
+            f"five histories did not cover yield changes for every crop type: {seen}",
+        )
+        print(f"[all histories] crop-yield events={total_events} by_type={dict(seen)}")
 
 
 if __name__ == "__main__":
