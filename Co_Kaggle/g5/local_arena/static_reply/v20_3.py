@@ -1220,7 +1220,8 @@ def market_orders(obs,signals,actions):
     # 1. SELL — liquidate immediately sellable goods first, while keeping the
     # configured WHEAT/FERTILIZER reserves. Sale proceeds fund later priorities.
     # -------------------------------------------------------------------------
-    reserve_wheat=0 if day==29 else max(4,live+2)
+    wheat_buffer=4 if live<4 else 8 if live<8 else 14
+    reserve_wheat=max(live,wheat_buffer)
     reserve_fert=0 if day<10 or day==29 else 4
     for c in SELLABLE_PRODUCTS:
         n=held.get(c,0)
