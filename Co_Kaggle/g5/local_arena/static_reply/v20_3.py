@@ -1271,10 +1271,12 @@ def market_orders(obs,signals,actions):
     # -------------------------------------------------------------------------
     lands=len(f['unlocked_quadrants'])
     empty_tiles=sum(1 for row in f['tiles'] for t in row if t is None)
-    land_policy={1:(3,1000),2:(5,2000),3:(5,4000)}
+    # (empty-tile threshold, land cost, latest buy day)
+    # The 4th quadrant is not worth buying after day 24.
+    land_policy={1:(3,1000,29),2:(5,2000,29),3:(5,4000,24)}
     if lands in land_policy:
-        empty_threshold,landcost=land_policy[lands]
-        if empty_tiles<empty_threshold and cash>=landcost and len(orders)<10:
+        empty_threshold,landcost,latest_buy_day=land_policy[lands]
+        if day<=latest_buy_day and empty_tiles<empty_threshold and cash>=landcost and len(orders)<10:
             orders.append(['BUY_LAND']);cash-=landcost
     # -------------------------------------------------------------------------
     # 4. BUY SEEDS / ANIMALS — walk production_signals() from highest need to
