@@ -1,0 +1,2989 @@
+#!/usr/bin/env python3
+"""Agents-SDK runtime, durable research memory, and observability for v23."""
+from __future__ import annotations
+
+import argparse
+import ast
+import asyncio
+import hashlib
+import json
+import os
+import sqlite3
+import subprocess
+import sys
+import time
+import uuid
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from agents import Agent, ModelRetrySettings, ModelSettings, RunConfig, RunContextWrapper, RunHooks, Runner, SQLiteSession, SessionSettings, function_tool, retry_policies, set_default_openai_key
+from openai.types.shared import Reasoning
+
+from .context import (
+    append_progress_files,
+    build_analyst_context,
+    build_engineer_context,
+    build_progress_snapshot,
+)
+from .analysis import (
+    analyze_cash_flow as analyze_cash_flow_data,
+    analyze_experiment_records,
+    analyze_inventory_flow as analyze_inventory_flow_data,
+    analyze_loss_history,
+    analyze_loss_window,
+    analyze_worker_utilization as analyze_worker_utilization_data,
+    cluster_loss_games as cluster_loss_games_data,
+    compare_candidate_to_v20 as compare_candidate_to_v20_data,
+    component_effect_matrix as component_effect_matrix_data,
+    hypothesis_evidence as hypothesis_evidence_data,
+)
+from .support import (
+    DEFAULT_MODEL, DEFAULT_SESSION_BUDGET_USD, DEFAULT_TOTAL_BUDGET_USD,
+    LEDGER_PATH, MODEL_PRICING_USD_PER_M, SYSTEM_PROMPT as V1_SYSTEM_PROMPT,
+    WORKSPACE, BudgetLedger, LocalTools, RunLog, Usage as LegacyUsage,
+    run_subprocess_bounded_output,
+)
+
+STATE_DB = WORKSPACE / "experiments.sqlite3"
+SESSION_DB = WORKSPACE / "agent_sessions.sqlite3"
+DEFAULT_SESSION_ID = "v23-research"
+
+SYSTEM_PROMPT = V1_SYSTEM_PROMPT + """
+
+v2 research-memory contract:
+- Before candidate evaluation, call start_experiment with one falsifiable hypothesis.
+- Pass experiment_id to static_replay_candidate.
+- After analysis, call finish_experiment with SUPPORTED, REJECTED, UNRESOLVED, or ERROR.
+- Call project_status before repeating an idea. Previous negative results are durable evidence.
+- Call set_goal when the task has an explicit numeric target. If the target is defined over a fixed corpus (for example wins across all 25 histories), set min_games_total to that corpus size so a subset cannot satisfy the final goal.
+- Goal completion comes only from structured replay metrics, never prose.
+- Model-written candidate policies may execute only through static_replay_candidate.
+- Every replayed candidate MUST be a durable full-v20-derived artifact under workspace/candidates/. Use write_v20_candidate_file to create it by replacing one or more named top-level functions from the v20 baseline. Do NOT build a tiny standalone agent(obs) replacement. Never evaluate ephemeral code, descriptive candidate strings, or arbitrary files elsewhere in v23.
+- To inspect v20 implementation, NEVER use read_text/search_text on the serialized notebook. Call list_v20_functions and read_v20_function instead. read_v20_function returns exact extracted function source and supports paging. Raw-notebook truncation or inability to inspect notebook JSON is NOT a blocker.
+- Treat workspace/candidates/<name>.py or .ipynb plus its SHA-256 as the immutable experiment artifact. Keep rejected as well as successful candidates for lineage and branching.
+- An assigned idea is not complete until the exact durable candidate has been plugged into static replay and produced at least one valid measured replay result. If finish_experiment returns execution-contract feedback, do not move on or merely explain; continue the SAME idea, create/fix the candidate, replay it correctly, inspect the result, and call finish_experiment again.
+- ERROR is not an escape hatch from the execution contract. Use ERROR only when concrete runtime evidence exists: a persisted replay error for this experiment or a blocker recorded through report_blocker. Candidate-code/runtime errors are recoverable attempts: close only the failed experiment attempt, keep the SAME idea RUNNING, create a fresh experiment with a new candidate artifact/content, and replay again. Do not call report_blocker for SyntaxError, ImportError, NameError, candidate load failure, or other fixable generated-code errors.
+- Every new idea must produce a new candidate artifact AND new candidate content. Reusing a path or SHA-256 already bound to a different idea is rejected. Derive from prior work if useful, but make a real idea-specific code change and save it as a new workspace/candidates/ artifact before replay.
+- When execution is enabled, do not stop at analysis or planning. You must create/select a concrete candidate, start an experiment, execute at least one static replay, analyze the measured result, and finish the experiment unless a concrete runtime error or budget stop blocks execution.
+- A rejected candidate is evidence, not a blocker. If the durable goal is unmet, continue with the next justified experiment.
+- The supplied ENGINEER CONTEXT PACK is the canonical starting context for assigned work.
+- Idea/experiment/replay lineage is authoritative. For assigned ideas, keep the supplied idea_id, let start_experiment link the experiment automatically, and use idea_dossier after replay to verify the candidate path/hash, replay_call_id, episode records, and metrics before concluding the experiment.
+- After four consecutive rejected experiments with no wins and no positive mean margin improvement, treat the search as stagnant: abandon the current tweak family, re-inspect raw loss evidence, and move to a different causal layer (for example worker actions/task ranking/logistics/planning/inventory/market). Do not keep making parameter variants of the same idea.
+- Do not use one fixed 5-game screen forever. Rotate or stratify screening histories when a screen repeatedly rejects candidates, and periodically run the strongest candidate family on all 25 histories because local replay is cheaper than additional model reasoning.
+- Only call report_blocker for a concrete runtime/environment failure that makes further research impossible without external intervention.
+- SELF-CORRECTION IS REQUIRED only for agent-generated candidate artifacts under workspace/candidates/. When static_replay_candidate returns candidate_repair_required=true, inspect the returned error, close that attempt with finish_experiment(..., ERROR, ...), call start_experiment again for the SAME idea, write a NEW corrected candidate artifact under workspace/candidates/, and replay it. Repeat this repair loop until replay produces a valid measured result or a truly external blocker exists.
+- If the controller reports that the prior model response was incomplete or hit max_output_tokens/max turns, treat it as a recoverable generation failure. Resume the SAME durable work, minimize prose, use tools first, and finish the pending action. Never report a blocker solely because a model response was truncated.
+- Never edit, rewrite, or self-correct user/project-supplied reference files such as working_files/, replay/, agent/, v20 source/notebooks, or any repository file outside workspace/candidates/. Treat those as read-only inputs. If such an external/reference file is actually broken, report the concrete blocker instead of modifying it.
+- FP16 is mandatory for candidate floating-point model weights, activations, tensors, and learned numeric compute. Integer/boolean/schema-mandated types are exempt. Do not emit float32, float64, double, or bfloat16 candidate model/tensor code unless a backend operation is provably unsupported in FP16; any such exception must be narrowly scoped, documented, and converted back to FP16 immediately.
+"""
+
+PERFORMANCE_ANALYST_PROMPT = """You are the independent v23 Performance Analyst.
+
+You are read-only. You do not write candidate code and you do not execute replay.
+Your job is to diagnose why research is or is not improving and give the Experiment
+Engineer a higher-information direction.
+
+Use the available read-only tools selectively.
+Turn discipline is mandatory:
+- You MUST reserve time for the final JSON batch; tool exploration is not the deliverable.
+- On an initial diagnosis, use at most 5 tool-call rounds before returning the final JSON.
+- Prefer one corpus-level summary plus 2-3 representative deep dives; never inspect all 25 games manually.
+- If evidence is incomplete after the tool budget, state uncertainty in the hypotheses and still return the required 10-idea JSON batch.
+- Start from the supplied ANALYST CONTEXT PACK and call research_progress if you need a fresh compact status snapshot.
+- Call project_status only when you need fields not already present in the context pack;
+- use analyze_experiments and analyze_component_effects before manually reading experiment rows;
+- use cluster_loss_histories to diversify representative replay cases when useful;
+- use analyze_history_game(episode) to locate suspicious windows in recorded v20 losses, then use analyze_cash_flow, analyze_inventory_flow, analyze_worker_utilization, or analyze_history_window to diagnose the relevant subsystem;
+- use compare_candidate_v20(idea_id, episode) to connect code changes to action divergence and measured outcome;
+- use evaluate_hypothesis_evidence(idea_id) before deciding whether a mechanism is supported, contradicted, or mixed;
+- inspect recent experiment/replay evidence;
+- inspect v20 model structure and raw loss histories only where needed;
+- reason about the whole v20 control system, not isolated functions. Trace feedback
+  loops across crop_plan, animal_plan, worker/task ranking, movement/logistics,
+  worker inventory, shed capacity, market_orders, hiring, purchases, land, cash,
+  prices, and future production;
+- explicitly look for coupled failure modes where one component makes another look
+  bad (for example animal_plan increasing production while market_orders dumps the
+  same goods into a glut, or task ranking harvesting faster than logistics/storage
+  can clear inventory);
+- consider coordinated interventions when the causal mechanism spans components;
+  changing multiple components is allowed when they implement ONE interaction
+  hypothesis and the experiment remains falsifiable;
+- treat rejected hypotheses as negative evidence;
+- treat idea_id -> experiment_id -> candidate path/SHA-256 -> replay_call_id -> episode/game_record_path as the canonical evidence chain. Use idea_dossier(idea_id) for detailed lineage and read individual game_record_path files only when step-level traces can change the diagnosis;
+- if recent search is stagnant, explicitly move away from the repeated hypothesis
+  family instead of proposing another parameter tweak.
+
+Return ONLY one compact JSON object with this schema:
+{
+  "performance_evidence": "measured evidence summary",
+  "failure_mechanisms": ["1-3 evidence-backed mechanisms"],
+  "do_not_repeat": ["idea families contradicted by prior evidence"],
+  "ideas": [
+    {
+      "title": "short unique title",
+      "hypothesis": "falsifiable prediction",
+      "causal_layer": "worker|ranking|logistics|planning|inventory|market|multi_component|other",
+      "components": ["exact v20 components/functions affected"],
+      "interaction_hypothesis": "how these components interact causally; use 'single-component' only when truly local",
+      "system_prediction": "predicted downstream effect on production/logistics/inventory/market/cash and final margin",
+      "rationale": "why this differs from rejected work",
+      "smallest_test": "smallest useful static-replay screen",
+      "promotion_rule": "measured condition to expand toward 5 then all 25"
+    }
+  ]
+}
+
+The ideas array MUST contain exactly 10 structurally distinct ideas. Do not give
+ten parameter variants of one mechanism. At least 3 ideas MUST be coordinated
+multi-component hypotheses with 2 or more entries in components. Examples include
+coordinating animal_plan with market_orders, crop_plan with worker/task ranking,
+or production with logistics/inventory capacity. The remaining ideas may be local
+when evidence supports a local bottleneck. Prefer interaction hypotheses that
+explain observed end-to-end money/margin outcomes. Order ideas by expected
+information value, not confidence.
+
+Do not claim improvement without measured replay evidence.
+"""
+
+
+def utcnow() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+class ResearchDB:
+    def __init__(self, path: Path):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self.db = sqlite3.connect(path, check_same_thread=False)
+        self.db.row_factory = sqlite3.Row
+        self.db.executescript("""
+        PRAGMA journal_mode=WAL;
+        CREATE TABLE IF NOT EXISTS runs(
+          run_id TEXT PRIMARY KEY, session_id TEXT, task TEXT, model TEXT,
+          started_at TEXT, ended_at TEXT, elapsed_seconds REAL, status TEXT,
+          api_requests INTEGER DEFAULT 0, input_tokens INTEGER DEFAULT 0,
+          cached_tokens INTEGER DEFAULT 0, cache_write_tokens INTEGER DEFAULT 0,
+          output_tokens INTEGER DEFAULT 0, reasoning_tokens INTEGER DEFAULT 0,
+          total_tokens INTEGER DEFAULT 0, conservative_cost_usd REAL DEFAULT 0,
+          experiments_started INTEGER DEFAULT 0, replay_calls INTEGER DEFAULT 0,
+          replay_cases INTEGER DEFAULT 0, final_output TEXT);
+        CREATE TABLE IF NOT EXISTS experiments(
+          experiment_id TEXT PRIMARY KEY, run_id TEXT, idea_id TEXT, hypothesis TEXT,
+          candidate TEXT, candidate_sha256 TEXT, parent_candidate TEXT, notes TEXT, started_at TEXT,
+          ended_at TEXT, elapsed_seconds REAL, status TEXT, conclusion TEXT,
+          replay_calls INTEGER DEFAULT 0, replay_cases INTEGER DEFAULT 0,
+          best_margin_improvement REAL, mean_margin_improvement REAL,
+          wins INTEGER, losses INTEGER, regressions INTEGER);
+        CREATE TABLE IF NOT EXISTS replays(
+          replay_id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT,
+          experiment_id TEXT, replay_call_id TEXT, candidate TEXT, episode TEXT,
+          started_at TEXT, elapsed_seconds REAL, valid INTEGER,
+          original_v20_margin REAL, candidate_margin REAL, margin_improvement REAL,
+          result TEXT, action_divergences INTEGER, game_record_path TEXT, error TEXT);
+        CREATE TABLE IF NOT EXISTS goals(
+          goal_id TEXT PRIMARY KEY, metric TEXT, operator TEXT, target REAL,
+          max_regressions INTEGER, min_games_total INTEGER,
+          created_at TEXT, reached_at TEXT,
+          reached_run_id TEXT, reached_experiment_id TEXT, reached_value REAL,
+          reached_observability_json TEXT, active INTEGER DEFAULT 1);
+        CREATE TABLE IF NOT EXISTS strategy_reviews(
+          review_id TEXT PRIMARY KEY, run_id TEXT, created_at TEXT, trigger TEXT,
+          experiments_seen INTEGER, replay_cases_seen INTEGER,
+          analyst_output TEXT, usage_json TEXT, conservative_cost_usd REAL);
+        CREATE TABLE IF NOT EXISTS analyst_attempts(
+          attempt_id TEXT PRIMARY KEY, run_id TEXT, created_at TEXT, trigger TEXT,
+          status TEXT, analyst_output TEXT, error TEXT,
+          usage_json TEXT, conservative_cost_usd REAL);
+        CREATE TABLE IF NOT EXISTS research_ideas(
+          idea_id TEXT PRIMARY KEY, review_id TEXT, batch_index INTEGER,
+          title TEXT, hypothesis TEXT, causal_layer TEXT, components_json TEXT,
+          interaction_hypothesis TEXT, system_prediction TEXT, rationale TEXT,
+          smallest_test TEXT, promotion_rule TEXT, status TEXT DEFAULT 'PENDING',
+          experiment_id TEXT, created_at TEXT, started_at TEXT, finished_at TEXT,
+          conclusion TEXT);
+        """)
+        goal_columns = {row[1] for row in self.db.execute("PRAGMA table_info(goals)").fetchall()}
+        if "reached_observability_json" not in goal_columns:
+            self.db.execute("ALTER TABLE goals ADD COLUMN reached_observability_json TEXT")
+        if "min_games_total" not in goal_columns:
+            self.db.execute("ALTER TABLE goals ADD COLUMN min_games_total INTEGER")
+        experiment_columns = {
+            row[1] for row in self.db.execute("PRAGMA table_info(experiments)").fetchall()
+        }
+        if "idea_id" not in experiment_columns:
+            self.db.execute("ALTER TABLE experiments ADD COLUMN idea_id TEXT")
+        if "candidate_sha256" not in experiment_columns:
+            self.db.execute("ALTER TABLE experiments ADD COLUMN candidate_sha256 TEXT")
+        replay_columns = {
+            row[1] for row in self.db.execute("PRAGMA table_info(replays)").fetchall()
+        }
+        if "game_record_path" not in replay_columns:
+            self.db.execute("ALTER TABLE replays ADD COLUMN game_record_path TEXT")
+        idea_columns = {
+            row[1] for row in self.db.execute("PRAGMA table_info(research_ideas)").fetchall()
+        }
+        if "components_json" not in idea_columns:
+            self.db.execute("ALTER TABLE research_ideas ADD COLUMN components_json TEXT")
+        if "interaction_hypothesis" not in idea_columns:
+            self.db.execute("ALTER TABLE research_ideas ADD COLUMN interaction_hypothesis TEXT")
+        if "system_prediction" not in idea_columns:
+            self.db.execute("ALTER TABLE research_ideas ADD COLUMN system_prediction TEXT")
+        self.db.commit()
+
+    def start_run(self, run_id, session_id, task, model):
+        self.db.execute(
+            "INSERT INTO runs(run_id,session_id,task,model,started_at,status) VALUES(?,?,?,?,?,'RUNNING')",
+            (run_id, session_id, task, model, utcnow()))
+        self.db.commit()
+
+    def finish_run(self, run_id, status, usage, cost, output, elapsed):
+        self.db.execute("""UPDATE runs SET ended_at=?,elapsed_seconds=?,status=?,
+          api_requests=?,input_tokens=?,cached_tokens=?,cache_write_tokens=?,
+          output_tokens=?,reasoning_tokens=?,total_tokens=?,
+          conservative_cost_usd=?,final_output=? WHERE run_id=?""",
+          (utcnow(), elapsed, status, usage["requests"], usage["input_tokens"],
+           usage["cached_tokens"], usage["cache_write_tokens"], usage["output_tokens"],
+           usage["reasoning_tokens"], usage["total_tokens"], cost, output, run_id))
+        self.db.commit()
+
+    def start_experiment(self, run_id, hypothesis, candidate="", parent_candidate="",
+                         notes="", idea_id=None):
+        eid = "exp_" + uuid.uuid4().hex[:10]
+        if idea_id:
+            idea = self.db.execute(
+                "SELECT * FROM research_ideas WHERE idea_id=?", (idea_id,)
+            ).fetchone()
+            if idea is None:
+                return {"error":"unknown idea_id: " + idea_id}
+            if idea["status"] == "RUNNING" and idea["experiment_id"]:
+                existing = self.db.execute(
+                    "SELECT experiment_id,status FROM experiments WHERE experiment_id=?",
+                    (idea["experiment_id"],),
+                ).fetchone()
+                if existing is not None and existing["status"] == "RUNNING":
+                    return str(existing["experiment_id"])
+                # A prior recoverable attempt may be finished as ERROR while the
+                # idea intentionally stays RUNNING. In that case create a fresh
+                # experiment attempt below.
+            elif idea["status"] != "PENDING":
+                return {
+                    "error":"idea is not pending or resumable",
+                    "idea_id":idea_id,
+                    "status":idea["status"],
+                }
+        self.db.execute("""INSERT INTO experiments(
+          experiment_id,run_id,idea_id,hypothesis,candidate,parent_candidate,notes,
+          started_at,status)
+          VALUES(?,?,?,?,?,?,?,?,'RUNNING')""",
+          (eid, run_id, idea_id, hypothesis, candidate or None,
+           parent_candidate or None, notes or None, utcnow()))
+        if idea_id:
+            self.db.execute(
+                """UPDATE research_ideas
+                   SET status='RUNNING',experiment_id=?,started_at=?
+                   WHERE idea_id=?""",
+                (eid, utcnow(), idea_id),
+            )
+        self.db.execute(
+            "UPDATE runs SET experiments_started=experiments_started+1 WHERE run_id=?",
+            (run_id,),
+        )
+        self.db.commit()
+        return eid
+
+    def finish_experiment(self, eid, status, conclusion, retry_same_idea=False):
+        row = self.db.execute(
+            "SELECT started_at,idea_id FROM experiments WHERE experiment_id=?",
+            (eid,),
+        ).fetchone()
+        if row is None:
+            return {"error": "unknown experiment_id: " + eid}
+        elapsed = (
+            datetime.now(timezone.utc) - datetime.fromisoformat(row["started_at"])
+        ).total_seconds()
+        self.db.execute(
+            """UPDATE experiments
+               SET ended_at=?,elapsed_seconds=?,status=?,conclusion=?
+               WHERE experiment_id=?""",
+            (utcnow(), elapsed, status, conclusion, eid),
+        )
+        if row["idea_id"]:
+            if retry_same_idea:
+                self.db.execute(
+                    """UPDATE research_ideas
+                       SET status='RUNNING',finished_at=NULL,conclusion=?
+                       WHERE idea_id=?""",
+                    (conclusion, row["idea_id"]),
+                )
+            else:
+                idea_status = "ERROR" if status == "ERROR" else "COMPLETED"
+                self.db.execute(
+                    """UPDATE research_ideas
+                       SET status=?,finished_at=?,conclusion=?
+                       WHERE idea_id=?""",
+                    (idea_status, utcnow(), conclusion, row["idea_id"]),
+                )
+        self.db.commit()
+        return {
+            "experiment_id": eid,
+            "idea_id": row["idea_id"],
+            "status": status,
+            "retry_same_idea": bool(retry_same_idea),
+            "elapsed_seconds": round(elapsed, 3),
+        }
+
+    def set_goal(self, metric, operator, target, max_regressions, min_games_total=None):
+        self.db.execute("UPDATE goals SET active=0 WHERE active=1")
+        gid = "goal_" + uuid.uuid4().hex[:10]
+        self.db.execute("""INSERT INTO goals(
+                           goal_id,metric,operator,target,max_regressions,min_games_total,
+                           created_at,active)
+                           VALUES(?,?,?,?,?,?,?,1)""",
+                        (gid, metric, operator, float(target), max_regressions,
+                         min_games_total, utcnow()))
+        self.db.commit()
+        return gid
+
+    def maybe_reach_goal(self, run_id, eid, summary, usage_snapshot, input_price, output_price):
+        goal = self.db.execute("SELECT * FROM goals WHERE active=1 ORDER BY created_at DESC LIMIT 1").fetchone()
+        if goal is None or goal["metric"] not in summary:
+            return None
+        value = summary.get(goal["metric"])
+        if not isinstance(value, (int, float)):
+            return None
+        regressions = int(summary.get("margin_worsened_cases", 0) or 0)
+        if goal["max_regressions"] is not None and regressions > int(goal["max_regressions"]):
+            return None
+        games_total = int(summary.get("games_total", 0) or 0)
+        if goal["min_games_total"] is not None and games_total < int(goal["min_games_total"]):
+            return None
+        target, op, value = float(goal["target"]), goal["operator"], float(value)
+        passed = {">=": value >= target, ">": value > target, "<=": value <= target,
+                  "<": value < target, "==": value == target}[op]
+        if not passed:
+            return None
+
+        prior = self.db.execute("""SELECT
+          COALESCE(SUM(api_requests),0) requests,
+          COALESCE(SUM(input_tokens),0) input_tokens,
+          COALESCE(SUM(cached_tokens),0) cached_tokens,
+          COALESCE(SUM(output_tokens),0) output_tokens,
+          COALESCE(SUM(reasoning_tokens),0) reasoning_tokens,
+          COALESCE(SUM(total_tokens),0) total_tokens,
+          COALESCE(SUM(conservative_cost_usd),0) cost
+          FROM runs WHERE status!='RUNNING'""").fetchone()
+        now = datetime.now(timezone.utc)
+        created = datetime.fromisoformat(goal["created_at"])
+        exp = self.db.execute("SELECT started_at FROM experiments WHERE experiment_id=?", (eid,)).fetchone()
+        exp_elapsed = None
+        if exp:
+            exp_elapsed = (now - datetime.fromisoformat(exp["started_at"])).total_seconds()
+        snapshot = {
+          "goal_elapsed_seconds": (now - created).total_seconds(),
+          "experiment_elapsed_seconds": exp_elapsed,
+          "experiments_started": int(self.db.execute("SELECT COUNT(*) FROM experiments").fetchone()[0]),
+          "replay_calls": int(self.db.execute("SELECT COALESCE(SUM(replay_calls),0) FROM experiments").fetchone()[0]),
+          "replay_cases": int(self.db.execute("SELECT COUNT(*) FROM replays").fetchone()[0]),
+          "api_requests": int(prior["requests"]) + int(usage_snapshot.get("requests",0)),
+          "input_tokens": int(prior["input_tokens"]) + int(usage_snapshot.get("input_tokens",0)),
+          "cached_tokens": int(prior["cached_tokens"]) + int(usage_snapshot.get("cached_tokens",0)),
+          "output_tokens": int(prior["output_tokens"]) + int(usage_snapshot.get("output_tokens",0)),
+          "reasoning_tokens": int(prior["reasoning_tokens"]) + int(usage_snapshot.get("reasoning_tokens",0)),
+          "total_tokens": int(prior["total_tokens"]) + int(usage_snapshot.get("total_tokens",0)),
+          "prior_completed_run_cost_usd": float(prior["cost"]),
+          "conservative_cost_usd_to_goal": (
+              float(prior["cost"])
+              + conservative_cost_usd(usage_snapshot, input_price, output_price)
+          ),
+        }
+        self.db.execute("""UPDATE goals SET reached_at=?,reached_run_id=?,
+          reached_experiment_id=?,reached_value=?,reached_observability_json=?,active=0
+          WHERE goal_id=?""",
+          (utcnow(), run_id, eid, value, json.dumps(snapshot, sort_keys=True), goal["goal_id"]))
+        self.db.commit()
+        return {"goal_id": goal["goal_id"], "metric": goal["metric"], "value": value,
+                "operator": op, "target": target, "observability": snapshot}
+
+    def bind_candidate(self, experiment_id, candidate, candidate_sha256):
+        row = self.db.execute(
+            "SELECT experiment_id,idea_id,candidate,candidate_sha256 FROM experiments WHERE experiment_id=?",
+            (experiment_id,),
+        ).fetchone()
+        if row is None:
+            return {"error":"unknown experiment_id: " + experiment_id}
+        if row["candidate"] and row["candidate"] != candidate:
+            return {"error":"candidate path changed within experiment","expected_candidate":row["candidate"],"actual_candidate":candidate}
+        if row["candidate_sha256"] and row["candidate_sha256"] != candidate_sha256:
+            return {"error":"candidate content changed within experiment","candidate":candidate,"expected_sha256":row["candidate_sha256"],"actual_sha256":candidate_sha256}
+
+        # A new analyst idea must produce genuinely new candidate code. Reusing
+        # either the same artifact path or byte-identical content from another
+        # idea would make the experiment a replay of old work rather than a test
+        # of the newly assigned idea.
+        if row["idea_id"]:
+            reused = self.db.execute(
+                """SELECT experiment_id,idea_id,candidate,candidate_sha256
+                   FROM experiments
+                   WHERE experiment_id != ?
+                     AND (
+                         candidate = ?
+                         OR candidate_sha256 = ?
+                     )
+                   ORDER BY started_at ASC
+                   LIMIT 1""",
+                (experiment_id, candidate, candidate_sha256),
+            ).fetchone()
+            if reused is not None:
+                same_path = reused["candidate"] == candidate
+                same_sha = reused["candidate_sha256"] == candidate_sha256
+                return {
+                    "error":"candidate must be new for each experiment attempt",
+                    "idea_id":row["idea_id"],
+                    "candidate":candidate,
+                    "candidate_sha256":candidate_sha256,
+                    "reused_from_idea_id":reused["idea_id"],
+                    "reused_from_experiment_id":reused["experiment_id"],
+                    "same_path":bool(same_path),
+                    "same_sha256":bool(same_sha),
+                    "feedback":(
+                        "Do not reuse a prior attempt's candidate. Continue the SAME assigned "
+                        "idea, fix the runtime/code error, save corrected code as a NEW file "
+                        "under workspace/candidates/, then replay that new artifact."
+                    ),
+                }
+
+        self.db.execute(
+            "UPDATE experiments SET candidate=COALESCE(candidate,?), candidate_sha256=COALESCE(candidate_sha256,?) WHERE experiment_id=?",
+            (candidate,candidate_sha256,experiment_id),
+        )
+        self.db.commit()
+        return {"experiment_id":experiment_id,"idea_id":row["idea_id"],"candidate":candidate,"candidate_sha256":candidate_sha256}
+
+    def idea_dossier(self, idea_id):
+        idea = self.db.execute("SELECT * FROM research_ideas WHERE idea_id=?", (idea_id,)).fetchone()
+        if idea is None:
+            return None
+        experiments = [dict(row) for row in self.db.execute(
+            "SELECT experiment_id,run_id,idea_id,hypothesis,candidate,candidate_sha256,parent_candidate,notes,started_at,ended_at,elapsed_seconds,status,conclusion,replay_calls,replay_cases,best_margin_improvement,mean_margin_improvement,wins,losses,regressions FROM experiments WHERE idea_id=? ORDER BY started_at",
+            (idea_id,),
+        ).fetchall()]
+        replay_rows = [dict(row) for row in self.db.execute(
+            "SELECT replay_id,experiment_id,replay_call_id,candidate,episode,started_at,elapsed_seconds,valid,original_v20_margin,candidate_margin,margin_improvement,result,action_divergences,game_record_path,error FROM replays WHERE experiment_id IN (SELECT experiment_id FROM experiments WHERE idea_id=?) ORDER BY replay_id",
+            (idea_id,),
+        ).fetchall()]
+        calls = {}
+        for row in replay_rows:
+            call_id = row["replay_call_id"]
+            if call_id not in calls:
+                calls[call_id] = {"replay_call_id":call_id,"candidate":row["candidate"],"games":[]}
+            calls[call_id]["games"].append({
+                "replay_id":row["replay_id"],
+                "episode":row["episode"],
+                "valid":bool(row["valid"]),
+                "result":row["result"],
+                "original_v20_margin":row["original_v20_margin"],
+                "candidate_margin":row["candidate_margin"],
+                "margin_improvement":row["margin_improvement"],
+                "action_divergences":row["action_divergences"],
+                "game_record_path":row["game_record_path"],
+                "error":row["error"],
+            })
+        idea_dict = dict(idea)
+        idea_dict["components"] = json.loads(idea_dict.get("components_json") or "[]")
+        return {"idea":idea_dict,"experiments":experiments,"replay_calls":list(calls.values())}
+
+    def batch_dossiers(self, review_id=None):
+        if review_id is None:
+            latest = self.latest_strategy_review()
+            review_id = latest["review_id"] if latest else None
+        if not review_id:
+            return []
+        ids = [row["idea_id"] for row in self.db.execute("SELECT idea_id FROM research_ideas WHERE review_id=? ORDER BY batch_index", (review_id,)).fetchall()]
+        return [self.idea_dossier(iid) for iid in ids]
+
+    def record_replay_call(self, run_id, eid, call_id, candidate, result, started_at, elapsed):
+        rows = result.get("matches", []) if isinstance(result, dict) else []
+        each = elapsed / max(1, len(rows))
+        for row in rows:
+            self.db.execute("""INSERT INTO replays(
+              run_id,experiment_id,replay_call_id,candidate,episode,started_at,
+              elapsed_seconds,valid,original_v20_margin,candidate_margin,
+              margin_improvement,result,action_divergences,game_record_path,error)
+              VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+              (run_id, eid, call_id, candidate, row.get("episode",""), started_at,
+               float(row.get("elapsed_seconds", each)),
+               int(bool(row.get("valid"))), row.get("original_v20_margin"),
+               row.get("candidate_margin"), row.get("margin_improvement"), row.get("result"),
+               row.get("action_divergences"), row.get("game_record_path"), row.get("error","")))
+        summary = result.get("summary", {}) if isinstance(result, dict) else {}
+        cases = int(summary.get("games_total", len(rows)) or 0)
+        self.db.execute("UPDATE runs SET replay_calls=replay_calls+1,replay_cases=replay_cases+? WHERE run_id=?",
+                        (cases, run_id))
+        self.db.execute("""UPDATE experiments SET replay_calls=replay_calls+1,replay_cases=replay_cases+?,
+          best_margin_improvement=?,mean_margin_improvement=?,wins=?,losses=?,regressions=?
+          WHERE experiment_id=?""",
+          (cases, summary.get("best_margin_improvement"), summary.get("mean_margin_improvement"),
+           summary.get("wins"), summary.get("losses"), summary.get("margin_worsened_cases"), eid))
+        self.db.commit()
+        return summary
+
+    def add_idea_batch(self, review_id, ideas):
+        if len(ideas) != 10:
+            return {"error":"idea batch must contain exactly 10 ideas","count":len(ideas)}
+        ids = []
+        for index, idea in enumerate(ideas, 1):
+            iid = "idea_" + uuid.uuid4().hex[:10]
+            self.db.execute(
+                """INSERT INTO research_ideas(
+                     idea_id,review_id,batch_index,title,hypothesis,causal_layer,
+                     components_json,interaction_hypothesis,system_prediction,
+                     rationale,smallest_test,promotion_rule,status,created_at)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'PENDING',?)""",
+                (
+                    iid, review_id, index,
+                    str(idea.get("title","")).strip(),
+                    str(idea.get("hypothesis","")).strip(),
+                    str(idea.get("causal_layer","other")).strip(),
+                    json.dumps(idea.get("components",[]), sort_keys=True),
+                    str(idea.get("interaction_hypothesis","")).strip(),
+                    str(idea.get("system_prediction","")).strip(),
+                    str(idea.get("rationale","")).strip(),
+                    str(idea.get("smallest_test","")).strip(),
+                    str(idea.get("promotion_rule","")).strip(),
+                    utcnow(),
+                ),
+            )
+            ids.append(iid)
+        self.db.commit()
+        return {"review_id":review_id,"idea_ids":ids,"count":len(ids)}
+
+    def idea_batch_status(self):
+        latest = self.latest_strategy_review()
+        if latest is None:
+            return {
+                "review_id":None,"total":0,"pending":0,"running":0,
+                "completed":0,"errors":0,
+            }
+        rows = self.db.execute(
+            """SELECT status,COUNT(*) n FROM research_ideas
+               WHERE review_id=? GROUP BY status""",
+            (latest["review_id"],),
+        ).fetchall()
+        counts = {row["status"]:int(row["n"]) for row in rows}
+        return {
+            "review_id":latest["review_id"],
+            "total":sum(counts.values()),
+            "pending":counts.get("PENDING",0),
+            "running":counts.get("RUNNING",0),
+            "completed":counts.get("COMPLETED",0),
+            "errors":counts.get("ERROR",0),
+        }
+
+    def current_work_idea(self):
+        """Resume a RUNNING idea before assigning a new PENDING idea."""
+        latest = self.latest_strategy_review()
+        if latest is None:
+            return None
+        row = self.db.execute(
+            """SELECT * FROM research_ideas
+               WHERE review_id=? AND status='RUNNING'
+               ORDER BY batch_index ASC LIMIT 1""",
+            (latest["review_id"],),
+        ).fetchone()
+        if row is not None:
+            out = dict(row)
+            experiment_status = None
+            if row["experiment_id"]:
+                exp = self.db.execute(
+                    "SELECT status FROM experiments WHERE experiment_id=?",
+                    (row["experiment_id"],),
+                ).fetchone()
+                experiment_status = exp["status"] if exp is not None else None
+            out["resume_existing"] = experiment_status == "RUNNING"
+            out["repair_after_error"] = experiment_status == "ERROR"
+            out["previous_experiment_status"] = experiment_status
+            return out
+        row = self.db.execute(
+            """SELECT * FROM research_ideas
+               WHERE review_id=? AND status='PENDING'
+               ORDER BY batch_index ASC LIMIT 1""",
+            (latest["review_id"],),
+        ).fetchone()
+        if row is None:
+            return None
+        out = dict(row)
+        out["resume_existing"] = False
+        return out
+
+    def next_pending_idea(self):
+        """Compatibility helper for inspection/tests; returns only PENDING ideas."""
+        latest = self.latest_strategy_review()
+        if latest is None:
+            return None
+        row = self.db.execute(
+            """SELECT * FROM research_ideas
+               WHERE review_id=? AND status='PENDING'
+               ORDER BY batch_index ASC LIMIT 1""",
+            (latest["review_id"],),
+        ).fetchone()
+        return dict(row) if row is not None else None
+
+    def recent_idea_results(self, review_id=None):
+        if review_id is None:
+            latest = self.latest_strategy_review()
+            review_id = latest["review_id"] if latest else None
+        if not review_id:
+            return []
+        return [dict(row) for row in self.db.execute(
+            """SELECT i.idea_id,i.batch_index,i.title,i.hypothesis,i.causal_layer,
+                      i.components_json,i.interaction_hypothesis,i.system_prediction,
+                      i.status,i.conclusion,e.experiment_id,e.candidate,e.candidate_sha256,e.wins,e.losses,
+                      e.replay_cases,e.mean_margin_improvement,
+                      e.best_margin_improvement,e.regressions
+               FROM research_ideas i
+               LEFT JOIN experiments e ON e.idea_id=i.idea_id
+               WHERE i.review_id=?
+               ORDER BY i.batch_index ASC""",
+            (review_id,),
+        ).fetchall()]
+
+    def batch_lineage_summary(self, review_id=None):
+        dossiers = self.batch_dossiers(review_id)
+        out = []
+        for d in dossiers:
+            idea = d["idea"]
+            experiments = []
+            for exp in d["experiments"]:
+                calls = [
+                    call for call in d["replay_calls"]
+                    if any(g["replay_id"] is not None for g in call["games"])
+                ]
+                experiments.append({
+                    "experiment_id":exp["experiment_id"],
+                    "status":exp["status"],
+                    "candidate":exp["candidate"],
+                    "candidate_sha256":exp["candidate_sha256"],
+                    "wins":exp["wins"],
+                    "losses":exp["losses"],
+                    "replay_cases":exp["replay_cases"],
+                    "mean_margin_improvement":exp["mean_margin_improvement"],
+                    "best_margin_improvement":exp["best_margin_improvement"],
+                    "regressions":exp["regressions"],
+                    "conclusion":exp["conclusion"],
+                    "replay_call_ids":[call["replay_call_id"] for call in calls],
+                    "game_record_paths":[
+                        game["game_record_path"]
+                        for call in calls for game in call["games"]
+                        if game["game_record_path"]
+                    ],
+                })
+            out.append({
+                "idea_id":idea["idea_id"],
+                "batch_index":idea["batch_index"],
+                "title":idea["title"],
+                "components":idea.get("components",[]),
+                "interaction_hypothesis":idea["interaction_hypothesis"],
+                "system_prediction":idea["system_prediction"],
+                "idea_status":idea["status"],
+                "experiments":experiments,
+            })
+        return out
+
+    def record_analyst_attempt(self, run_id, trigger, status,
+                               analyst_output="", error="", usage=None,
+                               conservative_cost_usd=0.0):
+        aid = "attempt_" + uuid.uuid4().hex[:10]
+        self.db.execute(
+            """INSERT INTO analyst_attempts(
+                 attempt_id,run_id,created_at,trigger,status,analyst_output,
+                 error,usage_json,conservative_cost_usd)
+               VALUES(?,?,?,?,?,?,?,?,?)""",
+            (
+                aid, run_id, utcnow(), trigger, status,
+                analyst_output or "", error or "",
+                json.dumps(usage or {}, sort_keys=True),
+                float(conservative_cost_usd),
+            ),
+        )
+        self.db.commit()
+        return aid
+
+    def record_strategy_review(self, run_id, trigger, analyst_output,
+                               usage=None, conservative_cost_usd=0.0):
+        rid = "review_" + uuid.uuid4().hex[:10]
+        experiments_seen = int(
+            self.db.execute("SELECT COUNT(*) FROM experiments").fetchone()[0]
+        )
+        replay_cases_seen = int(
+            self.db.execute("SELECT COUNT(*) FROM replays").fetchone()[0]
+        )
+        self.db.execute(
+            """INSERT INTO strategy_reviews(
+                 review_id,run_id,created_at,trigger,experiments_seen,
+                 replay_cases_seen,analyst_output,usage_json,conservative_cost_usd)
+               VALUES(?,?,?,?,?,?,?,?,?)""",
+            (
+                rid, run_id, utcnow(), trigger, experiments_seen,
+                replay_cases_seen, analyst_output,
+                json.dumps(usage or {}, sort_keys=True),
+                float(conservative_cost_usd),
+            ),
+        )
+        self.db.commit()
+        return rid
+
+    def latest_strategy_review(self):
+        row = self.db.execute(
+            """SELECT * FROM strategy_reviews
+               ORDER BY created_at DESC LIMIT 1"""
+        ).fetchone()
+        return dict(row) if row is not None else None
+
+    def strategy_review_trigger(self):
+        latest = self.latest_strategy_review()
+        if latest is None:
+            return "initial_diagnosis"
+        batch = self.idea_batch_status()
+        if batch["total"] == 0:
+            return "empty_or_invalid_batch_retry"
+        if batch["pending"] > 0 or batch["running"] > 0:
+            return None
+        return "idea_batch_exhausted"
+
+    def research_signal(self, recent_limit=6):
+        recent_limit = max(4, min(int(recent_limit), 20))
+        rows = [dict(x) for x in self.db.execute(
+            """SELECT experiment_id,hypothesis,status,wins,losses,replay_cases,
+                      mean_margin_improvement,best_margin_improvement,started_at
+               FROM experiments
+               WHERE status!='RUNNING'
+               ORDER BY started_at DESC LIMIT ?""",
+            (recent_limit,),
+        ).fetchall()]
+
+        consecutive_rejected = 0
+        for row in rows:
+            if row.get("status") == "REJECTED":
+                consecutive_rejected += 1
+            else:
+                break
+
+        positive_recent = any(
+            int(row.get("wins") or 0) > 0
+            or float(row.get("mean_margin_improvement") or 0.0) > 0.0
+            for row in rows
+        )
+        no_effect_recent = sum(
+            1 for row in rows
+            if row.get("mean_margin_improvement") is not None
+            and abs(float(row["mean_margin_improvement"])) < 1e-9
+        )
+        best = self.db.execute(
+            """SELECT COALESCE(MAX(wins),0) best_wins,
+                      COALESCE(MAX(mean_margin_improvement),0) best_mean_margin
+               FROM experiments WHERE status!='RUNNING'"""
+        ).fetchone()
+
+        return {
+            "recent_count": len(rows),
+            "consecutive_rejected": consecutive_rejected,
+            "positive_recent": positive_recent,
+            "no_effect_recent": no_effect_recent,
+            "best_wins": int(best["best_wins"] or 0),
+            "best_mean_margin_improvement": float(best["best_mean_margin"] or 0.0),
+            "stagnating": (
+                len(rows) >= 4
+                and consecutive_rejected >= 4
+                and not positive_recent
+            ),
+            "recent_hypotheses": [
+                row.get("hypothesis", "") for row in rows[:4]
+            ],
+        }
+
+    def project_status(self):
+        r = self.db.execute("""SELECT COUNT(*) n,COALESCE(SUM(elapsed_seconds),0) elapsed,
+          COALESCE(SUM(api_requests),0) requests,COALESCE(SUM(input_tokens),0) input_tokens,
+          COALESCE(SUM(cached_tokens),0) cached_tokens,COALESCE(SUM(output_tokens),0) output_tokens,
+          COALESCE(SUM(reasoning_tokens),0) reasoning_tokens,COALESCE(SUM(total_tokens),0) total_tokens,
+          COALESCE(SUM(conservative_cost_usd),0) cost FROM runs WHERE status!='RUNNING'""").fetchone()
+        e = self.db.execute("""SELECT COUNT(*) n,
+          COALESCE(SUM(status='SUPPORTED'),0) supported,
+          COALESCE(SUM(status='REJECTED'),0) rejected FROM experiments""").fetchone()
+        goal = self.db.execute("SELECT * FROM goals ORDER BY created_at DESC LIMIT 1").fetchone()
+        recent = [dict(x) for x in self.db.execute("""SELECT experiment_id,hypothesis,status,
+          elapsed_seconds,replay_cases,mean_margin_improvement,regressions,conclusion
+          FROM experiments ORDER BY started_at DESC LIMIT 8""").fetchall()]
+        return {
+          "runs_completed": int(r["n"]), "wall_clock_seconds_sum": float(r["elapsed"]),
+          "api_requests": int(r["requests"]), "input_tokens": int(r["input_tokens"]),
+          "cached_tokens": int(r["cached_tokens"]), "output_tokens": int(r["output_tokens"]),
+          "reasoning_tokens": int(r["reasoning_tokens"]), "total_tokens": int(r["total_tokens"]),
+          "conservative_cost_usd": float(r["cost"]),
+          "analyst_attempts_total": int(self.db.execute("SELECT COUNT(*) FROM analyst_attempts").fetchone()[0]),
+          "experiments_total": int(e["n"]),
+          "experiments_supported": int(e["supported"]), "experiments_rejected": int(e["rejected"]),
+          "replay_cases_total": int(self.db.execute("SELECT COUNT(*) FROM replays").fetchone()[0]),
+          "goal": ({**dict(goal),
+                    "reached_observability": json.loads(goal["reached_observability_json"])
+                     if goal and goal["reached_observability_json"] else None}
+                   if goal else None),
+          "recent_experiments": recent,
+          "research_signal": self.research_signal(),
+          "idea_batch": self.idea_batch_status(),
+          "recent_idea_results": self.recent_idea_results()[-10:],
+          "latest_batch_lineage": self.batch_lineage_summary(),
+          "latest_strategy_review": (
+              {
+                  "review_id": self.latest_strategy_review()["review_id"],
+                  "created_at": self.latest_strategy_review()["created_at"],
+                  "trigger": self.latest_strategy_review()["trigger"],
+                  "experiments_seen": self.latest_strategy_review()["experiments_seen"],
+                  "replay_cases_seen": self.latest_strategy_review()["replay_cases_seen"],
+                  "analyst_output": (
+                      self.latest_strategy_review()["analyst_output"][:3000]
+                      if self.latest_strategy_review()["analyst_output"] else ""
+                  ),
+              }
+              if self.latest_strategy_review() else None
+          ),
+        }
+
+
+@dataclass
+class ModelCallPacer:
+    min_interval_seconds: float = 8.0
+    last_started_monotonic: float = 0.0
+
+    async def wait(self, log, role: str) -> None:
+        interval = max(0.0, float(self.min_interval_seconds))
+        if interval <= 0:
+            self.last_started_monotonic = time.monotonic()
+            return
+        now = time.monotonic()
+        wait_seconds = max(0.0, interval - (now - self.last_started_monotonic))
+        if wait_seconds > 0:
+            log.event("model_call_pacing", {
+                "role": role,
+                "delay_seconds": round(wait_seconds, 3),
+                "min_interval_seconds": interval,
+            })
+            await asyncio.sleep(wait_seconds)
+        self.last_started_monotonic = time.monotonic()
+
+
+@dataclass
+class AppContext:
+    run_id: str
+    local: LocalTools
+    db: ResearchDB
+    log: RunLog
+    input_price: float
+    output_price: float
+    replay_python: str
+    pacer: ModelCallPacer
+    blocker_reason: str = ""
+    active_idea_id: str = ""
+
+
+def j(x):
+    return json.dumps(x, sort_keys=True, default=str)
+
+
+def j_bounded(x, max_chars=12000):
+    """Bound large tool payloads so one diagnostic call cannot flood model context."""
+    raw = j(x)
+    max_chars = max(2000, int(max_chars))
+    if len(raw) <= max_chars:
+        return raw
+    return j({
+        "truncated": True,
+        "original_chars": len(raw),
+        "preview": raw[:max_chars],
+        "instruction": "Narrow the next analysis query instead of requesting the full payload again.",
+    })
+
+def normalize_replay_result(value: Any) -> dict[str, Any]:
+    """Normalize replay child JSON so malformed-but-valid payloads cannot crash runtime logic."""
+    if not isinstance(value, dict):
+        return {
+            "error": "static replay child returned non-object JSON",
+            "payload_type": type(value).__name__,
+            "matches": [],
+            "summary": {},
+        }
+
+    result = dict(value)
+    matches = result.get("matches", [])
+    if not isinstance(matches, list):
+        result["error"] = result.get("error") or "static replay matches must be a list"
+        result["matches"] = []
+    else:
+        clean_matches = [row for row in matches if isinstance(row, dict)]
+        dropped = len(matches) - len(clean_matches)
+        result["matches"] = clean_matches
+        if dropped:
+            result["malformed_matches_dropped"] = dropped
+
+    summary = result.get("summary", {})
+    if not isinstance(summary, dict):
+        result["error"] = result.get("error") or "static replay summary must be an object"
+        result["summary"] = {}
+    return result
+
+
+class BudgetStopError(RuntimeError):
+    """Normal autonomous stop when a configured API budget ceiling is reached."""
+
+
+def model_retry_settings() -> ModelRetrySettings:
+    """Retry transient provider/network failures at the individual model-call layer."""
+    return ModelRetrySettings(
+        max_retries=5,
+        backoff={
+            "initial_delay": 0.5,
+            "max_delay": 16.0,
+            "multiplier": 2.0,
+            "jitter": True,
+        },
+        policy=retry_policies.any(
+            retry_policies.provider_suggested(),
+            retry_policies.retry_after(),
+            retry_policies.network_error(),
+            retry_policies.http_status([408, 409, 429, 500, 502, 503, 504]),
+        ),
+    )
+
+
+class BudgetHooks(RunHooks[AppContext]):
+    """Per-model-call usage logging and conservative hard-stop before the next call."""
+
+    def __init__(self, log, starting_project_cost, session_limit, total_limit, input_price, output_price,
+                 pacer: ModelCallPacer, role: str):
+        self.log = log
+        self.pacer = pacer
+        self.role = role
+        self.starting_project_cost = float(starting_project_cost)
+        self.session_limit = float(session_limit)
+        self.total_limit = float(total_limit)
+        self.input_price = float(input_price)
+        self.output_price = float(output_price)
+        self.last_usage = {"requests":0,"input_tokens":0,"cached_tokens":0,"cache_write_tokens":0,
+                           "output_tokens":0,"reasoning_tokens":0,"total_tokens":0}
+
+    def _cost(self, usage):
+        return conservative_cost_usd(usage, self.input_price, self.output_price)
+
+    async def on_llm_start(self, context, agent, system_prompt, input_items):
+        await self.pacer.wait(self.log, self.role)
+        usage = usage_dict(context.usage)
+        session_cost = self._cost(usage)
+        if session_cost >= self.session_limit:
+            raise BudgetStopError("session budget ceiling reached before next model call")
+        if self.starting_project_cost + session_cost >= self.total_limit:
+            raise BudgetStopError("project budget ceiling reached before next model call")
+        self.log.event("llm_start", {"usage_before_call": usage,
+                                     "session_conservative_cost_usd": session_cost})
+
+    async def on_llm_end(self, context, agent, response):
+        usage = usage_dict(context.usage)
+        self.last_usage = usage
+        self.log.event("llm_end", {"usage_after_call": usage,
+                                   "session_conservative_cost_usd": self._cost(usage)})
+
+
+@function_tool
+def list_tree(ctx: RunContextWrapper[AppContext], path: str, max_depth: int = 2, max_entries: int = 200) -> str:
+    """List a bounded v23 subtree."""
+    return j_bounded(ctx.context.local.list_tree(path, max_depth, max_entries), 12000)
+
+@function_tool
+def read_text(ctx: RunContextWrapper[AppContext], path: str, start_line: int = 1, max_lines: int = 200) -> str:
+    """Read a narrow UTF-8 range from a v23 file."""
+    return j_bounded(ctx.context.local.read_text(path, start_line, max_lines), 24000)
+
+@function_tool
+def search_text(ctx: RunContextWrapper[AppContext], query: str, path: str = ".", max_matches: int = 40) -> str:
+    """Search bounded v23 text files."""
+    return j_bounded(ctx.context.local.search_text(query, path, max_matches), 16000)
+
+@function_tool
+def summarize_jsonl(ctx: RunContextWrapper[AppContext], path: str, tail_rows: int = 20) -> str:
+    """Summarize local JSONL without sending the full log."""
+    return j_bounded(ctx.context.local.summarize_jsonl(path, tail_rows), 16000)
+
+@function_tool
+def write_workspace_file(ctx: RunContextWrapper[AppContext], path: str, content: str, overwrite: bool = False) -> str:
+    """Write only under v23/workspace. Use write_candidate_file for executable candidates."""
+    return j_bounded(ctx.context.local.write_workspace_file(path, content, overwrite), 8000)
+
+
+V20_BASELINE_NOTEBOOK = (
+    Path(__file__).resolve().parents[1]
+    / "working_files"
+    / "submission_nb"
+    / "kaggriculture-sub_v20.ipynb"
+)
+
+
+def _v20_baseline_source(local: LocalTools) -> str:
+    # The v20 baseline is a checked-in read-only research input. Resolve it from
+    # runtime.py's canonical v23 location rather than LocalTools.root, which tests
+    # may deliberately redirect to an isolated temporary workspace.
+    path = V20_BASELINE_NOTEBOOK
+    notebook = json.loads(path.read_text(encoding="utf-8"))
+    found = []
+    for cell in notebook.get("cells", []):
+        if cell.get("cell_type") != "code":
+            continue
+        lines = "".join(cell.get("source", [])).splitlines()
+        if not lines:
+            continue
+        first = lines[0].strip()
+        if first.startswith("%%writefile"):
+            target = first[len("%%writefile"):].strip().strip("'\"")
+            if Path(target).name == "main.py":
+                found.append("\n".join(lines[1:]) + "\n")
+    if len(found) != 1:
+        raise ValueError(
+            f"{path}: expected exactly one %%writefile main.py cell, found {len(found)}"
+        )
+    return found[0]
+
+
+def _top_level_functions(source: str) -> dict[str, ast.FunctionDef | ast.AsyncFunctionDef]:
+    tree = ast.parse(source)
+    return {
+        node.name: node
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+
+def _v20_function_source(
+    local: LocalTools, function_name: str
+) -> tuple[str, ast.FunctionDef | ast.AsyncFunctionDef]:
+    baseline = _v20_baseline_source(local)
+    functions = _top_level_functions(baseline)
+    name = function_name.strip()
+    if not name:
+        raise ValueError("function_name is required")
+    node = functions.get(name)
+    if node is None:
+        raise ValueError(
+            "unknown v20 top-level function: " + name
+            + "; call list_v20_functions first"
+        )
+    lines = baseline.splitlines(keepends=True)
+    start_line = min(
+        [node.lineno] + [d.lineno for d in getattr(node, "decorator_list", [])]
+    )
+    source = "".join(lines[start_line - 1:node.end_lineno])
+    return source, node
+
+
+@function_tool
+def list_v20_functions(ctx: RunContextWrapper[AppContext]) -> str:
+    """List exact top-level v20 function names, signatures, and source line ranges."""
+    try:
+        baseline = _v20_baseline_source(ctx.context.local)
+        functions = _top_level_functions(baseline)
+        rows = []
+        for name, node in sorted(functions.items(), key=lambda item: item[1].lineno):
+            args = []
+            all_args = list(node.args.posonlyargs) + list(node.args.args)
+            defaults_offset = len(all_args) - len(node.args.defaults)
+            for index, arg in enumerate(all_args):
+                item = arg.arg
+                if index >= defaults_offset:
+                    default = node.args.defaults[index - defaults_offset]
+                    try:
+                        item += "=" + ast.unparse(default)
+                    except Exception:
+                        item += "=..."
+                args.append(item)
+            if node.args.vararg:
+                args.append("*" + node.args.vararg.arg)
+            for arg, default in zip(node.args.kwonlyargs, node.args.kw_defaults):
+                item = arg.arg
+                if default is not None:
+                    try:
+                        item += "=" + ast.unparse(default)
+                    except Exception:
+                        item += "=..."
+                args.append(item)
+            if node.args.kwarg:
+                args.append("**" + node.args.kwarg.arg)
+            start_line = min(
+                [node.lineno]
+                + [d.lineno for d in getattr(node, "decorator_list", [])]
+            )
+            rows.append({
+                "name": name,
+                "signature": f"{name}({', '.join(args)})",
+                "start_line": start_line,
+                "end_line": node.end_lineno,
+                "source_lines": node.end_lineno - start_line + 1,
+            })
+        return j_bounded({
+            "baseline":"working_files/submission_nb/kaggriculture-sub_v20.ipynb",
+            "function_count":len(rows),
+            "functions":rows,
+            "instruction":(
+                "Use read_v20_function(function_name, start_line, max_lines) "
+                "to inspect exact implementation. Do not read/search the raw notebook."
+            ),
+        }, 20000)
+    except Exception as exc:
+        return j({"error":f"{type(exc).__name__}: {exc}"})
+
+
+@function_tool
+def read_v20_function(
+    ctx: RunContextWrapper[AppContext],
+    function_name: str,
+    start_line: int = 1,
+    max_lines: int = 240,
+) -> str:
+    """Read exact source for one top-level v20 function with paging."""
+    try:
+        source, _ = _v20_function_source(ctx.context.local, function_name)
+        lines = source.splitlines()
+        start_line = max(1, int(start_line))
+        max_lines = max(1, min(int(max_lines), 400))
+        selected = lines[start_line - 1:start_line - 1 + max_lines]
+        next_start = (
+            start_line + len(selected)
+            if start_line - 1 + len(selected) < len(lines)
+            else None
+        )
+        return j_bounded({
+            "function_name": function_name.strip(),
+            "source_start_line": start_line,
+            "returned_lines": len(selected),
+            "total_function_lines": len(lines),
+            "next_start_line": next_start,
+            "source":"\n".join(selected),
+            "instruction":(
+                "If next_start_line is not null, call read_v20_function again "
+                "with that start_line before editing the function."
+            ),
+        }, 24000)
+    except Exception as exc:
+        return j({"error":f"{type(exc).__name__}: {exc}"})
+
+
+def _replace_v20_functions(
+    baseline: str, replacements: dict[str, str]
+) -> tuple[str, list[str]]:
+    if not replacements:
+        raise ValueError("at least one v20 function replacement is required")
+    baseline_functions = _top_level_functions(baseline)
+    unknown = sorted(set(replacements) - set(baseline_functions))
+    if unknown:
+        raise ValueError(
+            "replacement names must be existing top-level v20 functions; unknown: "
+            + ", ".join(unknown)
+        )
+
+    lines = baseline.splitlines(keepends=True)
+    edits = []
+    for name, replacement in replacements.items():
+        replacement = str(replacement or "").strip() + "\n"
+        parsed = ast.parse(replacement)
+        defs = [
+            node for node in parsed.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        ]
+        if len(defs) != 1 or len(parsed.body) != 1 or defs[0].name != name:
+            raise ValueError(
+                f"replacement for {name} must contain exactly one top-level def {name}(...)"
+            )
+        old = baseline_functions[name]
+        start_line = min(
+            [old.lineno] + [d.lineno for d in getattr(old, "decorator_list", [])]
+        )
+        edits.append((start_line - 1, old.end_lineno, replacement))
+
+    for start, end, replacement in sorted(edits, reverse=True):
+        lines[start:end] = [replacement]
+    candidate = "".join(lines)
+    ast.parse(candidate)
+    return candidate, sorted(replacements)
+
+
+def validate_v20_derived_source(local: LocalTools, source: str) -> dict[str, Any]:
+    try:
+        baseline = _v20_baseline_source(local)
+        baseline_functions = set(_top_level_functions(baseline))
+        candidate_functions = set(_top_level_functions(source))
+    except Exception as exc:
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
+    missing_functions = sorted(baseline_functions - candidate_functions)
+    retained_ratio = len(source) / max(1, len(baseline))
+    ok = not missing_functions and retained_ratio >= 0.75
+    return {
+        "ok": ok,
+        "baseline_chars": len(baseline),
+        "candidate_chars": len(source),
+        "retained_size_ratio": round(retained_ratio, 4),
+        "baseline_function_count": len(baseline_functions),
+        "candidate_function_count": len(candidate_functions),
+        "missing_v20_functions": missing_functions,
+        "error": None if ok else (
+            "candidate is not a full v20-derived policy; preserve all v20 top-level "
+            "functions and modify only the assigned function(s)"
+        ),
+    }
+
+
+@function_tool
+def write_v20_candidate_file(
+    ctx: RunContextWrapper[AppContext],
+    filename: str,
+    replacements_json: str,
+    overwrite: bool = False,
+) -> str:
+    """Create a full v20-derived candidate by replacing named top-level v20 functions.
+
+    replacements_json must be a JSON object mapping existing v20 function names
+    to complete replacement function source strings.
+    """
+    filename = filename.strip()
+    if (
+        not filename
+        or Path(filename).name != filename
+        or Path(filename).suffix.lower() != ".py"
+    ):
+        return j({"error":"filename must be a simple .py file name"})
+    try:
+        replacements = json.loads(replacements_json)
+        if not isinstance(replacements, dict) or not replacements:
+            raise ValueError(
+                "replacements_json must be a non-empty JSON object mapping "
+                "v20 function names to replacement function source"
+            )
+        if not all(
+            isinstance(name, str) and isinstance(source, str)
+            for name, source in replacements.items()
+        ):
+            raise ValueError(
+                "every replacements_json key and value must be a string"
+            )
+        baseline = _v20_baseline_source(ctx.context.local)
+        candidate_source, changed_functions = _replace_v20_functions(
+            baseline, replacements
+        )
+        validation = validate_v20_derived_source(
+            ctx.context.local, candidate_source
+        )
+        if not validation["ok"]:
+            return j(validation)
+    except Exception as exc:
+        return j({"error":f"{type(exc).__name__}: {exc}"})
+
+    out = ctx.context.local.write_derived_candidate_file(
+        str(Path("candidates") / filename), candidate_source, overwrite
+    )
+    if "error" in out:
+        return j(out)
+    candidate = "workspace/" + out["path"]
+    candidate_path = ctx.context.local._read_path(candidate)
+    out.update({
+        "candidate": candidate,
+        "sha256": hashlib.sha256(candidate_path.read_bytes()).hexdigest(),
+        "baseline": "working_files/submission_nb/kaggriculture-sub_v20.ipynb",
+        "baseline_sha256": hashlib.sha256(baseline.encode("utf-8")).hexdigest(),
+        "changed_functions": changed_functions,
+        "v20_derived_validation": validation,
+    })
+    ctx.context.log.event("v20_candidate_artifact_written", {
+        "candidate": candidate,
+        "sha256": out["sha256"],
+        "changed_functions": changed_functions,
+        "retained_size_ratio": validation["retained_size_ratio"],
+    })
+    return j_bounded(out, 12000)
+
+
+@function_tool
+def write_candidate_file(ctx: RunContextWrapper[AppContext], filename: str, content: str,
+                         overwrite: bool = False) -> str:
+    """Legacy raw candidate writer. Engineer research should use write_v20_candidate_file."""
+    filename = filename.strip()
+    if not filename or Path(filename).name != filename:
+        return j({"error":"filename must be a simple file name, not a path"})
+    suffix = Path(filename).suffix.lower()
+    if suffix not in {".py", ".ipynb"}:
+        return j({"error":"candidate filename must end in .py or .ipynb"})
+    out = ctx.context.local.write_workspace_file(
+        str(Path("candidates") / filename), content, overwrite
+    )
+    if "error" in out:
+        return j(out)
+    candidate = "workspace/" + out["path"]
+    candidate_path = ctx.context.local._read_path(candidate)
+    out["candidate"] = candidate
+    out["sha256"] = hashlib.sha256(candidate_path.read_bytes()).hexdigest()
+    ctx.context.log.event("candidate_artifact_written", {
+        "candidate": candidate,
+        "sha256": out["sha256"],
+        "chars": out["chars"],
+    })
+    return j_bounded(out, 8000)
+
+@function_tool
+def run_python(ctx: RunContextWrapper[AppContext], script: str, args: list[str] | None = None, timeout_seconds: int = 120) -> str:
+    """Run an existing non-workspace v23 Python file with a bounded timeout."""
+    return j_bounded(ctx.context.local.run_python(script, args, timeout_seconds), 24000)
+
+def validate_candidate_path(local: LocalTools, candidate: str,
+                            allow_empty: bool = True) -> tuple[str, str | None]:
+    """Return a canonical durable candidate path or a validation error."""
+    candidate = candidate.strip()
+    if not candidate:
+        if allow_empty:
+            return "", None
+        return "", "candidate is required; create one with write_candidate_file first"
+    try:
+        candidate_path = local._read_path(candidate)
+    except Exception as exc:
+        return "", f"{type(exc).__name__}: {exc}"
+    if not candidate_path.is_file() or candidate_path.suffix.lower() not in {".py", ".ipynb"}:
+        return "", (
+            "candidate must be an existing .py/.ipynb artifact under workspace/candidates/"
+        )
+    candidates_root = (local.workspace / "candidates").resolve()
+    try:
+        candidate_path.relative_to(candidates_root)
+    except ValueError:
+        return "", (
+            "candidate must live under workspace/candidates/; "
+            "create it with write_v20_candidate_file"
+        )
+    return str(candidate_path.relative_to(local.root)), None
+
+
+@function_tool
+def start_experiment(ctx: RunContextWrapper[AppContext], hypothesis: str, candidate: str = "",
+                     parent_candidate: str = "", notes: str = "") -> str:
+    """Create a durable experiment record before candidate evaluation.
+
+    candidate is optional at experiment creation. When provided, it must already
+    be a durable executable artifact under workspace/candidates/. Descriptive text
+    belongs in hypothesis/notes.
+    """
+    candidate, candidate_error = validate_candidate_path(ctx.context.local, candidate)
+    if candidate_error:
+        return j({"error": candidate_error})
+
+    eid = ctx.context.db.start_experiment(
+        ctx.context.run_id, hypothesis, candidate, parent_candidate, notes,
+        ctx.context.active_idea_id or None,
+    )
+    if isinstance(eid, dict):
+        return j(eid)
+    ctx.context.log.event(
+        "experiment_start",
+        {
+            "experiment_id": eid,
+            "idea_id": ctx.context.active_idea_id or None,
+            "hypothesis": hypothesis,
+        },
+    )
+    return j({"experiment_id": eid, "idea_id": ctx.context.active_idea_id or None})
+
+def experiment_execution_contract(db: ResearchDB, experiment_id: str) -> dict[str, Any]:
+    """Check whether an experiment has durable code and valid measured replay evidence."""
+    row = db.db.execute(
+        """SELECT experiment_id,idea_id,status,candidate,candidate_sha256,
+                  replay_calls,replay_cases
+           FROM experiments WHERE experiment_id=?""",
+        (experiment_id,),
+    ).fetchone()
+    if row is None:
+        return {"ok": False, "error": "unknown experiment_id: " + experiment_id}
+
+    measured = int(db.db.execute(
+        """SELECT COUNT(*) FROM replays
+           WHERE experiment_id=? AND valid=1
+             AND result IN ('WIN','LOSS','TIE')
+             AND candidate_margin IS NOT NULL
+             AND margin_improvement IS NOT NULL""",
+        (experiment_id,),
+    ).fetchone()[0])
+    valid = int(db.db.execute(
+        "SELECT COUNT(*) FROM replays WHERE experiment_id=? AND valid=1",
+        (experiment_id,),
+    ).fetchone()[0])
+
+    missing = []
+    if not row["candidate"]:
+        missing.append("durable candidate path")
+    if not row["candidate_sha256"]:
+        missing.append("bound candidate SHA-256")
+    if int(row["replay_calls"] or 0) < 1:
+        missing.append("at least one static replay call")
+    if int(row["replay_cases"] or 0) < 1:
+        missing.append("at least one replay case")
+    if valid < 1:
+        missing.append("at least one valid replay case")
+    if measured < 1:
+        missing.append("at least one valid measured WIN/LOSS/TIE result with margins")
+
+    return {
+        "ok": not missing,
+        "experiment_id": experiment_id,
+        "idea_id": row["idea_id"],
+        "candidate": row["candidate"],
+        "candidate_sha256": row["candidate_sha256"],
+        "replay_calls": int(row["replay_calls"] or 0),
+        "replay_cases": int(row["replay_cases"] or 0),
+        "valid_replay_cases": valid,
+        "measured_replay_cases": measured,
+        "missing": missing,
+    }
+
+
+def experiment_runtime_error_evidence(db: ResearchDB, experiment_id: str,
+                                      blocker_reason: str = "") -> dict[str, Any]:
+    """Return concrete evidence that justifies terminating an experiment as ERROR."""
+    row = db.db.execute(
+        "SELECT experiment_id,idea_id FROM experiments WHERE experiment_id=?",
+        (experiment_id,),
+    ).fetchone()
+    if row is None:
+        return {"ok": False, "error": "unknown experiment_id: " + experiment_id}
+
+    replay_errors = int(db.db.execute(
+        """SELECT COUNT(*) FROM replays
+           WHERE experiment_id=?
+             AND COALESCE(TRIM(error),'') != ''""",
+        (experiment_id,),
+    ).fetchone()[0])
+
+    blocker = str(blocker_reason or "").strip()
+    return {
+        "ok": replay_errors > 0 or bool(blocker),
+        "experiment_id": experiment_id,
+        "idea_id": row["idea_id"],
+        "replay_error_cases": replay_errors,
+        "blocker_reason": blocker,
+    }
+
+
+@function_tool
+def finish_experiment(ctx: RunContextWrapper[AppContext], experiment_id: str, status: str, conclusion: str) -> str:
+    """Finish only after durable candidate code produced valid measured replay evidence.
+
+    ERROR is reserved for a concrete runtime/environment failure that prevents the
+    normal idea -> code -> replay -> measured result lifecycle.
+    """
+    status = status.upper()
+    if status not in {"SUPPORTED","REJECTED","UNRESOLVED","ERROR"}:
+        return j({"error":"invalid status"})
+
+    if status == "ERROR":
+        error_evidence = experiment_runtime_error_evidence(
+            ctx.context.db, experiment_id, ctx.context.blocker_reason
+        )
+        if error_evidence.get("error"):
+            return j(error_evidence)
+        if not error_evidence["ok"]:
+            feedback = {
+                "error": "ERROR status requires concrete runtime evidence",
+                "experiment_id": experiment_id,
+                "idea_id": error_evidence.get("idea_id"),
+                "replay_error_cases": error_evidence.get("replay_error_cases", 0),
+                "blocker_reason": error_evidence.get("blocker_reason", ""),
+                "feedback": (
+                    "Do not mark this idea ERROR or move on. No persisted replay error "
+                    "or recorded blocker proves a runtime failure. Continue the SAME "
+                    "assigned idea: create/fix the durable candidate with "
+                    "write_candidate_file, plug it into static_replay_candidate, obtain "
+                    "a valid measured replay result, inspect the evidence, then finish "
+                    "the experiment normally. If a concrete environment/runtime failure "
+                    "truly prevents execution, call report_blocker first."
+                ),
+            }
+            ctx.context.log.event("experiment_error_rejected", feedback)
+            return j(feedback)
+    else:
+        contract = experiment_execution_contract(ctx.context.db, experiment_id)
+        if contract.get("error"):
+            return j(contract)
+
+        artifact_error = None
+        candidate = str(contract.get("candidate") or "")
+        if candidate:
+            candidate_rel, candidate_error = validate_candidate_path(
+                ctx.context.local, candidate, allow_empty=False
+            )
+            if candidate_error:
+                artifact_error = candidate_error
+            else:
+                candidate_path = ctx.context.local._read_path(candidate_rel)
+                actual_sha = hashlib.sha256(candidate_path.read_bytes()).hexdigest()
+                if actual_sha != contract.get("candidate_sha256"):
+                    artifact_error = (
+                        "candidate artifact changed after replay; create a new immutable "
+                        "candidate file and replay it before finishing"
+                    )
+
+        if not contract["ok"] or artifact_error:
+            feedback = {
+                "error": "experiment execution contract incomplete",
+                "experiment_id": experiment_id,
+                "idea_id": contract.get("idea_id"),
+                "missing": contract.get("missing", []),
+                "artifact_error": artifact_error,
+                "feedback": (
+                    "Do not finish or move to another idea. Continue the SAME assigned idea. "
+                    "Create/fix a durable candidate with write_candidate_file under "
+                    "workspace/candidates/, plug that exact candidate into "
+                    "static_replay_candidate, obtain at least one valid measured replay "
+                    "result, inspect the replay evidence, then call finish_experiment again."
+                ),
+            }
+            ctx.context.log.event("experiment_finish_rejected", feedback)
+            return j(feedback)
+
+    if status == "ERROR" and not ctx.context.blocker_reason:
+        # Persisted replay errors caused by generated candidate code are recoverable.
+        # Close this immutable attempt, keep the idea RUNNING, and force a fresh
+        # experiment/candidate attempt on the next Engineer cycle.
+        out = ctx.context.db.finish_experiment(
+            experiment_id, status, conclusion, retry_same_idea=True
+        )
+        out["retry_required"] = True
+        out["feedback"] = (
+            "This failed candidate attempt is now closed and immutable. Continue the SAME "
+            "idea. Call start_experiment again to create a NEW experiment attempt, then "
+            "write a NEW corrected candidate artifact with a different path/content, plug "
+            "that candidate into static_replay_candidate, and retry until a valid measured "
+            "result exists. Do not call report_blocker for fixable candidate code errors."
+        )
+        ctx.context.log.event("experiment_retry_scheduled", out)
+        return j(out)
+
+    out = ctx.context.db.finish_experiment(experiment_id, status, conclusion)
+    ctx.context.log.event("experiment_finish", out)
+    return j(out)
+
+@function_tool
+def set_goal(ctx: RunContextWrapper[AppContext], metric: str, operator: str, target: float,
+             max_regressions: int | None = None,
+             min_games_total: int | None = None) -> str:
+    """Set a numeric goal plus optional regression and evaluation-size guards."""
+    if operator not in {">=",">","<=","<","=="}:
+        return j({"error":"invalid operator"})
+    if min_games_total is not None and min_games_total < 1:
+        return j({"error":"min_games_total must be >= 1"})
+    gid = ctx.context.db.set_goal(
+        metric, operator, target, max_regressions, min_games_total
+    )
+    return j({
+        "goal_id":gid,"metric":metric,"operator":operator,"target":target,
+        "max_regressions":max_regressions,"min_games_total":min_games_total
+    })
+
+@function_tool
+def project_status(ctx: RunContextWrapper[AppContext]) -> str:
+    """Return durable project usage, experiment, replay, and goal status."""
+    return j_bounded(ctx.context.db.project_status(), 12000)
+
+@function_tool
+def research_progress(ctx: RunContextWrapper[AppContext]) -> str:
+    """Return the canonical compact research progress snapshot."""
+    try:
+        return j_bounded(build_progress_snapshot(ctx.context.db), 10000)
+    except Exception as exc:
+        return j({"error":f"{type(exc).__name__}: {exc}"})
+
+@function_tool
+def analyze_history_game(ctx: RunContextWrapper[AppContext], episode: str, window_size: int = 24, top_windows: int = 8) -> str:
+    """Deterministically summarize one v20 loss history and identify high-activity windows."""
+    try:
+        return j_bounded(analyze_loss_history(ctx.context.local.root, episode, window_size, top_windows), 12000)
+    except Exception as exc:
+        return j({"error":f"{type(exc).__name__}: {exc}"})
+
+@function_tool
+def analyze_history_window(ctx: RunContextWrapper[AppContext], episode: str, start_turn: int, end_turn: int) -> str:
+    """Return detailed turn-by-turn actions, scalar state, and deltas for one history window."""
+    try:
+        return j_bounded(analyze_loss_window(ctx.context.local.root, episode, start_turn, end_turn), 14000)
+    except Exception as exc:
+        return j({"error":f"{type(exc).__name__}: {exc}"})
+
+@function_tool
+def analyze_experiments(ctx: RunContextWrapper[AppContext], review_id: str | None = None) -> str:
+    """Aggregate experiment evidence by idea, causal layer, and component combination."""
+    try:
+        return j_bounded(analyze_experiment_records(ctx.context.db, review_id), 12000)
+    except Exception as exc:
+        return j({"error":f"{type(exc).__name__}: {exc}"})
+
+@function_tool
+def compare_candidate_v20(ctx: RunContextWrapper[AppContext], idea_id: str, episode: str) -> str:
+    """Compare one candidate replay with recorded v20 actions/outcome for an episode."""
+    try:
+        return j_bounded(compare_candidate_to_v20_data(ctx.context.local.root, ctx.context.db, idea_id, episode), 12000)
+    except Exception as exc:
+        return j({"error":f"{type(exc).__name__}: {exc}"})
+
+@function_tool
+def analyze_cash_flow(ctx: RunContextWrapper[AppContext], episode: str) -> str:
+    """Analyze observable cash-like state changes in one recorded v20 loss."""
+    try:
+        return j_bounded(analyze_cash_flow_data(ctx.context.local.root, episode), 10000)
+    except Exception as exc:
+        return j({"error":f"{type(exc).__name__}: {exc}"})
+
+@function_tool
+def analyze_inventory_flow(ctx: RunContextWrapper[AppContext], episode: str) -> str:
+    """Analyze observable inventory/capacity/resource paths in one recorded v20 loss."""
+    try:
+        return j_bounded(analyze_inventory_flow_data(ctx.context.local.root, episode), 10000)
+    except Exception as exc:
+        return j({"error":f"{type(exc).__name__}: {exc}"})
+
+@function_tool
+def analyze_worker_utilization(ctx: RunContextWrapper[AppContext], episode: str) -> str:
+    """Classify recorded v20 actions into transport, crop, animal, idle, and admin work."""
+    try:
+        return j_bounded(analyze_worker_utilization_data(ctx.context.local.root, episode), 10000)
+    except Exception as exc:
+        return j({"error":f"{type(exc).__name__}: {exc}"})
+
+@function_tool
+def analyze_component_effects(ctx: RunContextWrapper[AppContext], review_id: str | None = None) -> str:
+    """Aggregate experiment outcomes by affected components and component combinations."""
+    try:
+        return j_bounded(component_effect_matrix_data(ctx.context.db, review_id), 10000)
+    except Exception as exc:
+        return j({"error":f"{type(exc).__name__}: {exc}"})
+
+@function_tool
+def cluster_loss_histories(ctx: RunContextWrapper[AppContext]) -> str:
+    """Group all v20 loss histories by deterministic behavioral signatures and choose representatives."""
+    try:
+        data = cluster_loss_games_data(ctx.context.local.root)
+        compact = {
+            "clusters": data.get("clusters", []),
+            "games": [
+                {
+                    "episode": row.get("episode"),
+                    "cluster": row.get("cluster"),
+                    "features": row.get("features"),
+                }
+                for row in data.get("games", [])
+            ],
+            "note": data.get("note"),
+        }
+        return j_bounded(compact, 10000)
+    except Exception as exc:
+        return j({"error":f"{type(exc).__name__}: {exc}"})
+
+@function_tool
+def evaluate_hypothesis_evidence(ctx: RunContextWrapper[AppContext], idea_id: str) -> str:
+    """Compare an idea hypothesis/prediction with its measured replay evidence."""
+    try:
+        return j_bounded(hypothesis_evidence_data(ctx.context.local.root, ctx.context.db, idea_id), 10000)
+    except Exception as exc:
+        return j({"error":f"{type(exc).__name__}: {exc}"})
+
+@function_tool
+def idea_dossier(ctx: RunContextWrapper[AppContext], idea_id: str) -> str:
+    """Return canonical lineage for one idea: code version, experiments, replays, and game-record paths."""
+    dossier = ctx.context.db.idea_dossier(idea_id)
+    if dossier is None:
+        return j({"error":"unknown idea_id: " + idea_id})
+    return j_bounded(dossier, 12000)
+
+_CANDIDATE_CODE_ERROR_MARKERS = (
+    "syntaxerror", "invalid syntax", "importerror", "modulenotfounderror",
+    "no module named", "nameerror", "is not defined", "attributeerror",
+    "indentationerror", "taberror", "failed to load candidate",
+    "candidate load", "compile(", "unexpected indent",
+)
+
+
+def candidate_code_failure_evidence(db: ResearchDB, idea_id: str | None) -> dict[str, Any]:
+    """Find recent replay evidence that points to fixable generated candidate code."""
+    if not idea_id:
+        return {"candidate_code_failure": False, "errors": []}
+    rows = db.db.execute(
+        """SELECT r.error,r.experiment_id,r.replay_call_id,e.candidate,e.candidate_sha256
+           FROM replays r
+           JOIN experiments e ON e.experiment_id=r.experiment_id
+           WHERE e.idea_id=? AND COALESCE(TRIM(r.error),'') != ''
+           ORDER BY r.replay_id DESC LIMIT 8""",
+        (idea_id,),
+    ).fetchall()
+    errors = []
+    matched = []
+    for row in rows:
+        err = str(row["error"] or "").strip()
+        if not err:
+            continue
+        item = {
+            "error": err[:3000],
+            "experiment_id": row["experiment_id"],
+            "replay_call_id": row["replay_call_id"],
+            "candidate": row["candidate"],
+            "candidate_sha256": row["candidate_sha256"],
+        }
+        errors.append(item)
+        low = err.casefold()
+        candidate = str(row["candidate"] or "").replace("\\", "/")
+        generated_candidate = candidate.startswith("workspace/candidates/")
+        if generated_candidate and any(
+            marker in low for marker in _CANDIDATE_CODE_ERROR_MARKERS
+        ):
+            matched.append(item)
+    return {
+        "candidate_code_failure": bool(matched),
+        "errors": errors[:4],
+        "matched_errors": matched[:4],
+    }
+
+
+@function_tool
+def report_blocker(ctx: RunContextWrapper[AppContext], failed_step: str, reason: str) -> str:
+    """Report a concrete runtime/environment blocker that makes further research impossible."""
+    failed_step = failed_step.strip()
+    reason = reason.strip()
+    if not failed_step or not reason:
+        return j({"error":"failed_step and reason are required"})
+
+    combined_blocker_text = (failed_step + " " + reason).lower()
+    source_access_blocker = (
+        ("v20" in combined_blocker_text or "notebook" in combined_blocker_text)
+        and any(
+            term in combined_blocker_text
+            for term in ("source", "function", "inspect", "truncat", "serialized")
+        )
+    )
+    if source_access_blocker:
+        try:
+            baseline = _v20_baseline_source(ctx.context.local)
+            functions = _top_level_functions(baseline)
+        except Exception:
+            functions = {}
+        if functions:
+            feedback = {
+                "error":"v20 source inspection is locally recoverable, not a blocker",
+                "idea_id":ctx.context.active_idea_id or None,
+                "available_function_count":len(functions),
+                "feedback":(
+                    "Do not inspect the raw serialized notebook with read_text/search_text. "
+                    "Call list_v20_functions, then read_v20_function for the exact function "
+                    "implementation. If the previous candidate attempt is closed, call "
+                    "start_experiment again for the SAME idea, create a NEW corrected "
+                    "v20-derived candidate, and replay it."
+                ),
+            }
+            ctx.context.log.event("blocker_rejected_v20_source_access", feedback)
+            return j_bounded(feedback, 12000)
+
+    repair = candidate_code_failure_evidence(
+        ctx.context.db, ctx.context.active_idea_id or None
+    )
+    # Only persisted failures from an agent-generated workspace/candidates artifact
+    # trigger self-repair. A SyntaxError mentioned in working_files/ or another
+    # supplied/reference file must not cause the agent to rewrite that file.
+    if ctx.context.active_idea_id and repair["candidate_code_failure"]:
+        feedback = {
+            "error":"generated candidate-code failure is recoverable, not a global blocker",
+            "idea_id":ctx.context.active_idea_id,
+            "candidate_code_errors":repair.get("matched_errors", []),
+            "feedback":(
+                "Self-correct only the generated workspace/candidates artifact. Keep the "
+                "SAME idea. Close the failed attempt with finish_experiment(..., ERROR, ...), "
+                "call start_experiment again to get a NEW experiment_id, write a NEW corrected "
+                "candidate file under workspace/candidates/, and replay it. Never modify "
+                "working_files/ or other supplied repository/reference files."
+            ),
+        }
+        ctx.context.log.event("blocker_rejected_candidate_repair", feedback)
+        return j_bounded(feedback, 12000)
+
+    ctx.context.blocker_reason = failed_step + ": " + reason
+    ctx.context.log.event("research_blocker", {
+        "failed_step": failed_step,
+        "reason": reason,
+    })
+    return j({"blocker_recorded": True, "failed_step": failed_step, "reason": reason})
+
+
+@function_tool
+def static_replay_candidate(ctx: RunContextWrapper[AppContext], candidate: str, experiment_id: str,
+                            episodes: list[str] | None = None, max_episodes: int = 25) -> str:
+    """Run static replay in an isolated child process and persist per-case metrics."""
+    if not ctx.context.local.allow_exec:
+        return j({"error":"execution disabled; rerun with --allow-exec"})
+    experiment = ctx.context.db.db.execute(
+        "SELECT experiment_id,idea_id FROM experiments WHERE experiment_id=?",
+        (experiment_id,),
+    ).fetchone()
+    if experiment is None:
+        return j({"error":"unknown experiment_id: " + experiment_id})
+
+    candidate_rel, candidate_error = validate_candidate_path(
+        ctx.context.local, candidate, allow_empty=False
+    )
+    if candidate_error:
+        return j({"error": candidate_error})
+    candidate_path = ctx.context.local._read_path(candidate_rel)
+    if candidate_path.suffix.lower() != ".py":
+        return j({
+            "error":"v23 research candidates must be full v20-derived .py artifacts",
+            "feedback":"Create the candidate with write_v20_candidate_file.",
+        })
+    candidate_source = candidate_path.read_text(encoding="utf-8")
+    baseline_validation = validate_v20_derived_source(
+        ctx.context.local, candidate_source
+    )
+    if not baseline_validation["ok"]:
+        return j({
+            "error":"candidate is not baseline-derived",
+            "candidate":candidate_rel,
+            "validation":baseline_validation,
+            "feedback":(
+                "Do not replace v20 with a small standalone agent. Use "
+                "write_v20_candidate_file to copy the complete v20 policy and replace "
+                "only the function(s) required by the assigned hypothesis."
+            ),
+        })
+    candidate_sha256 = hashlib.sha256(candidate_path.read_bytes()).hexdigest()
+    bound = ctx.context.db.bind_candidate(
+        experiment_id, candidate_rel, candidate_sha256
+    )
+    if "error" in bound:
+        return j(bound)
+
+    call_id = "replay_" + uuid.uuid4().hex[:10]
+    started_at, started = utcnow(), time.monotonic()
+    runner = ctx.context.local.root / "replay" / "runner.py"
+    child_env = {}
+    for key, value in os.environ.items():
+        upper = key.upper()
+        if any(secret in upper for secret in ("OPENAI_API_KEY","TOKEN","SECRET","PASSWORD","CREDENTIAL")):
+            continue
+        child_env[key] = value
+    child_env["PYTHONUNBUFFERED"] = "1"
+
+    argv = [
+        ctx.context.replay_python, str(runner),
+        "--candidate", candidate_rel,
+        "--episodes-json", json.dumps(episodes or []),
+        "--max-episodes", str(max(1, min(int(max_episodes), 50))),
+    ]
+    if experiment["idea_id"]:
+        record_dir = (
+            Path("workspace") / "replay_records" / str(experiment["idea_id"])
+            / experiment_id / call_id
+        )
+        argv.extend(["--record-dir", str(record_dir)])
+    try:
+        completed = run_subprocess_bounded_output(
+            argv,
+            cwd=ctx.context.local.root,
+            timeout=300,
+            env=child_env,
+            # Replay runner emits one marker-prefixed JSON line; known payloads can exceed 32 MB.
+            # Keep a hard ceiling high enough to preserve that line without unbounded RAM growth.
+            stdout_bytes=64_000_000,
+            stderr_bytes=64_000,
+        )
+        if completed["timed_out"]:
+            result = {
+                "error":"static replay timeout",
+                "timeout_seconds":300,
+                "stdout":completed["stdout"][-4000:],
+                "stderr":completed["stderr"][-4000:],
+                "stdout_truncated":completed["stdout_truncated"],
+                "stderr_truncated":completed["stderr_truncated"],
+            }
+        else:
+            marker = "__V23_RESULT__"
+            payload_line = next(
+                (line[len(marker):] for line in reversed(completed["stdout"].splitlines())
+                 if line.startswith(marker)),
+                None,
+            )
+            if payload_line is None:
+                result = {
+                    "error":"static replay child did not emit a result marker",
+                    "returncode":completed["returncode"],
+                    "stdout":completed["stdout"][-4000:],
+                    "stderr":completed["stderr"][-4000:],
+                    "stdout_truncated":completed["stdout_truncated"],
+                    "stderr_truncated":completed["stderr_truncated"],
+                }
+            else:
+                result = normalize_replay_result(json.loads(payload_line))
+                if completed["returncode"] != 0 and "error" not in result:
+                    result["error"] = f"static replay child exited {completed['returncode']}"
+    except Exception as exc:
+        result = {"error":f"{type(exc).__name__}: {exc}", "matches": [], "summary": {}}
+
+    result = normalize_replay_result(result)
+
+    elapsed = time.monotonic() - started
+    summary = ctx.context.db.record_replay_call(
+        ctx.context.run_id, experiment_id, call_id, candidate_rel, result, started_at, elapsed)
+    reached = ctx.context.db.maybe_reach_goal(
+        ctx.context.run_id, experiment_id, summary, usage_dict(ctx.usage),
+        ctx.context.input_price, ctx.context.output_price)
+    result["replay_call_id"] = call_id
+    result["idea_id"] = experiment["idea_id"]
+    result["candidate"] = candidate_rel
+    result["candidate_sha256"] = candidate_sha256
+    result["elapsed_seconds"] = round(elapsed, 3)
+    if reached:
+        result["goal_reached"] = reached
+    ctx.context.log.event("static_replay", {
+        "experiment_id":experiment_id,
+        "replay_call_id":call_id,
+        "candidate":candidate_rel,
+        "candidate_sha256":candidate_sha256,
+        "idea_id":experiment["idea_id"],
+        "elapsed_seconds":round(elapsed,3),
+        "summary":summary,
+        "goal_reached":reached,
+        "child_returncode": result.get("returncode"),
+        "replay_python": ctx.context.replay_python,
+    })
+    # Full replay details/traces remain in SQLite and game_record_path files.
+    # Never send the full replay payload back into model context.
+    compact_matches = []
+    for row in result.get("matches", []) if isinstance(result, dict) else []:
+        compact_matches.append({
+            "episode": row.get("episode"),
+            "valid": row.get("valid"),
+            "result": row.get("result"),
+            "original_v20_margin": row.get("original_v20_margin"),
+            "candidate_margin": row.get("candidate_margin"),
+            "margin_improvement": row.get("margin_improvement"),
+            "action_divergences": row.get("action_divergences"),
+            "first_action_divergence": row.get("first_action_divergence"),
+            "game_record_path": row.get("game_record_path"),
+            "error": row.get("error"),
+        })
+    error_texts = []
+    top_error = result.get("error") if isinstance(result, dict) else None
+    if top_error:
+        error_texts.append(str(top_error))
+    error_texts.extend(
+        str(row.get("error") or "") for row in compact_matches if row.get("error")
+    )
+    candidate_repair_required = any(
+        any(marker in err.casefold() for marker in _CANDIDATE_CODE_ERROR_MARKERS)
+        for err in error_texts
+    )
+    model_result = {
+        "protocol": result.get("protocol") if isinstance(result, dict) else None,
+        "precision_audit": result.get("precision_audit") if isinstance(result, dict) else None,
+        "summary": summary,
+        "matches": compact_matches,
+        "replay_call_id": call_id,
+        "idea_id": experiment["idea_id"],
+        "candidate": candidate_rel,
+        "candidate_sha256": candidate_sha256,
+        "elapsed_seconds": round(elapsed, 3),
+        "goal_reached": reached,
+        "error": top_error,
+        "candidate_repair_required": candidate_repair_required,
+        "repair_errors": [err[:3000] for err in error_texts[:4]],
+        "repair_action": (
+            "Generated candidate code failed. Self-correct now: finish this immutable "
+            "attempt as ERROR, start a NEW experiment for the SAME idea, create a NEW "
+            "corrected candidate path/content, and replay again. Do not call report_blocker."
+            if candidate_repair_required else None
+        ),
+        "detail_policy": "Use idea_dossier or game_record_path for targeted drill-down; full traces are not returned to model context.",
+    }
+    return j_bounded(model_result, 24000)
+
+
+def conservative_cost_usd(usage, input_price, output_price):
+    """Estimate Standard-tier cost including prompt-cache reads/writes, then add 10% headroom."""
+    input_tokens = int(usage.get("input_tokens", 0) or 0)
+    cached_tokens = int(usage.get("cached_tokens", 0) or 0)
+    cache_write_tokens = int(usage.get("cache_write_tokens", 0) or 0)
+    output_tokens = int(usage.get("output_tokens", 0) or 0)
+    uncached_tokens = max(0, input_tokens - cached_tokens - cache_write_tokens)
+    raw = (
+        uncached_tokens * float(input_price)
+        + cached_tokens * float(input_price) * 0.10
+        + cache_write_tokens * float(input_price) * 1.25
+        + output_tokens * float(output_price)
+    ) / 1_000_000.0
+    return raw * 1.10
+
+
+def usage_dict(u):
+    cached = cache_write = reasoning = 0
+    for e in getattr(u, "request_usage_entries", []) or []:
+        inp, out = getattr(e, "input_tokens_details", None), getattr(e, "output_tokens_details", None)
+        cached += int(getattr(inp, "cached_tokens", 0) or 0)
+        cache_write += int(getattr(inp, "cache_write_tokens", 0) or 0)
+        reasoning += int(getattr(out, "reasoning_tokens", 0) or 0)
+    return {"requests":int(getattr(u,"requests",0) or 0),
+            "input_tokens":int(getattr(u,"input_tokens",0) or 0),
+            "cached_tokens":cached,"cache_write_tokens":cache_write,
+            "output_tokens":int(getattr(u,"output_tokens",0) or 0),
+            "reasoning_tokens":reasoning,"total_tokens":int(getattr(u,"total_tokens",0) or 0)}
+
+
+def parse_analyst_batch(text: str) -> dict[str, Any]:
+    raw = text.strip()
+    if raw.startswith("```"):
+        lines = raw.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        raw = "\n".join(lines).strip()
+    data = json.loads(raw)
+    ideas = data.get("ideas")
+    if not isinstance(ideas, list) or len(ideas) != 10:
+        raise ValueError("analyst output must contain exactly 10 ideas")
+    required = {
+        "title","hypothesis","causal_layer","interaction_hypothesis",
+        "system_prediction","rationale","smallest_test","promotion_rule"
+    }
+    multi_component = 0
+    for i, idea in enumerate(ideas, 1):
+        if not isinstance(idea, dict):
+            raise ValueError(f"idea {i} is not an object")
+        missing = [key for key in required if not str(idea.get(key,"")).strip()]
+        if missing:
+            raise ValueError(f"idea {i} missing fields: {missing}")
+        components = idea.get("components")
+        if not isinstance(components, list) or not components:
+            raise ValueError(f"idea {i} components must be a non-empty list")
+        normalized = [str(x).strip() for x in components if str(x).strip()]
+        if not normalized:
+            raise ValueError(f"idea {i} components must contain names")
+        idea["components"] = normalized
+        if len(set(normalized)) >= 2:
+            multi_component += 1
+    if multi_component < 3:
+        raise ValueError(
+            "analyst batch must contain at least 3 multi-component ideas"
+        )
+    return data
+
+
+def add_usage(total: dict[str, int], delta: dict[str, int]) -> None:
+    for key in total:
+        total[key] += int(delta.get(key, 0) or 0)
+
+
+def latest_goal_state(db: ResearchDB) -> dict[str, Any] | None:
+    row = db.db.execute(
+        "SELECT * FROM goals ORDER BY created_at DESC LIMIT 1"
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def autonomous_stop_reason(goal: dict[str, Any] | None,
+                           blocker_reason: str,
+                           allow_exec: bool) -> str | None:
+    if goal and goal.get("reached_at"):
+        return "goal_reached"
+    if blocker_reason:
+        return "reported_blocker"
+    if not allow_exec:
+        return "execution_disabled"
+    return None
+
+
+def persist_budget_ledger(budget: BudgetLedger, model: str, usage: dict[str, int],
+                          input_price: float, output_price: float) -> None:
+    LEDGER_PATH.write_text(
+        json.dumps({
+            **vars(budget.total),
+            "model_last_used": model,
+            "updated_at_utc": utcnow(),
+            "cached_tokens_observed_last_run": usage["cached_tokens"],
+            "cache_write_tokens_observed_last_run": usage["cache_write_tokens"],
+            "reasoning_tokens_observed_last_run": usage["reasoning_tokens"],
+            "pricing_assumption": {
+                "executor_input_usd_per_m": input_price,
+                "executor_output_usd_per_m": output_price,
+                "cached_input_multiplier": 0.10,
+                "cache_write_multiplier": 1.25,
+                "safety_multiplier": 1.10,
+                "mixed_model_costs_may_be_accumulated": True,
+            },
+        }, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+def parse_args():
+    p=argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--task",required=True); p.add_argument("--model",default=DEFAULT_MODEL)
+    p.add_argument(
+        "--api-key",
+        default=None,
+        help="OpenAI API key for this agent run. Falls back to OPENAI_API_KEY.",
+    )
+    p.add_argument("--reasoning-effort",default="low",choices=["none","low","medium","high","xhigh","max"])
+    p.add_argument(
+        "--analyst-model",
+        default=None,
+        help="Model for the independent Performance Analyst. Defaults to --model.",
+    )
+    p.add_argument(
+        "--analyst-reasoning-effort",
+        default="medium",
+        choices=["none","low","medium","high","xhigh","max"],
+        help="Reasoning effort for performance analysis / improvement ideation.",
+    )
+    p.add_argument(
+        "--analyst-max-output-tokens",
+        type=int,
+        default=4000,
+        help="Output budget for the 10-idea Analyst JSON batch.",
+    )
+    p.add_argument(
+        "--analyst-max-turns",
+        type=int,
+        default=12,
+        help="Maximum model/tool turns for one Performance Analyst review.",
+    )
+    p.add_argument("--max-turns",type=int,default=12); p.add_argument("--max-output-tokens",type=int,default=2500)
+    p.add_argument("--allow-exec",action="store_true"); p.add_argument("--session-id",default=DEFAULT_SESSION_ID)
+    p.add_argument("--session-history-limit",type=int,default=80)
+    p.add_argument(
+        "--model-call-min-interval-seconds",
+        type=float,
+        default=8.0,
+        help="Minimum spacing between model calls across analyst/engineer roles; set 0 to disable.",
+    )
+    p.add_argument("--total-budget-usd",type=float,default=DEFAULT_TOTAL_BUDGET_USD)
+    p.add_argument("--session-budget-usd",type=float,default=DEFAULT_SESSION_BUDGET_USD)
+    p.add_argument("--input-usd-per-m",type=float); p.add_argument("--output-usd-per-m",type=float)
+    p.add_argument("--disable-tracing",action="store_true")
+    p.add_argument(
+        "--replay-python",
+        default=os.getenv("V23_REPLAY_PYTHON"),
+        help="Python interpreter from the isolated replay environment. "
+             "Defaults to V23_REPLAY_PYTHON or v23/.venv-replay.",
+    )
+    return p.parse_args()
+
+
+def resolve_replay_python(value: str | None) -> str:
+    """Resolve the isolated replay interpreter without importing Kaggle into the agent env."""
+    candidates = []
+    if value:
+        candidates.append(Path(value).expanduser())
+    root = Path(__file__).resolve().parents[1]
+    if os.name == "nt":
+        candidates.append(root / ".venv-replay" / "Scripts" / "python.exe")
+    else:
+        candidates.append(root / ".venv-replay" / "bin" / "python")
+
+    for candidate in candidates:
+        candidate = candidate.resolve()
+        if candidate.is_file():
+            if candidate == Path(sys.executable).resolve():
+                raise SystemExit(
+                    "replay interpreter must be separate from the agent interpreter; "
+                    "create .venv-replay or pass --replay-python"
+                )
+            return str(candidate)
+
+    raise SystemExit(
+        "isolated replay Python not found. Create v23/.venv-replay from "
+        "requirements-replay.txt or pass --replay-python / V23_REPLAY_PYTHON."
+    )
+
+
+def recoverable_model_generation_error(exc: Exception) -> bool:
+    """Return True for model-generation failures that should be retried in-loop."""
+    name = type(exc).__name__.lower()
+    text = (type(exc).__name__ + ": " + str(exc)).lower()
+    if name == "maxturnsexceeded":
+        return True
+    markers = (
+        "response.incomplete",
+        "status=incomplete",
+        "max_output_tokens",
+        "incomplete_details",
+        "reason='max_output_tokens'",
+        'reason="max_output_tokens"',
+    )
+    return "modelbehaviorerror" in name and any(marker in text for marker in markers)
+
+
+def model_pricing(model: str, explicit_input=None, explicit_output=None):
+    if (explicit_input is None) != (explicit_output is None):
+        raise SystemExit("pass both explicit token prices")
+    if explicit_input is not None:
+        return float(explicit_input), float(explicit_output)
+    if model not in MODEL_PRICING_USD_PER_M:
+        raise SystemExit(
+            "unknown model pricing for " + model
+            + "; use a known model or explicit token prices"
+        )
+    return MODEL_PRICING_USD_PER_M[model]
+
+
+def pricing_for(args):
+    return model_pricing(
+        args.model, args.input_usd_per_m, args.output_usd_per_m
+    )
+
+
+def main():
+    args=parse_args()
+    api_key = args.api_key or os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise SystemExit(
+            "OpenAI API key is required: pass --api-key or set OPENAI_API_KEY"
+        )
+    api_key_source = "cli" if args.api_key else "environment"
+    set_default_openai_key(api_key)
+    args.api_key = None
+    if not 1<=args.max_turns<=50: raise SystemExit("--max-turns must be 1..50")
+    if not 256<=args.max_output_tokens<=20000: raise SystemExit("--max-output-tokens must be 256..20000")
+    if not 1200<=args.analyst_max_output_tokens<=12000: raise SystemExit("--analyst-max-output-tokens must be 1200..12000")
+    if not 6<=args.analyst_max_turns<=30: raise SystemExit("--analyst-max-turns must be 6..30")
+    if not 1<=args.session_history_limit<=500: raise SystemExit("--session-history-limit must be 1..500")
+    if not 0<=args.model_call_min_interval_seconds<=60:
+        raise SystemExit("--model-call-min-interval-seconds must be 0..60")
+    if not 0<args.session_budget_usd<=args.total_budget_usd: raise SystemExit("invalid budget ceilings")
+    inp_price,out_price=pricing_for(args)
+    analyst_model=args.analyst_model or args.model
+    if analyst_model == args.model:
+        analyst_inp_price,analyst_out_price=inp_price,out_price
+    else:
+        analyst_inp_price,analyst_out_price=model_pricing(analyst_model)
+    replay_python=resolve_replay_python(args.replay_python) if args.allow_exec else ""
+    WORKSPACE.mkdir(parents=True,exist_ok=True)
+    run_id="run_"+datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")+"_"+uuid.uuid4().hex[:8]
+    config={"version":2,"run_id":run_id,"task":args.task,"model":args.model,
+            "api_key_source":api_key_source,
+            "session_id":args.session_id,"max_turns":args.max_turns,
+            "analyst_model":analyst_model,
+            "analyst_reasoning_effort":args.analyst_reasoning_effort,
+            "analyst_max_output_tokens":args.analyst_max_output_tokens,
+            "analyst_max_turns":args.analyst_max_turns,
+            "model_call_min_interval_seconds":args.model_call_min_interval_seconds,
+            "replay_python":replay_python or None,
+            "tracing_enabled":not args.disable_tracing,"trace_sensitive_data":False}
+    log=RunLog(WORKSPACE,config); local=LocalTools(allow_exec=args.allow_exec,log=log)
+    db=ResearchDB(STATE_DB); db.start_run(run_id,args.session_id,args.task,args.model)
+    app=AppContext(
+        run_id,local,db,log,inp_price,out_price,replay_python,
+        ModelCallPacer(args.model_call_min_interval_seconds),
+    )
+    budget=BudgetLedger(LEDGER_PATH,model=args.model,input_usd_per_m=inp_price,
+        output_usd_per_m=out_price,total_budget_usd=args.total_budget_usd,
+        session_budget_usd=args.session_budget_usd)
+    if not budget.can_call(): raise SystemExit("budget ceiling already reached")
+
+    agent=Agent[AppContext](name="v23 Kaggriculture Research Agent",instructions=SYSTEM_PROMPT,
+      model=args.model,model_settings=ModelSettings(reasoning=Reasoning(effort=args.reasoning_effort),
+      max_tokens=args.max_output_tokens,verbosity="low",parallel_tool_calls=False,
+      store=False,prompt_cache_options={"mode":"implicit","ttl":"30m"},
+      retry=model_retry_settings()),
+      tools=[list_tree,read_text,search_text,summarize_jsonl,list_v20_functions,read_v20_function,write_workspace_file,write_v20_candidate_file,run_python,
+             start_experiment,finish_experiment,set_goal,project_status,idea_dossier,
+             report_blocker,static_replay_candidate])
+    analyst_agent=Agent[AppContext](
+      name="v23 Performance Analyst",
+      instructions=PERFORMANCE_ANALYST_PROMPT,
+      model=analyst_model,
+      model_settings=ModelSettings(
+        reasoning=Reasoning(effort=args.analyst_reasoning_effort),
+        max_tokens=args.analyst_max_output_tokens,
+        verbosity="low",
+        parallel_tool_calls=False,
+        store=False,
+        prompt_cache_options={"mode":"implicit","ttl":"30m"},
+        retry=model_retry_settings(),
+      ),
+      tools=[
+        list_tree,read_text,search_text,summarize_jsonl,project_status,research_progress,
+        analyze_history_game,analyze_history_window,analyze_experiments,
+        compare_candidate_v20,analyze_cash_flow,analyze_inventory_flow,
+        analyze_worker_utilization,analyze_component_effects,
+        cluster_loss_histories,evaluate_hypothesis_evidence,idea_dossier
+      ],
+    )
+    # Durable research state lives in experiments.sqlite3/context packs.
+    # Use a fresh model conversation per process run so one oversized historical
+    # tool output cannot poison all future requests for the logical research session.
+    model_session_id = args.session_id + "-" + run_id
+    session=SQLiteSession(model_session_id,str(SESSION_DB))
+    prompt=("Research task:\n"+args.task+"\n\nExecution enabled: "+str(args.allow_exec)+
+            ". Conservative per-run ceiling: USD "+format(args.session_budget_usd,".2f")+
+            "; remaining project ledger: USD "+format(budget.remaining_total(),".4f")+
+            ". Use durable experiment records and minimize model turns.")
+    started=time.monotonic(); status="DONE"; output=""
+    usage={"requests":0,"input_tokens":0,"cached_tokens":0,"cache_write_tokens":0,
+           "output_tokens":0,"reasoning_tokens":0,"total_tokens":0}
+    cycle = 0
+    analyst_failures = 0
+    analyst_repair_feedback = ""
+    engineer_generation_failures = 0
+    continuation = prompt
+    latest_review = db.latest_strategy_review()
+    strategy_guidance = (
+        str(latest_review["analyst_output"])
+        if latest_review and latest_review.get("analyst_output")
+        else ""
+    )
+
+    while True:
+        if not budget.can_call():
+            status = "BUDGET_STOP"
+            output = (
+                output.rstrip()
+                + "\n\nAutonomous loop stopped because the configured API budget "
+                  "ceiling was reached before the durable goal."
+            ).strip()
+            log.event("autonomous_stop", {"reason":"budget","cycle":cycle})
+            break
+
+        remaining_session_budget = max(
+            0.0, args.session_budget_usd - budget.session.estimated_cost_usd
+        )
+        if remaining_session_budget <= 0:
+            status = "BUDGET_STOP"
+            output = (
+                output.rstrip()
+                + "\n\nAutonomous loop stopped because the per-run API budget "
+                  "ceiling was reached before the durable goal."
+            ).strip()
+            log.event("autonomous_stop", {"reason":"session_budget","cycle":cycle})
+            break
+
+        review_trigger = db.strategy_review_trigger() if args.allow_exec else None
+        new_strategy_review = ""
+        if review_trigger:
+            log.event("specialist_review_start", {
+                "role":"performance_analyst",
+                "trigger":review_trigger,
+                "cycle_before":cycle + 1,
+            })
+            analyst_hooks=BudgetHooks(
+                log,
+                budget.total.estimated_cost_usd,
+                remaining_session_budget,
+                args.total_budget_usd,
+                analyst_inp_price,
+                analyst_out_price,
+                app.pacer,
+                "performance_analyst",
+            )
+            analyst_usage={
+                "requests":0,"input_tokens":0,"cached_tokens":0,
+                "cache_write_tokens":0,"output_tokens":0,
+                "reasoning_tokens":0,"total_tokens":0
+            }
+            analyst_output=""
+            analyst_error=""
+            analyst_context = build_analyst_context(
+                db, local.root, max_chars=12000
+            )
+            analyst_prompt=(
+                "Research task:\n"+args.task+
+                "\n\nANALYST CONTEXT PACK:\n"+j(analyst_context)+
+                "\n\nIndependent performance review trigger: "+review_trigger+
+                "\nInspect only the minimum additional v20 evidence needed to diagnose "
+                "performance. Produce exactly 10 structurally distinct test ideas in the "
+                "required JSON schema."
+            )
+            if analyst_repair_feedback:
+                analyst_prompt += (
+                    "\n\nSELF-CORRECTION REQUIRED. Your previous Analyst attempt was "
+                    "invalid. Correct the output instead of abandoning the research run. "
+                    "Return a complete replacement batch that satisfies the schema exactly. "
+                    "Validation/runtime feedback:\n" + analyst_repair_feedback
+                )
+            log.communication(
+                "controller",
+                "performance_analyst",
+                "analyst_request",
+                analyst_prompt,
+                {"trigger": review_trigger, "attempt": analyst_failures + 1},
+            )
+            try:
+                analyst_result=Runner.run_sync(
+                    analyst_agent,
+                    analyst_prompt,
+                    context=app,
+                    max_turns=args.analyst_max_turns,
+                    hooks=analyst_hooks,
+                    run_config=RunConfig(
+                        workflow_name="v23 performance analysis",
+                        group_id=args.session_id+"-analyst",
+                        trace_include_sensitive_data=False,
+                        tracing_disabled=args.disable_tracing,
+                        trace_metadata={
+                            "run_id":run_id,"model":analyst_model,
+                            "role":"performance_analyst",
+                            "trigger":review_trigger,
+                        },
+                    ),
+                )
+                analyst_output=str(analyst_result.final_output or "")
+                analyst_usage=usage_dict(analyst_result.context_wrapper.usage)
+                log.communication(
+                    "performance_analyst",
+                    "controller",
+                    "analyst_response",
+                    analyst_output,
+                    {"trigger": review_trigger},
+                )
+            except Exception as exc:
+                analyst_error=type(exc).__name__+": "+str(exc)
+                analyst_usage=dict(analyst_hooks.last_usage)
+                log.communication(
+                    "performance_analyst",
+                    "controller",
+                    "analyst_error",
+                    analyst_error,
+                    {"trigger": review_trigger},
+                )
+
+            add_usage(usage, analyst_usage)
+            analyst_cost=conservative_cost_usd(
+                analyst_usage,analyst_inp_price,analyst_out_price
+            )
+            analyst_delta=LegacyUsage(
+                analyst_usage["input_tokens"],analyst_usage["output_tokens"],
+                analyst_usage["requests"],analyst_cost
+            )
+            budget.session.add(analyst_delta)
+            budget.total.add(analyst_delta)
+            persist_budget_ledger(
+                budget,args.model,usage,inp_price,out_price
+            )
+
+            parsed_review=None
+            if analyst_error:
+                db.record_analyst_attempt(
+                    run_id,review_trigger,"ERROR",analyst_output,analyst_error,
+                    analyst_usage,analyst_cost
+                )
+                log.event("specialist_review_error", {
+                    "role":"performance_analyst",
+                    "trigger":review_trigger,
+                    "error":analyst_error,
+                    "usage":analyst_usage,
+                    "conservative_cost_usd":analyst_cost,
+                })
+                if analyst_error.startswith("BudgetStopError:"):
+                    status="BUDGET_STOP"
+                    output=analyst_error
+                    break
+                analyst_failures += 1
+                analyst_repair_feedback = (
+                    "Previous Analyst call failed before producing a valid batch: "
+                    + analyst_error[:4000]
+                )
+            elif analyst_output:
+                try:
+                    parsed_review=parse_analyst_batch(analyst_output)
+                except Exception as exc:
+                    parse_error="invalid analyst batch: "+str(exc)
+                    db.record_analyst_attempt(
+                        run_id,review_trigger,"INVALID",analyst_output,parse_error,
+                        analyst_usage,analyst_cost
+                    )
+                    log.event("specialist_review_error", {
+                        "role":"performance_analyst",
+                        "trigger":review_trigger,
+                        "error":parse_error,
+                        "raw_output":analyst_output[:4000],
+                    })
+                    analyst_failures += 1
+                    analyst_repair_feedback = (
+                        parse_error[:3000]
+                        + "\nPrevious invalid output (bounded):\n"
+                        + analyst_output[:5000]
+                    )
+                if parsed_review is not None:
+                    db.record_analyst_attempt(
+                        run_id,review_trigger,"VALID",analyst_output,"",
+                        analyst_usage,analyst_cost
+                    )
+                    review_id=db.record_strategy_review(
+                        run_id,review_trigger,analyst_output,
+                        analyst_usage,analyst_cost
+                    )
+                    batch_out=db.add_idea_batch(
+                        review_id,parsed_review["ideas"]
+                    )
+                    if "error" in batch_out:
+                        analyst_failures += 1
+                        analyst_repair_feedback = (
+                            "Batch persistence/validation rejected the Analyst output: "
+                            + str(batch_out["error"])[:4000]
+                            + "\nReturn a corrected complete 10-idea batch."
+                        )
+                        log.event("specialist_review_error", {
+                            "role":"performance_analyst",
+                            "trigger":review_trigger,
+                            "error":batch_out["error"],
+                        })
+                    else:
+                        analyst_failures = 0
+                        analyst_repair_feedback = ""
+                        strategy_guidance=analyst_output
+                        new_strategy_review=analyst_output
+                        log.event("specialist_review_finish", {
+                            "role":"performance_analyst",
+                            "model":analyst_model,
+                            "reasoning_effort":args.analyst_reasoning_effort,
+                            "review_id":review_id,
+                            "trigger":review_trigger,
+                            "idea_count":batch_out["count"],
+                            "idea_ids":batch_out["idea_ids"],
+                            "usage":analyst_usage,
+                            "conservative_cost_usd":analyst_cost,
+                        })
+            else:
+                db.record_analyst_attempt(
+                    run_id,review_trigger,"INVALID","",
+                    "analyst returned empty output",analyst_usage,analyst_cost
+                )
+                analyst_failures += 1
+                analyst_repair_feedback = (
+                    "Previous Analyst attempt returned empty output. Return exactly one "
+                    "complete replacement JSON batch containing 10 valid ideas."
+                )
+
+            if analyst_failures:
+                log.event("analyst_self_correction_scheduled", {
+                    "failures":analyst_failures,
+                    "trigger":review_trigger,
+                    "feedback":analyst_repair_feedback[:5000],
+                })
+                log.communication(
+                    "controller",
+                    "performance_analyst",
+                    "analyst_self_correction",
+                    analyst_repair_feedback,
+                    {"failures": analyst_failures, "trigger": review_trigger},
+                )
+
+            if not budget.can_call():
+                status="BUDGET_STOP"
+                output=(
+                    output.rstrip()
+                    + "\n\nAutonomous loop stopped after specialist analysis because "
+                      "the configured API budget ceiling was reached."
+                ).strip()
+                break
+
+            remaining_session_budget = max(
+                0.0, args.session_budget_usd
+                - budget.session.estimated_cost_usd
+            )
+            if remaining_session_budget <= 0:
+                status="BUDGET_STOP"
+                output=(
+                    output.rstrip()
+                    + "\n\nAutonomous loop stopped after specialist analysis because "
+                      "the per-run API budget ceiling was reached."
+                ).strip()
+                break
+
+        next_idea = db.current_work_idea() if args.allow_exec else None
+        if args.allow_exec and next_idea is None:
+            # Do not spend an Engineer model call when no valid Analyst idea exists.
+            app.active_idea_id=""
+            continuation=(
+                "No valid Analyst idea is queued. Retry the Analyst bootstrap; "
+                "do not call the Experiment Engineer."
+            )
+            try:
+                progress_snapshot = build_progress_snapshot(db)
+                append_progress_files(local.root, progress_snapshot, utcnow())
+                log.event("progress_snapshot", progress_snapshot)
+            except Exception as exc:
+                log.event("progress_snapshot_error", {
+                    "error": type(exc).__name__ + ": " + str(exc)
+                })
+            continue
+        else:
+            app.active_idea_id=next_idea["idea_id"] if next_idea else ""
+
+        cycle += 1
+        hooks=BudgetHooks(
+            log,
+            budget.total.estimated_cost_usd,
+            remaining_session_budget,
+            args.total_budget_usd,
+            inp_price,
+            out_price,
+            app.pacer,
+            "experiment_engineer",
+        )
+        cycle_output = ""
+        cycle_usage = {
+            "requests":0,"input_tokens":0,"cached_tokens":0,"cache_write_tokens":0,
+            "output_tokens":0,"reasoning_tokens":0,"total_tokens":0
+        }
+        cycle_prompt=continuation
+        engineer_context = build_engineer_context(
+            db, next_idea, max_chars=8000
+        )
+        cycle_prompt += (
+            "\n\nENGINEER CONTEXT PACK:\n" + j(engineer_context)
+        )
+        if next_idea:
+            cycle_prompt += (
+                "\nImplement only the assigned idea in the context pack. Preserve "
+                "multi-component interactions, run the smallest useful replay, expand "
+                "only when its promotion rule is met, verify idea_dossier after replay, "
+                "and finish the experiment before moving to another idea."
+            )
+        log.communication(
+            "controller",
+            "experiment_engineer",
+            "engineer_request",
+            cycle_prompt,
+            {
+                "cycle": cycle,
+                "idea_id": next_idea.get("idea_id") if next_idea else None,
+                "experiment_id": next_idea.get("experiment_id") if next_idea else None,
+            },
+        )
+        recoverable_generation_error = False
+        try:
+            result=Runner.run_sync(
+              agent, cycle_prompt, context=app, session=session,
+              max_turns=args.max_turns, hooks=hooks,
+              run_config=RunConfig(
+                workflow_name="v23 autonomous research",
+                group_id=args.session_id,
+                trace_include_sensitive_data=False,
+                tracing_disabled=args.disable_tracing,
+                trace_metadata={"run_id":run_id,"model":args.model,"cycle":cycle},
+                session_settings=SessionSettings(limit=args.session_history_limit),
+              ),
+            )
+            cycle_output=str(result.final_output or "")
+            cycle_usage=usage_dict(result.context_wrapper.usage)
+            engineer_generation_failures = 0
+            log.communication(
+                "experiment_engineer",
+                "controller",
+                "engineer_response",
+                cycle_output,
+                {
+                    "cycle": cycle,
+                    "idea_id": next_idea.get("idea_id") if next_idea else None,
+                },
+            )
+        except Exception as exc:
+            cycle_output=type(exc).__name__+": "+str(exc)
+            cycle_usage=dict(hooks.last_usage)
+            log.communication(
+                "experiment_engineer",
+                "controller",
+                "engineer_error",
+                cycle_output,
+                {
+                    "cycle": cycle,
+                    "idea_id": next_idea.get("idea_id") if next_idea else None,
+                },
+            )
+            if isinstance(exc, BudgetStopError):
+                add_usage(usage, cycle_usage)
+                cycle_cost=conservative_cost_usd(cycle_usage,inp_price,out_price)
+                delta=LegacyUsage(
+                    cycle_usage["input_tokens"],cycle_usage["output_tokens"],
+                    cycle_usage["requests"],cycle_cost
+                )
+                budget.session.add(delta); budget.total.add(delta)
+                persist_budget_ledger(budget,args.model,usage,inp_price,out_price)
+                status="BUDGET_STOP"
+                output=cycle_output
+                log.event("autonomous_stop", {
+                    "reason":"budget_hook","cycle":cycle,"detail":cycle_output
+                })
+                break
+
+            if recoverable_model_generation_error(exc):
+                engineer_generation_failures += 1
+                recoverable_generation_error = True
+                continuation = (
+                    "SELF-CORRECTION REQUIRED: the previous Engineer model response "
+                    "was incomplete because it hit its generation/turn limit. Preserve "
+                    "the SAME assigned idea and any durable experiment/candidate state. "
+                    "Do not restart analysis and do not report a blocker. Resume from "
+                    "the current durable state, use tools first, keep prose extremely "
+                    "short, and complete the next required action (repair/replay/finish). "
+                    "Previous runtime error: " + cycle_output[:3000]
+                )
+                log.event("engineer_generation_retry_scheduled", {
+                    "cycle":cycle,
+                    "idea_id":next_idea.get("idea_id") if next_idea else None,
+                    "experiment_id":next_idea.get("experiment_id") if next_idea else None,
+                    "failures":engineer_generation_failures,
+                    "error":cycle_output[:5000],
+                })
+                log.communication(
+                    "controller",
+                    "experiment_engineer",
+                    "engineer_generation_self_correction",
+                    continuation,
+                    {
+                        "cycle":cycle,
+                        "failures":engineer_generation_failures,
+                        "idea_id":next_idea.get("idea_id") if next_idea else None,
+                    },
+                )
+            else:
+                status="ERROR"
+                output=cycle_output
+                add_usage(usage, cycle_usage)
+                cycle_cost=conservative_cost_usd(cycle_usage,inp_price,out_price)
+                delta=LegacyUsage(
+                    cycle_usage["input_tokens"],cycle_usage["output_tokens"],
+                    cycle_usage["requests"],cycle_cost
+                )
+                budget.session.add(delta); budget.total.add(delta)
+                persist_budget_ledger(budget,args.model,usage,inp_price,out_price)
+                log.event("autonomous_stop", {
+                    "reason":"runtime_error","cycle":cycle,"error":cycle_output
+                })
+                break
+
+        add_usage(usage, cycle_usage)
+        cycle_cost=conservative_cost_usd(cycle_usage,inp_price,out_price)
+        delta=LegacyUsage(
+            cycle_usage["input_tokens"],cycle_usage["output_tokens"],
+            cycle_usage["requests"],cycle_cost
+        )
+        budget.session.add(delta); budget.total.add(delta)
+        persist_budget_ledger(budget,args.model,usage,inp_price,out_price)
+        output=cycle_output or output
+
+        if recoverable_generation_error:
+            try:
+                progress_snapshot = build_progress_snapshot(db)
+                append_progress_files(local.root, progress_snapshot, utcnow())
+                log.event("progress_snapshot", progress_snapshot)
+            except Exception as snapshot_exc:
+                log.event("progress_snapshot_error", {
+                    "error": type(snapshot_exc).__name__ + ": " + str(snapshot_exc)
+                })
+            # Keep active_idea_id and durable state intact; next loop rehydrates
+            # current_work_idea and resumes the same attempt/repair sequence.
+            continue
+
+        app.active_idea_id=""
+        goal=latest_goal_state(db)
+        goal_reached=bool(goal and goal.get("reached_at"))
+        signal=db.research_signal()
+        log.event("autonomous_cycle", {
+            "cycle":cycle,
+            "cycle_output":cycle_output,
+            "cycle_usage":cycle_usage,
+            "cycle_conservative_cost_usd":cycle_cost,
+            "goal":goal,
+            "goal_reached":goal_reached,
+            "research_signal":signal,
+            "strategy_review_trigger":review_trigger,
+            "used_new_strategy_review":bool(new_strategy_review),
+        })
+
+        try:
+            progress_snapshot = build_progress_snapshot(db)
+            append_progress_files(local.root, progress_snapshot, utcnow())
+            log.event("progress_snapshot", progress_snapshot)
+        except Exception as exc:
+            log.event("progress_snapshot_error", {
+                "error": type(exc).__name__ + ": " + str(exc)
+            })
+
+        stop_reason=autonomous_stop_reason(goal, app.blocker_reason, args.allow_exec)
+        if stop_reason == "goal_reached":
+            status="DONE"
+            output = (
+                cycle_output.rstrip()
+                + "\n\nDurable goal reached; autonomous research loop stopped."
+            ).strip()
+            break
+
+        if stop_reason == "reported_blocker":
+            status="BLOCKED"
+            output = (
+                cycle_output.rstrip()
+                + "\n\nAutonomous research loop stopped on recorded blocker: "
+                + app.blocker_reason
+            ).strip()
+            log.event("autonomous_stop", {
+                "reason":"reported_blocker","cycle":cycle,
+                "blocker":app.blocker_reason,
+            })
+            break
+
+        if stop_reason == "execution_disabled":
+            status="DONE"
+            break
+
+        unfinished = None
+        repair_after_error = False
+        if next_idea:
+            current = db.current_work_idea()
+            repair_after_error = bool(
+                current
+                and current.get("idea_id") == next_idea.get("idea_id")
+                and current.get("repair_after_error")
+            )
+            if (
+                current
+                and current.get("idea_id") == next_idea.get("idea_id")
+                and current.get("status") == "RUNNING"
+                and current.get("experiment_id")
+                and not repair_after_error
+            ):
+                unfinished = experiment_execution_contract(
+                    db, str(current["experiment_id"])
+                )
+
+        if repair_after_error:
+            continuation=(
+                "SELF-CORRECTION FEEDBACK: the previous immutable candidate attempt failed "
+                "with generated-code/runtime evidence. Continue the SAME assigned idea, but "
+                "do NOT reuse or edit the failed artifact and do NOT reuse the failed "
+                "experiment. Inspect the prior replay error in the Engineer context, call "
+                "start_experiment to create a NEW experiment attempt, write a NEW corrected "
+                "artifact under workspace/candidates/, replay it, and repeat repair attempts "
+                "until a valid measured result exists."
+            )
+            log.event("engineer_repair_feedback", {
+                "idea_id": current.get("idea_id") if current else None,
+                "previous_experiment_id": current.get("experiment_id") if current else None,
+            })
+            log.communication(
+                "controller",
+                "experiment_engineer",
+                "engineer_self_correction",
+                continuation,
+                {
+                    "idea_id": current.get("idea_id") if current else None,
+                    "previous_experiment_id": current.get("experiment_id") if current else None,
+                },
+            )
+        elif unfinished and not unfinished.get("ok"):
+            continuation=(
+                "RETRY FEEDBACK: the previous Engineer cycle did not complete the "
+                "required idea -> durable code -> plug into static replay -> valid measured "
+                "result lifecycle. Continue the SAME assigned idea and current RUNNING "
+                "experiment; do NOT advance to another idea. Missing requirements: "
+                + ", ".join(unfinished.get("missing", []))
+                + ". Create/fix the candidate with write_candidate_file under "
+                  "workspace/candidates/, run static_replay_candidate with that exact "
+                  "artifact until at least one valid measured replay result exists, inspect "
+                  "the result, then call finish_experiment again."
+            )
+            log.event("engineer_retry_feedback", {
+                "idea_id": current.get("idea_id"),
+                "experiment_id": current.get("experiment_id"),
+                "missing": unfinished.get("missing", []),
+            })
+            log.communication(
+                "controller",
+                "experiment_engineer",
+                "engineer_retry",
+                continuation,
+                {
+                    "idea_id": current.get("idea_id"),
+                    "experiment_id": current.get("experiment_id"),
+                    "missing": unfinished.get("missing", []),
+                },
+            )
+        else:
+            continuation=(
+                "Continue the SAME research task and session. The durable goal is still "
+                "unmet. The controller will assign the next pending analyst idea. Use prior "
+                "measured results as evidence, implement only the assigned idea, execute "
+                "static replay, and record the conclusion. Do not invent an unqueued idea."
+            )
+
+    elapsed=time.monotonic()-started
+    if status=="DONE" and args.allow_exec:
+        progress = db.db.execute(
+            "SELECT replay_calls,replay_cases,experiments_started FROM runs WHERE run_id=?",
+            (run_id,),
+        ).fetchone()
+        valid_replays = int(db.db.execute(
+            "SELECT COUNT(*) FROM replays WHERE run_id=? AND valid=1",
+            (run_id,),
+        ).fetchone()[0])
+        open_experiments = int(db.db.execute(
+            "SELECT COUNT(*) FROM experiments WHERE run_id=? AND status='RUNNING'",
+            (run_id,),
+        ).fetchone()[0])
+        contract_ok = (
+            progress is not None
+            and int(progress["replay_calls"] or 0) > 0
+            and valid_replays > 0
+            and open_experiments == 0
+        )
+        if not contract_ok:
+            status="INCOMPLETE"
+            output = (
+                output.rstrip()
+                + "\n\nExecution contract violation: --allow-exec was enabled, "
+                  "but the run did not complete a valid static-replay experiment. "
+                  "A successful run requires at least one valid replay case and no "
+                  "unfinished experiment. The run is marked INCOMPLETE."
+            )
+            log.event("execution_contract_violation", {
+                "run_id": run_id,
+                "experiments_started": int(progress["experiments_started"] or 0) if progress else 0,
+                "replay_calls": int(progress["replay_calls"] or 0) if progress else 0,
+                "replay_cases": int(progress["replay_cases"] or 0) if progress else 0,
+                "valid_replay_cases": valid_replays,
+                "open_experiments": open_experiments,
+            })
+    # budget.session accumulates each model call at that model's own pricing.
+    # Repricing aggregate Luna+Sol tokens at executor prices would under-report cost.
+    cost=float(budget.session.estimated_cost_usd)
+    db.finish_run(run_id,status,usage,cost,output,elapsed)
+    try:
+        final_progress = build_progress_snapshot(db)
+        append_progress_files(local.root, final_progress, utcnow())
+        log.event("progress_snapshot_final", final_progress)
+    except Exception as exc:
+        log.event("progress_snapshot_error", {
+            "error": type(exc).__name__ + ": " + str(exc)
+        })
+    log.event("run_summary",{"run_id":run_id,"elapsed_seconds":round(elapsed,3),
+              "usage":usage,"conservative_cost_usd":cost,"project_status":db.project_status()})
+    log.final(output)
+    print(output); print("\n[v23 observability]")
+    print(j({"run_id":run_id,"elapsed_seconds":round(elapsed,3),"usage":usage,
+             "conservative_cost_usd":round(cost,8),"session_id":args.session_id,
+             "model_session_id":model_session_id,
+             "autonomous_cycles":cycle,"goal":latest_goal_state(db),
+             "analyst_model":analyst_model,
+             "analyst_reasoning_effort":args.analyst_reasoning_effort,
+             "experiments_db":str(STATE_DB),"session_db":str(SESSION_DB),
+             "trace_enabled":not args.disable_tracing}))
+    print("[v23 run] "+str(log.dir))
+    return 0 if status=="DONE" else 2
+
+
+if __name__=="__main__":
+    raise SystemExit(main())

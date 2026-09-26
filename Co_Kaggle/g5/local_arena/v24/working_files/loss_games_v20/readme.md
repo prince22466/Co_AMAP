@@ -1,0 +1,1 @@
+v20 is the loser player.
