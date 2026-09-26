@@ -16,9 +16,12 @@ CROPS={
  'STRAWBERRY':(100,120,((10,2),(12,2),(14,2),(16,2)),16),
  'MELON':(80,250,((10,6),),10)}
 
-# Fixed first-quadrant seed target. crop_plan() does not enforce this geometry; it only
-# plants seeds already owned. market_orders() is responsible for acquiring this opening mix.
-OPENING_SEEDS={'WHEAT':13,'STRAWBERRY':3,'CARROT':2,'MELON':1}
+# Opening purchase targets are separate from the final crop mix. The opening buys only
+# 3 WHEAT because the start state already supplies the rest of the wheat needed for the
+# 13-WHEAT crop target. crop_plan() itself only plants seeds actually owned.
+START_SEED_BUYS={'WHEAT':3,'STRAWBERRY':3,'CARROT':2,'MELON':1}
+START_ANIMAL_BUYS={'COW':2,'SHEEP':1,'GOOSE':1}
+OPENING_CROP_TARGET={'WHEAT':13,'STRAWBERRY':3,'CARROT':2,'MELON':1}
 
 ANIMALS={'COW':(400,'MILK',8,2,3),'SHEEP':(500,'WOOL',6,3,4),'GOOSE':(300,'EGG',4,1,2)}
 
@@ -1064,33 +1067,43 @@ def unit_actions(obs,animal,crops):
 
 
 def start_plan(obs,cash=None,slots=10):
-    """Return the fixed day-0 market opening commands.
+    """Return the fixed day-0 opening purchases that still need to be issued.
 
-    Hour 0 uses the packed 10-command opening. Later day-0 turns only complete any
-    missing seeds from OPENING_SEEDS, counting both seeds still owned and crops already
-    planted so consumed seeds are not purchased twice.
+    Opening purchase targets:
+      seeds   = 3 WHEAT + 3 STRAWBERRY + 2 CARROT + 1 MELON
+      animals = 2 COW + 1 SHEEP + 1 GOOSE
+
+    Hour 0 keeps the six-HIRE opening. With only 10 market commands available, that leaves
+    four purchase commands: the three animal species plus STRAWBERRY, whose long growth
+    latency makes it the seed purchase worth issuing immediately. Later day-0 calls finish
+    the remaining seed purchases without rebuying seeds that were already planted.
     """
     f=obs['farms'][obs['player']];p=obs['private'];day=obs['day'];hour=obs['hour']
     if day!=0 or slots<=0:return []
+    if cash is None:cash=f['money']
+
+    orders=[]
 
     if hour==0:
+        # Six workers + three animal-species orders + one slow-crop seed order = 10.
         opening=[
             ['HIRE'],['HIRE'],['HIRE'],['HIRE'],['HIRE'],['HIRE'],
-            ['BUY_SEED','WHEAT',13],
-            ['BUY_ANIMAL','COW',2],
-            ['BUY_ANIMAL','SHEEP',2],
-            ['BUY_SEED','STRAWBERRY',3],
+            ['BUY_ANIMAL','COW',START_ANIMAL_BUYS['COW']],
+            ['BUY_ANIMAL','SHEEP',START_ANIMAL_BUYS['SHEEP']],
+            ['BUY_ANIMAL','GOOSE',START_ANIMAL_BUYS['GOOSE']],
+            ['BUY_SEED','STRAWBERRY',START_SEED_BUYS['STRAWBERRY']],
         ]
         return opening[:slots]
 
-    if cash is None:cash=f['money']
-    orders=[]
-    planted={c:0 for c in OPENING_SEEDS}
+    # Count seed purchases already realized either as unplanted seeds or planted crops.
+    # This prevents a seed from being bought twice after crop_plan()/unit_actions consumes it.
+    planted={c:0 for c in START_SEED_BUYS}
     for row in f['tiles']:
         for t in row:
             if isinstance(t,dict) and t.get('crop') in planted:planted[t['crop']]+=1
 
-    for c,target in OPENING_SEEDS.items():
+    # STRAWBERRY was bought at hour 0. Later turns complete the other seed targets.
+    for c,target in START_SEED_BUYS.items():
         have=p['seeds'].get(c,0)+planted[c]
         missing=max(0,target-have)
         if missing<=0:continue
@@ -1099,7 +1112,6 @@ def start_plan(obs,cash=None,slots=10):
         if n<=0 or len(orders)>=slots:continue
         orders.append(['BUY_SEED',c,n]);cash-=n*CROPS[c][0]
     return orders
-
 
 def market_orders(obs,animal,crops,actions,signals):
     # Build the rule-based market order list (maximum 10 orders). First account for goods
@@ -1137,6 +1149,8 @@ def market_orders(obs,animal,crops,actions,signals):
         opening_orders=start_plan(obs,cash,10-len(orders))
         for order in opening_orders:
             orders.append(order)
+            # start_plan() returns commands only; market_orders() maintains its own running
+            # cash estimate so later purchases in this same turn cannot overspend it.
             if order[0]=='BUY_SEED':cash-=order[2]*CROPS[order[1]][0]
 
     desired_hands=7 if len(f['unlocked_quadrants'])==1 else 11 if len(f['unlocked_quadrants'])==2 else 11
@@ -1181,6 +1195,9 @@ def market_orders(obs,animal,crops,actions,signals):
         for signal in signals:
             c=signal.get('product')
             if c not in CROPS or not signal.get('actionable') or signal.get('gap',0)<=0:continue
+            # producer_equivalent_gap expresses the remaining shortage as a number of
+            # additional producers. Example: 2.4 means roughly three more crop tiles are
+            # needed, so round up when converting the signal into a seed-purchase quantity.
             producer_gap=signal.get('producer_equivalent_gap',0)
             if not math.isfinite(producer_gap) or producer_gap<=0:continue
             n=min(unfilled_slots,max(1,math.ceil(producer_gap)))
