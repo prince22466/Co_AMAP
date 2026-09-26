@@ -1200,10 +1200,12 @@ def market_orders(obs,signals,actions):
     # after current worker PICKUP/DROP/PLACE actions, then emit SELL orders for available
     # products while reserving wheat for the herd and fertilizer for crops.
     # Day 0/hour 0 is a fixed 10-order opening. Otherwise, remaining slots are considered in
-    # this order: HIRE (early hours, target hand count, Fibonacci hire cost), BUY_PRODUCT
-    # WHEAT, BUY_LAND, ranked signal-driven BUY_SEED/BUY_ANIMAL procurement, then
-    # BUY_PRODUCT FERTILIZER. Dynamic producer procurement starts after day 0 so the fixed
-    # opening remains authoritative. Every stage checks cash and
+    # this order: HIRE (early hours, target hand count, Fibonacci hire cost), BUY_LAND,
+    # ranked signal-driven BUY_SEED/BUY_ANIMAL procurement, then BUY_PRODUCT FERTILIZER.
+    # WHEAT has no special BUY_PRODUCT path: feed demand is already included in
+    # production_signals(), so WHEAT shortages compete normally via BUY_SEED. Dynamic
+    # producer procurement starts after day 0 so the fixed opening remains authoritative.
+    # Every stage checks cash and
     # order capacity; earlier SELL/HIRE orders can consume slots needed by later purchases,
     # and the final `orders[:10]` enforces the engine limit defensively.
     f=obs['farms'][obs['player']];p=obs['private'];day=obs['day'];hour=obs['hour'];prices=obs['market']['prices']
@@ -1241,10 +1243,6 @@ def market_orders(obs,signals,actions):
             cost=fib[hires]
             if len(orders)>=10 or cash<cost+20:break
             orders.append(['HIRE']);cash-=cost;hires+=1
-    wheat_need=max(4,live+2)
-    if day<29 and total.get('WHEAT',0)<wheat_need:
-        n=min(wheat_need-total.get('WHEAT',0),int(max(0,cash-10)//(prices['WHEAT']+3)))
-        if n>0 and len(orders)<10:orders.append(['BUY_PRODUCT','WHEAT',n]);cash-=n*(prices['WHEAT']+3)
     lands=len(f['unlocked_quadrants'])
     empty_tiles=sum(1 for row in f['tiles'] for t in row if t is None)
     land_policy={1:(3,1000),2:(5,2000),3:(5,4000)}
