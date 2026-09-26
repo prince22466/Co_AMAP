@@ -549,9 +549,6 @@ class ForecastOneHistoryEventTests(unittest.TestCase):
                 self, delta_flow, delta_projected, step
             )
             flow_points = nonzero_points(delta_flow[crop])
-            assert_projection_delta_consistent(
-                self, delta_flow, delta_projected, step
-            )
             projected_points = nonzero_points(delta_projected[crop])
             print(
                 f"  OPP_CROP_APPEAR history_step={i} turn={step} "
@@ -614,6 +611,9 @@ class ForecastOneHistoryEventTests(unittest.TestCase):
                         f"OPP_YIELD step={step} t={t} product={product_name}",
                     )
 
+            assert_projection_delta_consistent(
+                self, delta_flow, delta_projected, step
+            )
             projected_points = nonzero_points(delta_projected[crop])
             print(
                 f"  OPP_YIELD_CHANGE history_step={i} turn={step} "
