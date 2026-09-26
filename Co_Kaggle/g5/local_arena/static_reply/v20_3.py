@@ -30,14 +30,16 @@ SHOPS={
  'SMOOTHIE_SHOP':{'STRAWBERRY':1,'MILK':1},
  'FARMERS_MARKET':{'WHEAT':1,'CARROT':1,'TOMATO':1,'STRAWBERRY':1}}
 
-ROUTES=(((4,4),(4,3),(2,4)),((3,4),(3,3),(2,3)),((5,4),(5,3)),((6,4),(6,3)),((4,5),(3,5)),((4,6),(3,6)))
+# 17 nearest shed tiles, excluding the lower-right quadrant (x>=5 and y>=5).
+ROUTES=(((4,4),(4,3),(4,2)),((3,4),(3,3),(2,4)),((5,4),(5,3),(5,2)),
+        ((6,4),(6,3)),((4,5),(3,5),(2,5)),((4,6),(3,6),(4,7)))
 ANIMAL_POINTS={p for route in ROUTES for p in route}
 # The shed occupies the central 2x2 tiles. These coordinates are the transfer interface
 # used for PICKUP/DROP/PLACE decisions and as routing targets via nearest_shed().
 SHED=((4,4),(5,4),(4,5),(5,5))
 PASS=['PASS']
 # Maximum number of animals the planner should place on route tiles.
-HERD_LIMIT=13
+HERD_LIMIT=17 # empirical evident from the number of herds of winners in v20 loss cases 
 OPP_STYLE=None
 # Legacy opponent-style tuning tuple. In this v20 file it is never read, so its values
 # have no runtime effect and the tuple-component semantics cannot be recovered from v20.
