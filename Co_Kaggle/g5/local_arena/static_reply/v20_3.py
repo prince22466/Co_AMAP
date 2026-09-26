@@ -397,11 +397,14 @@ def crop_plan(obs,projected,animal):
     # -------------------------------------------------------------------------
     # Stage 2: define the fixed early-game crop geometry.
     # -------------------------------------------------------------------------
-    # Preserve the existing cheap productive opening: among the upper-left candidate
-    # slots, reserve the first 13 for WHEAT and the next 6 for MELON.
+    # Use all 19 upper-left opening crop slots with a diversified fixed mix:
+    # 13 WHEAT + 3 STRAWBERRY + 2 CARROT + 1 MELON.
     opening=[p for p in points if p[0]<5 and p[1]<5]
     opening.sort(key=lambda p:(p[1],p[0]))
-    wheat=set(opening[:13]);melon=set(opening[13:19])
+    wheat=set(opening[:13])
+    strawberry=set(opening[13:16])
+    carrot=set(opening[16:18])
+    melon=set(opening[18:19])
 
     # -------------------------------------------------------------------------
     # Stage 3: choose a crop for each currently empty candidate slot.
@@ -410,9 +413,12 @@ def crop_plan(obs,projected,animal):
         # Existing crops, weeds, structures, etc. are operational state handled elsewhere.
         if tile(f,p) is not None:continue
 
-        # Stage 3a: during days 0..3, honor the fixed WHEAT/MELON opening assignment.
-        if day<=3 and p in wheat|melon:
-            c='WHEAT' if p in wheat else 'MELON'
+        # Stage 3a: during days 0..3, honor the fixed diversified opening assignment.
+        if day<=3 and p in wheat|strawberry|carrot|melon:
+            if p in wheat:c='WHEAT'
+            elif p in strawberry:c='STRAWBERRY'
+            elif p in carrot:c='CARROT'
+            else:c='MELON'
         else:
             # Stage 3b: after the fixed opening (or outside its reserved slots), score
             # every crop using the current legacy projected-inventory economics.
@@ -1086,7 +1092,10 @@ def market_orders(obs,animal,crops,actions):
         if n:
             orders.append(['SELL',c,n]);cash+=n*max(1,prices[c]*.8)
     if day==0 and hour==0:
-        return [['HIRE'], ['HIRE'], ['HIRE'], ['HIRE'], ['HIRE'], ['HIRE'], ['BUY_SEED', 'WHEAT', 13], ['BUY_ANIMAL', 'COW', 2], ['BUY_ANIMAL', 'SHEEP', 2], ['BUY_SEED', 'MELON', 6]]
+        # The 10-order cap leaves two opening seed-order slots after 6 hires + 2 animal
+        # orders. Buy the slow STRAWBERRY hedge immediately with WHEAT; the normal seed
+        # purchase path picks up the planned 2 CARROT + 1 MELON on the following turn.
+        return [['HIRE'], ['HIRE'], ['HIRE'], ['HIRE'], ['HIRE'], ['HIRE'], ['BUY_SEED', 'WHEAT', 13], ['BUY_ANIMAL', 'COW', 2], ['BUY_ANIMAL', 'SHEEP', 2], ['BUY_SEED', 'STRAWBERRY', 3]]
     desired_hands=7 if len(f['unlocked_quadrants'])==1 else 11 if len(f['unlocked_quadrants'])==2 else 11
     if day<3:desired_hands=6
     elif day==29 and OPP_STYLE=='V16':desired_hands=min(desired_hands,V16_FINAL_HANDS)
