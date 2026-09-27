@@ -1234,6 +1234,25 @@ def market_orders(obs,signals,actions):
     total=totals(p)
     live=sum(1 for row in f['tiles'] for t in row if isinstance(t,dict) and 'animal' in t)
 
+    # Worker actions execute before market orders, so include animals validly placed
+    # this turn when sizing the feed reserve. Otherwise a PLACE action can increase the
+    # herd after we counted it and let the market stage over-sell / under-buy WHEAT.
+    positions=[f['farmer']]+f['hands']
+    placed_positions=set()
+    for i,action in enumerate(actions):
+        if (i>=len(positions) or i>=len(p['inventories']) or
+                not isinstance(action,list) or len(action)<2 or action[0]!='PLACE'):
+            continue
+        animal=action[1]
+        if animal not in ANIMALS or p['inventories'][i].get(animal,0)<=0:
+            continue
+        pos=tuple(positions[i]);structure='COOP' if animal=='GOOSE' else 'PASTURE'
+        t=tile(f,pos)
+        if (pos not in placed_positions and isinstance(t,dict) and
+                t.get('kind')==structure and not t.get('animal')):
+            placed_positions.add(pos)
+            live+=1
+
     # -------------------------------------------------------------------------
     # 1. SELL — liquidate immediately sellable goods first, while keeping the
     # configured WHEAT/FERTILIZER reserves. Sale proceeds fund later priorities.
