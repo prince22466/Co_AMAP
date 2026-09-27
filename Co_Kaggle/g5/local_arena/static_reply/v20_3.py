@@ -1364,7 +1364,6 @@ def market_orders(obs,signals,actions):
                 cash-=n*cost
                 crop_slots-=n
             elif producer in ANIMALS:
-                if animal_buy_budget<=0:continue
                 cost=ANIMALS[producer][0]
                 affordable=int(spendable//cost)
                 n=min(needed,animal_slots,affordable,animal_buy_budget)
