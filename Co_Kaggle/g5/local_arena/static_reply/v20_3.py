@@ -1340,6 +1340,7 @@ def market_orders(obs,signals,actions):
             0,
             min(HERD_LIMIT,unlocked_animal_slots)-placed_animals-owned_unplaced_animals
         )
+        animal_buy_budget=2
 
         for signal in signals:
             if len(orders)>=10:break
@@ -1363,13 +1364,15 @@ def market_orders(obs,signals,actions):
                 cash-=n*cost
                 crop_slots-=n
             elif producer in ANIMALS:
+                if animal_buy_budget<=0:continue
                 cost=ANIMALS[producer][0]
                 affordable=int(spendable//cost)
-                n=min(needed,animal_slots,affordable)
+                n=min(needed,animal_slots,affordable,animal_buy_budget)
                 if n<=0:continue
                 orders.append(['BUY_ANIMAL',producer,n])
                 cash-=n*cost
                 animal_slots-=n
+                animal_buy_budget-=n
     # -------------------------------------------------------------------------
     # 6. BUY FERTILIZER — last priority. Size stock from every crop currently on
     # our land, then buy only the shortage if cash/order capacity still remains.
