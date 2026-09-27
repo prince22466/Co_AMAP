@@ -1164,11 +1164,11 @@ def start_plan(obs,cash=None,slots=10):
     """Return the fixed day-0 opening purchases in one exact order.
 
     Canonical sequence:
-      6 x HIRE
       BUY_SEED WHEAT 13
       BUY_ANIMAL COW 2
       BUY_SEED CARROT 2
       BUY_SEED STRAWBERRY 3
+      5 x HIRE
       BUY_SEED MELON 1
       BUY_ANIMAL SHEEP 1
       BUY_ANIMAL GOOSE 1
@@ -1217,7 +1217,8 @@ def market_orders(obs,signals,actions):
     # products while reserving wheat for the herd and fertilizer for crops.
     # Day 0/hour 0 is a fixed 10-order opening. Otherwise, remaining slots are considered in
     # this order after SELL: short-horizon BUY_PRODUCT WHEAT, HIRE, BUY_LAND,
-    # ranked signal-driven BUY_SEED/BUY_ANIMAL procurement, then BUY_PRODUCT FERTILIZER.
+    # ranked signal-driven BUY_SEED/BUY_ANIMAL procurement (at most two animal units
+    # in this turn), then BUY_PRODUCT FERTILIZER.
     # Feed WHEAT is intentionally separate from production_signals(): seeds solve future
     # production capacity, while animals need consumable WHEAT before those crops mature.
     # Dynamic producer procurement starts after day 0 so the fixed opening remains authoritative.
@@ -1232,33 +1233,16 @@ def market_orders(obs,signals,actions):
     cash=f['money'];orders=[]
     held,sell_total=post_action_market_inventory(obs,actions)
     total=totals(p)
-    live=sum(1 for row in f['tiles'] for t in row if isinstance(t,dict) and 'animal' in t)
+    live=sum(1 for row in f['tiles'] for t in row if isinstance(t,dict) and 'animal' in t)# animal numbers
 
-    # Worker actions execute before market orders, so include animals validly placed
-    # this turn when sizing the feed reserve. Otherwise a PLACE action can increase the
-    # herd after we counted it and let the market stage over-sell / under-buy WHEAT.
-    positions=[f['farmer']]+f['hands']
-    placed_positions=set()
-    for i,action in enumerate(actions):
-        if (i>=len(positions) or i>=len(p['inventories']) or
-                not isinstance(action,list) or len(action)<2 or action[0]!='PLACE'):
-            continue
-        animal=action[1]
-        if animal not in ANIMALS or p['inventories'][i].get(animal,0)<=0:
-            continue
-        pos=tuple(positions[i]);structure='COOP' if animal=='GOOSE' else 'PASTURE'
-        t=tile(f,pos)
-        if (pos not in placed_positions and isinstance(t,dict) and
-                t.get('kind')==structure and not t.get('animal')):
-            placed_positions.add(pos)
-            live+=1
+
 
     # -------------------------------------------------------------------------
     # 1. SELL — liquidate immediately sellable goods first, while keeping the
     # configured WHEAT/FERTILIZER reserves. Sale proceeds fund later priorities.
     # -------------------------------------------------------------------------
-    wheat_buffer=4 if live<4 else 8 if live<8 else 14
-    reserve_wheat=max(live,wheat_buffer)
+    wheat_buffer=2 if live<4 else 4 if live<=8 else 7 #wheat reserve at each turn
+    reserve_wheat=min(live+2,wheat_buffer)
     reserve_fert=0 if day<10 or day==29 else 4
     for c in SELLABLE_PRODUCTS:
         n=held.get(c,0)
@@ -1284,7 +1268,7 @@ def market_orders(obs,signals,actions):
         shortage=reserve_wheat-wheat_owned_after_actions
         unit_cost=prices['WHEAT']+3
         n=min(shortage,int(max(0,cash-10)//unit_cost))
-        if n:
+        if n>0:
             orders.append(['BUY_PRODUCT','WHEAT',n])
             cash-=n*unit_cost
 
@@ -1307,8 +1291,8 @@ def market_orders(obs,signals,actions):
     # 3. HIRE — fill the current hand target before spending on land or producers.
     # Existing timing, Fibonacci cost, and cash-buffer rules are preserved.
     # -------------------------------------------------------------------------
-    desired_hands=7 if len(f['unlocked_quadrants'])==1 else 11 if len(f['unlocked_quadrants'])==2 else 11
-    if day<3:desired_hands=6
+    desired_hands=5 if len(f['unlocked_quadrants'])==1 else 8 if len(f['unlocked_quadrants'])==2 else 11
+    if day<3:desired_hands=5
     elif day==29 and OPP_STYLE=='V16':desired_hands=min(desired_hands,V16_FINAL_HANDS)
     if hour<4:
         hires=f['hires_today'];fib=[1,1]
