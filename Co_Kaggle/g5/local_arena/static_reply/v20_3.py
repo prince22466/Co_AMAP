@@ -1216,11 +1216,11 @@ def market_orders(obs,signals,actions):
     # after current worker PICKUP/DROP/PLACE actions, then emit SELL orders for available
     # products while reserving wheat for the herd and fertilizer for crops.
     # Day 0/hour 0 is a fixed 10-order opening. Otherwise, remaining slots are considered in
-    # this order: HIRE (early hours, target hand count, Fibonacci hire cost), BUY_LAND,
+    # this order after SELL: short-horizon BUY_PRODUCT WHEAT, HIRE, BUY_LAND,
     # ranked signal-driven BUY_SEED/BUY_ANIMAL procurement, then BUY_PRODUCT FERTILIZER.
-    # WHEAT has no special BUY_PRODUCT path: feed demand is already included in
-    # production_signals(), so WHEAT shortages compete normally via BUY_SEED. Dynamic
-    # producer procurement starts after day 0 so the fixed opening remains authoritative.
+    # Feed WHEAT is intentionally separate from production_signals(): seeds solve future
+    # production capacity, while animals need consumable WHEAT before those crops mature.
+    # Dynamic producer procurement starts after day 0 so the fixed opening remains authoritative.
     # Every stage checks cash and
     # order capacity; earlier SELL/HIRE orders can consume slots needed by later purchases,
     # and the final `orders[:10]` enforces the engine limit defensively.
@@ -1233,6 +1233,25 @@ def market_orders(obs,signals,actions):
     held,sell_total=post_action_market_inventory(obs,actions)
     total=totals(p)
     live=sum(1 for row in f['tiles'] for t in row if isinstance(t,dict) and 'animal' in t)
+
+    # Worker actions execute before market orders, so include animals validly placed
+    # this turn when sizing the feed reserve. Otherwise a PLACE action can increase the
+    # herd after we counted it and let the market stage over-sell / under-buy WHEAT.
+    positions=[f['farmer']]+f['hands']
+    placed_positions=set()
+    for i,action in enumerate(actions):
+        if (i>=len(positions) or i>=len(p['inventories']) or
+                not isinstance(action,list) or len(action)<2 or action[0]!='PLACE'):
+            continue
+        animal=action[1]
+        if animal not in ANIMALS or p['inventories'][i].get(animal,0)<=0:
+            continue
+        pos=tuple(positions[i]);structure='COOP' if animal=='GOOSE' else 'PASTURE'
+        t=tile(f,pos)
+        if (pos not in placed_positions and isinstance(t,dict) and
+                t.get('kind')==structure and not t.get('animal')):
+            placed_positions.add(pos)
+            live+=1
 
     # -------------------------------------------------------------------------
     # 1. SELL — liquidate immediately sellable goods first, while keeping the
@@ -1255,6 +1274,21 @@ def market_orders(obs,signals,actions):
         return start_plan(obs,cash,10)
 
     # -------------------------------------------------------------------------
+    # 2. BUY FEED WHEAT — use the same herd-aware reserve as the SELL gate.
+    # This is a short-horizon inventory requirement, not a producer-capacity signal.
+    # Place it before HIRE/land/producer buying so a full order list cannot starve
+    # existing animals while spending on expansion.
+    # -------------------------------------------------------------------------
+    wheat_owned_after_actions=sell_total.get('WHEAT',0)
+    if day<29 and wheat_owned_after_actions<reserve_wheat and len(orders)<10:
+        shortage=reserve_wheat-wheat_owned_after_actions
+        unit_cost=prices['WHEAT']+3
+        n=min(shortage,int(max(0,cash-10)//unit_cost))
+        if n:
+            orders.append(['BUY_PRODUCT','WHEAT',n])
+            cash-=n*unit_cost
+
+    # -------------------------------------------------------------------------
     # DAY-0 OPENING TAIL — after the first turn, finish any MELON/SHEEP/GOOSE
     # opening purchases that did not fit inside the first 10 market-order slots.
     # -------------------------------------------------------------------------
@@ -1270,7 +1304,7 @@ def market_orders(obs,signals,actions):
             elif order[0]=='BUY_ANIMAL':cash-=order[2]*ANIMALS[order[1]][0]
 
     # -------------------------------------------------------------------------
-    # 2. HIRE — fill the current hand target before spending on land or producers.
+    # 3. HIRE — fill the current hand target before spending on land or producers.
     # Existing timing, Fibonacci cost, and cash-buffer rules are preserved.
     # -------------------------------------------------------------------------
     desired_hands=7 if len(f['unlocked_quadrants'])==1 else 11 if len(f['unlocked_quadrants'])==2 else 11
@@ -1284,7 +1318,7 @@ def market_orders(obs,signals,actions):
             if len(orders)>=10 or cash<cost+20:break
             orders.append(['HIRE']);cash-=cost;hires+=1
     # -------------------------------------------------------------------------
-    # 3. BUY LAND — expand only when free tiles fall below the capacity threshold.
+    # 4. BUY LAND — expand only when free tiles fall below the capacity threshold.
     # Land gets priority over new seeds/animals once the expansion rule triggers.
     # -------------------------------------------------------------------------
     lands=len(f['unlocked_quadrants'])
@@ -1297,7 +1331,7 @@ def market_orders(obs,signals,actions):
         if day<=latest_buy_day and empty_tiles<empty_threshold and cash>=landcost and len(orders)<10:
             orders.append(['BUY_LAND']);cash-=landcost
     # -------------------------------------------------------------------------
-    # 4. BUY SEEDS / ANIMALS — walk production_signals() from highest need to
+    # 5. BUY SEEDS / ANIMALS — walk production_signals() from highest need to
     # lowest. Apply producer deadline, floor(gap), deployment-space, cash-reserve,
     # and 10-order constraints before emitting BUY_SEED / BUY_ANIMAL.
     # -------------------------------------------------------------------------
@@ -1353,7 +1387,7 @@ def market_orders(obs,signals,actions):
                 cash-=n*cost
                 animal_slots-=n
     # -------------------------------------------------------------------------
-    # 5. BUY FERTILIZER — last priority. Size stock from every crop currently on
+    # 6. BUY FERTILIZER — last priority. Size stock from every crop currently on
     # our land, then buy only the shortage if cash/order capacity still remains.
     # -------------------------------------------------------------------------
     # Keep fertilizer stock sized to all crops currently growing on our land.

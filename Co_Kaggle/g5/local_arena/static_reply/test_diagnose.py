@@ -61,6 +61,55 @@ class DiagnosticTests(unittest.TestCase):
         self.assertNotIn("cash_reserve", row["reasons"])
         self.assertEqual(row["needed"], 0)
 
+    def test_market_orders_buy_wheat_when_herd_reserve_is_short(self):
+        obs = observation()
+        obs["day"] = 3
+        obs["hour"] = 0
+        obs["private"]["shed"]["WHEAT"] = 3
+        for x in range(5):
+            obs["farms"][obs["player"]]["tiles"][0][x] = dict(
+                kind="PASTURE", animal="COW", placed_day=0, yield_units=0,
+                fed_today=False, cared_today=False,
+            )
+        orders = self.g["market_orders"](obs, [], [["PASS"]])
+        wheat_buys = [o for o in orders if o[:2] == ["BUY_PRODUCT", "WHEAT"]]
+        self.assertEqual(wheat_buys, [["BUY_PRODUCT", "WHEAT", 5]])
+        first_non_sell = next(o for o in orders if o[0] != "SELL")
+        self.assertEqual(first_non_sell, ["BUY_PRODUCT", "WHEAT", 5])
+        self.assertFalse(any(o[:2] == ["SELL", "WHEAT"] for o in orders))
+
+    def test_market_orders_sell_only_wheat_above_herd_reserve(self):
+        obs = observation()
+        obs["day"] = 3
+        obs["hour"] = 5
+        obs["private"]["shed"]["WHEAT"] = 10
+        for x in range(5):
+            obs["farms"][obs["player"]]["tiles"][0][x] = dict(
+                kind="PASTURE", animal="COW", placed_day=0, yield_units=0,
+                fed_today=False, cared_today=False,
+            )
+        orders = self.g["market_orders"](obs, [], [["PASS"]])
+        self.assertIn(["SELL", "WHEAT", 2], orders)
+        self.assertFalse(any(o[:2] == ["BUY_PRODUCT", "WHEAT"] for o in orders))
+
+    def test_market_orders_reserve_counts_same_turn_animal_placement(self):
+        obs = observation()
+        obs["day"] = 3
+        obs["hour"] = 5
+        obs["private"]["shed"]["WHEAT"] = 10
+        obs["private"]["inventories"][0]["COW"] = 1
+        obs["farms"][obs["player"]]["farmer"] = [4, 3]
+        obs["farms"][obs["player"]]["tiles"][3][4] = dict(kind="PASTURE")
+        for x in range(3):
+            obs["farms"][obs["player"]]["tiles"][0][x] = dict(
+                kind="PASTURE", animal="COW", placed_day=0, yield_units=0,
+                fed_today=False, cared_today=False,
+            )
+        orders = self.g["market_orders"](obs, [], [["PLACE", "COW"]])
+        # Pre-action herd=3 would reserve only 4; post-action herd=4 must reserve 8.
+        self.assertIn(["SELL", "WHEAT", 2], orders)
+        self.assertNotIn(["SELL", "WHEAT", 6], orders)
+
     def test_json_nonfinite_gap_is_explicit_null(self):
         self.assertEqual(diagnose.clean({"gap": float("inf"), "score": 1}), {"gap": None, "score": 1})
 
