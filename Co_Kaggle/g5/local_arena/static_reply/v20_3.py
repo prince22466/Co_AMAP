@@ -1340,7 +1340,7 @@ def market_orders(obs,signals,actions):
             0,
             min(HERD_LIMIT,unlocked_animal_slots)-placed_animals-owned_unplaced_animals
         )
-        animal_buy_budget=2
+        animal_buy_budget=2 # largest number of animal to buy per turn
 
         for signal in signals:
             if len(orders)>=10:break
