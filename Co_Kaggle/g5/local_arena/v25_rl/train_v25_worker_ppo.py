@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""PPO/GAE training for the v25 full worker-action replacement on static v20 losses.
+"""PPO/GAE training for v25 worker actions on static v20 losses.
 
-The losing v20 seat is replaced while the opponent replays its recorded actions.
-v25's higher-level production/animal/crop/market planning remains unchanged, but
-v25_rl.unit_actions is monkey-patched out for the whole episode.  Training uses
-worker-efficiency reward only: no final money, margin, WIN/TIE/LOSS, or market
-price reward enters GAE or PPO.
+Only farmer/hands are learned. The game still receives a market action list so
+hiring, procurement, selling, and land purchases continue, but that list is
+replayed from the recorded v20 history and is not generated, scored, or updated
+by PPO. No final money, margin, WIN/TIE/LOSS, or market-price reward enters GAE.
 """
 from __future__ import annotations
 import argparse, copy, importlib.util, json, math, random, sys, time
@@ -64,15 +63,11 @@ class EpisodeResult:
     max_candidates:int
     error:str=""
 
-def worker_only_candidate_action(e,policy,obs,recorded_candidate):
-    """Replace only farmer/hands; replay v20's recorded market orders unchanged."""
-    if not isinstance(recorded_candidate,dict):
-        raise RuntimeError("recorded candidate action is not a dict")
-
+def worker_policy_action(e,policy,obs):
+    """Return only the trainable farmer/hands component."""
     # Preserve the small opponent-style initialization performed by v25 agent()
-    # because crop/animal planning can reference OPP_STYLE.  Do not call agent():
-    # agent() would also call market_orders(), which is deliberately excluded
-    # from this worker-only experiment.
+    # because crop/animal planning can reference OPP_STYLE. Do not call agent():
+    # agent() would also generate market_orders(), which is outside worker RL.
     if obs["day"]==0 and obs["hour"]==0:
         e.OPP_STYLE=None
     elif getattr(e,"OPP_STYLE",None) is None and obs["day"]==0 and obs["hour"]>0:
@@ -83,10 +78,22 @@ def worker_only_candidate_action(e,policy,obs,recorded_candidate):
     animal=e.animal_plan(obs,signals)
     crops=e.crop_plan(obs,signals)
     workers=policy.unit_actions(obs,animal,crops)
+    return {"farmer":workers[0],"hands":workers[1:]}
+
+
+def recorded_market_action(recorded_candidate):
+    """Frozen market input needed to keep the replayed game economy running."""
+    if not isinstance(recorded_candidate,dict):
+        raise RuntimeError("recorded candidate action is not a dict")
+    return copy.deepcopy(recorded_candidate.get("market") or [])
+
+
+def compose_environment_action(worker_action,market_action):
+    """Combine learned workers with non-learned market input only for env.step()."""
     return {
-        "farmer": workers[0],
-        "hands": workers[1:],
-        "market": copy.deepcopy(recorded_candidate.get("market") or []),
+        "farmer":worker_action["farmer"],
+        "hands":worker_action["hands"],
+        "market":market_action,
     }
 
 
@@ -101,9 +108,22 @@ def run_static_episode(path,model,device,executor_path,deterministic=False,colle
             opponent=recorded[other]; recorded_candidate=recorded[seat]
             if opponent is None: raise RuntimeError(f"None opponent action at {replay_step}")
             if recorded_candidate is None: raise RuntimeError(f"None recorded candidate action at {replay_step}")
-            candidate=worker_only_candidate_action(e,policy,obs,recorded_candidate)
+
+            # PPO controls only this object.
+            worker_action=worker_policy_action(e,policy,obs)
+
+            # The market stream is required for the game economy, but it is a
+            # frozen replay input: no policy log-probability and no reward term.
+            market_action=recorded_market_action(recorded_candidate)
+            candidate=compose_environment_action(worker_action,market_action)
+
             actions=[None,None]; actions[seat]=candidate; actions[other]=opponent; env.step(actions)
-            post=_agent_observation(env,seat); reward=compute_worker_reward(e,obs,candidate,post); total.add(reward); policy.finish_turn(reward)
+            post=_agent_observation(env,seat)
+
+            # Deliberately pass worker_action, not candidate. This makes it
+            # impossible for market commands to enter direct reward attribution.
+            reward=compute_worker_reward(e,obs,worker_action,post)
+            total.add(reward); policy.finish_turn(reward)
         statuses=[str(_field(s,"status","")) for s in env.steps[-1]]; ok=statuses==["DONE","DONE"]
         return EpisodeResult(path.stem,_seed_hint(h),ok,seat,float(total.reward),len(policy.records) if collect else len(h["steps"])-1,total.as_dict(),float(np.mean(policy.candidate_counts)) if policy.candidate_counts else 0.0,max(policy.candidate_counts) if policy.candidate_counts else 0,"" if ok else f"status={statuses}"),policy.records
     except Exception as exc:
@@ -169,7 +189,7 @@ def device_for(v):
     return torch.device("cpu")
 
 def save_checkpoint(path,model,opt,update,args,best):
-    torch.save({"algorithm":CHECKPOINT_ALGORITHM,"update":update,"model_state_dict":model.state_dict(),"optimizer_state_dict":opt.state_dict(),"candidate_feature_names":CANDIDATE_FEATURE_NAMES,"global_feature_names":GLOBAL_FEATURE_NAMES,"best_validation_worker_reward":best,"reward_contract":{"product_value":PRODUCT_VALUE,"generated":PRODUCT_GENERATED_REWARD,"harvested":PRODUCT_HARVESTED_REWARD,"delivered":PRODUCT_DELIVERED_REWARD,"animal_escape":ANIMAL_ESCAPE_PENALTY,"crop_to_weed":CROP_TO_WEED_PENALTY,"crop_death":CROP_DEATH_PENALTY,"lost_harvestable_unit":LOST_HARVESTABLE_UNIT_PENALTY},"args":vars(args),"note":"worker reward only; no final game result/money/margin reward"},path)
+    torch.save({"algorithm":CHECKPOINT_ALGORITHM,"update":update,"model_state_dict":model.state_dict(),"optimizer_state_dict":opt.state_dict(),"candidate_feature_names":CANDIDATE_FEATURE_NAMES,"global_feature_names":GLOBAL_FEATURE_NAMES,"best_validation_worker_reward":best,"reward_contract":{"product_value":PRODUCT_VALUE,"generated":PRODUCT_GENERATED_REWARD,"harvested":PRODUCT_HARVESTED_REWARD,"delivered":PRODUCT_DELIVERED_REWARD,"animal_escape":ANIMAL_ESCAPE_PENALTY,"crop_to_weed":CROP_TO_WEED_PENALTY,"crop_death":CROP_DEATH_PENALTY,"lost_harvestable_unit":LOST_HARVESTABLE_UNIT_PENALTY},"args":vars(args),"note":"PPO controls farmer/hands only; recorded market list is an unlearned env input; worker reward only; no final game result/money/margin/market reward"},path)
 
 def load_checkpoint(path,model,opt,device):
     p=torch.load(path,map_location=device,weights_only=False)
