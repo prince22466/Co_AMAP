@@ -266,10 +266,10 @@ python train_v25_worker_ppo.py --preflight-only
 ```
 
 
-PPO regression test:
+Regression tests:
 
 ```bash
-python -m unittest test_ppo_subdecision_ratio.py
+python -m unittest test_ppo_subdecision_ratio.py test_worker_reward_contract.py
 ```
 
 Train:
@@ -298,7 +298,7 @@ python train_v25_worker_ppo.py \
 
 ## Outputs
 
-Outputs are written under `runs/worker_ppo_static_v20_v3`.
+Outputs are written under `runs/worker_ppo_static_v20_v4_animal_reward`.
 
 - `metrics.jsonl` — PPO statistics, mean worker reward, and mean reward-component counts.
 - `episodes.jsonl` — per-training-replay worker metrics.
