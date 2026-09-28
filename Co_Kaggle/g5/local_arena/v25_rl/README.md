@@ -1,72 +1,158 @@
 # v25 worker RL
 
-v25 keeps the existing higher-level production, crop, animal, procurement, and market planners in v25_rl.py. Training replaces the entire unit_actions(obs, animal, crops) worker executor at runtime with WorkerPolicy.unit_actions. None of the legacy worker routing, forced delivery, staging, task weighting, tree prior, or residual-Q worker scheduler is called.
+v25 keeps the existing higher-level production, crop, animal, procurement, and market planners in `v25_rl.py`. During training, the legacy `unit_actions(obs, animal, crops)` implementation is replaced at runtime by `WorkerPolicy.unit_actions`.
+
+The old worker executor is therefore not used: its forced delivery logic, livestock routing/staging, heuristic task weights, tree prior, and residual-Q scheduler are bypassed.
+
+This is a full replacement of the **worker scheduling function**, but it is not primitive-action end-to-end RL. Candidate worker intents and legality checks are generated with rules, the policy learns which worker should take which intent and in what order, and movement toward a selected remote target is one deterministic Manhattan step.
 
 ## Static replay
 
-Training uses Co_Kaggle/g5/game_history/v20/*.json. Every history is treated as a recorded v20 loss. The lower-reward seat is replaced by the candidate; the other seat replays its original recorded action stream turn by turn. This is static counterfactual replay, not a live rematch.
+Training uses:
 
-A recorded-action parity gate is run before training.
+`Co_Kaggle/g5/game_history/v20/*.json`
+
+The corpus contract is that these are v20 losses. For each replay, the lower-final-reward seat is treated as the v20 seat and replaced by the v25 candidate. The other seat replays its original recorded action stream turn by turn.
+
+This is **static counterfactual replay**, not a live rematch: after the candidate changes the trajectory, the recorded opponent does not adapt.
+
+Before training, `recorded_action_parity()` is run on the first sorted history as a replay-engine sanity check.
 
 ## Worker-only objective
 
-There is no terminal win/loss, final money, money margin, market-price, or opponent-money reward. Episode worker score is simply the sum of per-turn worker rewards. PPO uses the 720-turn reward stream with GAE (gamma=0.99, lambda=0.95 by default).
+Training reward measures worker execution efficiency only.
 
-Reward contract:
+The following are **not** included in PPO reward:
 
-| Observable event | Reward |
+- final WIN / TIE / LOSS
+- final money
+- money margin
+- opponent money
+- market prices or price movement
+
+Episode worker score is:
+
+`sum(turn_worker_reward)`
+
+The trainer creates one reward for every replay transition processed by:
+
+`range(1, len(history["steps"]))`
+
+so the number of RL transitions is `len(history["steps"]) - 1`; it is not hard-coded to 720. PPO uses those turn rewards with GAE. Defaults are `gamma=0.99` and `gae_lambda=0.95`.
+
+### Reward contract
+
+| Worker outcome | Reward |
 | --- | ---: |
 | animal escapes | -40 |
 | PLANT -> WEED | -32 |
-| plant disappears without harvest | -32 |
-| each harvestable unit lost with destroyed asset | -8 |
-| product unit generated | +2 |
-| product unit harvested | +2 |
-| product unit delivered to shed | +4 |
-| successful plant | +1 |
-| build coop/pasture | +0.5 |
-| place animal | +1 |
-| effective care | +1 |
-| effective fertilize | +1 |
-| collect fertilizer | +1 |
-| normal feed / water | +1 |
-| critical feed / water (consecutive_* >= 1) | +4 |
+| still-productive plant is destroyed/disappears without HARVEST | -32 |
+| each harvestable unit lost with a destroyed asset | -8 |
+| crop/animal product unit generated | +2 |
+| crop/animal product unit harvested | +2 |
+| crop/animal product unit explicitly delivered to shed | +4 |
+| successful PLANT | +1 |
+| successful BUILD_COOP / BUILD_PASTURE | +0.5 |
+| successful animal placement | +1 |
+| effective CARE | +1 |
+| effective FERTILIZE | +1 |
+| COLLECT_FERTILIZER from an available animal | +1 |
+| normal FEED / WATER | +1 |
+| critical FEED / WATER where `consecutive_* >= 1` | +4 |
 
-All products use one fixed lifecycle value of 8: 2 generated + 2 harvested + 4 delivered. Market price movement is ignored.
+For crop and animal output products in `PRODUCTS`, the maximum lifecycle reward for one unit that completes all three milestones is:
 
-PLANT -> WEED is always a heavy worker-efficiency failure, including expiration caused by inefficient harvesting. A plant disappearing without HARVEST is also a heavy failure. Random None -> WEED spawning is not penalized.
+`2 generated + 2 harvested + 4 delivered = 8`
+
+This fixed value ignores market-price movement. Fertilizer is separate from this product lifecycle and receives the collection reward above.
+
+`PLANT -> WEED` is always treated as a heavy worker-efficiency failure, including expiration caused by failing to harvest in time. Random `None -> WEED` spawning is not penalized.
+
+A deliberate `DIG` of a fully exhausted crop with no remaining yield and age beyond its useful production window is treated as valid cleanup and is **not** assigned the crop-death penalty. Destroying a still-productive crop remains a heavy failure.
 
 ## Policy
 
-animal_plan and crop_plan remain workload inputs, but all worker execution is learned. The policy generates feasible intents for planting, watering, harvesting, fertilizing, feeding, care, fertilizer collection, coop/pasture construction, animal placement, resource pickup, product delivery, digging, and pass.
+`animal_plan` and `crop_plan` remain workload inputs. The RL worker scheduler can choose among intents for:
 
-Workers are assigned autoregressively each turn. A remote selected task emits one deterministic Manhattan move toward its target. The PPO record is one environment turn: all worker selections made in that turn form a joint action whose log probability is the sum of its subdecision log probabilities. The one observed turn reward is attached to that joint action.
+- planting
+- watering
+- harvesting
+- fertilizing
+- feeding
+- care
+- fertilizer collection
+- coop/pasture construction
+- animal placement
+- resource pickup
+- product delivery
+- digging
+- pass
 
-Files:
-- worker_reward.py: fixed worker reward constants and before/after transition reward extraction.
-- worker_policy.py: actor/critic, state/candidate features, complete RL unit_actions replacement.
-- train_v25_worker_ppo.py: static v20-loss replay, GAE, PPO, validation, logging, checkpoints.
-- v25_rl.py: unchanged high-level v25 planner/executor source.
+Workers are assigned autoregressively within a turn. After each worker choice, feasibility/reservation state is updated and the next worker is selected from the remaining candidates.
+
+If a selected task is remote, the emitted environment action is one deterministic Manhattan move toward its target. The network therefore learns **task/worker assignment and task ordering**, not free-form pathfinding.
+
+One PPO record corresponds to one environment turn. All worker selections made inside that turn are treated as one autoregressive joint action:
+
+`joint_log_prob = sum(subdecision_log_probs)`
+
+The single observed worker reward for the resulting environment transition is attached to that joint turn action.
+
+## Files
+
+- `worker_reward.py` — fixed reward constants and before/after turn reward extraction.
+- `worker_policy.py` — actor/critic, state/candidate features, rule-generated feasible worker intents, and the complete runtime replacement for `unit_actions`.
+- `train_v25_worker_ppo.py` — static v20-loss replay, GAE, PPO, validation, logging, and checkpoints.
+- `v25_rl.py` — unchanged higher-level v25 planner/executor source.
 
 ## Run
 
-From Co_Kaggle/g5/local_arena/v25_rl:
+From `Co_Kaggle/g5/local_arena/v25_rl`:
 
-    python train_v25_worker_ppo.py --preflight-only
+Preflight:
+
+```bash
+python train_v25_worker_ppo.py --preflight-only
+```
 
 Train:
 
-    python train_v25_worker_ppo.py --updates 100 --episodes-per-update 8 --max-training-hours 2
+```bash
+python train_v25_worker_ppo.py \
+  --updates 100 \
+  --episodes-per-update 8 \
+  --max-training-hours 2
+```
 
 Resume:
 
-    python train_v25_worker_ppo.py --resume runs/worker_ppo_static_v20/checkpoints/latest.pt --updates 200 --episodes-per-update 8 --max-training-hours 2
+```bash
+python train_v25_worker_ppo.py \
+  --resume runs/worker_ppo_static_v20/checkpoints/latest.pt \
+  --updates 200 \
+  --episodes-per-update 8 \
+  --max-training-hours 2
+```
 
-Outputs are written under runs/worker_ppo_static_v20:
-- metrics.jsonl: PPO loss and mean worker reward plus every reward component.
-- episodes.jsonl: per-training-history worker metrics.
-- validation.jsonl and validation_episodes.jsonl: deterministic held-out worker metrics.
-- checkpoints/latest.pt: latest checkpoint.
-- checkpoints/best.pt: highest held-out mean worker reward.
+## Outputs
 
-Primary health metrics are mean_animals_escaped, mean_crops_to_weed, mean_products_harvested, mean_products_delivered, and mean_worker_reward.
+Outputs are written under `runs/worker_ppo_static_v20`.
+
+- `metrics.jsonl` — PPO statistics, mean worker reward, and mean reward-component counts.
+- `episodes.jsonl` — per-training-replay worker metrics.
+- `validation.jsonl` — deterministic held-out aggregate worker metrics.
+- `validation_episodes.jsonl` — deterministic held-out per-replay worker metrics.
+- `checkpoints/latest.pt` — latest checkpoint.
+- `checkpoints/best.pt` — checkpoint with the highest held-out mean worker reward seen so far, including the initial untrained baseline.
+
+Primary health metrics are:
+
+- `mean_animals_escaped`
+- `mean_crops_to_weed`
+- `mean_crops_died`
+- `mean_products_generated`
+- `mean_products_harvested`
+- `mean_products_delivered`
+- `mean_worker_reward`
+
+The worker policy should improve these operational metrics independently of whether the overall game is ultimately won or lost.
