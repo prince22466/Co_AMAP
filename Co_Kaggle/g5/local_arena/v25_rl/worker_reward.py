@@ -318,6 +318,20 @@ def compute_worker_reward(executor, before, worker_action, after) -> RewardBreak
             # Planting on the last hour can immediately refresh into a weed;
             # count that as the same catastrophic failure rather than a random weed.
             if bt is None and isinstance(at, dict) and at.get("kind") == "WEED" and "PLANT" in ops_here:
+                # The seed was still planted successfully; the day refresh then
+                # killed it immediately. Count both the planting event and the
+                # worker-efficiency failure.
+                planted_crop = next(
+                    (
+                        action[1]
+                        for action in tile_actions
+                        if action and action[0] == "PLANT" and len(action) >= 2
+                    ),
+                    None,
+                )
+                if planted_crop in CROP_PRODUCTS:
+                    out.seeds_planted_total += 1
+                    out.seeds_planted_by_crop[planted_crop] += 1
                 out.crops_to_weed += 1
                 out.reward += CROP_TO_WEED_PENALTY
 
