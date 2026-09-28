@@ -363,8 +363,9 @@ def main():
     (out/"config.json").write_text(json.dumps({**vars(args),"executor":str(ex),"device_resolved":str(device),"algorithm":CHECKPOINT_ALGORITHM,"objective":"worker efficiency only; farmer/hands replaced by RL, recorded v20 market orders replayed unchanged; no final game result reward","product_value":PRODUCT_VALUE},indent=2,default=str)+"\n")
     rows,base=evaluate(val,model,device,ex,"baseline"); write_jsonl(out/"validation.jsonl",{"update":-1,**base})
     for r in rows: write_jsonl(out/"validation_episodes.jsonl",{"update":-1,**r.__dict__})
-    if base["mean_worker_reward"] is not None:
-        best=max(best,float(base["mean_worker_reward"]))
+    baseline_worker_reward=base.get("mean_worker_reward")
+    if baseline_worker_reward is not None:
+        best=max(best,float(baseline_worker_reward))
         # Make best.pt truthful even when the untrained baseline remains the
         # best held-out worker policy for the entire run.
         save_checkpoint(ck/"best.pt",model,opt,-1,args,best)
@@ -394,9 +395,20 @@ def main():
         if u%args.checkpoint_every_updates==0:
             save_checkpoint(ck/f"update_{u:04d}.pt",model,opt,u,args,best); save_checkpoint(ck/"latest.pt",model,opt,u,args,best)
         if u%args.validate_every_updates==0:
-            rows,s=evaluate(val,model,device,ex,f"validation u{u}"); write_jsonl(out/"validation.jsonl",{"update":u,**s})
-            for r in rows: write_jsonl(out/"validation_episodes.jsonl",{"update":u,**r.__dict__})
+            rows,s=evaluate(val,model,device,ex,f"validation u{u}")
             score=s.get("mean_worker_reward")
+            if score is not None and baseline_worker_reward is not None and float(baseline_worker_reward)>0:
+                ratio=float(score)/float(baseline_worker_reward)
+                s["reward_vs_baseline"]=ratio
+                s["collapse_warning"]=bool(ratio<.25)
+                if ratio<.25:
+                    print(
+                        f"WARNING: validation worker reward collapsed to {ratio:.1%} "
+                        f"of baseline ({float(score):+.1f} vs {float(baseline_worker_reward):+.1f})",
+                        flush=True,
+                    )
+            write_jsonl(out/"validation.jsonl",{"update":u,**s})
+            for r in rows: write_jsonl(out/"validation_episodes.jsonl",{"update":u,**r.__dict__})
             if score is not None and float(score)>best: best=float(score); save_checkpoint(ck/"best.pt",model,opt,u,args,best); print(f"new best worker reward={best:+.3f}",flush=True)
     save_checkpoint(ck/"latest.pt",model,opt,last,args,best); return 0
 
