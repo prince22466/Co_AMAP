@@ -79,7 +79,6 @@ class SubDecision:
 class TurnRecord:
     state: np.ndarray
     subdecisions: list[SubDecision]
-    old_log_prob: float
     old_value: float
     turn: int
     reward: float=0.0
@@ -168,7 +167,7 @@ class WorkerPolicy:
         workers=list(range(len(_positions(obs)))); actions=[None]*len(workers); tasks=self.tasks(obs,animal_plan,crop_plan); reserved=set(); seeds=dict(obs["private"]["seeds"]); shed=dict(obs["private"]["shed"])
         state=global_features(self.e,obs,animal_plan,crop_plan,len(workers)); st=torch.as_tensor(state,dtype=torch.float32,device=self.device)
         with torch.no_grad(): old_value=float(self.model.value(st).item())
-        subs=[]; joint_lp=0.0
+        subs=[]
         while workers:
             choices=[]; feats=[]
             for w in workers:
@@ -182,13 +181,13 @@ class WorkerPolicy:
             mat=np.stack(feats).astype(np.float32); ct=torch.as_tensor(mat,dtype=torch.float32,device=self.device)
             with torch.no_grad():
                 dist=Categorical(logits=self.model.logits(ct)); a=torch.argmax(dist.logits) if self.deterministic else dist.sample(); lp=dist.log_prob(a)
-            j=int(a.item()); w,t=choices[j]; actions[w]=self.emit(obs,w,t); joint_lp+=float(lp.item()); self.candidate_counts.append(len(choices))
+            j=int(a.item()); w,t=choices[j]; actions[w]=self.emit(obs,w,t); self.candidate_counts.append(len(choices))
             if self.collect: subs.append(SubDecision(mat.astype(np.float16),j,float(lp.item())))
             workers.remove(w)
             if t.op!="PASS": reserved.add(t.key)
             if t.op=="PLANT": seeds[t.item]=max(0,int(seeds.get(t.item,0))-1)
             elif t.op=="PICKUP": shed[t.item]=max(0,int(shed.get(t.item,0))-t.amount)
-        if self.collect: self.pending=TurnRecord(state,subs,joint_lp,old_value,int(obs["day"])*24+int(obs["hour"]))
+        if self.collect: self.pending=TurnRecord(state,subs,old_value,int(obs["day"])*24+int(obs["hour"]))
         return [a or ["PASS"] for a in actions]
 
     def finish_turn(self,reward: RewardBreakdown):
