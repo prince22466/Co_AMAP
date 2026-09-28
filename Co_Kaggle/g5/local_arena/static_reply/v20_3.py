@@ -1,5 +1,5 @@
 
-"""Kaggriculture v20_3, copy of v20_1 with corp_plan of v20_2."""
+"""Kaggriculture v20_3, copy of v20_1 with new structure."""
 
 
 import math
@@ -291,7 +291,7 @@ def _current_crop_remaining_capacity(tile_state,day,step):
 # Signal assembly and ranking
 # -----------------------------------------------------------------------------
 def production_signals(obs):
-    """Rank crops by known remaining demand versus observable production capacity.
+    """Rank crops(only) by known remaining demand versus observable own production capacity.
 
     This is deliberately a signaling service, not a market-inventory forecast:
       - hard demand = Town + unlocked shops + visible herd WHEAT feed;
