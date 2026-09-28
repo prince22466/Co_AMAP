@@ -102,6 +102,8 @@ class RewardBreakdown:
     # Explicit production-pipeline measurements.
     seeds_planted_total: int = 0
     seeds_planted_by_crop: dict[str, float] = field(default_factory=_zero_crop_counts)
+    crop_harvest_events_total: int = 0
+    crop_harvest_events_by_crop: dict[str, float] = field(default_factory=_zero_crop_counts)
     crop_units_harvested_total: float = 0.0
     crop_units_harvested_by_crop: dict[str, float] = field(default_factory=_zero_crop_counts)
     animal_product_units_generated_total: float = 0.0
@@ -191,6 +193,8 @@ def compute_worker_reward(executor, before, worker_action, after) -> RewardBreak
                 if tile_before.get("kind") == "PLANT":
                     crop = tile_before.get("crop")
                     if crop in CROP_PRODUCTS:
+                        out.crop_harvest_events_total += 1
+                        out.crop_harvest_events_by_crop[crop] += 1
                         out.crop_units_harvested_total += units
                         out.crop_units_harvested_by_crop[crop] += units
                 elif tile_before.get("animal"):
