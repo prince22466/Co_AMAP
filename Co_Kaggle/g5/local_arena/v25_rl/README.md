@@ -1,8 +1,8 @@
 # v25 worker RL
 
-v25 keeps the existing higher-level production, crop, animal, procurement, and market planners in `v25_rl.py`. During training, the legacy `unit_actions(obs, animal, crops)` implementation is replaced at runtime by `WorkerPolicy.unit_actions`.
+v25 keeps the existing higher-level production, crop, and animal planners in `v25_rl.py`. During training, the legacy `unit_actions(obs, animal, crops)` implementation is replaced by `WorkerPolicy.unit_actions`. The candidate does **not** call `market_orders()`.
 
-The old worker executor is therefore not used: its forced delivery logic, livestock routing/staging, heuristic task weights, tree prior, and residual-Q scheduler are bypassed.
+The old worker executor is therefore not used: its forced delivery logic, livestock routing/staging, heuristic task weights, tree prior, and residual-Q scheduler are bypassed. The candidate's procurement/selling policy is also not optimized in this experiment.
 
 This is a full replacement of the **worker scheduling function**, but it is not primitive-action end-to-end RL. Candidate worker intents and legality checks are generated with rules, the policy learns which worker should take which intent and in what order, and movement toward a selected remote target is one deterministic Manhattan step.
 
@@ -12,15 +12,15 @@ Training uses:
 
 `Co_Kaggle/g5/game_history/v20/*.json`
 
-The corpus contract is that these are v20 losses. For each replay, the lower-final-reward seat is treated as the v20 seat and replaced by the v25 candidate. The other seat replays its original recorded action stream turn by turn.
+The corpus contract is that these are v20 losses. For each replay, the lower-final-reward seat is treated as the v20 seat. Only that seat's `farmer` and `hands` actions are replaced by the RL policy. Its recorded v20 `market` action list is replayed unchanged, and the opponent replays its complete original recorded action stream.
 
-This is **static counterfactual replay**, not a live rematch: after the candidate changes the trajectory, the recorded opponent does not adapt.
+This is **static counterfactual replay**, not a live rematch: after the RL workers change the trajectory, neither the recorded opponent nor the recorded v20 market-order stream adapts. A recorded buy/sell/hire/land command may therefore become ineffective if the counterfactual state no longer satisfies its original preconditions.
 
 Before training, `recorded_action_parity()` is run on the first sorted history as a replay-engine sanity check.
 
 ## Worker-only objective
 
-Training reward measures worker execution efficiency only.
+Training reward measures worker execution efficiency only. `market_orders()` is not called by the candidate. Recorded v20 market commands are supplied only as frozen exogenous replay inputs so the worker experiment retains the original procurement, hiring, selling, and land-purchase schedule as closely as the counterfactual state permits.
 
 The following are **not** included in PPO reward:
 
@@ -103,7 +103,7 @@ The single observed worker reward for the resulting environment transition is at
 - `worker_reward.py` — fixed reward constants and before/after turn reward extraction.
 - `worker_policy.py` — actor/critic, state/candidate features, rule-generated feasible worker intents, and the complete runtime replacement for `unit_actions`.
 - `train_v25_worker_ppo.py` — static v20-loss replay, GAE, PPO, validation, logging, and checkpoints.
-- `v25_rl.py` — unchanged higher-level v25 planner/executor source.
+- `v25_rl.py` — unchanged source for `production_signals`, `animal_plan`, `crop_plan`, and shared game helpers. Its `market_orders()` function is not called by the worker-training replay.
 
 ## Run
 
