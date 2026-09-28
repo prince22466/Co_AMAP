@@ -20,6 +20,16 @@ from train_v25_worker_ppo import ppo_update
 
 
 class SubdecisionPPOTest(unittest.TestCase):
+    def test_low_temperature_concentrates_probability_on_argmax(self):
+        logits = torch.tensor([0.10, 0.08, 0.00, -0.05])
+        normal = Categorical(logits=logits)
+        cold = Categorical(logits=logits / 0.20)
+        winner = int(torch.argmax(logits).item())
+        self.assertGreater(
+            float(cold.probs[winner].item()),
+            float(normal.probs[winner].item()),
+        )
+
     def test_joint_ratio_would_compound_but_subdecision_ratio_does_not(self):
         per_worker_ratio = 1.10
         workers = 12
@@ -37,6 +47,7 @@ class SubdecisionPPOTest(unittest.TestCase):
         opt = torch.optim.Adam(model.parameters(), lr=1e-5)
         device = torch.device("cpu")
 
+        rollout_temperature = 0.20
         records = []
         for turn, advantage in enumerate((1.0, -1.0)):
             state = np.random.randn(state_dim).astype(np.float32)
@@ -49,7 +60,9 @@ class SubdecisionPPOTest(unittest.TestCase):
                 candidates = np.random.randn(5, candidate_dim).astype(np.float32)
                 ct = torch.as_tensor(candidates, dtype=torch.float32)
                 with torch.no_grad():
-                    dist = Categorical(logits=model.logits(ct))
+                    dist = Categorical(
+                        logits=model.logits(ct) / rollout_temperature
+                    )
                     action = int(torch.argmax(dist.logits).item())
                     old_log_prob = float(
                         dist.log_prob(torch.tensor(action)).item()
@@ -75,10 +88,11 @@ class SubdecisionPPOTest(unittest.TestCase):
         args = SimpleNamespace(
             ppo_epochs=2,
             minibatch_size=4,
-            clip_ratio=0.2,
-            target_kl=0.02,
+            clip_ratio=0.10,
+            target_kl=0.01,
+            rollout_temperature=rollout_temperature,
             value_coef=0.5,
-            entropy_coef=0.01,
+            entropy_coef=0.001,
             max_grad_norm=0.5,
         )
 
@@ -87,6 +101,7 @@ class SubdecisionPPOTest(unittest.TestCase):
         self.assertEqual(stats["actor_samples"], 8)
         self.assertAlmostEqual(stats["mean_subdecisions_per_turn"], 4.0)
         self.assertGreaterEqual(stats["ppo_epochs_completed"], 1)
+        self.assertGreaterEqual(stats["actor_minibatches_completed"], 1)
         self.assertTrue(math.isfinite(stats["approx_kl"]))
         self.assertTrue(math.isfinite(stats["ratio_mean"]))
         self.assertGreaterEqual(stats["clip_fraction"], 0.0)
