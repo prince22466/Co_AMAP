@@ -27,8 +27,8 @@ from worker_reward import ANIMAL_ESCAPE_PENALTY,CROP_DEATH_PENALTY,CROP_TO_WEED_
 
 DEFAULT_HISTORY_DIR=G5_ROOT/"game_history"/"v20"
 DEFAULT_EXECUTOR=HERE/"v25_rl.py"
-DEFAULT_OUTPUT_DIR=HERE/"runs"/"worker_ppo_static_v20"
-CHECKPOINT_ALGORITHM="v25_static_worker_ppo_gae_v2_subdecision_ratio"
+DEFAULT_OUTPUT_DIR=HERE/"runs"/"worker_ppo_static_v20_v3"
+CHECKPOINT_ALGORITHM="v25_static_worker_ppo_gae_v3_conservative_rollout"
 
 def load_executor(path):
     spec=importlib.util.spec_from_file_location(f"v25_ep_{time.time_ns()}",path)
@@ -97,9 +97,9 @@ def compose_environment_action(worker_action,market_action):
     }
 
 
-def run_static_episode(path,model,device,executor_path,deterministic=False,collect=True):
+def run_static_episode(path,model,device,executor_path,deterministic=False,collect=True,rollout_temperature=.2):
     h=load_history(path); seat=loss_seat(h); other=1-seat; e=load_executor(executor_path)
-    policy=WorkerPolicy(e,model,device,deterministic,collect)
+    policy=WorkerPolicy(e,model,device,deterministic,collect,rollout_temperature)
     env=_environment_from_history(h); total=RewardBreakdown()
     try:
         for replay_step in range(1,len(h["steps"])):
@@ -137,19 +137,19 @@ def assign_gae(records,gamma,lam):
         delta=r.reward+gamma*nv-r.old_value; adv=delta+gamma*lam*adv
         r.advantage=float(adv); r.return_target=float(adv+r.old_value)
 
-def subdecision_logprob_entropy(model,sub,device):
+def subdecision_logprob_entropy(model,sub,device,rollout_temperature):
     c=torch.as_tensor(sub.candidates,dtype=torch.float32,device=device)
-    d=Categorical(logits=model.logits(c))
+    d=Categorical(logits=model.logits(c)/rollout_temperature)
     idx=torch.tensor(sub.action_index,device=device)
     return d.log_prob(idx),d.entropy().mean()
 
 def ppo_update(model,opt,device,records,args):
-    """PPO with one clipped ratio per worker subdecision.
+    """Conservative PPO over worker subdecisions.
 
-    GAE/value targets remain turn-level.  Every worker assignment selected in a
-    turn shares that turn's normalized advantage, but its PPO ratio uses only
-    its own old/new log probability.  This avoids exponentiating a sum of many
-    worker log-probability changes into one unstable joint-action ratio.
+    Rollouts and PPO log probabilities use the same low-temperature behavior
+    distribution. GAE/value targets remain turn-level; every worker assignment
+    in a turn shares that turn's normalized advantage. KL is checked before
+    every actor minibatch update so a drifting policy is stopped immediately.
     """
     if not records:
         raise ValueError("no PPO records")
@@ -172,18 +172,20 @@ def ppo_update(model,opt,device,records,args):
     actor_stats=[]
     value_stats=[]
     epochs_completed=0
+    actor_minibatches_completed=0
     kl_early_stop=False
 
     for _ in range(args.ppo_epochs):
         actor_order=np.random.permutation(len(actor_samples))
-        epoch_kls=[]
 
         for start in range(0,len(actor_order),args.minibatch_size):
             ids=actor_order[start:start+args.minibatch_size]
             new_lp=[]; ent=[]
             for q in ids:
                 _,sub=actor_samples[int(q)]
-                lp,e=subdecision_logprob_entropy(model,sub,device)
+                lp,e=subdecision_logprob_entropy(
+                    model,sub,device,args.rollout_temperature
+                )
                 new_lp.append(lp); ent.append(e)
 
             new_lp=torch.stack(new_lp)
@@ -192,19 +194,15 @@ def ppo_update(model,opt,device,records,args):
             at=torch.as_tensor(actor_adv[ids],dtype=torch.float32,device=device)
             log_ratio=new_lp-oldt
             ratio=torch.exp(torch.clamp(log_ratio,-20,20))
-            unclipped=ratio*at
-            clipped=torch.clamp(ratio,1-args.clip_ratio,1+args.clip_ratio)*at
-            policy_loss=-torch.minimum(unclipped,clipped).mean()
-            actor_loss=policy_loss-args.entropy_coef*entropy
-
-            opt.zero_grad(set_to_none=True)
-            actor_loss.backward()
-            nn.utils.clip_grad_norm_(model.actor.parameters(),args.max_grad_norm)
-            opt.step()
-
             approx_kl=((ratio-1.0)-log_ratio).mean()
             clip_fraction=((ratio-1.0).abs()>args.clip_ratio).float().mean()
-            epoch_kls.append(float(approx_kl.item()))
+
+            unclipped=ratio*at
+            clipped=torch.clamp(
+                ratio,1-args.clip_ratio,1+args.clip_ratio
+            )*at
+            policy_loss=-torch.minimum(unclipped,clipped).mean()
+
             actor_stats.append((
                 float(policy_loss.item()),
                 float(entropy.item()),
@@ -216,12 +214,28 @@ def ppo_update(model,opt,device,records,args):
                 float(ratio.max().item()),
             ))
 
-        # The critic is still trained once per environment turn.
+            # Check before applying this minibatch update. The previous version
+            # waited until a whole PPO epoch had already changed the actor.
+            if args.target_kl>0 and float(approx_kl.item())>args.target_kl:
+                kl_early_stop=True
+                break
+
+            actor_loss=policy_loss-args.entropy_coef*entropy
+            opt.zero_grad(set_to_none=True)
+            actor_loss.backward()
+            nn.utils.clip_grad_norm_(model.actor.parameters(),args.max_grad_norm)
+            opt.step()
+            actor_minibatches_completed+=1
+
+        # Critic learning does not alter action probabilities, so keep one
+        # turn-level value pass for this epoch even when the actor hits KL stop.
         value_order=np.random.permutation(len(records))
         for start in range(0,len(value_order),args.minibatch_size):
             ids=value_order[start:start+args.minibatch_size]
             values=torch.stack([
-                model.value(torch.as_tensor(records[int(q)].state,dtype=torch.float32,device=device))
+                model.value(torch.as_tensor(
+                    records[int(q)].state,dtype=torch.float32,device=device
+                ))
                 for q in ids
             ])
             rt=torch.as_tensor(ret[ids],dtype=torch.float32,device=device)
@@ -235,9 +249,7 @@ def ppo_update(model,opt,device,records,args):
             value_stats.append(float(value_loss.item()))
 
         epochs_completed+=1
-        mean_epoch_kl=float(np.mean(epoch_kls)) if epoch_kls else 0.0
-        if args.target_kl>0 and mean_epoch_kl>args.target_kl:
-            kl_early_stop=True
+        if kl_early_stop:
             break
 
     a=np.asarray(actor_stats,float)
@@ -265,6 +277,7 @@ def ppo_update(model,opt,device,records,args):
         "return_mean":float(ret.mean()),
         "actor_samples":len(actor_samples),
         "mean_subdecisions_per_turn":float(len(actor_samples)/len(records)),
+        "actor_minibatches_completed":actor_minibatches_completed,
         "ppo_epochs_completed":epochs_completed,
         "kl_early_stop":kl_early_stop,
     }
@@ -328,7 +341,7 @@ def device_for(v):
     return torch.device("cpu")
 
 def save_checkpoint(path,model,opt,update,args,best):
-    torch.save({"algorithm":CHECKPOINT_ALGORITHM,"update":update,"model_state_dict":model.state_dict(),"optimizer_state_dict":opt.state_dict(),"candidate_feature_names":CANDIDATE_FEATURE_NAMES,"global_feature_names":GLOBAL_FEATURE_NAMES,"best_validation_worker_reward":best,"reward_contract":{"product_value":PRODUCT_VALUE,"generated":PRODUCT_GENERATED_REWARD,"harvested":PRODUCT_HARVESTED_REWARD,"delivered":PRODUCT_DELIVERED_REWARD,"animal_escape":ANIMAL_ESCAPE_PENALTY,"crop_to_weed":CROP_TO_WEED_PENALTY,"crop_death":CROP_DEATH_PENALTY,"lost_harvestable_unit":LOST_HARVESTABLE_UNIT_PENALTY},"args":vars(args),"note":"PPO controls farmer/hands only; per-worker subdecision ratios; turn-level GAE/value; recorded market list is an unlearned env input; no final game result/money/margin/market reward"},path)
+    torch.save({"algorithm":CHECKPOINT_ALGORITHM,"update":update,"model_state_dict":model.state_dict(),"optimizer_state_dict":opt.state_dict(),"candidate_feature_names":CANDIDATE_FEATURE_NAMES,"global_feature_names":GLOBAL_FEATURE_NAMES,"best_validation_worker_reward":best,"reward_contract":{"product_value":PRODUCT_VALUE,"generated":PRODUCT_GENERATED_REWARD,"harvested":PRODUCT_HARVESTED_REWARD,"delivered":PRODUCT_DELIVERED_REWARD,"animal_escape":ANIMAL_ESCAPE_PENALTY,"crop_to_weed":CROP_TO_WEED_PENALTY,"crop_death":CROP_DEATH_PENALTY,"lost_harvestable_unit":LOST_HARVESTABLE_UNIT_PENALTY},"args":vars(args),"note":"PPO controls farmer/hands only; low-temperature stochastic rollouts; per-worker subdecision ratios; turn-level GAE/value; minibatch KL guard; rollback on catastrophic validation collapse; recorded market list is an unlearned env input; no final game result/money/margin/market reward"},path)
 
 def load_checkpoint(path,model,opt,device):
     p=torch.load(path,map_location=device,weights_only=False)
@@ -342,11 +355,14 @@ def parser():
     p.add_argument("--history-dir",type=Path,default=DEFAULT_HISTORY_DIR); p.add_argument("--executor",type=Path,default=DEFAULT_EXECUTOR); p.add_argument("--output-dir",type=Path,default=DEFAULT_OUTPUT_DIR); p.add_argument("--resume",type=Path)
     p.add_argument("--validation-fraction",type=float,default=.20); p.add_argument("--split-seed",type=int,default=20260928); p.add_argument("--training-seed",type=int,default=32525)
     p.add_argument("--updates",type=int,default=100); p.add_argument("--episodes-per-update",type=int,default=8); p.add_argument("--validate-every-updates",type=int,default=1); p.add_argument("--checkpoint-every-updates",type=int,default=1); p.add_argument("--max-training-hours",type=float,default=2.0)
-    p.add_argument("--device",default="auto"); p.add_argument("--hidden",type=int,default=128); p.add_argument("--learning-rate",type=float,default=3e-4); p.add_argument("--gamma",type=float,default=.99); p.add_argument("--gae-lambda",type=float,default=.95); p.add_argument("--ppo-epochs",type=int,default=4); p.add_argument("--minibatch-size",type=int,default=128); p.add_argument("--clip-ratio",type=float,default=.2); p.add_argument("--target-kl",type=float,default=.02); p.add_argument("--value-coef",type=float,default=.5); p.add_argument("--entropy-coef",type=float,default=.01); p.add_argument("--max-grad-norm",type=float,default=.5); p.add_argument("--preflight-only",action="store_true")
+    p.add_argument("--device",default="auto"); p.add_argument("--hidden",type=int,default=128); p.add_argument("--learning-rate",type=float,default=1e-4); p.add_argument("--gamma",type=float,default=.99); p.add_argument("--gae-lambda",type=float,default=.95); p.add_argument("--ppo-epochs",type=int,default=4); p.add_argument("--minibatch-size",type=int,default=128); p.add_argument("--clip-ratio",type=float,default=.10); p.add_argument("--target-kl",type=float,default=.01); p.add_argument("--rollout-temperature",type=float,default=.20); p.add_argument("--collapse-restore-ratio",type=float,default=.25); p.add_argument("--value-coef",type=float,default=.5); p.add_argument("--entropy-coef",type=float,default=.001); p.add_argument("--max-grad-norm",type=float,default=.5); p.add_argument("--preflight-only",action="store_true")
     return p
 
 def main():
-    args=parser().parse_args(); hd=args.history_dir.expanduser().resolve(); ex=args.executor.expanduser().resolve(); out=args.output_dir.expanduser().resolve()
+    args=parser().parse_args()
+    if args.rollout_temperature<=0: raise SystemExit("--rollout-temperature must be > 0")
+    if not 0<args.collapse_restore_ratio<=1: raise SystemExit("--collapse-restore-ratio must be in (0,1]")
+    hd=args.history_dir.expanduser().resolve(); ex=args.executor.expanduser().resolve(); out=args.output_dir.expanduser().resolve()
     if not hd.is_dir(): raise SystemExit(f"history dir missing: {hd}")
     if not ex.is_file(): raise SystemExit(f"executor missing: {ex}")
     paths=sorted(hd.glob("*.json"))
@@ -376,7 +392,7 @@ def main():
         while len(results)<args.episodes_per_update:
             attempts+=1
             if attempts>args.episodes_per_update*4: raise RuntimeError("too many failed episodes")
-            path=rng.choice(train); r,recs=run_static_episode(path,model,device,ex,False,True); write_jsonl(out/"episodes.jsonl",{"update":u,**r.__dict__})
+            path=rng.choice(train); r,recs=run_static_episode(path,model,device,ex,False,True,args.rollout_temperature); write_jsonl(out/"episodes.jsonl",{"update":u,**r.__dict__})
             print(
                 f"[train u{u}] {path.stem} "
                 f"reward={r.worker_reward:+.1f} "
@@ -393,23 +409,47 @@ def main():
             assign_gae(recs,args.gamma,args.gae_lambda); records.extend(recs); results.append(r)
         stats=ppo_update(model,opt,device,records,args); last=u; metrics={"update":u,"turn_records":len(records),"elapsed_hours":(time.perf_counter()-started)/3600,**summary(results,"train"),**stats}; write_jsonl(out/"metrics.jsonl",metrics); print(json.dumps(metrics,sort_keys=True),flush=True)
         if u%args.checkpoint_every_updates==0:
-            save_checkpoint(ck/f"update_{u:04d}.pt",model,opt,u,args,best); save_checkpoint(ck/"latest.pt",model,opt,u,args,best)
+            # Keep the raw post-update checkpoint for diagnosis even if
+            # validation subsequently decides that the policy collapsed.
+            save_checkpoint(ck/f"update_{u:04d}.pt",model,opt,u,args,best)
+
         if u%args.validate_every_updates==0:
             rows,s=evaluate(val,model,device,ex,f"validation u{u}")
             score=s.get("mean_worker_reward")
-            if score is not None and baseline_worker_reward is not None and float(baseline_worker_reward)>0:
-                ratio=float(score)/float(baseline_worker_reward)
-                s["reward_vs_baseline"]=ratio
-                s["collapse_warning"]=bool(ratio<.25)
-                if ratio<.25:
+            rollback=False
+            reference=max(
+                float(baseline_worker_reward) if baseline_worker_reward is not None else -math.inf,
+                float(best),
+            )
+            if score is not None and math.isfinite(reference) and reference>0:
+                ratio=float(score)/reference
+                s["reward_vs_reference"]=ratio
+                s["collapse_warning"]=bool(ratio<args.collapse_restore_ratio)
+                if ratio<args.collapse_restore_ratio:
+                    rollback=True
+                    s["rollback_to_best"]=True
                     print(
                         f"WARNING: validation worker reward collapsed to {ratio:.1%} "
-                        f"of baseline ({float(score):+.1f} vs {float(baseline_worker_reward):+.1f})",
+                        f"of reference ({float(score):+.1f} vs {reference:+.1f}); "
+                        "restoring best.pt",
                         flush=True,
                     )
+
             write_jsonl(out/"validation.jsonl",{"update":u,**s})
-            for r in rows: write_jsonl(out/"validation_episodes.jsonl",{"update":u,**r.__dict__})
-            if score is not None and float(score)>best: best=float(score); save_checkpoint(ck/"best.pt",model,opt,u,args,best); print(f"new best worker reward={best:+.3f}",flush=True)
+            for r in rows:
+                write_jsonl(out/"validation_episodes.jsonl",{"update":u,**r.__dict__})
+
+            if rollback:
+                _,restored_best=load_checkpoint(ck/"best.pt",model,opt,device)
+                best=max(best,restored_best)
+            elif score is not None and float(score)>best:
+                best=float(score)
+                save_checkpoint(ck/"best.pt",model,opt,u,args,best)
+                print(f"new best worker reward={best:+.3f}",flush=True)
+
+        # latest.pt is always the policy that will actually continue training.
+        # After a catastrophic validation result this is the restored best.
+        save_checkpoint(ck/"latest.pt",model,opt,u,args,best)
     save_checkpoint(ck/"latest.pt",model,opt,last,args,best); return 0
 
 if __name__=="__main__": raise SystemExit(main())
