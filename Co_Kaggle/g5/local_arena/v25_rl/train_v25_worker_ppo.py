@@ -23,12 +23,12 @@ V20_RL=LOCAL_ARENA/"v20_rl"
 if str(V20_RL) not in sys.path: sys.path.insert(0,str(V20_RL))
 from evaluate_v20_v19_losses import _agent_observation,_environment_from_history,_field,_recorded_step_actions,_saved_final_rewards,_seed_hint,recorded_action_parity
 from worker_policy import ActorCritic,CANDIDATE_FEATURE_NAMES,GLOBAL_FEATURE_NAMES,TurnRecord,WorkerPolicy
-from worker_reward import ANIMAL_ESCAPE_PENALTY,CROP_DEATH_PENALTY,CROP_TO_WEED_PENALTY,LOST_HARVESTABLE_UNIT_PENALTY,PRODUCT_DELIVERED_REWARD,PRODUCT_GENERATED_REWARD,PRODUCT_HARVESTED_REWARD,PRODUCT_VALUE,RewardBreakdown,compute_worker_reward
+from worker_reward import ANIMAL_ESCAPE_PENALTY,ANIMAL_PRODUCT_DELIVERED_REWARD,ANIMAL_PRODUCT_GENERATED_REWARD,ANIMAL_PRODUCT_HARVESTED_REWARD,ANIMAL_PRODUCT_VALUE,CROP_DEATH_PENALTY,CROP_TO_WEED_PENALTY,LOST_HARVESTABLE_UNIT_PENALTY,PRODUCT_DELIVERED_REWARD,PRODUCT_GENERATED_REWARD,PRODUCT_HARVESTED_REWARD,PRODUCT_VALUE,RewardBreakdown,compute_worker_reward
 
 DEFAULT_HISTORY_DIR=G5_ROOT/"game_history"/"v20"
 DEFAULT_EXECUTOR=HERE/"v25_rl.py"
-DEFAULT_OUTPUT_DIR=HERE/"runs"/"worker_ppo_static_v20_v3"
-CHECKPOINT_ALGORITHM="v25_static_worker_ppo_gae_v3_conservative_rollout"
+DEFAULT_OUTPUT_DIR=HERE/"runs"/"worker_ppo_static_v20_v4_animal_reward"
+CHECKPOINT_ALGORITHM="v25_static_worker_ppo_gae_v4_animal_reward"
 
 def load_executor(path):
     spec=importlib.util.spec_from_file_location(f"v25_ep_{time.time_ns()}",path)
@@ -341,7 +341,7 @@ def device_for(v):
     return torch.device("cpu")
 
 def save_checkpoint(path,model,opt,update,args,best):
-    torch.save({"algorithm":CHECKPOINT_ALGORITHM,"update":update,"model_state_dict":model.state_dict(),"optimizer_state_dict":opt.state_dict(),"candidate_feature_names":CANDIDATE_FEATURE_NAMES,"global_feature_names":GLOBAL_FEATURE_NAMES,"best_validation_worker_reward":best,"reward_contract":{"product_value":PRODUCT_VALUE,"generated":PRODUCT_GENERATED_REWARD,"harvested":PRODUCT_HARVESTED_REWARD,"delivered":PRODUCT_DELIVERED_REWARD,"animal_escape":ANIMAL_ESCAPE_PENALTY,"crop_to_weed":CROP_TO_WEED_PENALTY,"crop_death":CROP_DEATH_PENALTY,"lost_harvestable_unit":LOST_HARVESTABLE_UNIT_PENALTY},"args":vars(args),"note":"PPO controls farmer/hands only; low-temperature stochastic rollouts; per-worker subdecision ratios; turn-level GAE/value; minibatch KL guard; rollback on catastrophic validation collapse; recorded market list is an unlearned env input; no final game result/money/margin/market reward"},path)
+    torch.save({"algorithm":CHECKPOINT_ALGORITHM,"update":update,"model_state_dict":model.state_dict(),"optimizer_state_dict":opt.state_dict(),"candidate_feature_names":CANDIDATE_FEATURE_NAMES,"global_feature_names":GLOBAL_FEATURE_NAMES,"best_validation_worker_reward":best,"reward_contract":{"crop_product_value":PRODUCT_VALUE,"crop_generated":PRODUCT_GENERATED_REWARD,"crop_harvested":PRODUCT_HARVESTED_REWARD,"crop_delivered":PRODUCT_DELIVERED_REWARD,"animal_product_value":ANIMAL_PRODUCT_VALUE,"animal_generated":ANIMAL_PRODUCT_GENERATED_REWARD,"animal_harvested":ANIMAL_PRODUCT_HARVESTED_REWARD,"animal_delivered":ANIMAL_PRODUCT_DELIVERED_REWARD,"animal_escape":ANIMAL_ESCAPE_PENALTY,"crop_to_weed":CROP_TO_WEED_PENALTY,"crop_death":CROP_DEATH_PENALTY,"lost_harvestable_unit":LOST_HARVESTABLE_UNIT_PENALTY},"args":vars(args),"note":"PPO controls farmer/hands only; low-temperature stochastic rollouts; per-worker subdecision ratios; turn-level GAE/value; minibatch KL guard; rollback on catastrophic validation collapse; recorded market list is an unlearned env input; no final game result/money/margin/market reward"},path)
 
 def load_checkpoint(path,model,opt,device):
     p=torch.load(path,map_location=device,weights_only=False)
@@ -376,7 +376,7 @@ def main():
     model=ActorCritic(len(CANDIDATE_FEATURE_NAMES),len(GLOBAL_FEATURE_NAMES),args.hidden).to(device); opt=torch.optim.Adam(model.parameters(),lr=args.learning_rate); start=0; best=-math.inf
     if args.resume: start,best=load_checkpoint(args.resume.expanduser().resolve(),model,opt,device)
     (out/"split.json").write_text(json.dumps({"train":[p.name for p in train],"validation":[p.name for p in val],"split_seed":args.split_seed},indent=2)+"\n")
-    (out/"config.json").write_text(json.dumps({**vars(args),"executor":str(ex),"device_resolved":str(device),"algorithm":CHECKPOINT_ALGORITHM,"objective":"worker efficiency only; farmer/hands replaced by RL, recorded v20 market orders replayed unchanged; no final game result reward","product_value":PRODUCT_VALUE},indent=2,default=str)+"\n")
+    (out/"config.json").write_text(json.dumps({**vars(args),"executor":str(ex),"device_resolved":str(device),"algorithm":CHECKPOINT_ALGORITHM,"objective":"worker efficiency only; farmer/hands replaced by RL, recorded v20 market orders replayed unchanged; no final game result reward","crop_product_value":PRODUCT_VALUE,"animal_product_value":ANIMAL_PRODUCT_VALUE},indent=2,default=str)+"\n")
     rows,base=evaluate(val,model,device,ex,"baseline"); write_jsonl(out/"validation.jsonl",{"update":-1,**base})
     for r in rows: write_jsonl(out/"validation_episodes.jsonl",{"update":-1,**r.__dict__})
     baseline_worker_reward=base.get("mean_worker_reward")
