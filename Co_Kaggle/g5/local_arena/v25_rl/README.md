@@ -20,7 +20,7 @@ Before training, `recorded_action_parity()` is run on the first sorted history a
 
 ## Worker-only objective
 
-Training reward measures worker execution efficiency only. `market_orders()` is not called by the candidate. Recorded v20 market commands are supplied only as frozen exogenous replay inputs so the worker experiment retains the original procurement, hiring, selling, and land-purchase schedule as closely as the counterfactual state permits.
+Training reward measures worker execution efficiency only. `market_orders()` is not called by the candidate. Recorded v20 market commands are supplied only as frozen exogenous inputs so the game can continue hiring workers, buying seeds/animals/resources, selling products, and buying land. Those market actions are required for the environment trajectory, but they are not part of the trainable policy.
 
 The following are **not** included in PPO reward:
 
@@ -29,6 +29,30 @@ The following are **not** included in PPO reward:
 - money margin
 - opponent money
 - market prices or price movement
+
+The implementation keeps the separation explicit:
+
+```text
+worker_action = RL policy output
+    farmer
+    hands
+
+market_action = recorded v20 market list
+    BUY_SEED / BUY_ANIMAL / BUY_PRODUCT
+    SELL / HIRE / BUY_LAND
+
+candidate_for_env = worker_action + market_action
+
+env.step(candidate_for_env)
+
+worker_reward = compute_worker_reward(
+    state_before,
+    worker_action,       # market_action is NOT passed here
+    state_after,
+)
+```
+
+Therefore PPO log-probabilities, GAE advantages, and policy gradients exist only for the worker action. The market list has no PPO log-probability and no direct reward term.
 
 Episode worker score is:
 
@@ -92,17 +116,17 @@ Workers are assigned autoregressively within a turn. After each worker choice, f
 
 If a selected task is remote, the emitted environment action is one deterministic Manhattan move toward its target. The network therefore learns **task/worker assignment and task ordering**, not free-form pathfinding.
 
-One PPO record corresponds to one environment turn. All worker selections made inside that turn are treated as one autoregressive joint action:
+One PPO record corresponds to one environment turn. All **worker** selections made inside that turn are treated as one autoregressive joint action. The recorded market list is not part of this joint action:
 
 `joint_log_prob = sum(subdecision_log_probs)`
 
-The single observed worker reward for the resulting environment transition is attached to that joint turn action.
+The single observed worker reward for the resulting environment transition is attached to that joint worker action. Market commands may affect the next environment state because they are executed by the game, but they are not actions produced by the RL policy and are never passed into `compute_worker_reward()`.
 
 ## Files
 
 - `worker_reward.py` — fixed reward constants and before/after turn reward extraction.
 - `worker_policy.py` — actor/critic, state/candidate features, rule-generated feasible worker intents, and the complete runtime replacement for `unit_actions`.
-- `train_v25_worker_ppo.py` — static v20-loss replay, GAE, PPO, validation, logging, and checkpoints.
+- `train_v25_worker_ppo.py` — static v20-loss replay, explicit separation of RL worker actions from frozen recorded market actions, GAE, PPO, validation, logging, and checkpoints.
 - `v25_rl.py` — unchanged source for `production_signals`, `animal_plan`, `crop_plan`, and shared game helpers. Its `market_orders()` function is not called by the worker-training replay.
 
 ## Run
