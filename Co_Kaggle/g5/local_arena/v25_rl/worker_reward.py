@@ -2,14 +2,22 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
-PRODUCTS = (
-    "WHEAT", "CARROT", "TOMATO", "STRAWBERRY", "MELON",
-    "MILK", "EGG", "WOOL",
-)
+CROP_PRODUCTS = ("WHEAT", "CARROT", "TOMATO", "STRAWBERRY", "MELON")
+ANIMAL_PRODUCT_NAMES = ("MILK", "EGG", "WOOL")
+PRODUCTS = CROP_PRODUCTS + ANIMAL_PRODUCT_NAMES
 ANIMAL_PRODUCTS = {"COW": "MILK", "GOOSE": "EGG", "SHEEP": "WOOL"}
+
+def _zero_crop_counts() -> dict[str, float]:
+    return {name: 0.0 for name in CROP_PRODUCTS}
+
+def _zero_animal_product_counts() -> dict[str, float]:
+    return {name: 0.0 for name in ANIMAL_PRODUCT_NAMES}
+
+def _zero_product_counts() -> dict[str, float]:
+    return {name: 0.0 for name in PRODUCTS}
 OPS = (
     "PLANT", "DIG", "HARVEST", "WATER", "FERTILIZE", "FEED", "CARE",
     "COLLECT_FERTILIZER", "BUILD_COOP", "BUILD_PASTURE", "PLACE_ANIMAL",
@@ -85,9 +93,24 @@ class RewardBreakdown:
     crops_to_weed: int = 0
     crops_died: int = 0
     lost_harvestable_units: float = 0.0
+
+    # Existing reward-stage totals.
     products_generated: float = 0.0
     products_harvested: float = 0.0
     products_delivered: float = 0.0
+
+    # Explicit production-pipeline measurements.
+    seeds_planted_total: int = 0
+    seeds_planted_by_crop: dict[str, float] = field(default_factory=_zero_crop_counts)
+    crop_units_harvested_total: float = 0.0
+    crop_units_harvested_by_crop: dict[str, float] = field(default_factory=_zero_crop_counts)
+    animal_product_units_generated_total: float = 0.0
+    animal_product_units_generated_by_product: dict[str, float] = field(default_factory=_zero_animal_product_counts)
+    animal_product_units_harvested_total: float = 0.0
+    animal_product_units_harvested_by_product: dict[str, float] = field(default_factory=_zero_animal_product_counts)
+    product_units_moved_to_shed_total: float = 0.0
+    product_units_moved_to_shed_by_product: dict[str, float] = field(default_factory=_zero_product_counts)
+
     plants_created: int = 0
     structures_built: int = 0
     animals_placed: int = 0
@@ -101,10 +124,20 @@ class RewardBreakdown:
 
     def add(self, other: "RewardBreakdown") -> None:
         for name in self.__dataclass_fields__:
-            setattr(self, name, getattr(self, name) + getattr(other, name))
+            current = getattr(self, name)
+            incoming = getattr(other, name)
+            if isinstance(current, dict):
+                for key, value in incoming.items():
+                    current[key] = current.get(key, 0.0) + float(value)
+            else:
+                setattr(self, name, current + incoming)
 
-    def as_dict(self) -> dict[str, float | int]:
-        return {name: getattr(self, name) for name in self.__dataclass_fields__}
+    def as_dict(self) -> dict[str, Any]:
+        out: dict[str, Any] = {}
+        for name in self.__dataclass_fields__:
+            value = getattr(self, name)
+            out[name] = dict(value) if isinstance(value, dict) else value
+        return out
 
 
 def compute_worker_reward(executor, before, worker_action, after) -> RewardBreakdown:
@@ -154,6 +187,17 @@ def compute_worker_reward(executor, before, worker_action, after) -> RewardBreak
                 harvested_by_tile[pos] += units
                 out.products_harvested += units
                 out.reward += PRODUCT_HARVESTED_REWARD * units
+
+                if tile_before.get("kind") == "PLANT":
+                    crop = tile_before.get("crop")
+                    if crop in CROP_PRODUCTS:
+                        out.crop_units_harvested_total += units
+                        out.crop_units_harvested_by_crop[crop] += units
+                elif tile_before.get("animal"):
+                    product = ANIMAL_PRODUCTS.get(tile_before.get("animal"))
+                    if product in ANIMAL_PRODUCT_NAMES:
+                        out.animal_product_units_harvested_total += units
+                        out.animal_product_units_harvested_by_product[product] += units
 
         elif op == "FEED" and isinstance(tile_before, dict) and tile_before.get("animal"):
             feed_tiles.add(pos)
@@ -211,6 +255,8 @@ def compute_worker_reward(executor, before, worker_action, after) -> RewardBreak
             accepted = max(0, min(requested, available, shed_capacity_left))
             if accepted:
                 out.products_delivered += accepted
+                out.product_units_moved_to_shed_total += accepted
+                out.product_units_moved_to_shed_by_product[product] += accepted
                 out.reward += PRODUCT_DELIVERED_REWARD * accepted
                 shed_capacity_left -= accepted
 
@@ -274,6 +320,10 @@ def compute_worker_reward(executor, before, worker_action, after) -> RewardBreak
             # Successful capacity creation.
             if bt is None and isinstance(at, dict) and at.get("kind") == "PLANT":
                 out.plants_created += 1
+                crop = at.get("crop")
+                if crop in CROP_PRODUCTS:
+                    out.seeds_planted_total += 1
+                    out.seeds_planted_by_crop[crop] += 1
                 out.reward += SUCCESSFUL_PLANT_REWARD
             if bt is None and isinstance(at, dict) and at.get("kind") in ("COOP", "PASTURE"):
                 if not at.get("animal"):
@@ -326,6 +376,11 @@ def compute_worker_reward(executor, before, worker_action, after) -> RewardBreak
                 generated = max(0.0, after_yield + harvested_by_tile.get(p, 0.0) - before_yield)
                 if generated:
                     out.products_generated += generated
+                    if bt.get("animal"):
+                        animal_product = ANIMAL_PRODUCTS.get(bt.get("animal"))
+                        if animal_product in ANIMAL_PRODUCT_NAMES:
+                            out.animal_product_units_generated_total += generated
+                            out.animal_product_units_generated_by_product[animal_product] += generated
                     out.reward += PRODUCT_GENERATED_REWARD * generated
 
     return out
