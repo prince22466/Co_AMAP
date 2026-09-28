@@ -93,24 +93,24 @@ OPP_SHED_FALLBACK=2
 # modeled as visible herd size + this reserve allowance.
 HERD_WHEAT_RESERVE=3
 
-def price(item, inventory):
-    # Heuristic market-price model used by the crop/animal planners. Inventory 10,000 is
-    # treated as the equilibrium point (d == 0). Scarcity (d < 0) raises the estimate;
-    # surplus (d >= 0) lowers it with item-specific curves, always floored at 1. The
-    # function forecasts planning value from projected inventory; it does not read the
-    # live market price directly.
-    d=inventory-10000
-    if item=='WHEAT':return max(1,25-5*math.log1p(d)/math.log(401)) if d>=0 else 25+math.sqrt(-d)
-    if item in ('CARROT','TOMATO','EGG'):
-        base,through,up,down={'CARROT':(35,450,1,.7),'TOMATO':(60,200,.4,.6),'EGG':(50,332,.4,.2)}[item]
-        u=abs(d)/through
-        if d<0:return base*(1+up*(u+8*max(0,u-1)**2))
-        return max(1,base*(1-down*math.sqrt(u))) if item!='EGG' else max(1,base-10*math.log1p(d)/math.log(333))
-    if item=='STRAWBERRY':return max(1,120-1.92*d) if d>=0 else 120+8.4*math.sqrt(-d)
-    if item=='MELON':return max(1,250-.01*d*d) if d>=0 else 250+50*math.log1p(-d)/math.log(301)
-    if item=='MILK':return max(1,160-256*d/122) if d>=0 else 160+96*math.sqrt(-d/122)
-    if item=='WOOL':return max(1,200-640*(d/105)**2) if d>=0 else 200+40*math.log1p(-d)/math.log(106)
-    return max(1,100-.2*d)
+# def price(item, inventory):
+#     # Heuristic market-price model used by the crop/animal planners. Inventory 10,000 is
+#     # treated as the equilibrium point (d == 0). Scarcity (d < 0) raises the estimate;
+#     # surplus (d >= 0) lowers it with item-specific curves, always floored at 1. The
+#     # function forecasts planning value from projected inventory; it does not read the
+#     # live market price directly.
+#     d=inventory-10000
+#     if item=='WHEAT':return max(1,25-5*math.log1p(d)/math.log(401)) if d>=0 else 25+math.sqrt(-d)
+#     if item in ('CARROT','TOMATO','EGG'):
+#         base,through,up,down={'CARROT':(35,450,1,.7),'TOMATO':(60,200,.4,.6),'EGG':(50,332,.4,.2)}[item]
+#         u=abs(d)/through
+#         if d<0:return base*(1+up*(u+8*max(0,u-1)**2))
+#         return max(1,base*(1-down*math.sqrt(u))) if item!='EGG' else max(1,base-10*math.log1p(d)/math.log(333))
+#     if item=='STRAWBERRY':return max(1,120-1.92*d) if d>=0 else 120+8.4*math.sqrt(-d)
+#     if item=='MELON':return max(1,250-.01*d*d) if d>=0 else 250+50*math.log1p(-d)/math.log(301)
+#     if item=='MILK':return max(1,160-256*d/122) if d>=0 else 160+96*math.sqrt(-d/122)
+#     if item=='WOOL':return max(1,200-640*(d/105)**2) if d>=0 else 200+40*math.log1p(-d)/math.log(106)
+#     return max(1,100-.2*d)
 
 # Manhattan grid distance. It is used for route ordering, nearest-shed selection,
 # worker/task travel cost, deadlines, and feasibility checks.
@@ -527,6 +527,8 @@ def fert_value(t,day,prices):
         return prices[c]*len(covered)-prices['FERTILIZER']
     return 0
 
+# WORKER TASK SCORING
+# The tree functions supply the task prior; the residual Q network below adjusts it.
 def _tree_0(x):
     return ((((((((0.3766264776950112 if x[11]<=-19.5 else 0.0) if x[16]<=1.5 else (0.0 if x[0]<=16.5 else (0.03498235180809181 if x[15]<=4.5 else 0.14247593265286385))) if x[3]<=165.375 else ((0.2394319774944989 if x[17]<=2.5 else 0.6063992165579589) if x[15]<=4.5 else 0.36291545435675154)) if x[20]<=1.5 else ((((0.990220882812766 if x[11]<=-0.5 else 0.9986009523302183) if x[2]<=0.5 else (0.7626193707694702 if x[6]<=1.0 else 0.9114243981848749)) if x[2]<=1.5 else ((0.7494151664414512 if x[0]<=5.5 else 0.9249829601099882) if x[1]<=4.5 else (0.6766347385887335 if x[1]<=7.5 else 0.5462169058237551))) if x[2]<=2.5 else (((0.6839305406320021 if x[4]<=3.5 else 0.9592880476607356) if x[2]<=4.5 else (0.16614310891306064 if x[3]<=168.5500030517578 else 0.32099863512037635)) if x[1]<=4.5 else ((0.020387558486208213 if x[18]<=2.5 else 0.3011825548410662) if x[17]<=0.5 else (0.14693855108537457 if x[0]<=10.5 else 0.08697684902730789))))) if x[12]<=0.5 else (((((0.8281282787082657 if x[7]<=2.5 else 0.934592345213388) if x[13]<=0.5 else 0.6403081404558741) if x[8]<=0.5 else (0.9385961303227053 if x[20]<=7.5 else 0.8976732521702258)) if x[0]<=11.5 else (((0.996987651221504 if x[16]<=5.5 else 0.9849726646007396) if x[2]<=0.5 else (0.7577221397787045 if x[6]<=1.0 else 0.8721804219837966)) if x[13]<=2.5 else 0.8428308263186575)) if x[2]<=1.5 else ((((0.04669946080625259 if x[1]<=16.5 else 0.1502293037970687) if x[15]<=3.5 else (0.0 if x[14]<=3.5 else 0.053894912392162)) if x[13]<=0.5 else (0.23021643746345466 if x[11]<=-26.5 else (0.0 if x[4]<=0.5 else 0.01621038392369422))) if x[4]<=1.5 else (((0.08367680186117638 if x[0]<=28.5 else 0.38021765372600674) if x[20]<=13.5 else 0.0) if x[16]<=3.5 else ((0.4260008305708879 if x[1]<=16.5 else 0.7240153492320891) if x[2]<=2.5 else (0.13836477525655114 if x[2]<=5.5 else 0.009378338204364475)))))) if x[15]<=5.5 else ((((((0.9944404359905622 if x[2]<=0.5 else 0.8170152315699553) if x[2]<=1.5 else (0.307725675974822 if x[14]<=3.5 else 0.025080911066756854)) if x[16]<=4.5 else (0.0 if x[6]<=1.0 else 0.0)) if x[18]<=2.5 else (((0.4600952613864519 if x[18]<=3.5 else 0.22269881534975558) if x[18]<=6.5 else (0.5675412191537467 if x[1]<=10.5 else 0.7298018492346675)) if x[5]<=3.5 else ((0.0972869178454919 if x[0]<=13.5 else 0.0) if x[11]<=-9.5 else (0.593843091035837 if x[17]<=0.5 else 0.0)))) if x[3]<=133.5 else ((((0.8708557904557312 if x[16]<=4.5 else 0.0) if x[0]<=20.5 else (0.9287557977790593 if x[18]<=0.5 else 0.8756180767523716)) if x[17]<=1.5 else (0.625776444615134 if x[2]<=2.5 else 0.0)) if x[18]<=2.5 else (((0.8471420692387573 if x[19]<=0.5 else 0.5298359210043873) if x[2]<=2.5 else (0.12972902274068532 if x[16]<=4.5 else 0.07225456604532704)) if x[18]<=6.5 else ((0.9410036831362533 if x[20]<=12.5 else 0.904874922795746) if x[2]<=2.5 else (0.0 if x[1]<=13.5 else 0.0))))) if x[19]<=1.5 else (((((0.8827947900740972 if x[2]<=1.5 else 0.08162652226409851) if x[3]<=129.625 else (0.4648582843928581 if x[7]<=3.5 else 0.7928770655846856)) if x[19]<=2.5 else ((0.16294830969923133 if x[15]<=6.5 else 0.10006107135047942) if x[19]<=4.5 else (0.44841165827854024 if x[18]<=1.5 else 0.14954272840115834))) if x[19]<=6.5 else ((0.0 if x[5]<=-0.5 else 0.0) if x[17]<=4.5 else ((0.9362483344987158 if x[2]<=2.5 else 0.06330699479877867) if x[11]<=-24.5 else (0.8111748506273605 if x[13]<=2.5 else 0.5159680744107875)))) if x[12]<=5.5 else (((1.0 if x[2]<=0.5 else 0.9255497140225853) if x[2]<=1.5 else 0.7353939704651172) if x[2]<=2.5 else (0.0 if x[6]<=2.5 else ((0.17732266057908255 if x[0]<=15.5 else 0.0) if x[12]<=9.5 else 0.2602690646320294)))))) if x[5]<=4.5 else ((((((0.10496998066551338 if x[3]<=131.25 else 0.04985216494506561) if x[16]<=2.5 else 0.0) if x[13]<=0.5 else 0.11907566696814395) if x[5]<=5.5 else ((0.0 if x[4]<=3.5 else (0.20288532457442932 if x[16]<=4.5 else 0.0)) if x[15]<=2.5 else (((0.9703245883653665 if x[12]<=1.5 else 0.790444665764504) if x[2]<=2.5 else 0.0) if x[16]<=1.5 else (0.4436750265592539 if x[1]<=10.5 else (0.0 if x[1]<=13.5 else 0.0))))) if x[18]<=1.5 else ((((0.35825748885651787 if x[19]<=1.5 else (0.8214773511402373 if x[13]<=0.5 else 0.6087150096807437)) if x[14]<=6.5 else ((0.9369890143638488 if x[12]<=2.5 else 0.8547859769907857) if x[12]<=3.5 else 0.7266541042213338)) if x[4]<=3.5 else (((0.8881734534646897 if x[14]<=1.5 else 0.9234988132981302) if x[12]<=2.5 else (0.9136889566703469 if x[15]<=1.5 else 0.8446206558560311)) if x[11]<=-9.5 else ((0.9243725709718554 if x[2]<=1.5 else 0.6015259183203276) if x[20]<=9.5 else (0.6581226300004969 if x[6]<=2.5 else 0.834352305046463)))) if x[2]<=2.5 else ((((0.0 if x[17]<=3.5 else 0.12465951085577272) if x[18]<=3.5 else (0.24415012428414967 if x[19]<=4.5 else 0.5284855139124782)) if x[12]<=3.5 else ((0.0 if x[7]<=0.5 else 0.0) if x[16]<=6.5 else 0.33264109691524824)) if x[1]<=4.5 else (((0.08963299687143897 if x[16]<=3.5 else 0.18672271438078997) if x[0]<=28.5 else (0.4436750265592539 if x[6]<=21.5 else 0.2216840024069457)) if x[10]<=0.5 else 0.0)))) if x[9]<=0.5 else ((((0.1009825223310541 if x[0]<=18.5 else 0.0) if x[14]<=7.5 else 0.19950179670365797) if x[15]<=2.5 else (0.3326410969152483 if x[12]<=0.5 else 0.15958156134795162)) if x[19]<=1.5 else (((0.561732854606775 if x[0]<=19.5 else 0.3588331851297848) if x[19]<=3.5 else (((0.8491587459856373 if x[14]<=3.5 else 0.8952304250248643) if x[20]<=12.5 else 0.6793214293185239) if x[12]<=2.5 else 0.5583713734541235)) if x[16]<=3.5 else ((((0.23753031473906494 if x[5]<=6.5 else 0.3382850351651939) if x[0]<=23.5 else 0.5706651324124118) if x[6]<=17.5 else ((0.9199585972347074 if x[2]<=1.5 else 0.04637360345115919) if x[12]<=1.5 else 0.31001254352573365)) if x[3]<=174.0 else (0.9755354834316712 if x[2]<=0.5 else ((0.3574927611822622 if x[0]<=17.5 else 0.4737991767808364) if x[14]<=3.5 else 0.17346573280754704))))))) if x[4]<=5.5 else ((((((((0.9696052524905975 if x[0]<=11.5 else 0.978883039392572) if x[6]<=18.5 else (0.9491585655861454 if x[0]<=25.5 else 0.9206358857248682)) if x[11]<=-9.5 else ((0.9029530377586175 if x[0]<=3.5 else 0.955090386911186) if x[0]<=5.5 else 0.8692113108529653)) if x[1]<=1.5 else ((0.9394201879626177 if x[6]<=21.5 else 0.8636333614579661) if x[11]<=-24.5 else ((0.786163357936125 if x[16]<=5.5 else 0.9038390461807083) if x[12]<=0.5 else 0.17098632825449864))) if x[9]<=0.5 else ((0.8980200124244049 if x[14]<=0.5 else 0.9354846681459418) if x[1]<=4.5 else (((0.9742809932473813 if x[0]<=23.5 else 0.9930820692980422) if x[11]<=-17.5 else (1.0 if x[11]<=-11.5 else 0.9815387008842308)) if x[19]<=3.5 else ((0.9974859305798462 if x[18]<=5.5 else 0.9907973135796988) if x[1]<=13.5 else (0.8746587140271866 if x[20]<=7.5 else 0.9616338115185221))))) if x[12]<=1.5 else ((((0.427808329393419 if x[9]<=0.5 else (0.9800716687573264 if x[6]<=21.5 else 0.9452935939360316)) if x[19]<=4.5 else 0.9912774407082439) if x[1]<=4.5 else (((0.9684583934642581 if x[11]<=-14.5 else 0.8702366902761083) if x[5]<=5.5 else (1.0 if x[6]<=7.5 else 0.9798941446200833)) if x[10]<=0.5 else ((0.9979145217536205 if x[17]<=3.5 else 0.9801766864222907) if x[18]<=4.5 else (1.0 if x[14]<=4.5 else 1.0)))) if x[18]<=5.5 else 0.9094910633052441)) if x[2]<=0.5 else ((((((0.10227758338794858 if x[1]<=4.5 else 0.3110200549653488) if x[2]<=1.5 else (0.014935350466163134 if x[11]<=-1.5 else 0.09496987596853534)) if x[14]<=8.5 else 0.2602690646320293) if x[12]<=0.5 else ((0.04923661152602754 if x[11]<=-19.5 else 0.0) if x[16]<=3.5 else 0.0)) if x[18]<=3.5 else (((0.5887192540542435 if x[4]<=6.5 else 0.5758155005726879) if x[0]<=1.5 else ((0.040510736205153344 if x[19]<=3.5 else 0.22445699398134838) if x[7]<=5.5 else (0.28172183676061113 if x[11]<=-15.5 else 0.472907262119068))) if x[12]<=1.5 else ((0.0 if x[17]<=3.5 else (0.0 if x[11]<=-19.5 else 0.2902665973505581)) if x[14]<=2.5 else ((0.008359867352730062 if x[6]<=21.5 else 0.09385225598336094) if x[19]<=5.5 else 0.1930623764748158)))) if x[10]<=0.5 else (((((0.4992208295020084 if x[17]<=3.5 else 0.24720715193689144) if x[14]<=0.5 else (0.7589239074935956 if x[18]<=4.5 else 0.5770172769300145)) if x[12]<=0.5 else (0.0 if x[20]<=11.5 else 0.2320023534449719)) if x[17]<=4.5 else 0.8236683961315194) if x[2]<=2.5 else ((0.0 if x[9]<=0.5 else ((0.1173239129050161 if x[1]<=10.5 else 0.3696438656189707) if x[2]<=3.5 else (0.0 if x[15]<=0.5 else 0.05247639289787661))) if x[7]<=1.0 else 0.0)))) if x[15]<=1.5 else (((((0.8692113108529653 if x[20]<=9.5 else (0.8770837464835861 if x[14]<=2.5 else 0.9703245883653665)) if x[18]<=3.5 else (0.7206845237150096 if x[20]<=10.5 else (0.9151812672943536 if x[5]<=5.5 else 0.7736482305779824))) if x[2]<=0.5 else ((((0.08426623011671815 if x[16]<=2.5 else 0.004696832900177559) if x[0]<=27.5 else (0.3039759478244288 if x[6]<=25.5 else 0.0)) if x[20]<=11.5 else (0.26108053247443963 if x[16]<=0.5 else (0.03638027281981023 if x[1]<=19.5 else 0.1156229526479878))) if x[11]<=-14.5 else (((0.0 if x[18]<=7.5 else 0.24633449853112468) if x[19]<=1.5 else (0.26503249425177433 if x[0]<=8.5 else 0.14210799477339384)) if x[7]<=5.5 else (0.0 if x[0]<=12.0 else 0.5293440661322036)))) if x[12]<=0.5 else (((0.5835124262723793 if x[12]<=1.5 else ((0.0 if x[20]<=9.5 else 0.6369607599335135) if x[20]<=10.5 else (0.01796295612646264 if x[20]<=11.5 else 0.13661826033887942))) if x[11]<=-28.5 else (((0.025853319118527607 if x[0]<=11.5 else 0.0) if x[6]<=12.5 else (0.13661826033887947 if x[6]<=13.5 else 0.014174392544682399)) if x[5]<=5.5 else ((0.45983182189196486 if x[20]<=12.5 else 0.7494151664414513) if x[2]<=0.5 else (0.026518536364297015 if x[1]<=16.5 else 0.10345695645415041)))) if x[14]<=12.5 else ((0.5424364210193192 if x[3]<=90.0 else 0.2494160771020015) if x[0]<=26.5 else 0.23021643746345466))) if x[9]<=0.5 else (((0.29564686544791696 if x[2]<=2.5 else 0.0) if x[17]<=3.5 else ((((0.14775525287871644 if x[20]<=11.5 else 0.0) if x[17]<=4.5 else 0.5606359424901679) if x[13]<=1.5 else 0.8714461205739877) if x[20]<=12.5 else (0.5365385115512981 if x[2]<=5.5 else 0.0))) if x[18]<=1.5 else (((((0.2362792331243842 if x[3]<=90.0 else 0.0) if x[17]<=2.5 else (0.05247639289787663 if x[17]<=3.5 else 0.0)) if x[15]<=2.5 else ((0.8671111565657061 if x[17]<=1.5 else 0.0) if x[1]<=16.5 else (0.1329735945178072 if x[10]<=0.5 else 0.584609194132032))) if x[19]<=1.5 else (((0.9028459247337188 if x[4]<=6.5 else 0.8158587618567819) if x[19]<=6.5 else (0.5659011890386165 if x[16]<=5.5 else 0.0)) if x[18]<=7.5 else ((0.0 if x[17]<=3.5 else 0.6253570479522851) if x[15]<=3.5 else 0.8885806949008731))) if x[0]<=26.5 else ((0.8315639114202824 if x[2]<=1.5 else (0.06042886132187326 if x[20]<=11.5 else 0.0)) if x[13]<=0.5 else ((0.5120418234832187 if x[12]<=0.5 else 0.8190507410644354) if x[19]<=3.5 else 0.5874801807876655)))))))
 def _tree_1(x):
@@ -969,21 +971,22 @@ def q_residual_score(state_bias,candidate):
     for k in range(64):v+=_Q_W4[k]*h2[k]
     return v
 
+# WORKER ACTION SCHEDULER
 def unit_actions(obs,animal,crops):
-    # Convert the animal/crop plans into one action for the farmer and every hand.
-    # Pipeline: first force delivery and animal-placement logistics; stage animals/resources
-    # from the shed; generate crop/animal maintenance tasks; form feasible worker-task pairs
-    # using resource and remaining-time checks; rank each pair with normalized tree prior +
-    # residual Q; greedily assign the best pair, removing that worker and all tasks on the
-    # chosen tile; finally DROP carried inventory at the shed or PASS. Direct forced actions
-    # bypass the learned ranker; only candidates in `tasks` go through Q selection.
+    # Return one action for the farmer and each hand. Delivery and livestock logistics
+    # take workers first; remaining workers compete for crop and animal tasks.
+
+    # 1. Snapshot positions, inventory, worker slots, and unfilled animal tiles.
     f=obs['farms'][obs['player']];private=obs['private'];day=obs['day'];hour=obs['hour']
     prices=obs['market']['prices'];positions=[f['farmer']]+f['hands'];invs=private['inventories']
     actions=[None]*len(positions);shed=dict(private['shed']);free=[];reserved=set()
     missing={p:a for p,a in animal.items() if not (isinstance(tile(f,p),dict) and tile(f,p).get('animal'))}
     exposure=sum(totals(private).values())
+
+    # 2. Commit workers carrying sale goods or livestock before task ranking.
     for i,pos in enumerate(positions):
         inv=invs[i]
+        # Return sale goods to the shed when delivery thresholds are met.
         goods=sum(inv.get(c,0) for c in ('MILK','WOOL','MELON','STRAWBERRY','TOMATO','CARROT','EGG'))
         deliver=(tuple(pos) in SHED and goods>0) or (day<13 and (inv.get('MELON',0)>=6 or inv.get('WOOL',0)>=4))
         deliver=deliver or (exposure>85 and goods>=5) or (day==29 and sum(inv.values())>0 and (hour>=16 or dist(pos,nearest_shed(pos))+3>=23-hour))
@@ -998,6 +1001,7 @@ def unit_actions(obs,animal,crops):
                 else:actions[i]=['DROP']
             else:actions[i]=move(pos,nearest_shed(pos))
             continue
+        # Route carried animals to an unoccupied planned structure tile.
         for a in ANIMALS:
             if not inv.get(a,0):continue
             targets=[p for p,c in missing.items() if c==a and p not in reserved]
@@ -1008,7 +1012,8 @@ def unit_actions(obs,animal,crops):
             actions[i]=op if tuple(pos)==p else move(pos,p);break
         if actions[i]:continue
         free.append(i)
-    # Stage new livestock directly from storage with distinct target slots.
+
+    # 3. Stage new livestock from the shed, reserving distinct destination tiles.
     for i in list(free):
         pos=positions[i]
         if tuple(pos) not in SHED or hour>16:continue
@@ -1016,6 +1021,8 @@ def unit_actions(obs,animal,crops):
         if not targets:continue
         p=min(targets,key=lambda p:dist(pos,p));a=missing[p]
         reserved.add(p);shed[a]-=1;actions[i]=['PICKUP',a,1];free.remove(i)
+
+    # 4. Create crop tasks: plant, clear weeds, harvest, water, or fertilize.
     tasks=[];available=dict(private['seeds']);unfed=0;fert_needed=0
     for p,c in crops.items():
         t=tile(f,p)
@@ -1042,6 +1049,8 @@ def unit_actions(obs,animal,crops):
         benefit=fert_value(t,day,prices)
         if benefit>10:
             fert_needed+=1;tasks.append((p,['FERTILIZE'],90+min(100,benefit/5),'FERTILIZER'))
+
+    # 5. Create animal tasks: feed, care, harvest products, or collect fertilizer.
     for y,row in enumerate(f['tiles']):
         for x,t in enumerate(row):
             if not isinstance(t,dict) or 'animal' not in t:continue
@@ -1054,7 +1063,9 @@ def unit_actions(obs,animal,crops):
                 deadline_bonus=deadline_weight*dist(p,nearest_shed(p)) if day==29 else 0
                 tasks.append((p,['HARVEST'],120+min(200,t['yield_units']*prices[ANIMALS[t['animal']][1]]/8)+deadline_bonus,None))
             if t.get('fertilizer_available'):tasks.append((p,['COLLECT_FERTILIZER'],80,None))
-    # A few carriers can feed the entire herd; others remain free for crops.
+
+    # 6. Give shed workers wheat and fertilizer for the queued maintenance tasks.
+    # A few carriers can feed the herd while other workers remain available.
     wheat_carried=sum(inv.get('WHEAT',0) for inv in invs)
     fert_carried=sum(inv.get('FERTILIZER',0) for inv in invs)
     for i in list(free):
@@ -1065,10 +1076,14 @@ def unit_actions(obs,animal,crops):
         elif fert_needed>fert_carried and shed.get('FERTILIZER',0) and not invs[i].get('FERTILIZER',0):
             n=min(3,fert_needed-fert_carried,shed['FERTILIZER']);shed['FERTILIZER']-=n;fert_carried+=n
             actions[i]=['PICKUP','FERTILIZER',n];free.remove(i)
+
+    # 7. Add shed pickups as ranked tasks if carriers still lack resources.
     if unfed>wheat_carried and shed.get('WHEAT',0):
         for p in SHED:tasks.append((p,['PICKUP','WHEAT',min(4,unfed-wheat_carried,shed['WHEAT'])],100,'NO_WHEAT'))
     if fert_needed>fert_carried and shed.get('FERTILIZER',0):
         for p in SHED:tasks.append((p,['PICKUP','FERTILIZER',min(3,fert_needed-fert_carried,shed['FERTILIZER'])],70,'NO_FERTILIZER'))
+
+    # 8. Match free workers to feasible tasks, one worker and one tile at a time.
     while free and tasks:
         choices=[]
         for i in free:
@@ -1085,6 +1100,7 @@ def unit_actions(obs,animal,crops):
                 choices.append((i,k,distance,features,baseline))
         if not choices:break
 
+        # Combine the tree prior with the residual Q score for each candidate.
         raw=[c[4] for c in choices]
         prior=q_normalized_prior(raw)
         candidates=[q_norm_task(c[3]) for c in choices]
@@ -1105,9 +1121,13 @@ def unit_actions(obs,animal,crops):
             if key>best_key:
                 j=z;best_q=q;best_key=key
 
+        # Act now if on the tile; otherwise move toward it. Remove all tasks
+        # on that tile so another worker does not receive the same destination.
         i,k=choices[j][0],choices[j][1];p,op,_,_=tasks[k]
         actions[i]=op if tuple(positions[i])==p else move(positions[i],p)
         free.remove(i);tasks=[t for t in tasks if t[0]!=p]
+
+    # 9. Deposit carried inventory at the shed or let unassigned workers pass.
     for i in free:
         if sum(invs[i].values()) and tuple(positions[i]) in SHED:actions[i]=['DROP']
         else:actions[i]=PASS
