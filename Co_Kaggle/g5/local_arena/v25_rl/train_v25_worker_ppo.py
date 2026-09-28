@@ -165,9 +165,32 @@ def ppo_update(model,opt,device,records,args):
     return {"policy_loss":float(a[:,0].mean()),"value_loss":float(a[:,1].mean()),"entropy":float(a[:,2].mean()),"loss":float(a[:,3].mean()),"approx_kl":float(a[:,4].mean()),"clip_fraction":float(a[:,5].mean()),"return_mean":float(ret.mean())}
 
 def summary(results,phase):
-    valid=[r for r in results if r.ok]; out={"phase":phase,"episodes":len(results),"episodes_ok":len(valid),"errors":len(results)-len(valid),"mean_worker_reward":float(np.mean([r.worker_reward for r in valid])) if valid else None,"min_worker_reward":float(np.min([r.worker_reward for r in valid])) if valid else None,"max_worker_reward":float(np.max([r.worker_reward for r in valid])) if valid else None,"mean_candidates":float(np.mean([r.mean_candidates for r in valid])) if valid else None}
+    valid=[r for r in results if r.ok]
+    out={
+        "phase":phase,
+        "episodes":len(results),
+        "episodes_ok":len(valid),
+        "errors":len(results)-len(valid),
+        "mean_worker_reward":float(np.mean([r.worker_reward for r in valid])) if valid else None,
+        "min_worker_reward":float(np.min([r.worker_reward for r in valid])) if valid else None,
+        "max_worker_reward":float(np.max([r.worker_reward for r in valid])) if valid else None,
+        "mean_candidates":float(np.mean([r.mean_candidates for r in valid])) if valid else None,
+    }
     for k in RewardBreakdown.__dataclass_fields__:
-        if k!="reward": out["mean_"+k]=float(np.mean([float(r.reward_breakdown.get(k,0)) for r in valid])) if valid else None
+        if k=="reward":
+            continue
+        values=[r.reward_breakdown.get(k,0) for r in valid]
+        if values and isinstance(values[0],dict):
+            keys=sorted({key for value in values for key in value})
+            means={
+                key:float(np.mean([float(value.get(key,0.0)) for value in values]))
+                for key in keys
+            }
+            out["mean_"+k]=means
+            for key,value in means.items():
+                out[f"mean_{k}_{key.lower()}"]=value
+        else:
+            out["mean_"+k]=float(np.mean([float(value) for value in values])) if values else None
     return out
 
 def evaluate(paths,model,device,executor,phase):
@@ -175,7 +198,18 @@ def evaluate(paths,model,device,executor,phase):
     with torch.inference_mode():
         for i,p in enumerate(paths,1):
             r,_=run_static_episode(p,model,device,executor,True,False); rows.append(r)
-            print(f"[{phase}] {i}/{len(paths)} {p.stem} reward={r.worker_reward:+.1f} escape={r.reward_breakdown.get('animals_escaped',0)} weed={r.reward_breakdown.get('crops_to_weed',0)} delivered={r.reward_breakdown.get('products_delivered',0)} {'OK' if r.ok else r.error}",flush=True)
+            print(
+                f"[{phase}] {i}/{len(paths)} {p.stem} "
+                f"reward={r.worker_reward:+.1f} "
+                f"planted={r.reward_breakdown.get('seeds_planted_total',0)} "
+                f"crop_harvested={r.reward_breakdown.get('crop_units_harvested_total',0)} "
+                f"animal_made={r.reward_breakdown.get('animal_product_units_generated_total',0)} "
+                f"to_shed={r.reward_breakdown.get('product_units_moved_to_shed_total',0)} "
+                f"escape={r.reward_breakdown.get('animals_escaped',0)} "
+                f"weed={r.reward_breakdown.get('crops_to_weed',0)} "
+                f"{'OK' if r.ok else r.error}",
+                flush=True,
+            )
     model.train(); return rows,summary(rows,phase)
 
 def write_jsonl(path,row):
@@ -237,7 +271,18 @@ def main():
             attempts+=1
             if attempts>args.episodes_per_update*4: raise RuntimeError("too many failed episodes")
             path=rng.choice(train); r,recs=run_static_episode(path,model,device,ex,False,True); write_jsonl(out/"episodes.jsonl",{"update":u,**r.__dict__})
-            print(f"[train u{u}] {path.stem} reward={r.worker_reward:+.1f} escape={r.reward_breakdown.get('animals_escaped',0)} weed={r.reward_breakdown.get('crops_to_weed',0)} delivered={r.reward_breakdown.get('products_delivered',0)} {'OK' if r.ok else r.error}",flush=True)
+            print(
+                f"[train u{u}] {path.stem} "
+                f"reward={r.worker_reward:+.1f} "
+                f"planted={r.reward_breakdown.get('seeds_planted_total',0)} "
+                f"crop_harvested={r.reward_breakdown.get('crop_units_harvested_total',0)} "
+                f"animal_made={r.reward_breakdown.get('animal_product_units_generated_total',0)} "
+                f"to_shed={r.reward_breakdown.get('product_units_moved_to_shed_total',0)} "
+                f"escape={r.reward_breakdown.get('animals_escaped',0)} "
+                f"weed={r.reward_breakdown.get('crops_to_weed',0)} "
+                f"{'OK' if r.ok else r.error}",
+                flush=True,
+            )
             if not r.ok or not recs: continue
             assign_gae(recs,args.gamma,args.gae_lambda); records.extend(recs); results.append(r)
         stats=ppo_update(model,opt,device,records,args); last=u; metrics={"update":u,"turn_records":len(records),"elapsed_hours":(time.perf_counter()-started)/3600,**summary(results,"train"),**stats}; write_jsonl(out/"metrics.jsonl",metrics); print(json.dumps(metrics,sort_keys=True),flush=True)
