@@ -73,6 +73,7 @@ class ActorCritic(nn.Module):
 class SubDecision:
     candidates: np.ndarray
     action_index: int
+    old_log_prob: float
 
 @dataclass
 class TurnRecord:
@@ -182,7 +183,7 @@ class WorkerPolicy:
             with torch.no_grad():
                 dist=Categorical(logits=self.model.logits(ct)); a=torch.argmax(dist.logits) if self.deterministic else dist.sample(); lp=dist.log_prob(a)
             j=int(a.item()); w,t=choices[j]; actions[w]=self.emit(obs,w,t); joint_lp+=float(lp.item()); self.candidate_counts.append(len(choices))
-            if self.collect: subs.append(SubDecision(mat.astype(np.float16),j))
+            if self.collect: subs.append(SubDecision(mat.astype(np.float16),j,float(lp.item())))
             workers.remove(w)
             if t.op!="PASS": reserved.add(t.key)
             if t.op=="PLANT": seeds[t.item]=max(0,int(seeds.get(t.item,0))-1)
