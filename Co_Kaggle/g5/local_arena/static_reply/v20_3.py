@@ -1377,7 +1377,9 @@ def market_orders(obs,signals,actions):
     live=sum(1 for row in f['tiles'] for t in row if isinstance(t,dict) and 'animal' in t)# animal numbers
     fert_need=sum(1 for row in f['tiles'] for t in row
                   if isinstance(t,dict) and 'crop' in t)
-    fert_target=min(24,fert_need+3) if fert_need and day<29 else 0
+    # Tomatoes and strawberries cannot use fertilizer early in this opening.
+    # Keep that early fertilizer liquid so seed and livestock purchases have cash.
+    fert_target=min(24,fert_need+3) if fert_need and 9<=day<29 else 0
     fert_owned=sell_total.get('FERTILIZER',0)
     # -------------------------------------------------------------------------
     # 1. SELL — liquidate immediately sellable goods first, while keeping the
