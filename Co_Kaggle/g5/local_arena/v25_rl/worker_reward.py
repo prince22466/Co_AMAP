@@ -236,10 +236,27 @@ def compute_worker_reward(executor, before, candidate_action, after) -> RewardBr
                     out.lost_harvestable_units += lost
                     out.reward += CROP_TO_WEED_PENALTY + LOST_HARVESTABLE_UNIT_PENALTY * lost
                 elif at is None and "HARVEST" not in ops_here:
-                    out.crops_died += 1
-                    lost = float(bt.get("yield_units", 0) or 0)
-                    out.lost_harvestable_units += lost
-                    out.reward += CROP_DEATH_PENALTY + LOST_HARVESTABLE_UNIT_PENALTY * lost
+                    # DIG of a fully exhausted crop is valid cleanup, not crop
+                    # death. Destroying a still-productive plant remains a heavy
+                    # worker-efficiency failure.
+                    crop = bt.get("crop")
+                    spec = executor.CROPS.get(crop)
+                    age = int(before["day"]) - int(bt.get("planted_day", before["day"]))
+                    useful_age = (
+                        max(a for a, _ in spec[2])
+                        if spec and crop in ("TOMATO", "STRAWBERRY")
+                        else int(spec[3]) if spec else -1
+                    )
+                    exhausted_cleanup = (
+                        "DIG" in ops_here
+                        and float(bt.get("yield_units", 0) or 0) <= 0
+                        and age > useful_age
+                    )
+                    if not exhausted_cleanup:
+                        out.crops_died += 1
+                        lost = float(bt.get("yield_units", 0) or 0)
+                        out.lost_harvestable_units += lost
+                        out.reward += CROP_DEATH_PENALTY + LOST_HARVESTABLE_UNIT_PENALTY * lost
 
             # Planting on the last hour can immediately refresh into a weed;
             # count that as the same catastrophic failure rather than a random weed.
