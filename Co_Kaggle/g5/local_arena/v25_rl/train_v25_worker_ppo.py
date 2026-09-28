@@ -28,7 +28,7 @@ from worker_reward import ANIMAL_ESCAPE_PENALTY,CROP_DEATH_PENALTY,CROP_TO_WEED_
 DEFAULT_HISTORY_DIR=G5_ROOT/"game_history"/"v20"
 DEFAULT_EXECUTOR=HERE/"v25_rl.py"
 DEFAULT_OUTPUT_DIR=HERE/"runs"/"worker_ppo_static_v20"
-CHECKPOINT_ALGORITHM="v25_static_worker_ppo_gae_v1"
+CHECKPOINT_ALGORITHM="v25_static_worker_ppo_gae_v2_subdecision_ratio"
 
 def load_executor(path):
     spec=importlib.util.spec_from_file_location(f"v25_ep_{time.time_ns()}",path)
@@ -137,32 +137,137 @@ def assign_gae(records,gamma,lam):
         delta=r.reward+gamma*nv-r.old_value; adv=delta+gamma*lam*adv
         r.advantage=float(adv); r.return_target=float(adv+r.old_value)
 
-def logprob_entropy(model,record,device):
-    lps=[]; ents=[]
-    for sub in record.subdecisions:
-        c=torch.as_tensor(sub.candidates,dtype=torch.float32,device=device); d=Categorical(logits=model.logits(c)); idx=torch.tensor(sub.action_index,device=device)
-        lps.append(d.log_prob(idx)); ents.append(d.entropy().mean())
-    z=torch.zeros((),device=device)
-    return (torch.stack(lps).sum(),torch.stack(ents).mean()) if lps else (z,z)
+def subdecision_logprob_entropy(model,sub,device):
+    c=torch.as_tensor(sub.candidates,dtype=torch.float32,device=device)
+    d=Categorical(logits=model.logits(c))
+    idx=torch.tensor(sub.action_index,device=device)
+    return d.log_prob(idx),d.entropy().mean()
 
 def ppo_update(model,opt,device,records,args):
-    if not records: raise ValueError("no PPO records")
-    adv=np.asarray([r.advantage for r in records],np.float32); adv=(adv-adv.mean())/(adv.std()+1e-8)
-    ret=np.asarray([r.return_target for r in records],np.float32); old=np.asarray([r.old_log_prob for r in records],np.float32); stats=[]
+    """PPO with one clipped ratio per worker subdecision.
+
+    GAE/value targets remain turn-level.  Every worker assignment selected in a
+    turn shares that turn's normalized advantage, but its PPO ratio uses only
+    its own old/new log probability.  This avoids exponentiating a sum of many
+    worker log-probability changes into one unstable joint-action ratio.
+    """
+    if not records:
+        raise ValueError("no PPO records")
+
+    turn_adv=np.asarray([r.advantage for r in records],np.float32)
+    turn_adv=(turn_adv-turn_adv.mean())/(turn_adv.std()+1e-8)
+    ret=np.asarray([r.return_target for r in records],np.float32)
+
+    actor_samples=[
+        (turn_idx,sub)
+        for turn_idx,record in enumerate(records)
+        for sub in record.subdecisions
+    ]
+    if not actor_samples:
+        raise ValueError("no PPO worker subdecisions")
+
+    actor_adv=np.asarray([turn_adv[turn_idx] for turn_idx,_ in actor_samples],np.float32)
+    actor_old=np.asarray([sub.old_log_prob for _,sub in actor_samples],np.float32)
+
+    actor_stats=[]
+    value_stats=[]
+    epochs_completed=0
+    kl_early_stop=False
+
     for _ in range(args.ppo_epochs):
-        order=np.random.permutation(len(records))
-        for start in range(0,len(order),args.minibatch_size):
-            ids=order[start:start+args.minibatch_size]; nl=[]; en=[]; val=[]
+        actor_order=np.random.permutation(len(actor_samples))
+        epoch_kls=[]
+
+        for start in range(0,len(actor_order),args.minibatch_size):
+            ids=actor_order[start:start+args.minibatch_size]
+            new_lp=[]; ent=[]
             for q in ids:
-                r=records[int(q)]; lp,ent=logprob_entropy(model,r,device); nl.append(lp); en.append(ent); val.append(model.value(torch.as_tensor(r.state,dtype=torch.float32,device=device)))
-            nl=torch.stack(nl); en=torch.stack(en).mean(); val=torch.stack(val)
-            oldt=torch.as_tensor(old[ids],device=device); at=torch.as_tensor(adv[ids],device=device); rt=torch.as_tensor(ret[ids],device=device)
-            ratio=torch.exp(torch.clamp(nl-oldt,-20,20)); pl=-torch.minimum(ratio*at,torch.clamp(ratio,1-args.clip_ratio,1+args.clip_ratio)*at).mean()
-            vl=.5*(val-rt).pow(2).mean(); loss=pl+args.value_coef*vl-args.entropy_coef*en
-            opt.zero_grad(set_to_none=True); loss.backward(); nn.utils.clip_grad_norm_(model.parameters(),args.max_grad_norm); opt.step()
-            stats.append((pl.item(),vl.item(),en.item(),loss.item(),(oldt-nl).mean().item(),((ratio-1).abs()>args.clip_ratio).float().mean().item()))
-    a=np.asarray(stats,float)
-    return {"policy_loss":float(a[:,0].mean()),"value_loss":float(a[:,1].mean()),"entropy":float(a[:,2].mean()),"loss":float(a[:,3].mean()),"approx_kl":float(a[:,4].mean()),"clip_fraction":float(a[:,5].mean()),"return_mean":float(ret.mean())}
+                _,sub=actor_samples[int(q)]
+                lp,e=subdecision_logprob_entropy(model,sub,device)
+                new_lp.append(lp); ent.append(e)
+
+            new_lp=torch.stack(new_lp)
+            entropy=torch.stack(ent).mean()
+            oldt=torch.as_tensor(actor_old[ids],dtype=torch.float32,device=device)
+            at=torch.as_tensor(actor_adv[ids],dtype=torch.float32,device=device)
+            log_ratio=new_lp-oldt
+            ratio=torch.exp(torch.clamp(log_ratio,-20,20))
+            unclipped=ratio*at
+            clipped=torch.clamp(ratio,1-args.clip_ratio,1+args.clip_ratio)*at
+            policy_loss=-torch.minimum(unclipped,clipped).mean()
+            actor_loss=policy_loss-args.entropy_coef*entropy
+
+            opt.zero_grad(set_to_none=True)
+            actor_loss.backward()
+            nn.utils.clip_grad_norm_(model.actor.parameters(),args.max_grad_norm)
+            opt.step()
+
+            approx_kl=((ratio-1.0)-log_ratio).mean()
+            clip_fraction=((ratio-1.0).abs()>args.clip_ratio).float().mean()
+            epoch_kls.append(float(approx_kl.item()))
+            actor_stats.append((
+                float(policy_loss.item()),
+                float(entropy.item()),
+                float(approx_kl.item()),
+                float(clip_fraction.item()),
+                float(ratio.mean().item()),
+                float(ratio.std(unbiased=False).item()),
+                float(ratio.min().item()),
+                float(ratio.max().item()),
+            ))
+
+        # The critic is still trained once per environment turn.
+        value_order=np.random.permutation(len(records))
+        for start in range(0,len(value_order),args.minibatch_size):
+            ids=value_order[start:start+args.minibatch_size]
+            values=torch.stack([
+                model.value(torch.as_tensor(records[int(q)].state,dtype=torch.float32,device=device))
+                for q in ids
+            ])
+            rt=torch.as_tensor(ret[ids],dtype=torch.float32,device=device)
+            value_loss=.5*(values-rt).pow(2).mean()
+            critic_loss=args.value_coef*value_loss
+
+            opt.zero_grad(set_to_none=True)
+            critic_loss.backward()
+            nn.utils.clip_grad_norm_(model.critic.parameters(),args.max_grad_norm)
+            opt.step()
+            value_stats.append(float(value_loss.item()))
+
+        epochs_completed+=1
+        mean_epoch_kl=float(np.mean(epoch_kls)) if epoch_kls else 0.0
+        if args.target_kl>0 and mean_epoch_kl>args.target_kl:
+            kl_early_stop=True
+            break
+
+    a=np.asarray(actor_stats,float)
+    policy_loss=float(a[:,0].mean())
+    entropy=float(a[:,1].mean())
+    approx_kl=float(a[:,2].mean())
+    clip_fraction=float(a[:,3].mean())
+    ratio_mean=float(a[:,4].mean())
+    ratio_std=float(a[:,5].mean())
+    ratio_min=float(a[:,6].min())
+    ratio_max=float(a[:,7].max())
+    value_loss=float(np.mean(value_stats)) if value_stats else 0.0
+
+    return {
+        "policy_loss":policy_loss,
+        "value_loss":value_loss,
+        "entropy":entropy,
+        "loss":policy_loss+args.value_coef*value_loss-args.entropy_coef*entropy,
+        "approx_kl":approx_kl,
+        "clip_fraction":clip_fraction,
+        "ratio_mean":ratio_mean,
+        "ratio_std":ratio_std,
+        "ratio_min":ratio_min,
+        "ratio_max":ratio_max,
+        "return_mean":float(ret.mean()),
+        "actor_samples":len(actor_samples),
+        "mean_subdecisions_per_turn":float(len(actor_samples)/len(records)),
+        "ppo_epochs_completed":epochs_completed,
+        "kl_early_stop":kl_early_stop,
+    }
 
 def summary(results,phase):
     valid=[r for r in results if r.ok]
@@ -223,7 +328,7 @@ def device_for(v):
     return torch.device("cpu")
 
 def save_checkpoint(path,model,opt,update,args,best):
-    torch.save({"algorithm":CHECKPOINT_ALGORITHM,"update":update,"model_state_dict":model.state_dict(),"optimizer_state_dict":opt.state_dict(),"candidate_feature_names":CANDIDATE_FEATURE_NAMES,"global_feature_names":GLOBAL_FEATURE_NAMES,"best_validation_worker_reward":best,"reward_contract":{"product_value":PRODUCT_VALUE,"generated":PRODUCT_GENERATED_REWARD,"harvested":PRODUCT_HARVESTED_REWARD,"delivered":PRODUCT_DELIVERED_REWARD,"animal_escape":ANIMAL_ESCAPE_PENALTY,"crop_to_weed":CROP_TO_WEED_PENALTY,"crop_death":CROP_DEATH_PENALTY,"lost_harvestable_unit":LOST_HARVESTABLE_UNIT_PENALTY},"args":vars(args),"note":"PPO controls farmer/hands only; recorded market list is an unlearned env input; worker reward only; no final game result/money/margin/market reward"},path)
+    torch.save({"algorithm":CHECKPOINT_ALGORITHM,"update":update,"model_state_dict":model.state_dict(),"optimizer_state_dict":opt.state_dict(),"candidate_feature_names":CANDIDATE_FEATURE_NAMES,"global_feature_names":GLOBAL_FEATURE_NAMES,"best_validation_worker_reward":best,"reward_contract":{"product_value":PRODUCT_VALUE,"generated":PRODUCT_GENERATED_REWARD,"harvested":PRODUCT_HARVESTED_REWARD,"delivered":PRODUCT_DELIVERED_REWARD,"animal_escape":ANIMAL_ESCAPE_PENALTY,"crop_to_weed":CROP_TO_WEED_PENALTY,"crop_death":CROP_DEATH_PENALTY,"lost_harvestable_unit":LOST_HARVESTABLE_UNIT_PENALTY},"args":vars(args),"note":"PPO controls farmer/hands only; per-worker subdecision ratios; turn-level GAE/value; recorded market list is an unlearned env input; no final game result/money/margin/market reward"},path)
 
 def load_checkpoint(path,model,opt,device):
     p=torch.load(path,map_location=device,weights_only=False)
@@ -237,7 +342,7 @@ def parser():
     p.add_argument("--history-dir",type=Path,default=DEFAULT_HISTORY_DIR); p.add_argument("--executor",type=Path,default=DEFAULT_EXECUTOR); p.add_argument("--output-dir",type=Path,default=DEFAULT_OUTPUT_DIR); p.add_argument("--resume",type=Path)
     p.add_argument("--validation-fraction",type=float,default=.20); p.add_argument("--split-seed",type=int,default=20260928); p.add_argument("--training-seed",type=int,default=32525)
     p.add_argument("--updates",type=int,default=100); p.add_argument("--episodes-per-update",type=int,default=8); p.add_argument("--validate-every-updates",type=int,default=1); p.add_argument("--checkpoint-every-updates",type=int,default=1); p.add_argument("--max-training-hours",type=float,default=2.0)
-    p.add_argument("--device",default="auto"); p.add_argument("--hidden",type=int,default=128); p.add_argument("--learning-rate",type=float,default=3e-4); p.add_argument("--gamma",type=float,default=.99); p.add_argument("--gae-lambda",type=float,default=.95); p.add_argument("--ppo-epochs",type=int,default=4); p.add_argument("--minibatch-size",type=int,default=128); p.add_argument("--clip-ratio",type=float,default=.2); p.add_argument("--value-coef",type=float,default=.5); p.add_argument("--entropy-coef",type=float,default=.01); p.add_argument("--max-grad-norm",type=float,default=.5); p.add_argument("--preflight-only",action="store_true")
+    p.add_argument("--device",default="auto"); p.add_argument("--hidden",type=int,default=128); p.add_argument("--learning-rate",type=float,default=3e-4); p.add_argument("--gamma",type=float,default=.99); p.add_argument("--gae-lambda",type=float,default=.95); p.add_argument("--ppo-epochs",type=int,default=4); p.add_argument("--minibatch-size",type=int,default=128); p.add_argument("--clip-ratio",type=float,default=.2); p.add_argument("--target-kl",type=float,default=.02); p.add_argument("--value-coef",type=float,default=.5); p.add_argument("--entropy-coef",type=float,default=.01); p.add_argument("--max-grad-norm",type=float,default=.5); p.add_argument("--preflight-only",action="store_true")
     return p
 
 def main():
