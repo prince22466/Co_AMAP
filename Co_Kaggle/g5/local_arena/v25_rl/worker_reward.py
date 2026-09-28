@@ -29,12 +29,26 @@ ITEMS = (
 )
 MOVE_ACTIONS = {"NORTH", "SOUTH", "EAST", "WEST"}
 
-# Reward contract discussed for v25 worker efficiency.
+# Crop products keep the original lifecycle value.
 PRODUCT_VALUE = 8.0
 PRODUCT_GENERATED_REWARD = 2.0
 PRODUCT_HARVESTED_REWARD = 2.0
 PRODUCT_DELIVERED_REWARD = 4.0
 assert PRODUCT_GENERATED_REWARD + PRODUCT_HARVESTED_REWARD + PRODUCT_DELIVERED_REWARD == PRODUCT_VALUE
+
+# Animal products have a longer, more worker-intensive production chain
+# (build/place/feed/care/harvest/deliver), so give completed animal output a
+# 2x lifecycle value while leaving crop rewards unchanged.
+ANIMAL_PRODUCT_VALUE = 16.0
+ANIMAL_PRODUCT_GENERATED_REWARD = 4.0
+ANIMAL_PRODUCT_HARVESTED_REWARD = 4.0
+ANIMAL_PRODUCT_DELIVERED_REWARD = 8.0
+assert (
+    ANIMAL_PRODUCT_GENERATED_REWARD
+    + ANIMAL_PRODUCT_HARVESTED_REWARD
+    + ANIMAL_PRODUCT_DELIVERED_REWARD
+    == ANIMAL_PRODUCT_VALUE
+)
 
 ANIMAL_ESCAPE_PENALTY = -40.0
 CROP_TO_WEED_PENALTY = -32.0
@@ -188,9 +202,9 @@ def compute_worker_reward(executor, before, worker_action, after) -> RewardBreak
             if units > 0:
                 harvested_by_tile[pos] += units
                 out.products_harvested += units
-                out.reward += PRODUCT_HARVESTED_REWARD * units
 
                 if tile_before.get("kind") == "PLANT":
+                    out.reward += PRODUCT_HARVESTED_REWARD * units
                     crop = tile_before.get("crop")
                     if crop in CROP_PRODUCTS:
                         out.crop_harvest_events_total += 1
@@ -200,6 +214,7 @@ def compute_worker_reward(executor, before, worker_action, after) -> RewardBreak
                 elif tile_before.get("animal"):
                     product = ANIMAL_PRODUCTS.get(tile_before.get("animal"))
                     if product in ANIMAL_PRODUCT_NAMES:
+                        out.reward += ANIMAL_PRODUCT_HARVESTED_REWARD * units
                         out.animal_product_units_harvested_total += units
                         out.animal_product_units_harvested_by_product[product] += units
 
@@ -261,7 +276,12 @@ def compute_worker_reward(executor, before, worker_action, after) -> RewardBreak
                 out.products_delivered += accepted
                 out.product_units_moved_to_shed_total += accepted
                 out.product_units_moved_to_shed_by_product[product] += accepted
-                out.reward += PRODUCT_DELIVERED_REWARD * accepted
+                delivery_reward = (
+                    ANIMAL_PRODUCT_DELIVERED_REWARD
+                    if product in ANIMAL_PRODUCT_NAMES
+                    else PRODUCT_DELIVERED_REWARD
+                )
+                out.reward += delivery_reward * accepted
                 shed_capacity_left -= accepted
 
     # Tile-level before/after events.
@@ -399,6 +419,8 @@ def compute_worker_reward(executor, before, worker_action, after) -> RewardBreak
                         if animal_product in ANIMAL_PRODUCT_NAMES:
                             out.animal_product_units_generated_total += generated
                             out.animal_product_units_generated_by_product[animal_product] += generated
-                    out.reward += PRODUCT_GENERATED_REWARD * generated
+                            out.reward += ANIMAL_PRODUCT_GENERATED_REWARD * generated
+                    else:
+                        out.reward += PRODUCT_GENERATED_REWARD * generated
 
     return out
