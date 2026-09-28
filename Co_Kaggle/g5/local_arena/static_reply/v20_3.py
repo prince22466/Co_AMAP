@@ -57,8 +57,8 @@ LATEST_BUY_DAY={
     'STRAWBERRY':18,
     'MELON':18,
     'COW':20,
-    'SHEEP':22,
-    'GOOSE':22,
+    'SHEEP':21,
+    'GOOSE':21,
 }
 
 OPP_STYLE=None
