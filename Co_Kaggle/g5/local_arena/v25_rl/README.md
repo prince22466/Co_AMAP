@@ -212,16 +212,33 @@ where modest probability changes compounded exponentially with the number of wor
 
 The recorded market list is not part of any PPO action. Market commands may affect the next environment state because they are executed by the game, but they are never passed into `compute_worker_reward()`.
 
-A KL safety guard is also enabled by default:
+Training uses a conservative stochastic behavior policy rather than full-temperature sampling:
 
 ```text
---target-kl 0.02
+--rollout-temperature 0.20
 ```
 
-If the mean per-subdecision approximate KL for an epoch exceeds this value, the remaining PPO epochs for that update are skipped. Training metrics include `approx_kl`, `clip_fraction`, `ratio_mean`, `ratio_std`, `ratio_min`, `ratio_max`, `actor_samples`, `mean_subdecisions_per_turn`, `ppo_epochs_completed`, and `kl_early_stop`.
+For training rollouts, actor logits are divided by this temperature before sampling. This concentrates probability near the current argmax policy while retaining stochastic exploration. PPO recomputes the old/new log probabilities with the same temperature, so the importance ratio remains mathematically consistent. Deterministic validation still uses the raw actor-logit argmax.
 
+The stability-oriented defaults are:
 
-Validation also records `reward_vs_baseline`. If held-out mean worker reward falls below 25% of the initial baseline, the trainer emits a `collapse_warning` and prints a warning immediately. This is diagnostic only; `best.pt` continues to preserve the best held-out policy.
+```text
+learning_rate        1e-4
+clip_ratio           0.10
+target_kl            0.01
+entropy_coef         0.001
+rollout_temperature  0.20
+```
+
+KL is checked before every actor minibatch update. If the current per-subdecision approximate KL is already above `--target-kl`, that minibatch and the remaining actor updates are skipped. Training metrics include `approx_kl`, `clip_fraction`, `ratio_mean`, `ratio_std`, `ratio_min`, `ratio_max`, `actor_samples`, `mean_subdecisions_per_turn`, `actor_minibatches_completed`, `ppo_epochs_completed`, and `kl_early_stop`.
+
+Validation has an automatic catastrophic-collapse guard. The reference reward is the best of the initial deterministic baseline and the best held-out reward achieved so far. If validation falls below:
+
+```text
+--collapse-restore-ratio 0.25
+```
+
+of that reference, the trainer records `collapse_warning=true`, reloads `best.pt` including optimizer state, and writes the restored policy to `latest.pt`. The raw collapsed post-update checkpoint remains available as `update_NNNN.pt` for diagnosis.
 
 ## Files
 
@@ -258,7 +275,7 @@ python train_v25_worker_ppo.py \
 ```
 
 
-The PPO fix uses checkpoint algorithm `v25_static_worker_ppo_gae_v2_subdecision_ratio`. Start a fresh run after this change. Checkpoints produced by the old joint-ratio implementation are intentionally rejected rather than resumed.
+The rollout-stability fix uses checkpoint algorithm `v25_static_worker_ppo_gae_v3_conservative_rollout` and writes by default to `runs/worker_ppo_static_v20_v3`. Start a fresh run after this change. Older v1/v2 checkpoints are intentionally rejected rather than resumed, and the separate output directory prevents old JSONL metrics from being mixed into the new run.
 
 `--minibatch-size` now batches worker subdecisions for the actor and turn records for the critic. The default remains 128.
 
@@ -266,7 +283,7 @@ Resume:
 
 ```bash
 python train_v25_worker_ppo.py \
-  --resume runs/worker_ppo_static_v20/checkpoints/latest.pt \
+  --resume runs/worker_ppo_static_v20_v3/checkpoints/latest.pt \
   --updates 200 \
   --episodes-per-update 8 \
   --max-training-hours 2
@@ -274,7 +291,7 @@ python train_v25_worker_ppo.py \
 
 ## Outputs
 
-Outputs are written under `runs/worker_ppo_static_v20`.
+Outputs are written under `runs/worker_ppo_static_v20_v3`.
 
 - `metrics.jsonl` — PPO statistics, mean worker reward, and mean reward-component counts.
 - `episodes.jsonl` — per-training-replay worker metrics.

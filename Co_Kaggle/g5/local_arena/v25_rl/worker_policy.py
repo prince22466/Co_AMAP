@@ -87,8 +87,11 @@ class TurnRecord:
     return_target: float=0.0
 
 class WorkerPolicy:
-    def __init__(self,executor,model,device,deterministic=False,collect=True):
+    def __init__(self,executor,model,device,deterministic=False,collect=True,rollout_temperature=0.2):
+        if rollout_temperature<=0:
+            raise ValueError("rollout_temperature must be > 0")
         self.e=executor; self.model=model; self.device=device; self.deterministic=deterministic; self.collect=collect
+        self.rollout_temperature=float(rollout_temperature)
         self.records=[]; self.pending=None; self.candidate_counts=[]
 
     def tasks(self,obs,animal_plan,crop_plan):
@@ -180,7 +183,11 @@ class WorkerPolicy:
                 break
             mat=np.stack(feats).astype(np.float32); ct=torch.as_tensor(mat,dtype=torch.float32,device=self.device)
             with torch.no_grad():
-                dist=Categorical(logits=self.model.logits(ct)); a=torch.argmax(dist.logits) if self.deterministic else dist.sample(); lp=dist.log_prob(a)
+                raw_logits=self.model.logits(ct)
+                behavior_logits=raw_logits if self.deterministic else raw_logits/self.rollout_temperature
+                dist=Categorical(logits=behavior_logits)
+                a=torch.argmax(raw_logits) if self.deterministic else dist.sample()
+                lp=dist.log_prob(a)
             j=int(a.item()); w,t=choices[j]; actions[w]=self.emit(obs,w,t); self.candidate_counts.append(len(choices))
             if self.collect: subs.append(SubDecision(mat.astype(np.float16),j,float(lp.item())))
             workers.remove(w)
