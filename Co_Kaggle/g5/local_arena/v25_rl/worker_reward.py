@@ -66,7 +66,6 @@ NORMAL_WATER_REWARD = 1.0
 CRITICAL_FEED_REWARD = 4.0
 CRITICAL_WATER_REWARD = 4.0
 
-CHECKPOINT_ALGORITHM = "v25_static_worker_ppo_gae_v1"
 
 def _positions(obs) -> list[tuple[int, int]]:
     farm = obs["farms"][obs["player"]]
