@@ -220,11 +220,15 @@ A KL safety guard is also enabled by default:
 
 If the mean per-subdecision approximate KL for an epoch exceeds this value, the remaining PPO epochs for that update are skipped. Training metrics include `approx_kl`, `clip_fraction`, `ratio_mean`, `ratio_std`, `ratio_min`, `ratio_max`, `actor_samples`, `mean_subdecisions_per_turn`, `ppo_epochs_completed`, and `kl_early_stop`.
 
+
+Validation also records `reward_vs_baseline`. If held-out mean worker reward falls below 25% of the initial baseline, the trainer emits a `collapse_warning` and prints a warning immediately. This is diagnostic only; `best.pt` continues to preserve the best held-out policy.
+
 ## Files
 
 - `worker_reward.py` — fixed reward constants and before/after turn reward extraction.
 - `worker_policy.py` — actor/critic, state/candidate features, rule-generated feasible worker intents, and the complete runtime replacement for `unit_actions`.
 - `train_v25_worker_ppo.py` — static v20-loss replay, explicit separation of RL worker actions from frozen recorded market actions, GAE, PPO, validation, logging, and checkpoints.
+- `test_ppo_subdecision_ratio.py` — regression coverage for the per-worker ratio formulation and PPO sample accounting.
 - `v25_rl.py` — unchanged source for `production_signals`, `animal_plan`, `crop_plan`, and shared game helpers. Its `market_orders()` function is not called by the worker-training replay.
 
 ## Run
@@ -235,6 +239,13 @@ Preflight:
 
 ```bash
 python train_v25_worker_ppo.py --preflight-only
+```
+
+
+PPO regression test:
+
+```bash
+python -m unittest test_ppo_subdecision_ratio.py
 ```
 
 Train:
