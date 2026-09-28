@@ -1161,55 +1161,66 @@ def unit_actions(obs,animal,crops):
 
 
 def start_plan(obs,cash=None,slots=10):
-    """Return the fixed day-0 opening purchases in one exact order.
+    """Return unmet day-0 opening targets in priority order, up to `slots` orders.
 
     Canonical sequence:
       BUY_SEED WHEAT 13
       BUY_ANIMAL COW 2
       BUY_SEED CARROT 2
       BUY_SEED STRAWBERRY 3
-      5 x HIRE
+      3 x HIRE
       BUY_SEED MELON 1
       BUY_ANIMAL SHEEP 1
       BUY_ANIMAL GOOSE 1
+      2 x HIRE
 
-    The first 10 commands fit through STRAWBERRY. The remaining MELON/SHEEP/GOOSE
-    commands are completed on later day-0 turns.
     """
-    f=obs['farms'][obs['player']];p=obs['private'];day=obs['day'];hour=obs['hour']
+    f=obs['farms'][obs['player']];p=obs['private'];day=obs['day']
     if day!=0 or slots<=0:return []
 
-    opening=[
-        ['HIRE'],['HIRE'],['HIRE'],['HIRE'],['HIRE'],['HIRE'],
-        ['BUY_SEED','WHEAT',13],
-        ['BUY_ANIMAL','COW',2],
-        ['BUY_SEED','CARROT',2],
-        ['BUY_SEED','STRAWBERRY',3],
-        ['BUY_SEED','MELON',1],
-        ['BUY_ANIMAL','SHEEP',1],
-        ['BUY_ANIMAL','GOOSE',1],
-    ]
-
-    # Hour 0 always emits the beginning of the exact sequence.
-    if hour==0:return opening[:slots]
-
-    # Later day-0 turns only need to complete the tail. Count both stored and already
-    # deployed assets so a completed command is not repeated after planting/placement.
-    melon_done=p['seeds'].get('MELON',0)>0
-    sheep_done=totals(p).get('SHEEP',0)>0
-    goose_done=totals(p).get('GOOSE',0)>0
+    # The first call can submit only ten of the twelve commands. On each later call,
+    # count purchased assets wherever workers may have moved them before retrying.
+    owned={c:int(p['seeds'].get(c,0)) for c in CROPS}
+    stock=totals(p)
+    owned.update({a:int(stock.get(a,0)) for a in ANIMALS})
     for row in f['tiles']:
         for t in row:
             if not isinstance(t,dict):continue
-            if t.get('crop')=='MELON':melon_done=True
-            if t.get('animal')=='SHEEP':sheep_done=True
-            if t.get('animal')=='GOOSE':goose_done=True
+            crop=t.get('crop');animal=t.get('animal')
+            if crop in CROPS:owned[crop]+=1
+            if animal in ANIMALS:owned[animal]+=1
 
-    tail=[]
-    if not melon_done:tail.append(['BUY_SEED','MELON',1])
-    if not sheep_done:tail.append(['BUY_ANIMAL','SHEEP',1])
-    if not goose_done:tail.append(['BUY_ANIMAL','GOOSE',1])
-    return tail[:slots]
+    opening=[
+        ('BUY_SEED','WHEAT',13),
+        ('BUY_ANIMAL','COW',2),
+        ('BUY_SEED','CARROT',2),
+        ('BUY_SEED','STRAWBERRY',3),
+        ('HIRE',None,3),
+        ('BUY_SEED','MELON',1),
+        ('BUY_ANIMAL','SHEEP',1),
+        ('BUY_ANIMAL','GOOSE',1),
+        ('HIRE',None,5),
+    ]
+    if cash is None:cash=f['money']
+    fib=[1,1]
+    for _ in range(14):fib.append(fib[-1]+fib[-2])
+    orders=[];planned_hires=0
+    for op,item,target in opening:
+        if len(orders)>=slots:break
+        if op=='HIRE':
+            missing=max(0,target-len(f['hands'])-planned_hires)
+            for _ in range(missing):
+                if len(orders)>=slots:break
+                cost=fib[f['hires_today']+planned_hires]
+                if cash<cost:break
+                orders.append(['HIRE']);cash-=cost;planned_hires+=1
+            continue
+        missing=max(0,target-owned[item])
+        cost=CROPS[item][0] if op=='BUY_SEED' else ANIMALS[item][0]
+        n=min(missing,int(max(0,cash)//cost))
+        if n>0:
+            orders.append([op,item,n]);cash-=n*cost;owned[item]+=n
+    return orders
 
 def market_orders(obs,signals,actions):
     # Build the rule-based market order list (maximum 10 orders). First simulate the shed
@@ -1273,19 +1284,25 @@ def market_orders(obs,signals,actions):
             cash-=n*unit_cost
 
     # -------------------------------------------------------------------------
-    # DAY-0 OPENING TAIL — after the first turn, finish any MELON/SHEEP/GOOSE
-    # opening purchases that did not fit inside the first 10 market-order slots.
+    # DAY-0 OPENING REMAINDER — reconcile all opening targets against current
+    # ownership, then submit what did not fit or execute on earlier turns.
     # -------------------------------------------------------------------------
     # start_plan() owns the fixed opening policy; market_orders() only appends the
     # remaining day-0 opening purchases into whatever order capacity is still available.
     if day==0 and len(orders)<10:
         opening_orders=start_plan(obs,cash,10-len(orders))
+        fib=[1,1]
+        for _ in range(14):fib.append(fib[-1]+fib[-2])
+        opening_hires=0
         for order in opening_orders:
             orders.append(order)
             # start_plan() returns commands only; market_orders() maintains its own running
             # cash estimate so later purchases in this same turn cannot overspend it.
             if order[0]=='BUY_SEED':cash-=order[2]*CROPS[order[1]][0]
             elif order[0]=='BUY_ANIMAL':cash-=order[2]*ANIMALS[order[1]][0]
+            elif order[0]=='HIRE':
+                cash-=fib[f['hires_today']+opening_hires]
+                opening_hires+=1
 
     # -------------------------------------------------------------------------
     # 3. HIRE — fill the current hand target before spending on land or producers.
@@ -1295,9 +1312,10 @@ def market_orders(obs,signals,actions):
     if day<3:desired_hands=5
     elif day==29 and OPP_STYLE=='V16':desired_hands=min(desired_hands,V16_FINAL_HANDS)
     if hour<4:
-        hires=f['hires_today'];fib=[1,1]
+        planned_hires=sum(order[0]=='HIRE' for order in orders)
+        hires=f['hires_today']+planned_hires;fib=[1,1]
         for _ in range(14):fib.append(fib[-1]+fib[-2])
-        for _ in range(max(0,desired_hands-len(f['hands']))):
+        for _ in range(max(0,desired_hands-len(f['hands'])-planned_hires)):
             cost=fib[hires]
             if len(orders)>=10 or cash<cost+20:break
             orders.append(['HIRE']);cash-=cost;hires+=1
