@@ -94,6 +94,70 @@ This fixed value ignores market-price movement. Fertilizer is separate from this
 
 A deliberate `DIG` of a fully exhausted crop with no remaining yield and age beyond its useful production window is treated as valid cleanup and is **not** assigned the crop-death penalty. Destroying a still-productive crop remains a heavy failure.
 
+## Production-pipeline measurements
+
+In addition to reward, every turn tracks explicit worker-production counters. These are accumulated into each episode's `reward_breakdown` and averaged in `metrics.jsonl` / `validation.jsonl`.
+
+The tracked pipeline is:
+
+```text
+seed planted
+    ↓
+crop units harvested
+
+animal product generated
+    ↓
+animal product harvested
+
+harvested product
+    ↓
+explicit worker delivery to shed
+```
+
+The counters are:
+
+- `seeds_planted_total`
+- `seeds_planted_by_crop[WHEAT|CARROT|TOMATO|STRAWBERRY|MELON]`
+- `crop_harvest_events_total`
+- `crop_harvest_events_by_crop[...]`
+- `crop_units_harvested_total`
+- `crop_units_harvested_by_crop[...]`
+- `animal_product_units_generated_total`
+- `animal_product_units_generated_by_product[MILK|EGG|WOOL]`
+- `animal_product_units_harvested_total`
+- `animal_product_units_harvested_by_product[MILK|EGG|WOOL]`
+- `product_units_moved_to_shed_total`
+- `product_units_moved_to_shed_by_product[WHEAT|CARROT|TOMATO|STRAWBERRY|MELON|MILK|EGG|WOOL]`
+
+A harvest event and harvested units are intentionally separate. For example, harvesting one carrot tile containing 3 units produces:
+
+```text
+crop_harvest_events_by_crop["CARROT"] += 1
+crop_units_harvested_by_crop["CARROT"] += 3
+```
+
+Animal production is measured from tile yield changes. If a worker harvests on the same turn that end-of-day production occurs, generated units are reconstructed as:
+
+```text
+generated = max(0, yield_after + harvested_this_turn - yield_before)
+```
+
+This avoids missing production when harvest and production occur in the same environment turn.
+
+Product movement to shed counts explicit worker delivery actions, not market selling and not automatic end-of-day inventory dumping. A later recorded `SELL` may remove the delivered units from the shed, but the delivery counter is already credited from the worker action and pre-action inventory.
+
+Planting is counted from the successful tile transition. If a seed is planted on the last hour and immediately becomes `WEED` during day refresh, it is still counted in `seeds_planted_*` and also receives the `PLANT -> WEED` failure penalty.
+
+Aggregate summaries expose both nested dictionaries and flattened metrics, for example:
+
+```text
+mean_seeds_planted_by_crop_wheat
+mean_crop_units_harvested_by_crop_melon
+mean_animal_product_units_generated_by_product_milk
+mean_animal_product_units_harvested_by_product_wool
+mean_product_units_moved_to_shed_by_product_egg
+```
+
 ## Policy
 
 `animal_plan` and `crop_plan` remain workload inputs. The RL worker scheduler can choose among intents for:
@@ -171,12 +235,14 @@ Outputs are written under `runs/worker_ppo_static_v20`.
 
 Primary health metrics are:
 
+- `mean_seeds_planted_total`
+- `mean_crop_units_harvested_total`
+- `mean_animal_product_units_generated_total`
+- `mean_animal_product_units_harvested_total`
+- `mean_product_units_moved_to_shed_total`
 - `mean_animals_escaped`
 - `mean_crops_to_weed`
 - `mean_crops_died`
-- `mean_products_generated`
-- `mean_products_harvested`
-- `mean_products_delivered`
 - `mean_worker_reward`
 
 The worker policy should improve these operational metrics independently of whether the overall game is ultimately won or lost.
