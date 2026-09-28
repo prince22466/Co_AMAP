@@ -30,10 +30,14 @@ SHOPS={
  'SMOOTHIE_SHOP':{'STRAWBERRY':1,'MILK':1},
  'FARMERS_MARKET':{'WHEAT':1,'CARROT':1,'TOMATO':1,'STRAWBERRY':1}}
 
-# 17 nearest shed tiles, excluding the lower-right quadrant (x>=5 and y>=5).
-ROUTES=(((4,4),(4,3),(4,2)),((3,4),(3,3),(2,4)),((5,4),(5,3),(5,2)),
-        ((6,4),(6,3)),((4,5),(3,5),(2,5)),((4,6),(3,6),(4,7)))
+# 17 animal tiles: 6 NW, 7 NE, 4 SW, and none in the lower-right quadrant.
+ROUTES=(((4,4),(4,3),(4,2)),((3,4),(3,3),(2,4)),
+        ((5,4),(5,3),(5,2)),((6,4),(6,3),(7,4),(6,2)),
+        ((4,5),(3,5)),((4,6),(3,6)))
 ANIMAL_POINTS={p for route in ROUTES for p in route}
+ANIMAL_QUADRANT={p:('S' if p[1]>=5 else 'N')+('E' if p[0]>=5 else 'W')
+                 for p in ANIMAL_POINTS}
+ANIMAL_QUADRANT_ORDER={'NW':0,'NE':1,'SW':2}
 # The shed occupies the central 2x2 tiles. These coordinates are the transfer interface
 # used for PICKUP/DROP/PLACE decisions and as routing targets via nearest_shed().
 SHED=((4,4),(5,4),(4,5),(5,5))
@@ -44,21 +48,19 @@ SELLABLE_PRODUCTS=('MILK','WOOL','STRAWBERRY','MELON','EGG','TOMATO','CARROT','F
 PASS=['PASS']
 # Maximum number of animals the planner should place on route tiles.
 HERD_LIMIT=17 # empirical evident from the number of herds of winners in v20 loss cases
+# Fill the six NW animal route positions during days 1 and 2 after the opening.
+EARLY_NW_ANIMAL_TARGETS={'COW':3,'SHEEP':1,'GOOSE':2}
 # Preserve working capital while signal-driven procurement buys new producers.
 PROCUREMENT_CASH_RESERVE=100
 
-# Latest in-game day on which a new producer may be purchased. These gates prevent
-# high late-season shortage signals from buying producers that have too little time
-# left to mature and generate useful output before the season ends.
+# Latest in-game day on which a new crop seed may be purchased. These gates prevent
+# late-season shortages from buying seeds that cannot mature before the season ends.
 LATEST_BUY_DAY={
     'WHEAT':24,
     'CARROT':25,
     'TOMATO':20,
     'STRAWBERRY':18,
     'MELON':18,
-    'COW':20,
-    'SHEEP':21,
-    'GOOSE':21,
 }
 
 OPP_STYLE=None
@@ -206,49 +208,34 @@ def post_action_market_inventory(obs,actions):
 # PRODUCTION SIGNALS
 # =============================================================================
 # This subsystem converts the currently observable game state into normalized
-# "need more production" signals.  It is intentionally separate from crop/animal
-# execution: the helpers below only measure demand, production capacity, and shortage.
+# crop-production need signals. The helpers below only measure demand, production
+# capacity, and shortage; animal purchases use AnimalBuyingPolicy instead.
 #
 # Internal flow:
-#   1) define which products can be produced and which producer creates each one;
-#   2) estimate known remaining hard demand;
-#   3) estimate remaining output from existing/new producers;
-#   4) assemble demand-capacity gaps and normalize them into comparable scores.
-
-
-# -----------------------------------------------------------------------------
-# Production-signal product universe and producer mapping
-# -----------------------------------------------------------------------------
-# Products for which the production signal service can recommend a producer.
-# Crop names map to seeds of the same name; animal products map to their animal.
-PRODUCTION_PRODUCTS=tuple(CROPS)+('MILK','WOOL','EGG')
-PRODUCT_PRODUCER={
-    'WHEAT':'WHEAT','CARROT':'CARROT','TOMATO':'TOMATO',
-    'STRAWBERRY':'STRAWBERRY','MELON':'MELON',
-    'MILK':'COW','WOOL':'SHEEP','EGG':'GOOSE',
-}
+#   1) estimate known remaining crop demand;
+#   2) estimate remaining output from existing crops and owned seeds;
+#   3) assemble demand-capacity gaps and normalize them into comparable scores.
 
 
 # -----------------------------------------------------------------------------
 # Remaining hard-demand model
 # -----------------------------------------------------------------------------
 def _remaining_hard_demand(obs):
-    """Known remaining consumption: Town + open shops + observable animal WHEAT feed."""
+    """Known crop consumption: Town + open shops + observable WHEAT feed."""
     step=obs['day']*TURNS_PER_DAY+obs['hour'];day=obs['day']
     town_ticks=sum(1 for t in range(step,SEASON_TURNS) if t%CENTER_INTERVAL==0)
     shop_ticks=sum(1 for t in range(step,SEASON_TURNS) if t%SHOP_INTERVAL==0)
-    shop_per_tick={p:0. for p in PRODUCTION_PRODUCTS}
+    shop_per_tick={crop:0. for crop in CROPS}
     for shop in obs['town']['unlocked_shops']:
         for product,units in SHOPS[shop].items():
             if product in shop_per_tick:shop_per_tick[product]+=units
     demand={
         p:float(town_ticks+shop_ticks*shop_per_tick[p])
-        for p in PRODUCTION_PRODUCTS
+        for p in CROPS
     }
 
     # Every visible animal consumes one WHEAT per day. If it has already been fed today,
-    # only future days remain; otherwise include today as well. This mirrors the signal
-    # service's use of both farms' visible animal production capacity.
+    # only future days remain; otherwise include today as well.
     future_days=max(0,29-day)
     feed=0.
     for farm in obs['farms']:
@@ -257,8 +244,7 @@ def _remaining_hard_demand(obs):
                 if isinstance(tile_state,dict) and 'animal' in tile_state:
                     feed+=future_days+(0 if tile_state.get('fed_today',False) else 1)
 
-    # Our unplaced animals are counted below as immediately deployable production
-    # capacity, so include their corresponding feed obligation here as well.
+    # Include the feed obligation for our unplaced animals as well.
     owned=totals(obs['private'])
     placement_days=max(0,30-day)
     feed+=placement_days*sum(owned.get(animal,0) for animal in ANIMALS)
@@ -269,17 +255,8 @@ def _remaining_hard_demand(obs):
 # -----------------------------------------------------------------------------
 # Producer-capacity models
 # -----------------------------------------------------------------------------
-# These helpers express future output in product units.  Existing producers and a
-# hypothetical newly acquired producer are measured on the same basis so the final
-# signal can express shortage in "additional producer equivalents".
-def _animal_remaining_capacity(animal,placed_day,day):
-    """Future well-cared output of one existing/newly placed animal."""
-    _,_,first,interval,units=ANIMALS[animal]
-    first_day=placed_day+first
-    return float(sum(
-        units for at_day in range(max(day+1,first_day),30)
-        if (at_day-first_day)%interval==0
-    ))
+# These helpers express future crop output in units. Existing crops and a
+# hypothetical newly planted seed are measured on the same basis.
 
 def _new_crop_stream_capacity(crop,plant_day,step):
     """Output from a crop planted on plant_day, repeating same crop after final harvest."""
@@ -314,52 +291,40 @@ def _current_crop_remaining_capacity(tile_state,day,step):
 # Signal assembly and ranking
 # -----------------------------------------------------------------------------
 def production_signals(obs):
-    """Rank products by known remaining demand versus observable production capacity.
+    """Rank crops by known remaining demand versus observable production capacity.
 
     This is deliberately a signaling service, not a market-inventory forecast:
-      - hard demand = Town + shops already unlocked at this turn;
-      - capacity = our observable stock + public ready yield + public current/repeating
-        crop/animal production + our owned seeds/unplaced animals;
-      - opponent hidden inventory and future unknown shops are excluded.
+      - hard demand = Town + unlocked shops + visible herd WHEAT feed;
+      - capacity = our crop stock + our ready/current crop yield + our owned seeds;
+      - opponent crop production, hidden inventory, and future shops are excluded.
 
     score = 1-exp(-N), where N is the positive shortage measured in units of one
-    additional producer acquired now. Higher score means stronger production need.
+    additional seed planted now. Higher score means stronger crop-production need.
     """
     # Stage 1: compute remaining hard demand and initialize per-product capacity buckets.
-    day=obs['day'];step=day*TURNS_PER_DAY+obs['hour'];player=obs['player']
+    day=obs['day'];step=day*TURNS_PER_DAY+obs['hour']
     hard_demand=_remaining_hard_demand(obs)
     breakdown={
         p:{'owned_stock':0.,'ready_yield':0.,'current_assets':0.,'owned_producers':0.}
-        for p in PRODUCTION_PRODUCTS
+        for p in CROPS
     }
 
     # Stage 2: finished goods already under our control count directly against future need.
     owned=totals(obs['private'])
-    for product in PRODUCTION_PRODUCTS:
+    for product in CROPS:
         breakdown[product]['owned_stock']=float(owned.get(product,0))
 
-    # Stage 3: public farm state from BOTH players contributes observable production
-    # capacity: ready yield plus remaining output from currently deployed assets.
-    for farm in obs['farms']:
-        for row in farm['tiles']:
-            for tile_state in row:
-                if not isinstance(tile_state,dict):continue
-                held=float(tile_state.get('yield_units',0))
-                if 'animal' in tile_state:
-                    animal=tile_state['animal'];product=ANIMALS[animal][1]
-                    breakdown[product]['ready_yield']+=held
-                    breakdown[product]['current_assets']+=_animal_remaining_capacity(
-                        animal,tile_state['placed_day'],day
-                    )
-                if 'crop' in tile_state:
-                    crop=tile_state['crop']
-                    breakdown[crop]['ready_yield']+=held
-                    breakdown[crop]['current_assets']+=_current_crop_remaining_capacity(
-                        tile_state,day,step
-                    )
+    # Stage 3: only our planted crops contribute ready yield and remaining output.
+    for row in obs['farms'][obs['player']]['tiles']:
+        for tile_state in row:
+            if not isinstance(tile_state,dict) or 'crop' not in tile_state:continue
+            crop=tile_state['crop']
+            breakdown[crop]['ready_yield']+=float(tile_state.get('yield_units',0))
+            breakdown[crop]['current_assets']+=_current_crop_remaining_capacity(
+                tile_state,day,step
+            )
 
-    # Stage 4: count our uncommitted producers as immediate capacity. Seeds are assumed
-    # planted now; unplaced animals are assumed placed now. Opponent equivalents are private.
+    # Stage 4: count our owned seeds as if planted now. Opponent seeds are private.
     seeds=obs['private']['seeds']
     for crop in CROPS:
         count=seeds.get(crop,0)
@@ -367,25 +332,14 @@ def production_signals(obs):
             breakdown[crop]['owned_producers']+=count*_new_crop_stream_capacity(
                 crop,day,step
             )
-    for animal,(_,product,_,_,_) in ANIMALS.items():
-        count=owned.get(animal,0)
-        if count:
-            breakdown[product]['owned_producers']+=count*_animal_remaining_capacity(
-                animal,day,day
-            )
-
-    # Stage 5: convert each product's unit shortage into "new producer equivalents",
-    # then squash it to [0,1] so crop and animal products share a comparable need score.
+    # Stage 5: convert each crop shortage into new-seed equivalents, then
+    # squash it to [0,1] for a comparable need score.
     results=[]
-    for product in PRODUCTION_PRODUCTS:
+    for product in CROPS:
         capacity=sum(breakdown[product].values())
         demand=hard_demand[product]
         gap=max(0.,demand-capacity)
-        producer=PRODUCT_PRODUCER[product]
-        if product in CROPS:
-            one_new=_new_crop_stream_capacity(product,day,step)
-        else:
-            one_new=_animal_remaining_capacity(producer,day,day)
+        one_new=_new_crop_stream_capacity(product,day,step)
 
         if gap<=0:
             producer_gap=0.
@@ -399,7 +353,7 @@ def production_signals(obs):
 
         results.append({
             'product':product,
-            'producer':producer,
+            'producer':product,
             'score':score,
             'actionable':one_new>0,
             'hard_demand':demand,
@@ -445,7 +399,11 @@ def animal_plan(obs,signals):
         p for p in ANIMAL_POINTS
         if p not in plan and tile(f,p)!='LOCKED'
     ]
-    slots.sort(key=lambda p:(dist(p,nearest_shed(p)),p))
+    # Fill quadrant route quotas in policy order before choosing the nearest
+    # position within a quadrant. Otherwise SW can consume the final-stage
+    # positions while earlier NE requirements are still being completed.
+    slots.sort(key=lambda p:(ANIMAL_QUADRANT_ORDER[ANIMAL_QUADRANT[p]],
+                             dist(p,nearest_shed(p)),p))
 
     capacity=min(len(slots),max(0,HERD_LIMIT-len(plan)))
     if capacity<=0:
@@ -1166,8 +1124,8 @@ def start_plan(obs,cash=None,slots=10):
     Canonical sequence:
       BUY_SEED WHEAT 13
       BUY_ANIMAL COW 2
-      BUY_SEED CARROT 2
-      BUY_SEED STRAWBERRY 3
+      BUY_SEED CARROT 1
+      BUY_SEED STRAWBERRY 4
       3 x HIRE
       BUY_SEED MELON 1
       BUY_ANIMAL SHEEP 1
@@ -1193,8 +1151,8 @@ def start_plan(obs,cash=None,slots=10):
     opening=[
         ('BUY_SEED','WHEAT',13),
         ('BUY_ANIMAL','COW',2),
-        ('BUY_SEED','CARROT',2),
-        ('BUY_SEED','STRAWBERRY',3),
+        ('BUY_SEED','CARROT',1),
+        ('BUY_SEED','STRAWBERRY',4),
         ('HIRE',None,3),
         ('BUY_SEED','MELON',1),
         ('BUY_ANIMAL','SHEEP',1),
@@ -1222,14 +1180,187 @@ def start_plan(obs,cash=None,slots=10):
             orders.append([op,item,n]);cash-=n*cost;owned[item]+=n
     return orders
 
+
+class AnimalBuyingPolicy:
+    """Rebuild the ordered animal requirements from the current observation.
+
+    Each requirement stores its increment and cumulative species targets. A later
+    requirement is considered only after every earlier cumulative target is met.
+    This needs no cross-turn memory: shed, tile, and worker-carried animals are
+    recounted each turn, so failed orders and escapes reopen their unmet stage.
+    """
+
+    # (first buying day, last buying day, quadrant, default increment, shop day,
+    #  animal units if that newly opened shop needs an animal product)
+    STAGES=(
+        (1,2,'NW',EARLY_NW_ANIMAL_TARGETS,None,0),
+        (3,4,'NE',{'COW':1,'SHEEP':1},3,2),
+        (6,7,'NE',{'COW':1,'GOOSE':1},6,2),
+        (9,10,'NE',{'COW':1,'GOOSE':1,'SHEEP':1},9,3),
+        (12,13,'SW',{'GOOSE':1,'SHEEP':1},12,2),
+        (15,17,'SW',{'GOOSE':1,'COW':1},15,2),
+    )
+    SHOP_ANIMAL={
+        'YARN_STORE':'SHEEP',
+        'PIZZA_SHOP':'COW',
+        'ICE_CREAM_SHOP':'COW',
+        'SMOOTHIE_SHOP':'COW',
+        'BAKERY':'GOOSE',
+        'BRUNCH_SPOT':'GOOSE',
+    }
+
+    def __init__(self,obs):
+        self.obs=obs
+        self.farm=obs['farms'][obs['player']]
+        self.day=obs['day']
+        private=obs['private']
+        ############# all owned animals
+        self.owned={a:int(private['shed'].get(a,0)) for a in ANIMALS}
+        for row in self.farm['tiles']:
+            for t in row:
+                if isinstance(t,dict) and t.get('animal') in ANIMALS:
+                    self.owned[t['animal']]+=1
+        for inv in private['inventories']:
+            for animal in ANIMALS:
+                self.owned[animal]+=int(inv.get(animal,0))
+        ##############
+
+        unlocked=sum(tile(self.farm,p)!='LOCKED' for p in ANIMAL_POINTS)
+        self.space=max(0,min(HERD_LIMIT,unlocked)-sum(self.owned.values()))
+        self.requirements=[]
+        cumulative={a:0 for a in ANIMALS}
+        for first,last,region,default,shop_day,shop_units in self.STAGES:
+            if first>self.day:break
+            increment=self._increment(default,shop_day,shop_units)
+            for animal,n in increment.items():cumulative[animal]+=n
+            self.requirements.append(dict(first=first,last=last,region=region,
+                                          increment=increment,target=dict(cumulative)))
+
+    def _increment(self,default,shop_day,shop_units):
+        # The D1-D2 opening target is fixed; later stages use their new shop.
+        if shop_day is None:
+            return dict(default)
+
+        # Each stage starts on a shop-opening day (D3, D6, ...).
+        shops=self.obs.get('town',{}).get('unlocked_shops',[])
+        index=shop_day//3-1
+        shop=shops[index] if index<len(shops) else None
+
+        # Shop type selects the species; stage size selects the animal count.
+        # A YARN_STORE's two-wool demand still represents just one shop.
+        animal=self.SHOP_ANIMAL.get(shop)
+        return {animal:shop_units} if animal else dict(default)
+
+    def _region_free_slots(self,region):
+        # Only designated animal routes in this quadrant can hold the herd.
+        free=0
+        for x,y in ANIMAL_POINTS:
+            if ANIMAL_QUADRANT[(x,y)]!=region:
+                continue
+            t=tile(self.farm,(x,y))
+
+            # An unlocked route is available if it has no placed animal.
+            if t!='LOCKED' and not (isinstance(t,dict) and t.get('animal') in ANIMALS):
+                free+=1
+        return free
+
+    def buy_orders(self,cash,slots):
+        # Buy only during a stage's allowed days and when market slots remain.
+        if slots<=0 or not any(s[0]<=self.day<=s[1] for s in self.STAGES):
+            return [],cash
+
+        # Track orders against the current owned count, cash, and route capacity.
+        orders=[]
+        budget=2
+        planned=dict(self.owned)
+        space=self.space
+        region_space={r:self._region_free_slots(r) for r in ('NW','NE','SW')}
+        regions=('NW','NE','SW')
+
+        # Work through cumulative stage targets in order. An escape can reopen
+        # an earlier target, which must be filled before later requirements.
+        for requirement in self.requirements:
+            target=requirement['target']
+            if all(planned[a]>=target[a] for a in ANIMALS):
+                continue
+
+            # Prefer this stage's quadrant. Use an earlier free route to
+            # replace an escape if the stage's quadrant is already full.
+            region=requirement['region']
+            available=tuple(r for r in reversed(regions[:regions.index(region)+1])
+                            if region_space[r]>0)
+            if not available:
+                break
+
+            # Buy this stage's species first, then fill any other species gap
+            # needed to finish its cumulative target.
+            species=tuple(requirement['increment'])+tuple(
+                a for a in ANIMALS if a not in requirement['increment'])
+            for animal in species:
+                if len(orders)>=slots:
+                    break
+                gap=max(0,target[animal]-planned[animal])
+                if gap<=0:
+                    continue
+
+                # Limit this purchase by cash reserve, available routes, and
+                # the two-animal per-turn budget.
+                cost=ANIMALS[animal][0]
+                affordable=int(max(0,cash-PROCUREMENT_CASH_RESERVE)//cost)
+                selected=next((r for r in available if region_space[r]>0),None)
+                if selected is None:
+                    break
+                n=min(gap,space,region_space[selected],budget,affordable)
+                if n<=0:
+                    continue
+
+                # Reserve the money and capacity for subsequent orders.
+                orders.append(['BUY_ANIMAL',animal,n])
+                cash-=n*cost
+                planned[animal]+=n
+                space-=n
+                budget-=n
+                region_space[selected]-=n
+
+            # Never use this turn's remaining budget for a later requirement
+            # while the current requirement still has a species deficit.
+            if any(planned[a]<target[a] for a in ANIMALS):
+                break
+        return orders,cash
+
+
+def melon_seed_order(obs,cash,orders):
+    """Buy one melon seed on even days through the last melon buying day.
+
+    Hour 2 avoids the start-of-day hire orders. On that turn a new seed is due
+    even if an older seed remains in storage. Later turns use a held seed or a
+    melon planted today to avoid repeating the order.
+    """
+    day=obs['day']
+    if day==0 or day%2 or day>LATEST_BUY_DAY['MELON'] or obs['hour']<2 or len(orders)>=10:
+        return None
+    if cash<CROPS['MELON'][0]:
+        return None
+    if any(order[:2]==['BUY_SEED','MELON'] for order in orders):
+        return None
+    if obs['hour']>2 and obs['private']['seeds'].get('MELON',0):
+        return None
+    farm=obs['farms'][obs['player']]
+    if obs['hour']>2 and any(isinstance(t,dict) and t.get('crop')=='MELON' and
+           t.get('planted_day')==day for row in farm['tiles'] for t in row):
+        return None
+    return ['BUY_SEED','MELON',1]
+
+
 def market_orders(obs,signals,actions):
     # Build the rule-based market order list (maximum 10 orders). First simulate the shed
     # after current worker PICKUP/DROP/PLACE actions, then emit SELL orders for available
-    # products while reserving wheat for the herd and fertilizer for crops.
+    # products while reserving wheat for the herd and keeping fertilizer at a
+    # single target shared by the SELL and BUY stages.
     # Day 0/hour 0 is a fixed 10-order opening. Otherwise, remaining slots are considered in
     # this order after SELL: short-horizon BUY_PRODUCT WHEAT, HIRE, BUY_LAND,
-    # ranked signal-driven BUY_SEED/BUY_ANIMAL procurement (at most two animal units
-    # in this turn), then BUY_PRODUCT FERTILIZER.
+    # staged BUY_ANIMAL (at most two animal units in this turn), ranked
+    # signal-driven BUY_SEED, then BUY_PRODUCT FERTILIZER.
     # Feed WHEAT is intentionally separate from production_signals(): seeds solve future
     # production capacity, while animals need consumable WHEAT before those crops mature.
     # Dynamic producer procurement starts after day 0 so the fixed opening remains authoritative.
@@ -1243,22 +1374,21 @@ def market_orders(obs,signals,actions):
     f=obs['farms'][obs['player']];p=obs['private'];day=obs['day'];hour=obs['hour'];prices=obs['market']['prices']
     cash=f['money'];orders=[]
     held,sell_total=post_action_market_inventory(obs,actions)
-    total=totals(p)
     live=sum(1 for row in f['tiles'] for t in row if isinstance(t,dict) and 'animal' in t)# animal numbers
-
-
-
+    fert_need=sum(1 for row in f['tiles'] for t in row
+                  if isinstance(t,dict) and 'crop' in t)
+    fert_target=min(24,fert_need+3) if fert_need and day<29 else 0
+    fert_owned=sell_total.get('FERTILIZER',0)
     # -------------------------------------------------------------------------
     # 1. SELL — liquidate immediately sellable goods first, while keeping the
-    # configured WHEAT/FERTILIZER reserves. Sale proceeds fund later priorities.
+    # WHEAT reserve and fertilizer target. Sale proceeds fund later priorities.
     # -------------------------------------------------------------------------
     wheat_buffer=2 if live<4 else 4 if live<=8 else 7 #wheat reserve at each turn
     reserve_wheat=min(live+2,wheat_buffer)
-    reserve_fert=0 if day<10 or day==29 else 4
     for c in SELLABLE_PRODUCTS:
         n=held.get(c,0)
         if c=='WHEAT':n=min(n,max(0,sell_total.get(c,0)-reserve_wheat))
-        if c=='FERTILIZER':n=min(n,max(0,sell_total.get(c,0)-reserve_fert))
+        if c=='FERTILIZER':n=min(n,max(0,fert_owned-fert_target))
         if n:
             orders.append(['SELL',c,n]);cash+=n*max(1,prices[c]*.8)
     # -------------------------------------------------------------------------
@@ -1327,82 +1457,60 @@ def market_orders(obs,signals,actions):
     empty_tiles=sum(1 for row in f['tiles'] for t in row if t is None)
     # (empty-tile threshold, land cost, latest buy day)
     # The 4th quadrant is not worth buying after day 24.
-    land_policy={1:(3,1000,29),2:(5,2000,29),3:(5,4000,24)}
+    land_policy={1:(2,1000,29),2:(2,2000,29),3:(2,4000,24)}
     if lands in land_policy:
         empty_threshold,landcost,latest_buy_day=land_policy[lands]
-        if day<=latest_buy_day and empty_tiles<empty_threshold and cash>=landcost and len(orders)<10:
+        if day<=latest_buy_day and empty_tiles<=empty_threshold and cash>=landcost and len(orders)<10:
             orders.append(['BUY_LAND']);cash-=landcost
     # -------------------------------------------------------------------------
-    # 5. BUY SEEDS / ANIMALS — walk production_signals() from highest need to
-    # lowest. Apply producer deadline, floor(gap), deployment-space, cash-reserve,
-    # and 10-order constraints before emitting BUY_SEED / BUY_ANIMAL.
+    # 5. BUY ANIMALS — complete cumulative NW, NE, and SW requirements in order.
+    # The planner reads the opening shop for each stage and retries unfinished
+    # earlier requirements before later ones on each designated buying day.
     # -------------------------------------------------------------------------
-    # Buy new producers greedily in production_signals() rank order. The signal already
-    # accounts for owned seeds/unplaced animals. Producer-specific latest-buy-day gates
-    # reject late purchases before cash/space allocation, and floor() avoids buying for a
-    # fractional residual shortage smaller than one complete producer-equivalent.
     if day>0 and len(orders)<10:
+        animal_orders,cash=AnimalBuyingPolicy(obs).buy_orders(cash,10-len(orders))
+        orders.extend(animal_orders)
+    # -------------------------------------------------------------------------
+    # 6. BUY SEEDS — keep MELON on a two-day cadence through its last buying day,
+    # then preserve production_signals() rank for the other crops. Use the cash
+    # and order slots remaining after animal purchases.
+    # -------------------------------------------------------------------------
+    if day>0 and len(orders)<10:
+        melon_order=melon_seed_order(obs,cash,orders)
+        if melon_order:
+            orders.append(melon_order)
+            cash-=CROPS['MELON'][0]
         crop_slots=sum(
             1 for y,row in enumerate(f['tiles']) for x,t in enumerate(row)
             if t is None and (x,y) not in ANIMAL_POINTS
         )
         crop_slots=max(0,crop_slots-sum(int(p['seeds'].get(c,0)) for c in CROPS))
-
-        unlocked_animal_slots=sum(1 for pos in ANIMAL_POINTS if tile(f,pos)!='LOCKED')
-        placed_animals=sum(
-            1 for row in f['tiles'] for t in row
-            if isinstance(t,dict) and t.get('animal') in ANIMALS
-        )
-        owned_unplaced_animals=sum(int(total.get(a,0)) for a in ANIMALS)
-        animal_slots=max(
-            0,
-            min(HERD_LIMIT,unlocked_animal_slots)-placed_animals-owned_unplaced_animals
-        )
-        animal_buy_budget=2 # largest number of animal to buy per turn
-
         for signal in signals:
             if len(orders)>=10:break
             if not signal.get('actionable'):continue
-
             producer=signal['producer']
+            if producer not in CROPS:continue
+            if producer=='MELON':continue
             if day>LATEST_BUY_DAY.get(producer,29):continue
-
             gap=signal.get('producer_equivalent_gap',0.)
             if not math.isfinite(gap):continue
             needed=int(math.floor(gap))
             if needed<=0:continue
-
             spendable=max(0,cash-PROCUREMENT_CASH_RESERVE)
-            if producer in CROPS:
-                cost=CROPS[producer][0]
-                affordable=int(spendable//cost)
-                n=min(needed,crop_slots,affordable)
-                if n<=0:continue
-                orders.append(['BUY_SEED',producer,n])
-                cash-=n*cost
-                crop_slots-=n
-            elif producer in ANIMALS:
-                cost=ANIMALS[producer][0]
-                affordable=int(spendable//cost)
-                n=min(needed,animal_slots,affordable,animal_buy_budget)
-                if n<=0:continue
-                orders.append(['BUY_ANIMAL',producer,n])
-                cash-=n*cost
-                animal_slots-=n
-                animal_buy_budget-=n
+            cost=CROPS[producer][0]
+            affordable=int(spendable//cost)
+            n=min(needed,crop_slots,affordable)
+            if n<=0:continue
+            orders.append(['BUY_SEED',producer,n])
+            cash-=n*cost
+            crop_slots-=n
     # -------------------------------------------------------------------------
-    # 6. BUY FERTILIZER — last priority. Size stock from every crop currently on
-    # our land, then buy only the shortage if cash/order capacity still remains.
+    # 7. BUY FERTILIZER — last priority. Buy only the shortage against the same
+    # target used by SELL, if cash and order capacity remain.
     # -------------------------------------------------------------------------
-    # Keep fertilizer stock sized to all crops currently growing on our land.
-    # fert_value() still decides where/when fertilizer is actually applied in unit_actions().
-    fert_need=sum(
-        1 for row in f['tiles'] for t in row
-        if isinstance(t,dict) and 'crop' in t
-    )
-    target=min(24,fert_need+3) if fert_need else 0
-    if total.get('FERTILIZER',0)<target and day<29 and len(orders)<10:
-        n=min(target-total.get('FERTILIZER',0),int(max(0,cash-100)//(prices['FERTILIZER']+3)))
+    # fert_value() still decides where/when workers actually apply fertilizer.
+    if fert_owned<fert_target and len(orders)<10:
+        n=min(fert_target-fert_owned,int(max(0,cash-100)//(prices['FERTILIZER']+3)))
         if n:orders.append(['BUY_PRODUCT','FERTILIZER',n])
     # -------------------------------------------------------------------------
     # FINALIZE — enforce the engine's maximum of 10 market orders.
