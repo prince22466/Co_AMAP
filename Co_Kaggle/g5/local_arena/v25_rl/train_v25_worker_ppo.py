@@ -8,7 +8,7 @@ worker-efficiency reward only: no final money, margin, WIN/TIE/LOSS, or market
 price reward enters GAE or PPO.
 """
 from __future__ import annotations
-import argparse, importlib.util, json, math, random, sys, time
+import argparse, copy, importlib.util, json, math, random, sys, time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -64,15 +64,44 @@ class EpisodeResult:
     max_candidates:int
     error:str=""
 
+def worker_only_candidate_action(e,policy,obs,recorded_candidate):
+    """Replace only farmer/hands; replay v20's recorded market orders unchanged."""
+    if not isinstance(recorded_candidate,dict):
+        raise RuntimeError("recorded candidate action is not a dict")
+
+    # Preserve the small opponent-style initialization performed by v25 agent()
+    # because crop/animal planning can reference OPP_STYLE.  Do not call agent():
+    # agent() would also call market_orders(), which is deliberately excluded
+    # from this worker-only experiment.
+    if obs["day"]==0 and obs["hour"]==0:
+        e.OPP_STYLE=None
+    elif getattr(e,"OPP_STYLE",None) is None and obs["day"]==0 and obs["hour"]>0:
+        other=obs["farms"][1-obs["player"]]
+        e.OPP_STYLE="V16" if other["hires_today"]==5 and 20<=other["money"]<120 else "NORMAL"
+
+    signals=e.production_signals(obs)
+    animal=e.animal_plan(obs,signals)
+    crops=e.crop_plan(obs,signals)
+    workers=policy.unit_actions(obs,animal,crops)
+    return {
+        "farmer": workers[0],
+        "hands": workers[1:],
+        "market": copy.deepcopy(recorded_candidate.get("market") or []),
+    }
+
+
 def run_static_episode(path,model,device,executor_path,deterministic=False,collect=True):
     h=load_history(path); seat=loss_seat(h); other=1-seat; e=load_executor(executor_path)
-    policy=WorkerPolicy(e,model,device,deterministic,collect); e.unit_actions=policy.unit_actions
+    policy=WorkerPolicy(e,model,device,deterministic,collect)
     env=_environment_from_history(h); total=RewardBreakdown()
     try:
         for replay_step in range(1,len(h["steps"])):
-            obs=_agent_observation(env,seat); candidate=e.agent(obs)
-            recorded=_recorded_step_actions(h,replay_step); opponent=recorded[other]
+            obs=_agent_observation(env,seat)
+            recorded=_recorded_step_actions(h,replay_step)
+            opponent=recorded[other]; recorded_candidate=recorded[seat]
             if opponent is None: raise RuntimeError(f"None opponent action at {replay_step}")
+            if recorded_candidate is None: raise RuntimeError(f"None recorded candidate action at {replay_step}")
+            candidate=worker_only_candidate_action(e,policy,obs,recorded_candidate)
             actions=[None,None]; actions[seat]=candidate; actions[other]=opponent; env.step(actions)
             post=_agent_observation(env,seat); reward=compute_worker_reward(e,obs,candidate,post); total.add(reward); policy.finish_turn(reward)
         statuses=[str(_field(s,"status","")) for s in env.steps[-1]]; ok=statuses==["DONE","DONE"]
@@ -172,7 +201,7 @@ def main():
     model=ActorCritic(len(CANDIDATE_FEATURE_NAMES),len(GLOBAL_FEATURE_NAMES),args.hidden).to(device); opt=torch.optim.Adam(model.parameters(),lr=args.learning_rate); start=0; best=-math.inf
     if args.resume: start,best=load_checkpoint(args.resume.expanduser().resolve(),model,opt,device)
     (out/"split.json").write_text(json.dumps({"train":[p.name for p in train],"validation":[p.name for p in val],"split_seed":args.split_seed},indent=2)+"\n")
-    (out/"config.json").write_text(json.dumps({**vars(args),"executor":str(ex),"device_resolved":str(device),"algorithm":CHECKPOINT_ALGORITHM,"objective":"worker efficiency only; no final game result reward","product_value":PRODUCT_VALUE},indent=2,default=str)+"\n")
+    (out/"config.json").write_text(json.dumps({**vars(args),"executor":str(ex),"device_resolved":str(device),"algorithm":CHECKPOINT_ALGORITHM,"objective":"worker efficiency only; farmer/hands replaced by RL, recorded v20 market orders replayed unchanged; no final game result reward","product_value":PRODUCT_VALUE},indent=2,default=str)+"\n")
     rows,base=evaluate(val,model,device,ex,"baseline"); write_jsonl(out/"validation.jsonl",{"update":-1,**base})
     for r in rows: write_jsonl(out/"validation_episodes.jsonl",{"update":-1,**r.__dict__})
     if base["mean_worker_reward"] is not None:
