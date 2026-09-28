@@ -107,18 +107,25 @@ class RewardBreakdown:
         return {name: getattr(self, name) for name in self.__dataclass_fields__}
 
 
-def compute_worker_reward(executor, before, candidate_action, after) -> RewardBreakdown:
-    """Calculate worker-only reward from one observable environment transition.
+def compute_worker_reward(executor, before, worker_action, after) -> RewardBreakdown:
+    """Calculate reward for worker execution only.
 
-    Market prices, money, final game result and opponent outcome are deliberately
-    absent.  The emitted worker actions are used only to disambiguate effects
-    that normal next-turn observations can hide (especially hour-23 day refresh).
+    worker_action must contain only farmer and hands. Market orders are
+    intentionally not accepted by this API, so buying/selling/hiring/land
+    actions cannot directly enter worker reward attribution.
+
+    The before/after observations still come from the real environment turn,
+    which may include frozen market actions and day refresh. The emitted worker
+    actions are used to disambiguate worker-controlled effects that the final
+    next-turn observation can otherwise hide.
     """
     out = RewardBreakdown()
     player = int(before["player"])
     before_farm = before["farms"][player]
     after_farm = after["farms"][player]
-    actions = _worker_actions(candidate_action)
+    if set(worker_action) - {"farmer", "hands"}:
+        raise ValueError("worker reward received non-worker action fields")
+    actions = _worker_actions(worker_action)
     before_positions = _positions(before)
     before_invs = list(before["private"]["inventories"])
     after_invs = list(after["private"]["inventories"])
