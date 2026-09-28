@@ -180,17 +180,55 @@ Workers are assigned autoregressively within a turn. After each worker choice, f
 
 If a selected task is remote, the emitted environment action is one deterministic Manhattan move toward its target. The network therefore learns **task/worker assignment and task ordering**, not free-form pathfinding.
 
-One PPO record corresponds to one environment turn. All **worker** selections made inside that turn are treated as one autoregressive joint action. The recorded market list is not part of this joint action:
+One PPO record corresponds to one environment turn. The turn still contains an autoregressive sequence of worker assignments, but PPO **does not form one probability ratio from the sum of all worker log probabilities**.
 
-`joint_log_prob = sum(subdecision_log_probs)`
+The single observed worker reward is converted by GAE into one turn-level advantage `A_t`. That same `A_t` is shared by every worker subdecision made in the turn. Each subdecision keeps its own behavior-policy log probability and gets its own clipped PPO ratio:
 
-The single observed worker reward for the resulting environment transition is attached to that joint worker action. Market commands may affect the next environment state because they are executed by the game, but they are not actions produced by the RL policy and are never passed into `compute_worker_reward()`.
+```text
+turn t:
+    worker subdecision 1 -> old_log_prob_1
+    worker subdecision 2 -> old_log_prob_2
+    ...
+    worker subdecision N -> old_log_prob_N
+
+one turn-level GAE advantage: A_t
+
+ratio_i = exp(new_log_prob_i - old_log_prob_i)
+
+policy_loss_i =
+    -min(
+        ratio_i * A_t,
+        clip(ratio_i, 0.8, 1.2) * A_t
+    )
+```
+
+This avoids the unstable previous formulation:
+
+```text
+exp(sum(new_log_prob_i - old_log_prob_i))
+```
+
+where modest probability changes compounded exponentially with the number of workers. The critic remains turn-level: there is still one `V(s_t)` and one return target per environment turn.
+
+The recorded market list is not part of any PPO action. Market commands may affect the next environment state because they are executed by the game, but they are never passed into `compute_worker_reward()`.
+
+A KL safety guard is also enabled by default:
+
+```text
+--target-kl 0.02
+```
+
+If the mean per-subdecision approximate KL for an epoch exceeds this value, the remaining PPO epochs for that update are skipped. Training metrics include `approx_kl`, `clip_fraction`, `ratio_mean`, `ratio_std`, `ratio_min`, `ratio_max`, `actor_samples`, `mean_subdecisions_per_turn`, `ppo_epochs_completed`, and `kl_early_stop`.
+
+
+Validation also records `reward_vs_baseline`. If held-out mean worker reward falls below 25% of the initial baseline, the trainer emits a `collapse_warning` and prints a warning immediately. This is diagnostic only; `best.pt` continues to preserve the best held-out policy.
 
 ## Files
 
 - `worker_reward.py` — fixed reward constants and before/after turn reward extraction.
 - `worker_policy.py` — actor/critic, state/candidate features, rule-generated feasible worker intents, and the complete runtime replacement for `unit_actions`.
 - `train_v25_worker_ppo.py` — static v20-loss replay, explicit separation of RL worker actions from frozen recorded market actions, GAE, PPO, validation, logging, and checkpoints.
+- `test_ppo_subdecision_ratio.py` — regression coverage for the per-worker ratio formulation and PPO sample accounting.
 - `v25_rl.py` — unchanged source for `production_signals`, `animal_plan`, `crop_plan`, and shared game helpers. Its `market_orders()` function is not called by the worker-training replay.
 
 ## Run
@@ -203,6 +241,13 @@ Preflight:
 python train_v25_worker_ppo.py --preflight-only
 ```
 
+
+PPO regression test:
+
+```bash
+python -m unittest test_ppo_subdecision_ratio.py
+```
+
 Train:
 
 ```bash
@@ -211,6 +256,11 @@ python train_v25_worker_ppo.py \
   --episodes-per-update 8 \
   --max-training-hours 2
 ```
+
+
+The PPO fix uses checkpoint algorithm `v25_static_worker_ppo_gae_v2_subdecision_ratio`. Start a fresh run after this change. Checkpoints produced by the old joint-ratio implementation are intentionally rejected rather than resumed.
+
+`--minibatch-size` now batches worker subdecisions for the actor and turn records for the critic. The default remains 128.
 
 Resume:
 
