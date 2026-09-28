@@ -175,7 +175,11 @@ def main():
     (out/"config.json").write_text(json.dumps({**vars(args),"executor":str(ex),"device_resolved":str(device),"algorithm":CHECKPOINT_ALGORITHM,"objective":"worker efficiency only; no final game result reward","product_value":PRODUCT_VALUE},indent=2,default=str)+"\n")
     rows,base=evaluate(val,model,device,ex,"baseline"); write_jsonl(out/"validation.jsonl",{"update":-1,**base})
     for r in rows: write_jsonl(out/"validation_episodes.jsonl",{"update":-1,**r.__dict__})
-    if base["mean_worker_reward"] is not None: best=max(best,float(base["mean_worker_reward"]))
+    if base["mean_worker_reward"] is not None:
+        best=max(best,float(base["mean_worker_reward"]))
+        # Make best.pt truthful even when the untrained baseline remains the
+        # best held-out worker policy for the entire run.
+        save_checkpoint(ck/"best.pt",model,opt,-1,args,best)
     started=time.perf_counter(); last=start-1
     for u in range(start,args.updates):
         if (time.perf_counter()-started)/3600>=args.max_training_hours: break
