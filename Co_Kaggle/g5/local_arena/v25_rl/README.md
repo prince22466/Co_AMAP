@@ -72,9 +72,12 @@ so the number of RL transitions is `len(history["steps"]) - 1`; it is not hard-c
 | PLANT -> WEED | -32 |
 | still-productive plant is destroyed/disappears without HARVEST | -32 |
 | each harvestable unit lost with a destroyed asset | -8 |
-| crop/animal product unit generated | +2 |
-| crop/animal product unit harvested | +2 |
-| crop/animal product unit explicitly delivered to shed | +4 |
+| crop product unit generated | +2 |
+| crop product unit harvested | +2 |
+| crop product unit explicitly delivered to shed | +4 |
+| animal product unit generated (MILK/EGG/WOOL) | +4 |
+| animal product unit harvested | +4 |
+| animal product unit explicitly delivered to shed | +8 |
 | successful PLANT | +1 |
 | successful BUILD_COOP / BUILD_PASTURE | +0.5 |
 | successful animal placement | +1 |
@@ -84,11 +87,15 @@ so the number of RL transitions is `len(history["steps"]) - 1`; it is not hard-c
 | normal FEED / WATER | +1 |
 | critical FEED / WATER where `consecutive_* >= 1` | +4 |
 
-For crop and animal output products in `PRODUCTS`, the maximum lifecycle reward for one unit that completes all three milestones is:
+Crop products keep the original lifecycle value:
 
 `2 generated + 2 harvested + 4 delivered = 8`
 
-This fixed value ignores market-price movement. Fertilizer is separate from this product lifecycle and receives the collection reward above.
+Animal products receive a 2x lifecycle premium because their worker pipeline is longer and more fragile:
+
+`4 generated + 4 harvested + 8 delivered = 16`
+
+The premium applies only to `MILK`, `EGG`, and `WOOL`. Planting, building, animal placement, feeding, care, and fertilizer rewards are unchanged, so the experiment isolates the value of completed animal output rather than broadly inflating all livestock-related actions. These fixed values ignore market-price movement.
 
 `PLANT -> WEED` is always treated as a heavy worker-efficiency failure, including expiration caused by failing to harvest in time. Random `None -> WEED` spawning is not penalized.
 
@@ -259,10 +266,10 @@ python train_v25_worker_ppo.py --preflight-only
 ```
 
 
-PPO regression test:
+Regression tests:
 
 ```bash
-python -m unittest test_ppo_subdecision_ratio.py
+python -m unittest test_ppo_subdecision_ratio.py test_worker_reward_contract.py
 ```
 
 Train:
@@ -275,7 +282,7 @@ python train_v25_worker_ppo.py \
 ```
 
 
-The rollout-stability fix uses checkpoint algorithm `v25_static_worker_ppo_gae_v3_conservative_rollout` and writes by default to `runs/worker_ppo_static_v20_v3`. Start a fresh run after this change. Older v1/v2 checkpoints are intentionally rejected rather than resumed, and the separate output directory prevents old JSONL metrics from being mixed into the new run.
+The animal-reward experiment uses checkpoint algorithm `v25_static_worker_ppo_gae_v4_animal_reward` and writes by default to `runs/worker_ppo_static_v20_v4_animal_reward`. Start a fresh run after this reward-contract change. Older checkpoints are intentionally rejected so critic targets and JSONL metrics from the 8/unit animal contract cannot be mixed with the new 16/unit contract.
 
 `--minibatch-size` now batches worker subdecisions for the actor and turn records for the critic. The default remains 128.
 
@@ -283,7 +290,7 @@ Resume:
 
 ```bash
 python train_v25_worker_ppo.py \
-  --resume runs/worker_ppo_static_v20_v3/checkpoints/latest.pt \
+  --resume runs/worker_ppo_static_v20_v4_animal_reward/checkpoints/latest.pt \
   --updates 200 \
   --episodes-per-update 8 \
   --max-training-hours 2
@@ -291,7 +298,7 @@ python train_v25_worker_ppo.py \
 
 ## Outputs
 
-Outputs are written under `runs/worker_ppo_static_v20_v3`.
+Outputs are written under `runs/worker_ppo_static_v20_v4_animal_reward`.
 
 - `metrics.jsonl` — PPO statistics, mean worker reward, and mean reward-component counts.
 - `episodes.jsonl` — per-training-replay worker metrics.
