@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Static replay of a Python agent against recorded v20 opponents.
 
-    python local_arena/static_reply/reply_template.py v20_bench.py
-    python local_arena/static_reply/reply_template.py v20_bench.py --limit 1
+    python local_arena/static_reply/reply_template.py v20_bench.py game_history/v20
+    python local_arena/static_reply/reply_template.py v20_bench.py game_history/v20/111583465.json
+    python local_arena/static_reply/reply_template.py v20_bench.py game_history/v20/111548564.json game_history/v20/111583465.json
 
 Opponent commands are fixed; candidate actions and game states are recomputed.
 Outputs use official env.toJSON() format. No training or model code is included.
@@ -167,7 +168,10 @@ def run_replay(engine, history, agent_path, seat):
 def build_parser():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("agent", help="Python file defining agent(obs); bare names also resolve beside this script")
-    parser.add_argument("--history-dir", type=Path, default=DEFAULT_HISTORY_DIR)
+    parser.add_argument("sources", nargs="*", type=Path,
+                        help="history directory or one or more JSON files; default: game_history/v20")
+    parser.add_argument("--history-dir", type=Path,
+                        help="legacy directory option; cannot be combined with positional sources")
     parser.add_argument("--output", type=Path, help="new output directory; default: runs/<agent>/<UTC timestamp>")
     parser.add_argument("--episodes", nargs="+", help="source episode IDs or JSON filenames (optional subset)")
     parser.add_argument("--limit", type=int, help="run only the first N selected histories")
@@ -176,33 +180,62 @@ def build_parser():
     return parser
 
 
+def select_history_paths(sources, history_dir=None, episodes=None, limit=None):
+    """Expand explicit directories/files or the default corpus into replay paths."""
+    if sources and history_dir is not None:
+        raise ValueError("use positional sources or --history-dir, not both")
+    inputs = sources or [history_dir or DEFAULT_HISTORY_DIR]
+    paths = []
+    for source in inputs:
+        source = Path(source).expanduser().resolve()
+        if source.is_dir():
+            found = sorted(source.glob("*.json"))
+            if not found:
+                raise ValueError(f"no JSON histories in {source}")
+            paths.extend(found)
+        elif source.is_file() and source.suffix.lower() == ".json":
+            paths.append(source)
+        else:
+            raise ValueError(f"history source must be a directory or JSON file: {source}")
+
+    # Preserve explicit file order and prevent duplicate output episode names.
+    paths = list(dict.fromkeys(paths))
+    if len({p.stem for p in paths}) != len(paths):
+        raise ValueError("selected histories contain duplicate episode names")
+    if episodes:
+        wanted = {Path(episode).stem for episode in episodes}
+        missing = wanted - {p.stem for p in paths}
+        if missing:
+            raise ValueError(f"unknown episodes: {sorted(missing)}")
+        paths = [p for p in paths if p.stem in wanted]
+    if limit is not None:
+        if limit < 1:
+            raise ValueError("--limit must be positive")
+        paths = paths[:limit]
+    if not paths:
+        raise ValueError("no matching histories")
+    return paths
+
+
 def main():
     parser = build_parser()
-    args = parser.parse_args()
+    args = parser.parse_intermixed_args()
     agent_path = Path(args.agent).expanduser()
     if not agent_path.is_file() and not agent_path.is_absolute():
         agent_path = HERE / agent_path
     agent_path = agent_path.resolve()
     if not agent_path.is_file() or agent_path.suffix != ".py":
         parser.error(f"agent must be an existing .py file: {agent_path}")
-    history_dir = args.history_dir.expanduser().resolve()
-    paths = sorted(history_dir.glob("*.json"))
-    if args.episodes:
-        wanted = {Path(p).stem for p in args.episodes}
-        missing = wanted - {p.stem for p in paths}
-        if missing:
-            parser.error(f"unknown episodes: {sorted(missing)}")
-        paths = [p for p in paths if p.stem in wanted]
-    if args.limit is not None:
-        if args.limit < 1:
-            parser.error("--limit must be positive")
-        paths = paths[:args.limit]
-    if not paths:
-        parser.error(f"no matching histories in {history_dir}")
+    try:
+        paths = select_history_paths(args.sources, args.history_dir, args.episodes, args.limit)
+    except ValueError as exc:
+        parser.error(str(exc))
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S_%fZ")
     output = (args.output or HERE / "runs" / agent_path.stem / stamp).expanduser().resolve()
-    if output == history_dir or output in history_dir.parents or history_dir in output.parents:
-        parser.error("output must be separate from the source history directory")
+    source_dirs = {path.parent for path in paths}
+    if any(output == source_dir or output in source_dir.parents or source_dir in output.parents
+           for source_dir in source_dirs):
+        parser.error("output must be separate from the source history directories")
     if output.exists() and (not output.is_dir() or any(output.iterdir())):
         parser.error(f"output is not an empty directory: {output}")
     output.mkdir(parents=True, exist_ok=True)
@@ -212,7 +245,10 @@ def main():
     digest = hashlib.sha256(agent_path.read_bytes()).hexdigest()
     rows = []
     summary = {"protocol": "static_recorded_opponent", "agent": str(agent_path),
-               "agent_sha256": digest, "history_dir": str(history_dir),
+               "agent_sha256": digest,
+               "history_dir": str((args.history_dir or DEFAULT_HISTORY_DIR).expanduser().resolve())
+                              if not args.sources else None,
+               "source_histories": [str(path) for path in paths],
                "engine_version": engine.__version__, "seat_mode": args.seat,
                "timeouts_enforced": False, "parity_required": not args.skip_parity,
                "games_requested": len(paths), "games_completed": 0,
@@ -220,7 +256,8 @@ def main():
     print(f"Agent: {agent_path}\nHistories: {len(paths)}\nOutput: {output}", flush=True)
     for index, path in enumerate(paths, 1):
         started = time.perf_counter()
-        row = {"episode": path.stem, "ok": False, "parity": "skipped" if args.skip_parity else "pending"}
+        row = {"episode": path.stem, "source_history": str(path), "ok": False,
+               "parity": "skipped" if args.skip_parity else "pending"}
         print(f"[{index}/{len(paths)}] {path.stem}: replaying...", flush=True)
         try:
             history = load_history(path)
@@ -237,7 +274,8 @@ def main():
             # Preserve original identities as provenance, not as new-run labels.
             replay["info"] = {"seed": replay["info"].get("seed"),
                 "TeamNames": [agent_path.stem if i == seat else "Recorded opponent" for i in range(2)],
-                "static_replay": {"source_episode": path.stem, "source_info": history.get("info", {}),
+                "static_replay": {"source_episode": path.stem, "source_path": str(path),
+                                  "source_info": history.get("info", {}),
                                   "candidate_seat": seat, "agent_sha256": digest}}
             destination = histories_out / path.name
             write_json(destination, replay)
