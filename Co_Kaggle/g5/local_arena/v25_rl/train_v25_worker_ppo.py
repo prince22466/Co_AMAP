@@ -409,9 +409,11 @@ def main():
     baseline_worker_reward=base.get("mean_worker_reward")
     if baseline_worker_reward is not None:
         best=max(best,float(baseline_worker_reward))
-        # Make best.pt truthful even when the untrained baseline remains the
-        # best held-out worker policy for the entire run.
-        save_checkpoint(ck/"best.pt",model,opt,-1,args,best)
+        # Preserve the source update when starting from --resume.  Writing -1
+        # here would make a later resume from this new best.pt restart at u0
+        # even though the weights came from a later checkpoint.
+        baseline_checkpoint_update=start-1
+        save_checkpoint(ck/"best.pt",model,opt,baseline_checkpoint_update,args,best)
     started=time.perf_counter(); last=start-1
     for u in range(start,args.updates):
         if (time.perf_counter()-started)/3600>=args.max_training_hours: break
