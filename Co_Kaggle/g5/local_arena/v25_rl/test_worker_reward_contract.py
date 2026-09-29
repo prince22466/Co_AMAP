@@ -10,7 +10,9 @@ from worker_reward import (
     ANIMAL_PRODUCT_HARVESTED_REWARD,
     ANIMAL_PRODUCT_VALUE,
     ANIMAL_ESCAPE_PENALTY,
+    ANIMAL_PICKUP_REWARD,
     AVOIDABLE_PASS_PENALTY,
+    BUILD_STRUCTURE_REWARD,
     CRITICAL_FEED_REWARD,
     EFFECTIVE_CARE_REWARD,
     HEALTHY_ANIMAL_DAY_REWARD,
@@ -84,10 +86,36 @@ class WorkerRewardContractTest(unittest.TestCase):
 
     def test_capacity_and_neglect_shaping_constants(self):
         self.assertEqual(SUCCESSFUL_PLANT_REWARD, 10.0)
+        self.assertEqual(BUILD_STRUCTURE_REWARD, 8.0)
+        self.assertEqual(ANIMAL_PICKUP_REWARD, 2.0)
         self.assertEqual(PLACE_ANIMAL_REWARD, 16.0)
         self.assertEqual(CROP_TO_WEED_PENALTY, -64.0)
         self.assertEqual(CROP_DEATH_PENALTY, -64.0)
         self.assertEqual(LOST_HARVESTABLE_UNIT_PENALTY, -16.0)
+
+    def test_successful_animal_pickup_gets_setup_credit(self):
+        before = _obs(None, inventory={"COW": 0}, shed={"COW": 1})
+        after = _obs(None, inventory={"COW": 1}, shed={"COW": 0})
+        result = compute_worker_reward(
+            EXECUTOR,
+            before,
+            {"farmer": ["PICKUP", "COW", 1], "hands": []},
+            after,
+        )
+        self.assertEqual(result.animals_picked_up, 1)
+        self.assertEqual(result.reward, ANIMAL_PICKUP_REWARD)
+
+    def test_failed_animal_pickup_gets_no_setup_credit(self):
+        before = _obs(None, inventory={"COW": 0}, shed={"COW": 0})
+        after = _obs(None, inventory={"COW": 0}, shed={"COW": 0})
+        result = compute_worker_reward(
+            EXECUTOR,
+            before,
+            {"farmer": ["PICKUP", "COW", 1], "hands": []},
+            after,
+        )
+        self.assertEqual(result.animals_picked_up, 0)
+        self.assertEqual(result.reward, 0.0)
 
     def test_avoidable_pass_penalty_is_metadata_gated(self):
         before = _obs(None)
