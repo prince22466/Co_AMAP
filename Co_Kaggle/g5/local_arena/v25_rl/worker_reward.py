@@ -52,17 +52,24 @@ assert (
 )
 
 ANIMAL_ESCAPE_PENALTY = -100.0
-CROP_TO_WEED_PENALTY = -64.0
-CROP_DEATH_PENALTY = -64.0
-LOST_HARVESTABLE_UNIT_PENALTY = -16.0
+# Weed is a hard operational failure: scheduler guards should normally prevent
+# it, and the remaining transition penalty is intentionally large enough that
+# any uncovered failure dominates routine worker shaping.
+CROP_TO_WEED_PENALTY = -256.0
+CROP_DEATH_PENALTY = -128.0
+LOST_HARVESTABLE_UNIT_PENALTY = -32.0
 
 SUCCESSFUL_PLANT_REWARD = 1.0
-PLANNED_PLANT_REWARD = 10.0
+# Planner execution and PASS preference now live in per-subdecision actor
+# advantages. Keep turn reward free of those labels so the critic learns only
+# environment outcomes and one worker's choice cannot smear credit over every
+# other worker assignment made in the same turn.
+PLANNED_PLANT_REWARD = 0.0
 BUILD_STRUCTURE_REWARD = 0.5
 PLACE_ANIMAL_REWARD = 1.0
-PLANNED_PLACE_ANIMAL_REWARD = 16.0
+PLANNED_PLACE_ANIMAL_REWARD = 0.0
 ROUTE_PROGRESS_REWARD = 0.05
-AVOIDABLE_PASS_PENALTY = -0.10
+AVOIDABLE_PASS_PENALTY = 0.0
 EFFECTIVE_CARE_REWARD = 3.0
 EFFECTIVE_FERTILIZE_REWARD = 1.0
 COLLECT_FERTILIZER_REWARD = 1.0
@@ -70,7 +77,7 @@ NORMAL_FEED_REWARD = 6.0
 NORMAL_WATER_REWARD = 1.0
 CRITICAL_FEED_REWARD = 2.0
 HEALTHY_ANIMAL_DAY_REWARD = 4.0
-CRITICAL_WATER_REWARD = 4.0
+CRITICAL_WATER_REWARD = 16.0
 
 
 def _positions(obs) -> list[tuple[int, int]]:
