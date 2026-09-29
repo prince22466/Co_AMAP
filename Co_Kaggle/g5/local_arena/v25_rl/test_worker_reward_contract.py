@@ -324,6 +324,41 @@ class WorkerRewardContractTest(unittest.TestCase):
         self.assertEqual(result.effective_care, 0)
         self.assertEqual(result.reward, 0.0)
 
+
+    def test_final_turn_feed_completes_earlier_care_credit(self):
+        before = _obs({
+            "kind": "PASTURE",
+            "animal": "COW",
+            "yield_units": 0,
+            "fed_today": False,
+            "cared_today": True,
+            "consecutive_unfed": 0,
+            "pending_care_bonus": 0,
+        }, day=0, hour=23)
+        after = _obs({
+            "kind": "PASTURE",
+            "animal": "COW",
+            "yield_units": 0,
+            "fed_today": False,
+            "cared_today": False,
+            "consecutive_unfed": 0,
+            "pending_care_bonus": 1,
+        }, day=1, hour=0)
+        result = compute_worker_reward(
+            EXECUTOR,
+            before,
+            {"farmer": ["FEED"], "hands": []},
+            after,
+        )
+        self.assertEqual(result.effective_care, 1)
+        self.assertEqual(result.normal_feed, 1)
+        self.assertEqual(
+            result.reward,
+            NORMAL_FEED_REWARD
+            + HEALTHY_ANIMAL_DAY_REWARD
+            + EFFECTIVE_CARE_REWARD,
+        )
+
     def test_final_turn_care_is_credited_after_flags_reset(self):
         before = _obs({
             "kind": "PASTURE",
