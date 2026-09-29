@@ -125,6 +125,7 @@ class RewardBreakdown:
     animal_product_units_generated_by_product: dict[str, float] = field(default_factory=_zero_animal_product_counts)
     animal_product_units_harvested_total: float = 0.0
     animal_product_units_harvested_by_product: dict[str, float] = field(default_factory=_zero_animal_product_counts)
+    animal_product_units_moved_to_shed_total: float = 0.0
     product_units_moved_to_shed_total: float = 0.0
     product_units_moved_to_shed_by_product: dict[str, float] = field(default_factory=_zero_product_counts)
 
@@ -278,11 +279,11 @@ def compute_worker_reward(executor, before, worker_action, after) -> RewardBreak
                 out.products_delivered += accepted
                 out.product_units_moved_to_shed_total += accepted
                 out.product_units_moved_to_shed_by_product[product] += accepted
-                delivery_reward = (
-                    ANIMAL_PRODUCT_DELIVERED_REWARD
-                    if product in ANIMAL_PRODUCT_NAMES
-                    else PRODUCT_DELIVERED_REWARD
-                )
+                if product in ANIMAL_PRODUCT_NAMES:
+                    out.animal_product_units_moved_to_shed_total += accepted
+                    delivery_reward = ANIMAL_PRODUCT_DELIVERED_REWARD
+                else:
+                    delivery_reward = PRODUCT_DELIVERED_REWARD
                 out.reward += delivery_reward * accepted
                 shed_capacity_left -= accepted
 
