@@ -18,6 +18,7 @@ class Task:
     critical: float=0.0
     slot: int=0
     planned: bool=False
+    deadline_step: int | None=None
     @property
     def key(self): return (self.target,self.op,self.item,self.slot)
 
@@ -38,6 +39,44 @@ AVOIDABLE_PASS_ACTOR_PENALTY = -1.0
 
 def _weed_prevention_task(task):
     return task.op=="WATER" and float(task.critical)>=1.0
+
+def _crop_decay_start_step(e,tile):
+    """Best available absolute step at which crop yield decay begins."""
+    raw_value=tile.get("max_lifespan_step",-1)
+    raw=int(raw_value if raw_value is not None else -1)
+    if raw>=0:
+        return raw
+    crop=tile.get("crop")
+    spec=e.CROPS.get(crop)
+    if not spec:
+        return None
+    events=tuple(spec[2] or ())
+    if not events:
+        return None
+    # Rules: one-time crops decay one day after max-yield day; ongoing crops
+    # decay one day after their final capped production event.
+    final_age=max(int(age) for age,_units in events)
+    planted=int(tile.get("planted_day",0) or 0)
+    return (planted+final_age+1)*24
+
+def _crop_decay_deadline_step(e,obs,tile):
+    """Conservative last step to harvest currently held crop units.
+
+    Decay removes one held unit every other turn and turns the plant into WEED
+    when the held yield reaches zero.  Before decay starts we can derive the
+    zero-yield step directly.  Once decay is already active, current yield is
+    authoritative and we conservatively assume the next decrement can occur on
+    the next environment step.
+    """
+    units=int(np.ceil(float(tile.get("yield_units",0) or 0)))
+    if units<=0:
+        return None
+    start=_crop_decay_start_step(e,tile)
+    if start is None:
+        return None
+    now=int(obs["day"])*24+int(obs["hour"])
+    next_decay=start if now<start else now+1
+    return int(next_decay+2*(units-1))
 
 def totals(private):
     out=defaultdict(int)
@@ -145,7 +184,10 @@ class WorkerPolicy:
             # from the planner's yield schedule. WHEAT/CARROT are legal at age
             # 2 even though the planner schedules their nominal yield later.
             if float(t.get("yield_units",0) or 0)>0 and age>=first_yield_age:
-                tasks.append(Task(pt,"HARVEST",crop))
+                tasks.append(Task(
+                    pt,"HARVEST",crop,
+                    deadline_step=_crop_decay_deadline_step(e,obs,t),
+                ))
             if day<29 and not t.get("watered_today"): tasks.append(Task(pt,"WATER",crop,critical=float(int(t.get("consecutive_unwatered",0) or 0)>=1)))
             useful=max(a for a,_ in spec[2]) if spec and crop in ("TOMATO","STRAWBERRY") else (int(spec[3]) if spec else 0)
             if day<29 and age<=useful and int(t.get("fertilized_until_day",-1))<day: tasks.append(Task(pt,"FERTILIZE","FERTILIZER"))
@@ -226,6 +268,12 @@ class WorkerPolicy:
             if distance+1>remaining: return False
         elif distance>remaining:
             return False
+        if (
+            t.op=="HARVEST"
+            and t.deadline_step is not None
+            and int(obs["day"])*24+int(obs["hour"])+distance>t.deadline_step
+        ):
+            return False
         if t.op=="PLANT" and int(seeds.get(t.item,0))<=0: return False
         if t.op=="FEED" and int(inv.get("WHEAT",0))<=0: return False
         if t.op=="FERTILIZE" and int(inv.get("FERTILIZER",0))<=0: return False
@@ -274,8 +322,27 @@ class WorkerPolicy:
             bonus+=self.planned_completion_bonus(t)
         return float(bonus)
 
-    def _max_critical_water_matching(self,obs,worker_ids,tasks,seeds,shed):
-        """Maximum reachable critical-WATER assignments for these workers."""
+    def _urgent_harvest_tasks(self,obs,worker_ids,tasks):
+        """Harvest jobs that have reached their latest safe departure window."""
+        if not worker_ids:
+            return []
+        now=int(obs["day"])*24+int(obs["hour"])
+        positions=_positions(obs)
+        urgent=[]
+        for t in tasks:
+            if t.op!="HARVEST" or t.deadline_step is None or t.target is None:
+                continue
+            distances=[self.e.dist(positions[w],t.target) for w in worker_ids]
+            if not distances:
+                continue
+            # One-turn reserve: when waiting one more turn would consume the
+            # last safe start opportunity, reserve a worker now.
+            if now+min(distances)+1>=int(t.deadline_step):
+                urgent.append(t)
+        return urgent
+
+    def _max_critical_task_matching(self,obs,worker_ids,tasks,seeds,shed):
+        """Maximum reachable assignments for hard-deadline scheduler tasks."""
         if not tasks or not worker_ids:
             return 0
         feasible_by_task=[
@@ -312,6 +379,11 @@ class WorkerPolicy:
         actions=[None]*len(workers)
         tasks=self.tasks(obs,animal_plan,crop_plan)
         critical_water_tasks=[t for t in tasks if _weed_prevention_task(t)]
+        deadline_harvest_tasks=self._urgent_harvest_tasks(
+            obs,workers,tasks
+        )
+        critical_tasks=critical_water_tasks+deadline_harvest_tasks
+        critical_keys={t.key for t in critical_tasks}
         reserved=set()
         seeds=dict(obs["private"]["seeds"])
         shed=dict(obs["private"]["shed"])
@@ -375,18 +447,19 @@ class WorkerPolicy:
             if active is None:
                 continue
             # Preserve a non-critical committed route whenever the *other*
-            # available workers can still cover every unreserved critical WATER
-            # task.  Only preempt the minimum routes required for crop survival.
-            if not _weed_prevention_task(active):
+            # available workers can still cover every unreserved hard deadline:
+            # critical WATER plus imminent crop-decay HARVEST. Only preempt the
+            # minimum routes required for crop survival / harvest preservation.
+            if active.key not in critical_keys:
                 remaining_critical=[
-                    t for t in critical_water_tasks if t.key not in reserved
+                    t for t in critical_tasks if t.key not in reserved
                 ]
                 other_workers=[q for q in workers if q!=w]
                 if remaining_critical:
-                    cover_with_w=self._max_critical_water_matching(
+                    cover_with_w=self._max_critical_task_matching(
                         obs,workers,remaining_critical,seeds,shed
                     )
-                    cover_without_w=self._max_critical_water_matching(
+                    cover_without_w=self._max_critical_task_matching(
                         obs,other_workers,remaining_critical,seeds,shed
                     )
                     if cover_without_w < cover_with_w:
@@ -420,12 +493,12 @@ class WorkerPolicy:
                     choices.append((w,t,reservation_key))
                     feats.append(candidate_features(self.e,obs,w,t,len(workers)))
 
-            # If any remaining worker can service a crop that will weed on the
-            # next missed refresh, remove every non-critical choice (including
-            # PASS) until those WATER tasks are reserved.
+            # Hard deadlines are not left to PPO discretion. While a reachable
+            # critical WATER or imminent decay-HARVEST remains unreserved,
+            # remove every non-critical choice (including PASS).
             urgent=[
                 i for i,(_w,t,_key) in enumerate(choices)
-                if _weed_prevention_task(t)
+                if t.key in critical_keys
             ]
             if urgent:
                 choices=[choices[i] for i in urgent]

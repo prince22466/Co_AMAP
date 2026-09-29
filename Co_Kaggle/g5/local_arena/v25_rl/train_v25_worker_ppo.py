@@ -27,7 +27,7 @@ from worker_reward import ANIMAL_ESCAPE_PENALTY,ANIMAL_PRODUCT_DELIVERED_REWARD,
 
 DEFAULT_HISTORY_DIR=G5_ROOT/"game_history"/"v20"
 DEFAULT_EXECUTOR=HERE/"v25_rl.py"
-DEFAULT_OUTPUT_DIR=HERE/"runs"/"worker_ppo_static_v20_v7_subdecision_zero_weed"
+DEFAULT_OUTPUT_DIR=HERE/"runs"/"worker_ppo_static_v20_v8_harvest_deadline"
 CHECKPOINT_ALGORITHM="v25_static_worker_ppo_gae_v4_animal_reward"
 
 def load_executor(path):
@@ -385,7 +385,10 @@ def evaluate(paths,model,device,executor,phase):
                 f"to_shed={r.reward_breakdown.get('product_units_moved_to_shed_total',0)} "
                 f"feed={r.reward_breakdown.get('normal_feed',0)}/{r.reward_breakdown.get('critical_feed',0)} "
                 f"escape={r.reward_breakdown.get('animals_escaped',0)} "
-                f"weed={r.reward_breakdown.get('crops_to_weed',0)} "
+                f"weed={r.reward_breakdown.get('crops_to_weed',0)}"
+                f"(water={r.reward_breakdown.get('crops_to_weed_unwatered',0)},"
+                f"decay={r.reward_breakdown.get('crops_to_weed_decay',0)},"
+                f"other={r.reward_breakdown.get('crops_to_weed_other',0)}) "
                 f"{'OK' if r.ok else r.error}",
                 flush=True,
             )
@@ -403,7 +406,7 @@ def device_for(v):
 
 def current_reward_contract():
     return {
-        "semantics":"engine-first-yield-eod-care-subdecision-zero-weed-v6",
+        "semantics":"engine-first-yield-eod-care-subdecision-harvest-deadline-v7",
         "crop_product_value":PRODUCT_VALUE,
         "crop_generated":PRODUCT_GENERATED_REWARD,
         "crop_harvested":PRODUCT_HARVESTED_REWARD,
@@ -432,11 +435,13 @@ def current_reward_contract():
         "defer_planned_plant_actor_penalty":DEFER_PLANNED_PLANT_ACTOR_PENALTY,
         "avoidable_pass_actor_penalty":AVOIDABLE_PASS_ACTOR_PENALTY,
         "critical_water_preemption":True,
+        "critical_harvest_preemption":True,
+        "weed_cause_diagnostics":True,
         "late_plant_requires_future_water_turn":True,
     }
 
 def save_checkpoint(path,model,opt,update,args,best,best_weed=math.inf):
-    torch.save({"algorithm":CHECKPOINT_ALGORITHM,"update":update,"model_state_dict":model.state_dict(),"optimizer_state_dict":opt.state_dict(),"candidate_feature_names":CANDIDATE_FEATURE_NAMES,"global_feature_names":GLOBAL_FEATURE_NAMES,"best_validation_worker_reward":best,"best_validation_crops_to_weed":best_weed,"reward_contract":current_reward_contract(),"args":vars(args),"note":"PPO controls farmer/hands only; per-subdecision actor shaping; critical WATER preempts noncritical work; best checkpoint minimizes crop-to-weed before maximizing reward; recorded market list is an unlearned env input"},path)
+    torch.save({"algorithm":CHECKPOINT_ALGORITHM,"update":update,"model_state_dict":model.state_dict(),"optimizer_state_dict":opt.state_dict(),"candidate_feature_names":CANDIDATE_FEATURE_NAMES,"global_feature_names":GLOBAL_FEATURE_NAMES,"best_validation_worker_reward":best,"best_validation_crops_to_weed":best_weed,"reward_contract":current_reward_contract(),"args":vars(args),"note":"PPO controls farmer/hands only; per-subdecision actor shaping; critical WATER and imminent decay-HARVEST preempt noncritical work; best checkpoint minimizes crop-to-weed before maximizing reward; recorded market list is an unlearned env input"},path)
 
 def load_checkpoint(path,model,opt,device):
     p=torch.load(path,map_location=device,weights_only=False)
@@ -518,7 +523,7 @@ def main():
     model=ActorCritic(len(CANDIDATE_FEATURE_NAMES),len(GLOBAL_FEATURE_NAMES),args.hidden).to(device); opt=torch.optim.Adam(model.parameters(),lr=args.learning_rate); start=0; best=-math.inf; best_weed=math.inf
     if args.resume: start,best,best_weed=load_checkpoint(args.resume.expanduser().resolve(),model,opt,device)
     (out/"split.json").write_text(json.dumps({"train":[p.name for p in train],"validation":[p.name for p in val],"split_seed":args.split_seed},indent=2)+"\n")
-    (out/"config.json").write_text(json.dumps({**vars(args),"executor":str(ex),"device_resolved":str(device),"algorithm":CHECKPOINT_ALGORITHM,"objective":"worker efficiency only; farmer/hands replaced by RL, recorded v20 market orders replayed unchanged; no final game result reward","policy_semantics":"persistent task routes; subdecision actor shaping; critical-water preemption; late-plant water reserve","crop_product_value":PRODUCT_VALUE,"animal_product_value":ANIMAL_PRODUCT_VALUE,"reward_contract":current_reward_contract()},indent=2,default=str)+"\n")
+    (out/"config.json").write_text(json.dumps({**vars(args),"executor":str(ex),"device_resolved":str(device),"algorithm":CHECKPOINT_ALGORITHM,"objective":"worker efficiency only; farmer/hands replaced by RL, recorded v20 market orders replayed unchanged; no final game result reward","policy_semantics":"persistent task routes; subdecision actor shaping; critical-water and decay-harvest preemption; late-plant water reserve","crop_product_value":PRODUCT_VALUE,"animal_product_value":ANIMAL_PRODUCT_VALUE,"reward_contract":current_reward_contract()},indent=2,default=str)+"\n")
     rows,base=evaluate(val,model,device,ex,"baseline"); write_jsonl(out/"validation.jsonl",{"update":-1,**base})
     for r in rows: write_jsonl(out/"validation_episodes.jsonl",{"update":-1,**r.__dict__})
     baseline_worker_reward=base.get("mean_worker_reward")

@@ -105,7 +105,11 @@ Animal products now receive a much stronger lifecycle value because the v4 train
 
 The reward deliberately puts most value on **delivery**, so harvesting animal output without moving it to the shed is no longer close to completing the lifecycle. Planner/PASS preference is no longer added to the shared turn reward. It is attached directly to the PPO worker subdecision so one worker's PLANT bonus or PASS penalty cannot incorrectly reinforce or punish every other worker choice made in the same turn. The animal-maintenance shaping is also changed from the previous contract: normal FEED is worth more than critical rescue FEED, effective CARE is credited at day rollover only when the animal actually finished that day both fed and cared, a fed animal surviving a day rollover receives dense credit, and animal escape is more expensive. These fixed values still ignore market-price movement.
 
-`PLANT -> WEED` is treated as a near-catastrophic worker-efficiency failure (`-256` plus `-32` per lost harvestable unit). Random `None -> WEED` spawning is not penalized. More importantly, weed prevention is now a scheduler invariant rather than relying only on delayed punishment. Critical WATER uses a reachability matching check: a non-critical persistent route is preempted only when keeping that worker committed would reduce the maximum number of at-risk crops that can be covered. Once the required workers are reserved, unrelated persistent routes continue normally. New PLANT tasks are infeasible unless movement + planting leaves at least one later turn in the same day for WATER.
+`PLANT -> WEED` is treated as a near-catastrophic worker-efficiency failure (`-256` plus `-32` per lost harvestable unit). Random `None -> WEED` spawning is not penalized.
+
+There are two worker-preventable paths to `PLANT -> WEED`: missed watering and end-of-life yield decay. Both now have hard scheduler protection. Critical WATER uses reachability matching. Harvestable crops also carry a decay deadline derived from the engine's `max_lifespan_step` when available, with a fallback from the crop's final production age. When waiting another turn would consume the last safe route-start opportunity, that HARVEST becomes a hard deadline: PASS and noncritical PPO choices are masked, and only the minimum number of persistent routes required for deadline coverage are preempted.
+
+New PLANT tasks remain infeasible unless movement + planting leaves at least one later turn in the same day for WATER.
 
 A deliberate `DIG` of a fully exhausted crop with no remaining yield and age beyond its useful production window is treated as valid cleanup and is **not** assigned the crop-death penalty. Destroying a still-productive crop remains a heavy failure.
 
@@ -129,7 +133,14 @@ harvested product
 explicit worker delivery to shed
 ```
 
-The counters are:
+The counters include cause-specific weed diagnostics:
+
+- `crops_to_weed` — total, retained for checkpoint compatibility
+- `crops_to_weed_unwatered`
+- `crops_to_weed_decay`
+- `crops_to_weed_other`
+
+and the production pipeline counters:
 
 - `seeds_planted_total`
 - `seeds_planted_by_crop[WHEAT|CARROT|TOMATO|STRAWBERRY|MELON]`
@@ -193,7 +204,7 @@ mean_product_units_moved_to_shed_by_product_egg
 
 Workers are assigned autoregressively within a turn. After each worker choice, feasibility/reservation state is updated and the next worker is selected from the remaining candidates.
 
-If a selected task is remote, the emitted environment action is one deterministic Manhattan move toward its target. The network therefore learns **task/worker assignment and task ordering**, not free-form pathfinding. A small `+0.05` shaping reward is attached only to these target-reducing task-route steps. PASS receives `-0.10` only when the same worker had at least one feasible non-PASS candidate; necessary idle time remains neutral.
+If a selected task is remote, the emitted environment action is one deterministic Manhattan move toward its target. The network therefore learns **task/worker assignment and task ordering**, not free-form pathfinding. A small `+0.05` shaping reward is attached only to these target-reducing task-route steps. Avoidable PASS is tracked as an actor-only penalty; necessary idle time remains neutral.
 
 One PPO record corresponds to one environment turn. The turn still contains an autoregressive sequence of worker assignments, but PPO **does not form one probability ratio from the sum of all worker log probabilities**.
 
@@ -306,7 +317,7 @@ python train_v25_worker_ppo.py \
 
 This animal-pipeline update intentionally keeps checkpoint algorithm `v25_static_worker_ppo_gae_v4_animal_reward` so the trained v4 actor/critic can be resumed. Model architecture and feature dimensions are unchanged. When an older v4 checkpoint is loaded under the new reward contract, the **actor weights are kept**, while the critic is reinitialized and Adam optimizer state plus the old validation-best score are reset. The old critic was trained against the previous reward scale (including falsely rewarded immature HARVEST no-ops), so its value estimates are not reused.
 
-To keep metrics from the reward contracts separate, new runs write by default to `runs/worker_ppo_static_v20_v7_subdecision_zero_weed`.
+To keep metrics from the reward contracts separate, harvest-deadline runs write by default to `runs/worker_ppo_static_v20_v8_harvest_deadline`.
 
 `--minibatch-size` now batches worker subdecisions for the actor and turn records for the critic. The default remains 128.
 
@@ -323,7 +334,7 @@ python train_v25_worker_ppo.py \
 
 ## Outputs
 
-Outputs are written under `runs/worker_ppo_static_v20_v7_subdecision_zero_weed`.
+Outputs are written under `runs/worker_ppo_static_v20_v8_harvest_deadline`.
 
 - `metrics.jsonl` — PPO statistics, mean worker reward, and mean reward-component counts.
 - `episodes.jsonl` — per-training-replay worker metrics.
@@ -346,6 +357,9 @@ Primary health metrics are:
 - `mean_product_units_moved_to_shed_total`
 - `mean_animals_escaped`
 - `mean_crops_to_weed`
+- `mean_crops_to_weed_unwatered`
+- `mean_crops_to_weed_decay`
+- `mean_crops_to_weed_other`
 - `mean_crops_died`
 - `mean_worker_reward`
 - `mean_planned_plants_completed`

@@ -112,11 +112,48 @@ def _same_product(tile_before, tile_after) -> str | None:
     return None
 
 
+def _crop_decay_start_step(executor, tile) -> int | None:
+    raw_value = tile.get("max_lifespan_step", -1)
+    raw = int(raw_value if raw_value is not None else -1)
+    if raw >= 0:
+        return raw
+    crop = tile.get("crop")
+    spec = executor.CROPS.get(crop)
+    if not spec:
+        return None
+    events = tuple(spec[2] or ())
+    if not events:
+        return None
+    final_age = max(int(age) for age, _units in events)
+    planted = int(tile.get("planted_day", 0) or 0)
+    return (planted + final_age + 1) * 24
+
+
+def _classify_crop_to_weed(executor, before, tile, day_rolled: bool) -> str:
+    """Best-evidence cause for a PLANT -> WEED transition."""
+    if (
+        day_rolled
+        and not bool(tile.get("watered_today"))
+        and int(tile.get("consecutive_unwatered", 0) or 0) >= 1
+    ):
+        return "unwatered"
+
+    start = _crop_decay_start_step(executor, tile)
+    now = int(before["day"]) * 24 + int(before["hour"])
+    if start is not None and now + 1 >= start:
+        return "decay"
+
+    return "other"
+
+
 @dataclass
 class RewardBreakdown:
     reward: float = 0.0
     animals_escaped: int = 0
     crops_to_weed: int = 0
+    crops_to_weed_unwatered: int = 0
+    crops_to_weed_decay: int = 0
+    crops_to_weed_other: int = 0
     crops_died: int = 0
     lost_harvestable_units: float = 0.0
 
@@ -346,11 +383,21 @@ def compute_worker_reward(executor, before, worker_action, after) -> RewardBreak
                     out.lost_harvestable_units += lost
                     out.reward += ANIMAL_ESCAPE_PENALTY + LOST_HARVESTABLE_UNIT_PENALTY * lost
 
-            # Crop -> weed is always a worker-efficiency failure.  Crop -> None
-            # without HARVEST is also treated as crop death.
+            # Keep the historical total, but classify the cause. A crop can
+            # become WEED through missed watering or through normal lifespan
+            # decay after harvestable yield is left on the tile.
             if isinstance(bt, dict) and bt.get("kind") == "PLANT":
                 if isinstance(at, dict) and at.get("kind") == "WEED":
                     out.crops_to_weed += 1
+                    cause = _classify_crop_to_weed(
+                        executor, before, bt, day_rolled
+                    )
+                    if cause == "unwatered":
+                        out.crops_to_weed_unwatered += 1
+                    elif cause == "decay":
+                        out.crops_to_weed_decay += 1
+                    else:
+                        out.crops_to_weed_other += 1
                     lost = float(bt.get("yield_units", 0) or 0)
                     out.lost_harvestable_units += lost
                     out.reward += CROP_TO_WEED_PENALTY + LOST_HARVESTABLE_UNIT_PENALTY * lost
@@ -395,6 +442,7 @@ def compute_worker_reward(executor, before, worker_action, after) -> RewardBreak
                     out.seeds_planted_total += 1
                     out.seeds_planted_by_crop[planted_crop] += 1
                 out.crops_to_weed += 1
+                out.crops_to_weed_unwatered += 1
                 out.reward += CROP_TO_WEED_PENALTY
 
             # Successful capacity creation.
