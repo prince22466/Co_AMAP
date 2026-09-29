@@ -69,18 +69,18 @@ so the number of RL transitions is `len(history["steps"]) - 1`; it is not hard-c
 | Worker outcome | Reward |
 | --- | ---: |
 | animal escapes | -100 |
-| PLANT -> WEED | -32 |
-| still-productive plant is destroyed/disappears without HARVEST | -32 |
-| each harvestable unit lost with a destroyed asset | -8 |
+| PLANT -> WEED | -64 |
+| still-productive plant is destroyed/disappears without HARVEST | -64 |
+| each harvestable unit lost with a destroyed asset | -16 |
 | crop product unit generated | +2 |
 | crop product unit harvested | +2 |
 | crop product unit explicitly delivered to shed | +4 |
 | animal product unit generated (MILK/EGG/WOOL) | +16 |
 | animal product unit harvested | +16 |
 | animal product unit explicitly delivered to shed | +96 |
-| successful PLANT | +1 |
+| successful planned PLANT | +10 |
 | successful BUILD_COOP / BUILD_PASTURE | +0.5 |
-| successful animal placement | +1 |
+| successful planned animal placement | +16 |
 | effective CARE day (animal finishes day fed + cared) | +3 |
 | effective FERTILIZE | +1 |
 | COLLECT_FERTILIZER from an available animal | +1 |
@@ -89,6 +89,11 @@ so the number of RL transitions is `len(history["steps"]) - 1`; it is not hard-c
 | fed animal survives a day rollover | +4 |
 | normal WATER | +1 |
 | critical WATER where `consecutive_unwatered >= 1` | +4 |
+| movement that reduces distance to the selected/committed task | +0.05 |
+| PASS while that worker has another feasible non-PASS task | -0.10 |
+| PASS with no feasible useful alternative | 0 |
+
+Capacity creation is deliberately planner-aligned: PLANT candidates come from `crop_plan` and animal placement candidates come from `animal_plan`, so the stronger capacity rewards reinforce execution of the existing production planners rather than arbitrary expansion. The PASS penalty is metadata-gated and applies only when the same worker had another feasible non-PASS candidate; legitimate idle time is neutral. Route progress credit applies only when an emitted movement step reduces Manhattan distance to the selected or persistent task target.
 
 Crop products keep the original lifecycle value:
 
@@ -381,4 +386,4 @@ PLACE 2 WHEAT into shed
 → 2 units receive delivery credit
 ```
 
-Reward metadata semantics are versioned as `engine-first-yield-eod-care-route-commit-provenance-v3`. Loading an older checkpoint therefore keeps compatible actor weights but resets critic, optimizer state, and the historical validation-best threshold.
+Reward metadata semantics are versioned as `engine-first-yield-eod-care-route-commit-provenance-plan-shaping-v4`. Loading an older checkpoint therefore keeps compatible actor weights but resets critic, optimizer state, and the historical validation-best threshold.
