@@ -382,15 +382,24 @@ def load_checkpoint(path,model,opt,device):
     p=torch.load(path,map_location=device,weights_only=False)
     if p.get("algorithm")!=CHECKPOINT_ALGORITHM: raise ValueError("checkpoint algorithm mismatch")
     model.load_state_dict(p["model_state_dict"])
-    if p.get("optimizer_state_dict"): opt.load_state_dict(p["optimizer_state_dict"])
     saved_contract=p.get("reward_contract") or {}
-    if saved_contract != current_reward_contract():
+    contract_changed=saved_contract != current_reward_contract()
+    if contract_changed:
+        # Actor/critic tensor shapes are compatible, but optimizer moments and
+        # the historical best score belong to a different reward scale.  Keep
+        # the learned weights, reset optimizer state, and establish a fresh
+        # best score from deterministic baseline evaluation under this contract.
         print(
-            "WARNING: resuming model/optimizer under an updated reward contract; "
-            "the actor is compatible and the critic will adapt to new targets",
+            "WARNING: reward contract changed; keeping model weights but "
+            "resetting optimizer state and validation-best score",
             flush=True,
         )
-    return int(p.get("update",-1))+1,float(p.get("best_validation_worker_reward",-math.inf))
+        best=-math.inf
+    else:
+        if p.get("optimizer_state_dict"):
+            opt.load_state_dict(p["optimizer_state_dict"])
+        best=float(p.get("best_validation_worker_reward",-math.inf))
+    return int(p.get("update",-1))+1,best
 
 def parser():
     p=argparse.ArgumentParser(description=__doc__)
