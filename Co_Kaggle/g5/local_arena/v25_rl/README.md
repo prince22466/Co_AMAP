@@ -211,14 +211,16 @@ one turn-level GAE advantage: A_t
 actor_advantage_i = clip(A_t + B_i, -5, +5)
 
 B_i examples:
-    completed planned PLANT          +2.00
-    completed planned BUILD          +1.00
-    completed planned animal PICKUP  +1.00
-    completed planned PLACE_ANIMAL   +1.50
-    defer feasible PLANT             -0.75
-    avoidable PASS                   -1.00
+    completed planned PLANT          +8 raw reward-equivalent / GAE std
+    completed planned BUILD          +1.00 normalized
+    completed planned animal PICKUP  +1.00 normalized
+    completed planned PLACE_ANIMAL   +1.50 normalized
+    defer feasible PLANT             -0.75 normalized
+    avoidable PASS                   -1.00 normalized
 
-For a remote planned task, the positive planner bonus is held on the originating PPO sample and is added only when that committed route reaches its execution point. If the route becomes invalid, is interrupted for critical WATER, or crosses a day boundary, the pending positive bonus is discarded. This prevents repeated incomplete route selections from farming planner shaping.
+For planned PLANT specifically, completion credit is calibrated on the same raw reward scale as crop HARVEST: +8 reward-equivalent units, approximately one normal crop harvest event. PPO divides that +8 by the rollout's raw GAE standard deviation before adding it only to the originating PLANT subdecision. The credit is withheld until the environment confirms the planned tile transition succeeded; merely reaching the tile or emitting PLANT earns nothing.
+
+For a remote planned task, the originating PPO sample is retained while the worker follows its committed route. If the route becomes invalid, is interrupted for critical WATER, or crosses a day boundary, the pending positive credit is discarded. This prevents repeated incomplete route selections from farming planner shaping.
 
 ratio_i = exp(new_log_prob_i - old_log_prob_i)
 
@@ -402,4 +404,4 @@ PLACE 2 WHEAT into shed
 → 2 units receive delivery credit
 ```
 
-Reward metadata semantics are versioned as `engine-first-yield-eod-care-subdecision-zero-weed-v5`. Loading an older checkpoint therefore keeps compatible actor weights but resets critic, optimizer state, and the historical validation-best threshold.
+Reward metadata semantics are versioned as `engine-first-yield-eod-care-subdecision-zero-weed-v6`. Loading an older checkpoint therefore keeps compatible actor weights but resets critic, optimizer state, and the historical validation-best threshold.
