@@ -55,14 +55,53 @@ class SubdecisionPPOTest(unittest.TestCase):
         record.advantage = 7.0
         record.return_target = 7.0
 
-        _turn_adv, samples, actor_adv, bonuses = actor_samples_and_advantages(
-            [record]
-        )
+        (
+            _turn_adv, samples, actor_adv, bonuses,
+            advantage_scale, reward_equiv, reward_equiv_normalized,
+        ) = actor_samples_and_advantages([record])
         self.assertEqual(len(samples), 2)
         np.testing.assert_allclose(bonuses, [2.0, -1.0], atol=1e-6)
         # A single turn normalizes to base advantage 0, so the two worker
         # choices now receive their own shaping rather than one shared signal.
         np.testing.assert_allclose(actor_adv, [2.0, -1.0], atol=1e-6)
+        self.assertEqual(advantage_scale, 1.0)
+        np.testing.assert_allclose(reward_equiv, [0.0, 0.0], atol=1e-6)
+        np.testing.assert_allclose(
+            reward_equiv_normalized, [0.0, 0.0], atol=1e-6
+        )
+
+    def test_planned_plant_reward_equiv_uses_raw_gae_scale(self):
+        state = np.zeros(4, dtype=np.float32)
+        candidates = np.zeros((2, 6), dtype=np.float16)
+
+        plant = SubDecision(
+            candidates, 0, 0.0,
+            actor_bonus=0.0,
+            reward_equiv_bonus=8.0,
+        )
+        neutral = SubDecision(candidates, 1, 0.0)
+
+        low = TurnRecord(state, [plant], 0.0, 0)
+        high = TurnRecord(state, [neutral], 0.0, 1)
+        low.advantage = 0.0
+        high.advantage = 8.0
+        low.return_target = 0.0
+        high.return_target = 8.0
+
+        (
+            _turn_adv, _samples, actor_adv, bonuses,
+            advantage_scale, reward_equiv, reward_equiv_normalized,
+        ) = actor_samples_and_advantages([low, high])
+
+        # Raw GAE advantages [0, 8] have std=4.  The +8 planned-plant
+        # completion therefore contributes +2 normalized actor advantage.
+        self.assertAlmostEqual(advantage_scale, 4.0)
+        np.testing.assert_allclose(reward_equiv, [8.0, 0.0], atol=1e-6)
+        np.testing.assert_allclose(
+            reward_equiv_normalized, [2.0, 0.0], atol=1e-6
+        )
+        np.testing.assert_allclose(bonuses, [2.0, 0.0], atol=1e-6)
+        np.testing.assert_allclose(actor_adv, [1.0, 1.0], atol=1e-6)
 
     def test_weed_improvement_overrides_reward_collapse(self):
         weed_improved, rollback, ratio = validation_checkpoint_decision(
