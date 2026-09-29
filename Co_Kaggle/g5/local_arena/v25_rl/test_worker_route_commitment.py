@@ -227,7 +227,7 @@ class WorkerRouteCommitmentTest(unittest.TestCase):
             deterministic=True,
             collect=False,
         )
-        obs = _critical_animal_obs(worker_x=0, hour=22, wheat=0)
+        obs = _critical_animal_obs(worker_x=0, hour=19, wheat=0)
         pickup = next(
             t for t in policy.tasks(obs, {}, {})
             if t.op == "PICKUP" and t.item == "WHEAT" and t.critical >= 1
@@ -238,7 +238,7 @@ class WorkerRouteCommitmentTest(unittest.TestCase):
             )
         )
 
-        obs["hour"] = 23
+        obs["hour"] = 20
         pickup = next(
             t for t in policy.tasks(obs, {}, {})
             if t.op == "PICKUP" and t.item == "WHEAT" and t.critical >= 1
@@ -280,7 +280,7 @@ class WorkerRouteCommitmentTest(unittest.TestCase):
             deterministic=True,
             collect=False,
         )
-        obs = _critical_animal_obs(worker_x=0, hour=23, wheat=0)
+        obs = _critical_animal_obs(worker_x=0, hour=20, wheat=0)
         obs["private"]["shed"] = {"WHEAT": 0}
         obs["farms"][0]["tiles"][0][3]["cared_today"] = False
         policy.active_day = 0
