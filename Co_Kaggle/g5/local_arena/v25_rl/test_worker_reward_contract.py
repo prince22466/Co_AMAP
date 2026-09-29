@@ -44,7 +44,9 @@ def _obs(tile, inventory=None, shed=None, day=0, hour=0):
 EXECUTOR = SimpleNamespace(
     SHED=[(0, 0)],
     SHED_CAPACITY=100,
-    CROPS={},
+    CROPS={
+        "WHEAT": (10, 25, ((4, 4),), 4),
+    },
 )
 
 
@@ -68,6 +70,32 @@ class WorkerRewardContractTest(unittest.TestCase):
         self.assertEqual(ANIMAL_PRODUCT_VALUE, 128.0)
         self.assertEqual(ANIMAL_PRODUCT_VALUE, 16.0 * PRODUCT_VALUE)
 
+
+
+    def test_immature_crop_harvest_noop_gets_no_reward(self):
+        before = _obs({
+            "kind": "PLANT",
+            "crop": "WHEAT",
+            "planted_day": 0,
+            "yield_units": 4,
+        }, day=2)
+        after = _obs({
+            "kind": "PLANT",
+            "crop": "WHEAT",
+            "planted_day": 0,
+            "yield_units": 4,
+        }, day=2)
+        result = compute_worker_reward(
+            EXECUTOR,
+            before,
+            {"farmer": ["HARVEST"], "hands": []},
+            after,
+        )
+        self.assertEqual(result.crop_harvest_events_total, 0)
+        self.assertEqual(result.crop_units_harvested_total, 0.0)
+        self.assertEqual(result.products_harvested, 0.0)
+        self.assertEqual(result.products_generated, 0.0)
+        self.assertEqual(result.reward, 0.0)
 
     def test_actual_generation_uses_animal_premium(self):
         crop_before = _obs({"kind": "PLANT", "crop": "WHEAT", "yield_units": 0})
