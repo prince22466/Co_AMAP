@@ -206,14 +206,12 @@ def compute_worker_reward(executor, before, worker_action, after) -> RewardBreak
 
             if tile_before.get("kind") == "PLANT":
                 crop = tile_before.get("crop")
-                spec = executor.CROPS.get(crop)
                 age = int(before["day"]) - int(tile_before.get("planted_day", before["day"]))
-                first_yield_age = (
-                    min((a for a, _ in spec[2]), default=10**9)
-                    if spec else 10**9
+                first_yield_age = int(
+                    getattr(executor, "CROP_FIRST_YIELD_DAY", {}).get(crop, 10**9)
                 )
-                # The engine rejects crop HARVEST before first_yield_age.
-                # Do not reward a command that was guaranteed to be a no-op.
+                # Match the engine's legal HARVEST threshold. Do not infer
+                # legality from the planner's nominal/max-yield schedule.
                 legal_harvest = legal_harvest and age >= first_yield_age
 
             if legal_harvest:
