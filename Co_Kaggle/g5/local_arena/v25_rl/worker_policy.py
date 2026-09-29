@@ -307,9 +307,24 @@ class WorkerPolicy:
             and t.item=="WHEAT"
             and float(t.critical)>=1.0
         ):
-            # Emergency WHEAT pickup is only useful if at least one later turn
-            # remains for the actual FEED after reaching the shed and PICKUP.
-            if distance+1>remaining: return False
+            # Emergency WHEAT pickup is useful only if this worker can reach
+            # the shed, PICKUP, then reach at least one currently critical
+            # animal and FEED it before the end-of-day escape refresh.
+            farm=obs["farms"][obs["player"]]
+            critical_animals=[]
+            for y,row in enumerate(farm["tiles"]):
+                for x,tile in enumerate(row):
+                    if (
+                        isinstance(tile,dict)
+                        and tile.get("animal")
+                        and not tile.get("fed_today")
+                        and int(tile.get("consecutive_unfed",0) or 0)>=1
+                    ):
+                        critical_animals.append((x,y))
+            if not critical_animals:
+                return False
+            followup=min(e.dist(target,pt) for pt in critical_animals)
+            if distance+1+followup>remaining: return False
         elif distance>remaining:
             return False
         if (
