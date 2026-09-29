@@ -285,7 +285,7 @@ python train_v25_worker_ppo.py \
 ```
 
 
-This animal-pipeline update intentionally keeps checkpoint algorithm `v25_static_worker_ppo_gae_v4_animal_reward` so the trained v4 actor/critic can be resumed. Model architecture and feature dimensions are unchanged. When an older v4 checkpoint is loaded under the new reward contract, the trainer prints a warning; actor weights remain usable and the critic adapts to the new targets.
+This animal-pipeline update intentionally keeps checkpoint algorithm `v25_static_worker_ppo_gae_v4_animal_reward` so the trained v4 actor/critic can be resumed. Model architecture and feature dimensions are unchanged. When an older v4 checkpoint is loaded under the new reward contract, the model weights are kept, but Adam optimizer state and the old validation-best score are reset because both belong to the previous reward scale. The critic then adapts to the new targets from a clean optimizer state.
 
 To keep metrics from the two reward contracts separate, new runs write by default to `runs/worker_ppo_static_v20_v4_animal_pipeline`.
 
