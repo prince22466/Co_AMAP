@@ -47,6 +47,9 @@ EXECUTOR = SimpleNamespace(
     CROPS={
         "WHEAT": (10, 25, ((4, 4),), 4),
     },
+    CROP_FIRST_YIELD_DAY={
+        "WHEAT": 2,
+    },
 )
 
 
@@ -78,13 +81,13 @@ class WorkerRewardContractTest(unittest.TestCase):
             "crop": "WHEAT",
             "planted_day": 0,
             "yield_units": 4,
-        }, day=2)
+        }, day=1)
         after = _obs({
             "kind": "PLANT",
             "crop": "WHEAT",
             "planted_day": 0,
             "yield_units": 4,
-        }, day=2)
+        }, day=1)
         result = compute_worker_reward(
             EXECUTOR,
             before,
@@ -96,6 +99,31 @@ class WorkerRewardContractTest(unittest.TestCase):
         self.assertEqual(result.products_harvested, 0.0)
         self.assertEqual(result.products_generated, 0.0)
         self.assertEqual(result.reward, 0.0)
+
+
+    def test_wheat_age_two_harvest_gets_reward(self):
+        before = _obs({
+            "kind": "PLANT",
+            "crop": "WHEAT",
+            "planted_day": 0,
+            "yield_units": 4,
+        }, day=2)
+        after = _obs({
+            "kind": "PLANT",
+            "crop": "WHEAT",
+            "planted_day": 0,
+            "yield_units": 0,
+        }, day=2)
+        result = compute_worker_reward(
+            EXECUTOR,
+            before,
+            {"farmer": ["HARVEST"], "hands": []},
+            after,
+        )
+        self.assertEqual(result.crop_harvest_events_total, 1)
+        self.assertEqual(result.crop_units_harvested_total, 4.0)
+        self.assertEqual(result.products_harvested, 4.0)
+        self.assertEqual(result.reward, 4 * PRODUCT_HARVESTED_REWARD)
 
     def test_actual_generation_uses_animal_premium(self):
         crop_before = _obs({"kind": "PLANT", "crop": "WHEAT", "yield_units": 0})
