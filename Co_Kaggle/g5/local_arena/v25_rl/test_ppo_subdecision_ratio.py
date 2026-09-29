@@ -16,7 +16,11 @@ if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
 from worker_policy import ActorCritic, SubDecision, TurnRecord
-from train_v25_worker_ppo import actor_samples_and_advantages, ppo_update
+from train_v25_worker_ppo import (
+    actor_samples_and_advantages,
+    ppo_update,
+    validation_checkpoint_decision,
+)
 
 
 class SubdecisionPPOTest(unittest.TestCase):
@@ -59,6 +63,32 @@ class SubdecisionPPOTest(unittest.TestCase):
         # A single turn normalizes to base advantage 0, so the two worker
         # choices now receive their own shaping rather than one shared signal.
         np.testing.assert_allclose(actor_adv, [2.0, -1.0], atol=1e-6)
+
+    def test_weed_improvement_overrides_reward_collapse(self):
+        weed_improved, rollback, ratio = validation_checkpoint_decision(
+            score=25000.0,
+            weed=0.0,
+            reference=40000.0,
+            best=40000.0,
+            best_weed=4.0,
+            collapse_restore_ratio=0.70,
+        )
+        self.assertTrue(weed_improved)
+        self.assertFalse(rollback)
+        self.assertAlmostEqual(ratio, 0.625)
+
+    def test_reward_collapse_rolls_back_when_weeds_do_not_improve(self):
+        weed_improved, rollback, ratio = validation_checkpoint_decision(
+            score=25000.0,
+            weed=4.0,
+            reference=40000.0,
+            best=40000.0,
+            best_weed=4.0,
+            collapse_restore_ratio=0.70,
+        )
+        self.assertFalse(weed_improved)
+        self.assertTrue(rollback)
+        self.assertAlmostEqual(ratio, 0.625)
 
     def test_ppo_update_consumes_individual_worker_samples(self):
         torch.manual_seed(7)
