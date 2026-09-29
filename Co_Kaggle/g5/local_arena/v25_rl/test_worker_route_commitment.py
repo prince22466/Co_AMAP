@@ -97,6 +97,7 @@ class WorkerRouteCommitmentTest(unittest.TestCase):
 
         first = policy.unit_actions(_obs(worker_x=0), {}, {})
         self.assertEqual(first[0], ["EAST"])
+        self.assertEqual(policy.turn_route_progress, [True])
         self.assertEqual(policy.active_tasks[0].key, ((3, 0), "FEED", "WHEAT", 0))
 
         second = policy.unit_actions(_obs(worker_x=1), {}, {})
@@ -116,7 +117,21 @@ class WorkerRouteCommitmentTest(unittest.TestCase):
 
         actions = policy.unit_actions(_obs(worker_x=1, fed=True), {}, {})
         self.assertEqual(actions[0], ["PASS"])
+        self.assertEqual(policy.turn_avoidable_pass, [False])
         self.assertNotIn(0, policy.active_tasks)
+
+
+    def test_pass_is_marked_avoidable_when_feed_work_is_feasible(self):
+        policy = WorkerPolicy(
+            _Executor(),
+            _PassLovingModel(),
+            torch.device("cpu"),
+            deterministic=True,
+            collect=False,
+        )
+        actions = policy.unit_actions(_obs(worker_x=3, fed=False, wheat=1), {}, {})
+        self.assertEqual(actions[0], ["PASS"])
+        self.assertEqual(policy.turn_avoidable_pass, [True])
 
     def test_shed_sourced_wheat_is_not_a_delivery_candidate(self):
         policy = WorkerPolicy(
