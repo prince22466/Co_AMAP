@@ -16,6 +16,17 @@ CROPS={
  'STRAWBERRY':(100,120,((10,2),(12,2),(14,2),(16,2)),16),
  'MELON':(80,250,((10,6),),10)}
 
+# Official Kaggriculture engine legality threshold for HARVEST.  This is
+# intentionally separate from CROPS' planner yield schedule above: one-time
+# crops may legally be harvested before their planner's max-yield day.
+CROP_FIRST_YIELD_DAY={
+ 'WHEAT':2,
+ 'CARROT':2,
+ 'TOMATO':8,
+ 'STRAWBERRY':10,
+ 'MELON':10,
+}
+
 ANIMALS={'COW':(400,'MILK',8,2,3),'SHEEP':(500,'WOOL',6,3,4),'GOOSE':(300,'EGG',4,1,2)}
 
 # Per-shop demand on each town consumption tick.
