@@ -385,7 +385,10 @@ def evaluate(paths,model,device,executor,phase):
                 f"to_shed={r.reward_breakdown.get('product_units_moved_to_shed_total',0)} "
                 f"feed={r.reward_breakdown.get('normal_feed',0)}/{r.reward_breakdown.get('critical_feed',0)} "
                 f"escape={r.reward_breakdown.get('animals_escaped',0)} "
-                f"weed={r.reward_breakdown.get('crops_to_weed',0)} "
+                f"weed={r.reward_breakdown.get('crops_to_weed',0)}"
+                f"(water={r.reward_breakdown.get('crops_to_weed_unwatered',0)},"
+                f"decay={r.reward_breakdown.get('crops_to_weed_decay',0)},"
+                f"other={r.reward_breakdown.get('crops_to_weed_other',0)}) "
                 f"{'OK' if r.ok else r.error}",
                 flush=True,
             )
