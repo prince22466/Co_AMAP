@@ -621,7 +621,7 @@ def main():
                 print(
                     f"WARNING: validation worker reward collapsed to {ratio:.1%} "
                     f"of reference ({float(score):+.1f} vs {reference:+.1f}) "
-                    "without improving weeds; restoring best.pt",
+                    "without improving asset survival; restoring best.pt",
                     flush=True,
                 )
             elif (
