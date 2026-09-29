@@ -23,7 +23,7 @@ V20_RL=LOCAL_ARENA/"v20_rl"
 if str(V20_RL) not in sys.path: sys.path.insert(0,str(V20_RL))
 from evaluate_v20_v19_losses import _agent_observation,_environment_from_history,_field,_recorded_step_actions,_saved_final_rewards,_seed_hint,recorded_action_parity
 from worker_policy import ActorCritic,CANDIDATE_FEATURE_NAMES,GLOBAL_FEATURE_NAMES,TurnRecord,WorkerPolicy
-from worker_reward import ANIMAL_ESCAPE_PENALTY,ANIMAL_PRODUCT_DELIVERED_REWARD,ANIMAL_PRODUCT_GENERATED_REWARD,ANIMAL_PRODUCT_HARVESTED_REWARD,ANIMAL_PRODUCT_VALUE,CRITICAL_FEED_REWARD,CROP_DEATH_PENALTY,CROP_TO_WEED_PENALTY,EFFECTIVE_CARE_REWARD,HEALTHY_ANIMAL_DAY_REWARD,LOST_HARVESTABLE_UNIT_PENALTY,NORMAL_FEED_REWARD,PRODUCT_DELIVERED_REWARD,PRODUCT_GENERATED_REWARD,PRODUCT_HARVESTED_REWARD,PRODUCT_VALUE,RewardBreakdown,compute_worker_reward
+from worker_reward import ANIMAL_ESCAPE_PENALTY,ANIMAL_PRODUCT_DELIVERED_REWARD,ANIMAL_PRODUCT_GENERATED_REWARD,ANIMAL_PRODUCT_HARVESTED_REWARD,ANIMAL_PRODUCT_VALUE,AVOIDABLE_PASS_PENALTY,CRITICAL_FEED_REWARD,CROP_DEATH_PENALTY,CROP_TO_WEED_PENALTY,EFFECTIVE_CARE_REWARD,HEALTHY_ANIMAL_DAY_REWARD,LOST_HARVESTABLE_UNIT_PENALTY,NORMAL_FEED_REWARD,PLANNED_PLACE_ANIMAL_REWARD,PLANNED_PLANT_REWARD,PRODUCT_DELIVERED_REWARD,PRODUCT_GENERATED_REWARD,PRODUCT_HARVESTED_REWARD,PRODUCT_VALUE,ROUTE_PROGRESS_REWARD,RewardBreakdown,compute_worker_reward
 
 DEFAULT_HISTORY_DIR=G5_ROOT/"game_history"/"v20"
 DEFAULT_EXECUTOR=HERE/"v25_rl.py"
@@ -84,6 +84,9 @@ def worker_policy_action(e,policy,obs):
         # Reward-only metadata. compose_environment_action() deliberately drops
         # this field before env.step().
         "_delivery_credit":copy.deepcopy(policy.turn_delivery_credit),
+        "_plan_credit":copy.deepcopy(policy.turn_plan_credit),
+        "_route_progress":list(policy.turn_route_progress),
+        "_avoidable_pass":list(policy.turn_avoidable_pass),
     }
 
 
@@ -363,7 +366,7 @@ def device_for(v):
 
 def current_reward_contract():
     return {
-        "semantics":"engine-first-yield-eod-care-route-commit-provenance-v3",
+        "semantics":"engine-first-yield-eod-care-route-plan-shaping-v4",
         "crop_product_value":PRODUCT_VALUE,
         "crop_generated":PRODUCT_GENERATED_REWARD,
         "crop_harvested":PRODUCT_HARVESTED_REWARD,
@@ -380,6 +383,10 @@ def current_reward_contract():
         "crop_to_weed":CROP_TO_WEED_PENALTY,
         "crop_death":CROP_DEATH_PENALTY,
         "lost_harvestable_unit":LOST_HARVESTABLE_UNIT_PENALTY,
+        "planned_plant":PLANNED_PLANT_REWARD,
+        "planned_place_animal":PLANNED_PLACE_ANIMAL_REWARD,
+        "route_progress":ROUTE_PROGRESS_REWARD,
+        "avoidable_pass":AVOIDABLE_PASS_PENALTY,
     }
 
 def save_checkpoint(path,model,opt,update,args,best):
@@ -418,7 +425,7 @@ def parser():
     p.add_argument("--history-dir",type=Path,default=DEFAULT_HISTORY_DIR); p.add_argument("--executor",type=Path,default=DEFAULT_EXECUTOR); p.add_argument("--output-dir",type=Path,default=DEFAULT_OUTPUT_DIR); p.add_argument("--resume",type=Path)
     p.add_argument("--validation-fraction",type=float,default=.20); p.add_argument("--split-seed",type=int,default=20260928); p.add_argument("--training-seed",type=int,default=32525)
     p.add_argument("--updates",type=int,default=100); p.add_argument("--episodes-per-update",type=int,default=8); p.add_argument("--validate-every-updates",type=int,default=1); p.add_argument("--checkpoint-every-updates",type=int,default=1); p.add_argument("--max-training-hours",type=float,default=2.0)
-    p.add_argument("--device",default="auto"); p.add_argument("--hidden",type=int,default=128); p.add_argument("--learning-rate",type=float,default=1e-4); p.add_argument("--gamma",type=float,default=.99); p.add_argument("--gae-lambda",type=float,default=.95); p.add_argument("--ppo-epochs",type=int,default=4); p.add_argument("--minibatch-size",type=int,default=128); p.add_argument("--clip-ratio",type=float,default=.10); p.add_argument("--target-kl",type=float,default=.01); p.add_argument("--rollout-temperature",type=float,default=.20); p.add_argument("--collapse-restore-ratio",type=float,default=.25); p.add_argument("--value-coef",type=float,default=.5); p.add_argument("--entropy-coef",type=float,default=.001); p.add_argument("--max-grad-norm",type=float,default=.5); p.add_argument("--preflight-only",action="store_true")
+    p.add_argument("--device",default="auto"); p.add_argument("--hidden",type=int,default=128); p.add_argument("--learning-rate",type=float,default=1e-4); p.add_argument("--gamma",type=float,default=.99); p.add_argument("--gae-lambda",type=float,default=.95); p.add_argument("--ppo-epochs",type=int,default=4); p.add_argument("--minibatch-size",type=int,default=128); p.add_argument("--clip-ratio",type=float,default=.10); p.add_argument("--target-kl",type=float,default=.01); p.add_argument("--rollout-temperature",type=float,default=.20); p.add_argument("--collapse-restore-ratio",type=float,default=.70); p.add_argument("--value-coef",type=float,default=.5); p.add_argument("--entropy-coef",type=float,default=.001); p.add_argument("--max-grad-norm",type=float,default=.5); p.add_argument("--preflight-only",action="store_true")
     return p
 
 def main():
