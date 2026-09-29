@@ -52,13 +52,22 @@ assert (
 )
 
 ANIMAL_ESCAPE_PENALTY = -100.0
-CROP_TO_WEED_PENALTY = -32.0
-CROP_DEATH_PENALTY = -32.0
-LOST_HARVESTABLE_UNIT_PENALTY = -PRODUCT_VALUE
+CROP_TO_WEED_PENALTY = -64.0
+CROP_DEATH_PENALTY = -64.0
+LOST_HARVESTABLE_UNIT_PENALTY = -16.0
 
-SUCCESSFUL_PLANT_REWARD = 1.0
+# PLANT and PLACE_ANIMAL candidates are created only from crop_plan/animal_plan,
+# so successful execution is direct planner-compliance shaping rather than a
+# generic incentive to create arbitrary capacity.
+SUCCESSFUL_PLANT_REWARD = 10.0
 BUILD_STRUCTURE_REWARD = 0.5
-PLACE_ANIMAL_REWARD = 1.0
+PLACE_ANIMAL_REWARD = 16.0
+
+# Small scheduler-efficiency shaping.  PASS is penalized only when the policy
+# had another feasible task for that worker; movement is rewarded only when a
+# committed/selected route actually closes Manhattan distance to its target.
+AVOIDABLE_PASS_PENALTY = -0.10
+PRODUCTIVE_ROUTE_PROGRESS_REWARD = 0.05
 EFFECTIVE_CARE_REWARD = 3.0
 EFFECTIVE_FERTILIZE_REWARD = 1.0
 COLLECT_FERTILIZER_REWARD = 1.0
@@ -140,6 +149,8 @@ class RewardBreakdown:
     healthy_animal_days: int = 0
     normal_water: int = 0
     critical_water: int = 0
+    avoidable_passes: int = 0
+    productive_route_progress: int = 0
 
     def add(self, other: "RewardBreakdown") -> None:
         for name in self.__dataclass_fields__:
@@ -176,13 +187,19 @@ def compute_worker_reward(executor, before, worker_action, after) -> RewardBreak
     player = int(before["player"])
     before_farm = before["farms"][player]
     after_farm = after["farms"][player]
-    if set(worker_action) - {"farmer", "hands", "_delivery_credit"}:
+    if set(worker_action) - {
+        "farmer", "hands", "_delivery_credit",
+        "_avoidable_pass", "_route_targets",
+    }:
         raise ValueError("worker reward received unsupported action fields")
     actions = _worker_actions(worker_action)
     before_positions = _positions(before)
     before_invs = list(before["private"]["inventories"])
     after_invs = list(after["private"]["inventories"])
     delivery_credit = worker_action.get("_delivery_credit") or []
+    avoidable_pass = worker_action.get("_avoidable_pass") or []
+    route_targets = worker_action.get("_route_targets") or []
+    after_positions = _positions(after)
     day_rolled = int(after["day"]) != int(before["day"])
     shed_points = {tuple(p) for p in executor.SHED}
 
@@ -290,6 +307,28 @@ def compute_worker_reward(executor, before, worker_action, after) -> RewardBreak
                     delivery_reward = PRODUCT_DELIVERED_REWARD
                 out.reward += delivery_reward * accepted
                 shed_capacity_left -= accepted
+
+    # Scheduler-efficiency shaping.  These metadata fields are produced by the
+    # policy but never passed to env.step(), so they cannot change legality.
+    for i, action in enumerate(actions):
+        if not action:
+            continue
+        op = action[0]
+        if op == "PASS" and i < len(avoidable_pass) and bool(avoidable_pass[i]):
+            out.avoidable_passes += 1
+            out.reward += AVOIDABLE_PASS_PENALTY
+
+        if (
+            op in MOVE_ACTIONS
+            and i < len(route_targets)
+            and i < len(before_positions)
+            and i < len(after_positions)
+            and route_targets[i] is not None
+        ):
+            target = tuple(route_targets[i])
+            if executor.dist(after_positions[i], target) < executor.dist(before_positions[i], target):
+                out.productive_route_progress += 1
+                out.reward += PRODUCTIVE_ROUTE_PROGRESS_REWARD
 
     # Tile-level before/after events.
     h = len(before_farm["tiles"])
