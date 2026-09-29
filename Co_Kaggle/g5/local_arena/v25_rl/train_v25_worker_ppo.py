@@ -78,7 +78,13 @@ def worker_policy_action(e,policy,obs):
     animal=e.animal_plan(obs,signals)
     crops=e.crop_plan(obs,signals)
     workers=policy.unit_actions(obs,animal,crops)
-    return {"farmer":workers[0],"hands":workers[1:]}
+    return {
+        "farmer":workers[0],
+        "hands":workers[1:],
+        # Reward-only metadata. compose_environment_action() deliberately drops
+        # this field before env.step().
+        "_delivery_credit":copy.deepcopy(policy.turn_delivery_credit),
+    }
 
 
 def recorded_market_action(recorded_candidate):
@@ -357,7 +363,7 @@ def device_for(v):
 
 def current_reward_contract():
     return {
-        "semantics":"engine-first-yield-eod-care-v2",
+        "semantics":"engine-first-yield-eod-care-route-commit-provenance-v3",
         "crop_product_value":PRODUCT_VALUE,
         "crop_generated":PRODUCT_GENERATED_REWARD,
         "crop_harvested":PRODUCT_HARVESTED_REWARD,
@@ -386,10 +392,11 @@ def load_checkpoint(path,model,opt,device):
     saved_contract=p.get("reward_contract") or {}
     contract_changed=saved_contract != current_reward_contract()
     if contract_changed:
-        # Keep the learned actor, but the critic/value scale is stale when the
-        # reward contract changes (especially after removing falsely rewarded
-        # immature HARVEST no-ops). Reinitialize critic parameters, reset Adam,
-        # and establish a fresh best score under the corrected reward function.
+        # Keep the learned actor, but critic/value estimates and optimizer
+        # moments are stale when reward or execution semantics change (harvest
+        # legality, end-of-day CARE credit, persistent routes, or delivery
+        # provenance). Reinitialize critic parameters, reset Adam, and establish
+        # a fresh best score under the corrected behavior/reward contract.
         for module in model.critic.modules():
             reset=getattr(module,"reset_parameters",None)
             if callable(reset):
@@ -432,7 +439,7 @@ def main():
     model=ActorCritic(len(CANDIDATE_FEATURE_NAMES),len(GLOBAL_FEATURE_NAMES),args.hidden).to(device); opt=torch.optim.Adam(model.parameters(),lr=args.learning_rate); start=0; best=-math.inf
     if args.resume: start,best=load_checkpoint(args.resume.expanduser().resolve(),model,opt,device)
     (out/"split.json").write_text(json.dumps({"train":[p.name for p in train],"validation":[p.name for p in val],"split_seed":args.split_seed},indent=2)+"\n")
-    (out/"config.json").write_text(json.dumps({**vars(args),"executor":str(ex),"device_resolved":str(device),"algorithm":CHECKPOINT_ALGORITHM,"objective":"worker efficiency only; farmer/hands replaced by RL, recorded v20 market orders replayed unchanged; no final game result reward","crop_product_value":PRODUCT_VALUE,"animal_product_value":ANIMAL_PRODUCT_VALUE,"reward_contract":current_reward_contract()},indent=2,default=str)+"\n")
+    (out/"config.json").write_text(json.dumps({**vars(args),"executor":str(ex),"device_resolved":str(device),"algorithm":CHECKPOINT_ALGORITHM,"objective":"worker efficiency only; farmer/hands replaced by RL, recorded v20 market orders replayed unchanged; no final game result reward","policy_semantics":"persistent task routes; provenance-qualified delivery reward","crop_product_value":PRODUCT_VALUE,"animal_product_value":ANIMAL_PRODUCT_VALUE,"reward_contract":current_reward_contract()},indent=2,default=str)+"\n")
     rows,base=evaluate(val,model,device,ex,"baseline"); write_jsonl(out/"validation.jsonl",{"update":-1,**base})
     for r in rows: write_jsonl(out/"validation_episodes.jsonl",{"update":-1,**r.__dict__})
     baseline_worker_reward=base.get("mean_worker_reward")
