@@ -111,6 +111,18 @@ There are two worker-preventable paths to `PLANT -> WEED`: missed watering and e
 
 New PLANT tasks remain infeasible unless movement + planting leaves at least one later turn in the same day for WATER.
 
+Animal survival is also a scheduler invariant. FEED with `consecutive_unfed >= 1` is hard-critical because one more missed end-of-day refresh makes the animal escape. Critical WATER and critical FEED form the first scheduler tier. If there is not enough WHEAT already carried by workers to cover the current critical-feed count, enough WHEAT PICKUP batches are marked as hard survival prerequisites. These supply tasks outrank decay-HARVEST and ordinary PPO work, and are rejected when they would consume the last turn with no opportunity left to FEED afterward.
+
+Hard scheduling is therefore lexicographic:
+
+1. critical WATER / critical FEED
+2. WHEAT PICKUP required for critical FEED
+3. imminent crop-decay HARVEST
+4. ordinary productive PPO work
+5. PASS
+
+The same reachability/matching preemption logic is used so unrelated committed routes are preserved whenever the remaining workers can still cover the higher-priority survival work.
+
 A deliberate `DIG` of a fully exhausted crop with no remaining yield and age beyond its useful production window is treated as valid cleanup and is **not** assigned the crop-death penalty. Destroying a still-productive crop remains a heavy failure.
 
 ## Production-pipeline measurements
@@ -317,7 +329,7 @@ python train_v25_worker_ppo.py \
 
 This animal-pipeline update intentionally keeps checkpoint algorithm `v25_static_worker_ppo_gae_v4_animal_reward` so the trained v4 actor/critic can be resumed. Model architecture and feature dimensions are unchanged. When an older v4 checkpoint is loaded under the new reward contract, the **actor weights are kept**, while the critic is reinitialized and Adam optimizer state plus the old validation-best score are reset. The old critic was trained against the previous reward scale (including falsely rewarded immature HARVEST no-ops), so its value estimates are not reused.
 
-To keep metrics from the reward contracts separate, harvest-deadline runs write by default to `runs/worker_ppo_static_v20_v8_harvest_deadline`.
+To keep metrics from the reward contracts separate, harvest-deadline runs write by default to `runs/worker_ppo_static_v20_v9_animal_survival`.
 
 `--minibatch-size` now batches worker subdecisions for the actor and turn records for the critic. The default remains 128.
 
@@ -334,14 +346,14 @@ python train_v25_worker_ppo.py \
 
 ## Outputs
 
-Outputs are written under `runs/worker_ppo_static_v20_v8_harvest_deadline`.
+Outputs are written under `runs/worker_ppo_static_v20_v9_animal_survival`.
 
 - `metrics.jsonl` — PPO statistics, mean worker reward, and mean reward-component counts.
 - `episodes.jsonl` — per-training-replay worker metrics.
 - `validation.jsonl` — deterministic held-out aggregate worker metrics.
 - `validation_episodes.jsonl` — deterministic held-out per-replay worker metrics.
 - `checkpoints/latest.pt` — latest checkpoint.
-- `checkpoints/best.pt` — weed-first checkpoint: lowest held-out `mean_crops_to_weed`, then highest worker reward as tie-breaker.
+- `checkpoints/best.pt` — asset-survival checkpoint: minimize held-out `mean_crops_to_weed + mean_animals_escaped`, then prefer fewer escapes, then higher worker reward.
 
 Primary health metrics are:
 

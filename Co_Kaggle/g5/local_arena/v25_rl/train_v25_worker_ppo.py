@@ -27,7 +27,7 @@ from worker_reward import ANIMAL_ESCAPE_PENALTY,ANIMAL_PRODUCT_DELIVERED_REWARD,
 
 DEFAULT_HISTORY_DIR=G5_ROOT/"game_history"/"v20"
 DEFAULT_EXECUTOR=HERE/"v25_rl.py"
-DEFAULT_OUTPUT_DIR=HERE/"runs"/"worker_ppo_static_v20_v8_harvest_deadline"
+DEFAULT_OUTPUT_DIR=HERE/"runs"/"worker_ppo_static_v20_v9_animal_survival"
 CHECKPOINT_ALGORITHM="v25_static_worker_ppo_gae_v4_animal_reward"
 
 def load_executor(path):
@@ -406,7 +406,7 @@ def device_for(v):
 
 def current_reward_contract():
     return {
-        "semantics":"engine-first-yield-eod-care-subdecision-harvest-deadline-v7",
+        "semantics":"engine-first-yield-eod-care-subdecision-animal-survival-v8",
         "crop_product_value":PRODUCT_VALUE,
         "crop_generated":PRODUCT_GENERATED_REWARD,
         "crop_harvested":PRODUCT_HARVESTED_REWARD,
@@ -435,13 +435,18 @@ def current_reward_contract():
         "defer_planned_plant_actor_penalty":DEFER_PLANNED_PLANT_ACTOR_PENALTY,
         "avoidable_pass_actor_penalty":AVOIDABLE_PASS_ACTOR_PENALTY,
         "critical_water_preemption":True,
+        "critical_feed_preemption":True,
+        "critical_feed_wheat_prerequisite":True,
+        "survival_priority_over_decay_harvest":True,
         "critical_harvest_preemption":True,
         "weed_cause_diagnostics":True,
         "late_plant_requires_future_water_turn":True,
     }
 
-def save_checkpoint(path,model,opt,update,args,best,best_weed=math.inf):
-    torch.save({"algorithm":CHECKPOINT_ALGORITHM,"update":update,"model_state_dict":model.state_dict(),"optimizer_state_dict":opt.state_dict(),"candidate_feature_names":CANDIDATE_FEATURE_NAMES,"global_feature_names":GLOBAL_FEATURE_NAMES,"best_validation_worker_reward":best,"best_validation_crops_to_weed":best_weed,"reward_contract":current_reward_contract(),"args":vars(args),"note":"PPO controls farmer/hands only; per-subdecision actor shaping; critical WATER and imminent decay-HARVEST preempt noncritical work; best checkpoint minimizes crop-to-weed before maximizing reward; recorded market list is an unlearned env input"},path)
+def save_checkpoint(
+    path,model,opt,update,args,best,best_weed=math.inf,best_escape=math.inf
+):
+    torch.save({"algorithm":CHECKPOINT_ALGORITHM,"update":update,"model_state_dict":model.state_dict(),"optimizer_state_dict":opt.state_dict(),"candidate_feature_names":CANDIDATE_FEATURE_NAMES,"global_feature_names":GLOBAL_FEATURE_NAMES,"best_validation_worker_reward":best,"best_validation_crops_to_weed":best_weed,"best_validation_animals_escaped":best_escape,"reward_contract":current_reward_contract(),"args":vars(args),"note":"PPO controls farmer/hands only; per-subdecision actor shaping; critical WATER/FEED and emergency WHEAT supply outrank imminent decay-HARVEST and noncritical work; best checkpoint minimizes irreversible asset failures (weeds + escapes), then escapes, then reward; recorded market list is an unlearned env input"},path)
 
 def load_checkpoint(path,model,opt,device):
     p=torch.load(path,map_location=device,weights_only=False)
@@ -466,12 +471,16 @@ def load_checkpoint(path,model,opt,device):
         )
         best=-math.inf
         best_weed=math.inf
+        best_escape=math.inf
     else:
         if p.get("optimizer_state_dict"):
             opt.load_state_dict(p["optimizer_state_dict"])
         best=float(p.get("best_validation_worker_reward",-math.inf))
         best_weed=float(p.get("best_validation_crops_to_weed",math.inf))
-    return int(p.get("update",-1))+1,best,best_weed
+        best_escape=float(
+            p.get("best_validation_animals_escaped",math.inf)
+        )
+    return int(p.get("update",-1))+1,best,best_weed,best_escape
 
 def parser():
     p=argparse.ArgumentParser(description=__doc__)
@@ -482,28 +491,39 @@ def parser():
     return p
 
 def validation_checkpoint_decision(
-    score,weed,reference,best,best_weed,collapse_restore_ratio
+    score,weed,escape,reference,best,best_weed,best_escape,
+    collapse_restore_ratio,
 ):
-    """Lexicographic validation policy: weeds first, reward second."""
-    weed_improved=(
-        weed is not None
-        and (
-            float(weed)<best_weed-1e-9
+    """Asset-survival first: minimize weeds+escapes, then escapes, then reward."""
+    survival_improved=False
+    if weed is not None and escape is not None:
+        current_weed=float(weed)
+        current_escape=float(escape)
+        current_failures=current_weed+current_escape
+        best_failures=float(best_weed)+float(best_escape)
+        survival_improved=(
+            current_failures<best_failures-1e-9
             or (
-                abs(float(weed)-best_weed)<=1e-9
-                and score is not None
-                and float(score)>best
+                abs(current_failures-best_failures)<=1e-9
+                and (
+                    current_escape<float(best_escape)-1e-9
+                    or (
+                        abs(current_escape-float(best_escape))<=1e-9
+                        and score is not None
+                        and float(score)>best
+                    )
+                )
             )
         )
-    )
     ratio=None
     reward_collapsed=False
     if score is not None and math.isfinite(reference) and reference>0:
         ratio=float(score)/reference
         reward_collapsed=ratio<collapse_restore_ratio
-    # A safer weed policy is never discarded solely for lower throughput.
-    rollback=bool(reward_collapsed and not weed_improved)
-    return weed_improved,rollback,ratio
+    # A policy with fewer irreversible asset failures is never discarded solely
+    # for lower throughput.
+    rollback=bool(reward_collapsed and not survival_improved)
+    return survival_improved,rollback,ratio
 
 def main():
     args=parser().parse_args()
@@ -520,23 +540,31 @@ def main():
     print(f"preflight replay parity OK: {paths[0].stem}",flush=True)
     if args.preflight_only: return 0
     device=device_for(args.device); random.seed(args.training_seed); np.random.seed(args.training_seed); torch.manual_seed(args.training_seed); rng=random.Random(args.training_seed)
-    model=ActorCritic(len(CANDIDATE_FEATURE_NAMES),len(GLOBAL_FEATURE_NAMES),args.hidden).to(device); opt=torch.optim.Adam(model.parameters(),lr=args.learning_rate); start=0; best=-math.inf; best_weed=math.inf
-    if args.resume: start,best,best_weed=load_checkpoint(args.resume.expanduser().resolve(),model,opt,device)
+    model=ActorCritic(len(CANDIDATE_FEATURE_NAMES),len(GLOBAL_FEATURE_NAMES),args.hidden).to(device); opt=torch.optim.Adam(model.parameters(),lr=args.learning_rate); start=0; best=-math.inf; best_weed=math.inf; best_escape=math.inf
+    if args.resume:
+        start,best,best_weed,best_escape=load_checkpoint(
+            args.resume.expanduser().resolve(),model,opt,device
+        )
     (out/"split.json").write_text(json.dumps({"train":[p.name for p in train],"validation":[p.name for p in val],"split_seed":args.split_seed},indent=2)+"\n")
-    (out/"config.json").write_text(json.dumps({**vars(args),"executor":str(ex),"device_resolved":str(device),"algorithm":CHECKPOINT_ALGORITHM,"objective":"worker efficiency only; farmer/hands replaced by RL, recorded v20 market orders replayed unchanged; no final game result reward","policy_semantics":"persistent task routes; subdecision actor shaping; critical-water and decay-harvest preemption; late-plant water reserve","crop_product_value":PRODUCT_VALUE,"animal_product_value":ANIMAL_PRODUCT_VALUE,"reward_contract":current_reward_contract()},indent=2,default=str)+"\n")
+    (out/"config.json").write_text(json.dumps({**vars(args),"executor":str(ex),"device_resolved":str(device),"algorithm":CHECKPOINT_ALGORITHM,"objective":"worker efficiency only; farmer/hands replaced by RL, recorded v20 market orders replayed unchanged; no final game result reward","policy_semantics":"persistent task routes; subdecision actor shaping; critical-water/feed survival with emergency wheat supply; decay-harvest preemption; late-plant water reserve","crop_product_value":PRODUCT_VALUE,"animal_product_value":ANIMAL_PRODUCT_VALUE,"reward_contract":current_reward_contract()},indent=2,default=str)+"\n")
     rows,base=evaluate(val,model,device,ex,"baseline"); write_jsonl(out/"validation.jsonl",{"update":-1,**base})
     for r in rows: write_jsonl(out/"validation_episodes.jsonl",{"update":-1,**r.__dict__})
     baseline_worker_reward=base.get("mean_worker_reward")
     baseline_weed=base.get("mean_crops_to_weed")
+    baseline_escape=base.get("mean_animals_escaped")
     if baseline_worker_reward is not None:
         best=max(best,float(baseline_worker_reward))
-    if baseline_weed is not None:
-        best_weed=min(best_weed,float(baseline_weed))
+    if baseline_weed is not None and baseline_escape is not None:
+        best_weed=float(baseline_weed)
+        best_escape=float(baseline_escape)
         # Preserve the source update when starting from --resume.  Writing -1
         # here would make a later resume from this new best.pt restart at u0
         # even though the weights came from a later checkpoint.
         baseline_checkpoint_update=start-1
-        save_checkpoint(ck/"best.pt",model,opt,baseline_checkpoint_update,args,best,best_weed)
+        save_checkpoint(
+            ck/"best.pt",model,opt,baseline_checkpoint_update,args,
+            best,best_weed,best_escape,
+        )
     started=time.perf_counter(); last=start-1
     for u in range(start,args.updates):
         if (time.perf_counter()-started)/3600>=args.max_training_hours: break
@@ -565,18 +593,23 @@ def main():
         if u%args.checkpoint_every_updates==0:
             # Keep the raw post-update checkpoint for diagnosis even if
             # validation subsequently decides that the policy collapsed.
-            save_checkpoint(ck/f"update_{u:04d}.pt",model,opt,u,args,best,best_weed)
+            save_checkpoint(
+                ck/f"update_{u:04d}.pt",model,opt,u,args,
+                best,best_weed,best_escape,
+            )
 
         if u%args.validate_every_updates==0:
             rows,s=evaluate(val,model,device,ex,f"validation u{u}")
             score=s.get("mean_worker_reward")
             weed=s.get("mean_crops_to_weed")
+            escape=s.get("mean_animals_escaped")
             reference=max(
                 float(baseline_worker_reward) if baseline_worker_reward is not None else -math.inf,
                 float(best),
             )
-            weed_improved,rollback,ratio=validation_checkpoint_decision(
-                score,weed,reference,best,best_weed,args.collapse_restore_ratio
+            survival_improved,rollback,ratio=validation_checkpoint_decision(
+                score,weed,escape,reference,best,best_weed,best_escape,
+                args.collapse_restore_ratio,
             )
             if ratio is not None:
                 s["reward_vs_reference"]=ratio
@@ -588,18 +621,19 @@ def main():
                 print(
                     f"WARNING: validation worker reward collapsed to {ratio:.1%} "
                     f"of reference ({float(score):+.1f} vs {reference:+.1f}) "
-                    "without improving weeds; restoring best.pt",
+                    "without improving asset survival; restoring best.pt",
                     flush=True,
                 )
             elif (
                 ratio is not None
                 and ratio<args.collapse_restore_ratio
-                and weed_improved
+                and survival_improved
             ):
-                s["reward_collapse_accepted_for_weed_improvement"]=True
+                s["reward_collapse_accepted_for_survival_improvement"]=True
                 print(
                     f"accepting lower reward ({ratio:.1%} of reference) because "
-                    f"validation weeds improved to {float(weed):.3f}",
+                    f"validation asset failures improved to "
+                    f"{float(weed)+float(escape):.3f}",
                     flush=True,
                 )
 
@@ -608,21 +642,34 @@ def main():
                 write_jsonl(out/"validation_episodes.jsonl",{"update":u,**r.__dict__})
 
             if rollback:
-                _,restored_best,restored_weed=load_checkpoint(ck/"best.pt",model,opt,device)
+                (
+                    _,restored_best,restored_weed,restored_escape
+                )=load_checkpoint(ck/"best.pt",model,opt,device)
                 best=max(best,restored_best)
-                best_weed=min(best_weed,restored_weed)
-            elif weed_improved:
+                best_weed=restored_weed
+                best_escape=restored_escape
+            elif survival_improved:
                 best_weed=float(weed)
+                best_escape=float(escape)
                 best=float(score) if score is not None else best
-                save_checkpoint(ck/"best.pt",model,opt,u,args,best,best_weed)
+                save_checkpoint(
+                    ck/"best.pt",model,opt,u,args,
+                    best,best_weed,best_escape,
+                )
                 print(
-                    f"new best weed/reward={best_weed:.3f}/{best:+.3f}",
+                    f"new best asset_failures/escape/weed/reward="
+                    f"{best_weed+best_escape:.3f}/"
+                    f"{best_escape:.3f}/{best_weed:.3f}/{best:+.3f}",
                     flush=True,
                 )
 
         # latest.pt is always the policy that will actually continue training.
         # After a catastrophic validation result this is the restored best.
-        save_checkpoint(ck/"latest.pt",model,opt,u,args,best,best_weed)
-    save_checkpoint(ck/"latest.pt",model,opt,last,args,best,best_weed); return 0
+        save_checkpoint(
+            ck/"latest.pt",model,opt,u,args,best,best_weed,best_escape
+        )
+    save_checkpoint(
+        ck/"latest.pt",model,opt,last,args,best,best_weed,best_escape
+    ); return 0
 
 if __name__=="__main__": raise SystemExit(main())
