@@ -81,7 +81,7 @@ so the number of RL transitions is `len(history["steps"]) - 1`; it is not hard-c
 | successful PLANT | +1 |
 | successful BUILD_COOP / BUILD_PASTURE | +0.5 |
 | successful animal placement | +1 |
-| effective CARE | +3 |
+| effective CARE day (animal finishes day fed + cared) | +3 |
 | effective FERTILIZE | +1 |
 | COLLECT_FERTILIZER from an available animal | +1 |
 | normal FEED | +6 |
@@ -98,7 +98,7 @@ Animal products now receive a much stronger lifecycle value because the v4 train
 
 `16 generated + 16 harvested + 96 delivered = 128`
 
-The reward deliberately puts most value on **delivery**, so harvesting animal output without moving it to the shed is no longer close to completing the lifecycle. The animal-maintenance shaping is also changed from the previous contract: normal FEED is worth more than critical rescue FEED, effective CARE is stronger, a fed animal surviving a day rollover receives dense credit, and animal escape is more expensive. These fixed values still ignore market-price movement.
+The reward deliberately puts most value on **delivery**, so harvesting animal output without moving it to the shed is no longer close to completing the lifecycle. The animal-maintenance shaping is also changed from the previous contract: normal FEED is worth more than critical rescue FEED, effective CARE is credited at day rollover only when the animal actually finished that day both fed and cared, a fed animal surviving a day rollover receives dense credit, and animal escape is more expensive. These fixed values still ignore market-price movement.
 
 `PLANT -> WEED` is always treated as a heavy worker-efficiency failure, including expiration caused by failing to harvest in time. Random `None -> WEED` spawning is not penalized.
 
@@ -331,3 +331,16 @@ Primary health metrics are:
 - `mean_worker_reward`
 
 The worker policy should improve these operational metrics independently of whether the overall game is ultimately won or lost.
+
+
+### Reward-semantics correctness
+
+Worker reward metadata includes semantics version `engine-first-yield-eod-care-v2`.
+
+This version means:
+
+- crop HARVEST legality follows the engine's explicit first-yield day rather than the planner's nominal yield schedule;
+- CARE reward is assigned when a surviving animal completes a day both fed and cared, so CARE and FEED may occur on different turns of the same day;
+- CARE that is never paired with feeding receives no effective-care reward.
+
+A checkpoint with older reward semantics keeps compatible actor weights, while critic/optimizer/best-score state is reset by the existing reward-contract mismatch handling.

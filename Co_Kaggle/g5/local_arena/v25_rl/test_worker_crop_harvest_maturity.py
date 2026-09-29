@@ -1,4 +1,4 @@
-"""Regression tests for crop harvest maturity gating."""
+"""Regression tests for engine crop HARVEST legality."""
 from __future__ import annotations
 
 import unittest
@@ -14,6 +14,13 @@ class _Executor:
         "STRAWBERRY": (100, 120, ((10, 2), (12, 2), (14, 2), (16, 2)), 16),
         "MELON": (80, 250, ((10, 6),), 10),
     }
+    CROP_FIRST_YIELD_DAY = {
+        "WHEAT": 2,
+        "CARROT": 2,
+        "TOMATO": 8,
+        "STRAWBERRY": 10,
+        "MELON": 10,
+    }
 
     @staticmethod
     def tile(farm, pos):
@@ -21,7 +28,7 @@ class _Executor:
         return farm["tiles"][y][x]
 
 
-def _obs(day):
+def _obs(day, crop):
     return {
         "player": 0,
         "day": day,
@@ -31,7 +38,7 @@ def _obs(day):
             "hands": [],
             "tiles": [[{
                 "kind": "PLANT",
-                "crop": "WHEAT",
+                "crop": crop,
                 "planted_day": 0,
                 "yield_units": 4,
                 "watered_today": True,
@@ -56,13 +63,23 @@ class CropHarvestMaturityTest(unittest.TestCase):
             collect=False,
         )
 
-    def test_immature_positive_yield_does_not_create_harvest_task(self):
-        tasks = self.policy.tasks(_obs(day=2), {}, {(0, 0): "WHEAT"})
-        self.assertFalse(any(t.op == "HARVEST" for t in tasks))
+    def _has_harvest(self, day, crop):
+        tasks = self.policy.tasks(_obs(day, crop), {}, {(0, 0): crop})
+        return any(t.op == "HARVEST" for t in tasks)
 
-    def test_first_yield_day_allows_harvest_task(self):
-        tasks = self.policy.tasks(_obs(day=4), {}, {(0, 0): "WHEAT"})
-        self.assertTrue(any(t.op == "HARVEST" for t in tasks))
+    def test_wheat_is_blocked_before_age_two(self):
+        self.assertFalse(self._has_harvest(1, "WHEAT"))
+
+    def test_wheat_is_legal_at_age_two(self):
+        self.assertTrue(self._has_harvest(2, "WHEAT"))
+
+    def test_carrot_is_legal_at_age_two(self):
+        self.assertFalse(self._has_harvest(1, "CARROT"))
+        self.assertTrue(self._has_harvest(2, "CARROT"))
+
+    def test_tomato_uses_engine_age_eight_threshold(self):
+        self.assertFalse(self._has_harvest(7, "TOMATO"))
+        self.assertTrue(self._has_harvest(8, "TOMATO"))
 
 
 if __name__ == "__main__":
