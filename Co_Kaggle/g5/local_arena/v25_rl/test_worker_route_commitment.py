@@ -22,8 +22,12 @@ class _Executor:
         "SHEEP": (500, "WOOL", 6, 3, 4),
         "GOOSE": (300, "EGG", 4, 1, 2),
     }
-    CROPS = {}
-    CROP_FIRST_YIELD_DAY = {}
+    CROPS = {
+        "WHEAT": (10, 25, ((4, 4),), 4),
+    }
+    CROP_FIRST_YIELD_DAY = {
+        "WHEAT": 2,
+    }
     SHED = ((0, 0),)
 
     @staticmethod
@@ -124,6 +128,23 @@ def _two_worker_critical_obs():
     return obs
 
 
+def _decay_crop_obs(worker_x=1, hour=22, max_lifespan_step=120):
+    obs = _obs(worker_x=worker_x, fed=False, wheat=1)
+    obs["day"] = 4
+    obs["hour"] = hour
+    obs["farms"][0]["tiles"][0][0] = {
+        "kind": "PLANT",
+        "crop": "WHEAT",
+        "planted_day": 0,
+        "yield_units": 1,
+        "watered_today": True,
+        "consecutive_unwatered": 0,
+        "max_lifespan_step": max_lifespan_step,
+        "fertilized_until_day": -1,
+    }
+    return obs
+
+
 class WorkerRouteCommitmentTest(unittest.TestCase):
     def test_committed_worker_keeps_heading_to_same_feed_task(self):
         policy = WorkerPolicy(
@@ -163,6 +184,73 @@ class WorkerRouteCommitmentTest(unittest.TestCase):
         )
         self.assertEqual(actions[0], ["WATER"])
         self.assertNotEqual(policy.active_tasks.get(0), Task((3, 0), "FEED", "WHEAT"))
+
+    def test_imminent_decay_harvest_preempts_pass(self):
+        policy = WorkerPolicy(
+            _Executor(),
+            _PassLovingModel(),
+            torch.device("cpu"),
+            deterministic=True,
+            collect=False,
+        )
+        obs = _decay_crop_obs(worker_x=1, hour=22, max_lifespan_step=120)
+
+        actions = policy.unit_actions(
+            obs,
+            {},
+            {(0, 0): "WHEAT"},
+        )
+        # At step 118, a one-unit crop with decay starting at 120 has reached
+        # its latest safe route-start window. PASS is hard-masked.
+        self.assertEqual(actions[0], ["WEST"])
+        self.assertEqual(policy.active_tasks[0].op, "HARVEST")
+
+        at_target = _decay_crop_obs(
+            worker_x=0, hour=23, max_lifespan_step=120
+        )
+        actions = policy.unit_actions(
+            at_target,
+            {},
+            {(0, 0): "WHEAT"},
+        )
+        self.assertEqual(actions[0], ["HARVEST"])
+
+    def test_imminent_decay_harvest_preempts_noncritical_route(self):
+        policy = WorkerPolicy(
+            _Executor(),
+            _PassLovingModel(),
+            torch.device("cpu"),
+            deterministic=True,
+            collect=False,
+        )
+        obs = _decay_crop_obs(worker_x=1, hour=22, max_lifespan_step=120)
+        policy.active_day = 4
+        policy.active_tasks[0] = Task((3, 0), "FEED", "WHEAT")
+
+        actions = policy.unit_actions(
+            obs,
+            {},
+            {(0, 0): "WHEAT"},
+        )
+        self.assertEqual(actions[0], ["WEST"])
+        self.assertEqual(policy.active_tasks[0].op, "HARVEST")
+
+    def test_nonurgent_harvest_remains_ppo_choice(self):
+        policy = WorkerPolicy(
+            _Executor(),
+            _PassLovingModel(),
+            torch.device("cpu"),
+            deterministic=True,
+            collect=False,
+        )
+        obs = _decay_crop_obs(worker_x=0, hour=5, max_lifespan_step=160)
+
+        actions = policy.unit_actions(
+            obs,
+            {},
+            {(0, 0): "WHEAT"},
+        )
+        self.assertEqual(actions[0], ["PASS"])
 
     def test_plant_requires_a_later_turn_for_water(self):
         policy = WorkerPolicy(
