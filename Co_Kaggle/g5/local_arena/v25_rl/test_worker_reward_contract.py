@@ -93,6 +93,18 @@ class WorkerRewardContractTest(unittest.TestCase):
         self.assertEqual(CROP_DEATH_PENALTY, -64.0)
         self.assertEqual(LOST_HARVESTABLE_UNIT_PENALTY, -16.0)
 
+    def test_successful_planned_animal_structure_build_gets_setup_credit(self):
+        before = _obs(None)
+        after = _obs({"kind": "PASTURE"})
+        result = compute_worker_reward(
+            EXECUTOR,
+            before,
+            {"farmer": ["BUILD_PASTURE"], "hands": []},
+            after,
+        )
+        self.assertEqual(result.structures_built, 1)
+        self.assertEqual(result.reward, BUILD_STRUCTURE_REWARD)
+
     def test_successful_animal_pickup_gets_setup_credit(self):
         before = _obs(None, inventory={"COW": 0}, shed={"COW": 1})
         after = _obs(None, inventory={"COW": 1}, shed={"COW": 0})
