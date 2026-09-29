@@ -369,15 +369,17 @@ class WorkerPolicy:
                     t for t in critical_water_tasks if t.key not in reserved
                 ]
                 other_workers=[q for q in workers if q!=w]
-                if (
-                    remaining_critical
-                    and self._max_critical_water_matching(
+                if remaining_critical:
+                    cover_with_w=self._max_critical_water_matching(
+                        obs,workers,remaining_critical,seeds,shed
+                    )
+                    cover_without_w=self._max_critical_water_matching(
                         obs,other_workers,remaining_critical,seeds,shed
-                    ) < len(remaining_critical)
-                ):
-                    self.active_tasks.pop(w,None)
-                    self.active_origins.pop(w,None)
-                    continue
+                    )
+                    if cover_without_w < cover_with_w:
+                        self.active_tasks.pop(w,None)
+                        self.active_origins.pop(w,None)
+                        continue
             candidates=tasks+self.extras(obs,w)
             current=next((t for t in candidates if t.key==active.key),None)
             if current is None or not self.feasible(obs,w,current,seeds,shed):
