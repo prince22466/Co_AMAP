@@ -236,27 +236,6 @@ def compute_worker_reward(executor, before, worker_action, after) -> RewardBreak
         elif op == "FEED" and isinstance(tile_before, dict) and tile_before.get("animal"):
             feed_tiles.add(pos)
 
-        elif op == "CARE" and isinstance(tile_before, dict) and tile_before.get("animal"):
-            fed_effective = bool(tile_before.get("fed_today")) or pos in feed_tiles
-            # FEED may be later in worker order; inspect all actions on this tile too.
-            if not fed_effective:
-                fed_effective = any(
-                    a and a[0] == "FEED" for _, a in action_at.get(pos, [])
-                ) or any(
-                    a and a[0] == "FEED" and before_positions[j] == pos
-                    for j, a in enumerate(actions)
-                    if j < len(before_positions)
-                )
-            after_tile = _tile(after, pos)
-            care_visible = (
-                isinstance(after_tile, dict)
-                and after_tile.get("animal") == tile_before.get("animal")
-                and (bool(after_tile.get("cared_today")) or day_rolled)
-            )
-            if fed_effective and care_visible:
-                out.effective_care += 1
-                out.reward += EFFECTIVE_CARE_REWARD
-
         elif op == "FERTILIZE" and isinstance(tile_before, dict) and tile_before.get("kind") == "PLANT":
             has_resource = float(inv_before.get("FERTILIZER", 0) or 0) > 0
             after_tile = _tile(after, pos)
@@ -419,17 +398,31 @@ def compute_worker_reward(executor, before, worker_action, after) -> RewardBreak
                         out.normal_feed += 1
                         out.reward += NORMAL_FEED_REWARD
 
-            # Dense maintenance credit: reward carrying a fed animal safely
-            # across the day boundary. This gives FEED/CARE decisions useful
-            # credit before the much sparser product-generation event arrives.
+            # End-of-day animal maintenance credit. CARE is only economically
+            # effective when the animal finishes the day both fed and cared.
+            # Credit that outcome at rollover rather than requiring FEED and CARE
+            # to happen in the same turn. This correctly handles CARE early in
+            # the day followed by FEED later, and avoids rewarding CARE that was
+            # never paired with feeding.
             if day_rolled and isinstance(bt, dict) and bt.get("animal"):
                 same = isinstance(at, dict) and at.get("animal") == bt.get("animal")
                 fed_for_day = bool(bt.get("fed_today"))
-                if "FEED" in ops_here and same:
-                    fed_for_day = fed_for_day or int(at.get("consecutive_unfed", 99)) == 0
+                cared_for_day = bool(bt.get("cared_today"))
+                if same and "FEED" in ops_here:
+                    fed_for_day = (
+                        fed_for_day
+                        or int(at.get("consecutive_unfed", 99)) == 0
+                    )
+                if same and "CARE" in ops_here:
+                    cared_for_day = True
+
                 if same and fed_for_day:
                     out.healthy_animal_days += 1
                     out.reward += HEALTHY_ANIMAL_DAY_REWARD
+
+                if same and fed_for_day and cared_for_day:
+                    out.effective_care += 1
+                    out.reward += EFFECTIVE_CARE_REWARD
 
             # Real output generated this turn.  If the same tile was harvested,
             # add harvested units back before differencing so production after a
