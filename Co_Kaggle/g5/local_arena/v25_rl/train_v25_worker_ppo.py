@@ -22,7 +22,7 @@ G5_ROOT=LOCAL_ARENA.parent
 V20_RL=LOCAL_ARENA/"v20_rl"
 if str(V20_RL) not in sys.path: sys.path.insert(0,str(V20_RL))
 from evaluate_v20_v19_losses import _agent_observation,_environment_from_history,_field,_recorded_step_actions,_saved_final_rewards,_seed_hint,recorded_action_parity
-from worker_policy import AVOIDABLE_PASS_ACTOR_PENALTY,DEFER_PLANNED_PLANT_ACTOR_PENALTY,PLANNED_ANIMAL_PICKUP_ACTOR_BONUS,PLANNED_BUILD_ACTOR_BONUS,PLANNED_PLACE_ANIMAL_ACTOR_BONUS,PLANNED_PLANT_ACTOR_BONUS,ActorCritic,CANDIDATE_FEATURE_NAMES,GLOBAL_FEATURE_NAMES,TurnRecord,WorkerPolicy
+from worker_policy import AVOIDABLE_PASS_ACTOR_PENALTY,DEFER_PLANNED_PLANT_ACTOR_PENALTY,PLANNED_ANIMAL_PICKUP_ACTOR_BONUS,PLANNED_BUILD_ACTOR_BONUS,PLANNED_PLACE_ANIMAL_ACTOR_BONUS,PLANNED_PLANT_REWARD_EQUIV,ActorCritic,CANDIDATE_FEATURE_NAMES,GLOBAL_FEATURE_NAMES,TurnRecord,WorkerPolicy
 from worker_reward import ANIMAL_ESCAPE_PENALTY,ANIMAL_PRODUCT_DELIVERED_REWARD,ANIMAL_PRODUCT_GENERATED_REWARD,ANIMAL_PRODUCT_HARVESTED_REWARD,ANIMAL_PRODUCT_VALUE,AVOIDABLE_PASS_PENALTY,CRITICAL_FEED_REWARD,CRITICAL_WATER_REWARD,CROP_DEATH_PENALTY,CROP_TO_WEED_PENALTY,EFFECTIVE_CARE_REWARD,HEALTHY_ANIMAL_DAY_REWARD,LOST_HARVESTABLE_UNIT_PENALTY,NORMAL_FEED_REWARD,PLANNED_PLACE_ANIMAL_REWARD,PLANNED_PLANT_REWARD,PRODUCT_DELIVERED_REWARD,PRODUCT_GENERATED_REWARD,PRODUCT_HARVESTED_REWARD,PRODUCT_VALUE,ROUTE_PROGRESS_REWARD,RewardBreakdown,compute_worker_reward
 
 DEFAULT_HISTORY_DIR=G5_ROOT/"game_history"/"v20"
@@ -153,9 +153,17 @@ def subdecision_logprob_entropy(model,sub,device,rollout_temperature):
     return d.log_prob(idx),d.entropy().mean()
 
 def actor_samples_and_advantages(records):
-    """Return PPO actor samples with subdecision-specific shaped advantages."""
-    turn_adv=np.asarray([r.advantage for r in records],np.float32)
-    turn_adv=(turn_adv-turn_adv.mean())/(turn_adv.std()+1e-8)
+    """Return PPO actor samples with subdecision-specific shaped advantages.
+
+    Fixed actor bonuses are already in normalized-advantage units.  Reward-
+    equivalent bonuses (currently planned PLANT) are first divided by the same
+    raw GAE scale used to normalize turn advantages.  This makes +8 planned
+    PLANT directly comparable to about one ordinary crop HARVEST event without
+    leaking that bonus into the critic target or unrelated worker decisions.
+    """
+    raw_turn_adv=np.asarray([r.advantage for r in records],np.float32)
+    advantage_scale=max(float(raw_turn_adv.std()),1.0)
+    turn_adv=(raw_turn_adv-raw_turn_adv.mean())/advantage_scale
     actor_samples=[
         (turn_idx,sub)
         for turn_idx,record in enumerate(records)
@@ -163,15 +171,22 @@ def actor_samples_and_advantages(records):
     ]
     if not actor_samples:
         raise ValueError("no PPO worker subdecisions")
-    bonuses=np.asarray(
+    fixed_bonuses=np.asarray(
         [float(sub.actor_bonus) for _,sub in actor_samples],np.float32
     )
+    reward_equiv=np.asarray(
+        [float(sub.reward_equiv_bonus) for _,sub in actor_samples],np.float32
+    )
+    reward_equiv_normalized=reward_equiv/advantage_scale
+    bonuses=fixed_bonuses+reward_equiv_normalized
     actor_adv=np.asarray(
         [turn_adv[turn_idx] for turn_idx,_ in actor_samples],np.float32
     )+bonuses
-    # Keep actor-only shaping bounded even when several preferences combine.
     actor_adv=np.clip(actor_adv,-5.0,5.0)
-    return turn_adv,actor_samples,actor_adv,bonuses
+    return (
+        turn_adv,actor_samples,actor_adv,bonuses,
+        advantage_scale,reward_equiv,reward_equiv_normalized,
+    )
 
 def ppo_update(model,opt,device,records,args):
     """Conservative PPO over worker subdecisions.
@@ -184,7 +199,10 @@ def ppo_update(model,opt,device,records,args):
     if not records:
         raise ValueError("no PPO records")
 
-    turn_adv,actor_samples,actor_adv,actor_bonus=actor_samples_and_advantages(records)
+    (
+        turn_adv,actor_samples,actor_adv,actor_bonus,
+        advantage_scale,reward_equiv_bonus,reward_equiv_bonus_normalized,
+    )=actor_samples_and_advantages(records)
     ret=np.asarray([r.return_target for r in records],np.float32)
     actor_old=np.asarray([sub.old_log_prob for _,sub in actor_samples],np.float32)
 
@@ -300,6 +318,11 @@ def ppo_update(model,opt,device,records,args):
         "actor_bonus_abs_mean":float(np.abs(actor_bonus).mean()),
         "actor_bonus_positive_fraction":float(np.mean(actor_bonus>0)),
         "actor_bonus_negative_fraction":float(np.mean(actor_bonus<0)),
+        "advantage_scale":float(advantage_scale),
+        "reward_equiv_bonus_mean":float(reward_equiv_bonus.mean()),
+        "reward_equiv_bonus_normalized_mean":float(
+            reward_equiv_bonus_normalized.mean()
+        ),
         "actor_minibatches_completed":actor_minibatches_completed,
         "ppo_epochs_completed":epochs_completed,
         "kl_early_stop":kl_early_stop,
@@ -402,7 +425,7 @@ def current_reward_contract():
         "planned_place_animal_turn_reward":PLANNED_PLACE_ANIMAL_REWARD,
         "route_progress":ROUTE_PROGRESS_REWARD,
         "avoidable_pass_turn_reward":AVOIDABLE_PASS_PENALTY,
-        "planned_plant_actor_bonus":PLANNED_PLANT_ACTOR_BONUS,
+        "planned_plant_reward_equiv":PLANNED_PLANT_REWARD_EQUIV,
         "planned_build_actor_bonus":PLANNED_BUILD_ACTOR_BONUS,
         "planned_animal_pickup_actor_bonus":PLANNED_ANIMAL_PICKUP_ACTOR_BONUS,
         "planned_place_animal_actor_bonus":PLANNED_PLACE_ANIMAL_ACTOR_BONUS,
