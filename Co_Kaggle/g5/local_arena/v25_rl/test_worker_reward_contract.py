@@ -190,6 +190,71 @@ class WorkerRewardContractTest(unittest.TestCase):
         self.assertEqual(LOST_HARVESTABLE_UNIT_PENALTY, -32.0)
         self.assertEqual(CRITICAL_WATER_REWARD, 16.0)
 
+    def test_crop_to_weed_from_missed_water_is_classified(self):
+        before = _obs({
+            "kind": "PLANT",
+            "crop": "WHEAT",
+            "planted_day": 0,
+            "yield_units": 0,
+            "watered_today": False,
+            "consecutive_unwatered": 1,
+            "max_lifespan_step": 120,
+        }, day=0, hour=23)
+        after = _obs({"kind": "WEED"}, day=1, hour=0)
+
+        result = compute_worker_reward(
+            EXECUTOR, before, {"farmer": ["PASS"], "hands": []}, after
+        )
+        self.assertEqual(result.crops_to_weed, 1)
+        self.assertEqual(result.crops_to_weed_unwatered, 1)
+        self.assertEqual(result.crops_to_weed_decay, 0)
+        self.assertEqual(result.crops_to_weed_other, 0)
+
+    def test_crop_to_weed_from_expiry_is_classified_as_decay(self):
+        before = _obs({
+            "kind": "PLANT",
+            "crop": "WHEAT",
+            "planted_day": 0,
+            "yield_units": 1,
+            "watered_today": True,
+            "consecutive_unwatered": 0,
+            "max_lifespan_step": 120,
+        }, day=4, hour=23)
+        after = _obs({"kind": "WEED"}, day=5, hour=0)
+
+        result = compute_worker_reward(
+            EXECUTOR, before, {"farmer": ["PASS"], "hands": []}, after
+        )
+        self.assertEqual(result.crops_to_weed, 1)
+        self.assertEqual(result.crops_to_weed_unwatered, 0)
+        self.assertEqual(result.crops_to_weed_decay, 1)
+        self.assertEqual(result.crops_to_weed_other, 0)
+        self.assertEqual(result.lost_harvestable_units, 1.0)
+        self.assertEqual(
+            result.reward,
+            CROP_TO_WEED_PENALTY + LOST_HARVESTABLE_UNIT_PENALTY,
+        )
+
+    def test_unexplained_crop_to_weed_remains_visible_as_other(self):
+        before = _obs({
+            "kind": "PLANT",
+            "crop": "WHEAT",
+            "planted_day": 0,
+            "yield_units": 0,
+            "watered_today": True,
+            "consecutive_unwatered": 0,
+            "max_lifespan_step": 120,
+        }, day=0, hour=5)
+        after = _obs({"kind": "WEED"}, day=0, hour=6)
+
+        result = compute_worker_reward(
+            EXECUTOR, before, {"farmer": ["PASS"], "hands": []}, after
+        )
+        self.assertEqual(result.crops_to_weed, 1)
+        self.assertEqual(result.crops_to_weed_unwatered, 0)
+        self.assertEqual(result.crops_to_weed_decay, 0)
+        self.assertEqual(result.crops_to_weed_other, 1)
+
     def test_immature_crop_harvest_noop_gets_no_reward(self):
         before = _obs({
             "kind": "PLANT",
