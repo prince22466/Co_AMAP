@@ -175,9 +175,14 @@ class WorkerPolicy:
             choices=[]; feats=[]
             for w in workers:
                 for t in tasks+self.extras(obs,w):
-                    if t.op!="PASS" and t.key in reserved: continue
+                    # Shared farm tasks (HARVEST/FEED/etc.) must only be assigned
+                    # once, but DELIVER is backed by this specific worker's
+                    # inventory. Multiple workers may validly deliver the same
+                    # product to the same shed in one turn.
+                    reservation_key=(w,t.key) if t.op=="DELIVER" else t.key
+                    if t.op!="PASS" and reservation_key in reserved: continue
                     if not self.feasible(obs,w,t,seeds,shed): continue
-                    choices.append((w,t)); feats.append(candidate_features(self.e,obs,w,t,len(workers)))
+                    choices.append((w,t,reservation_key)); feats.append(candidate_features(self.e,obs,w,t,len(workers)))
             if not choices:
                 for w in workers: actions[w]=["PASS"]
                 break
@@ -188,10 +193,10 @@ class WorkerPolicy:
                 dist=Categorical(logits=behavior_logits)
                 a=torch.argmax(raw_logits) if self.deterministic else dist.sample()
                 lp=dist.log_prob(a)
-            j=int(a.item()); w,t=choices[j]; actions[w]=self.emit(obs,w,t); self.candidate_counts.append(len(choices))
+            j=int(a.item()); w,t,reservation_key=choices[j]; actions[w]=self.emit(obs,w,t); self.candidate_counts.append(len(choices))
             if self.collect: subs.append(SubDecision(mat.astype(np.float16),j,float(lp.item())))
             workers.remove(w)
-            if t.op!="PASS": reserved.add(t.key)
+            if t.op!="PASS": reserved.add(reservation_key)
             if t.op=="PLANT": seeds[t.item]=max(0,int(seeds.get(t.item,0))-1)
             elif t.op=="PICKUP": shed[t.item]=max(0,int(shed.get(t.item,0))-t.amount)
         if self.collect: self.pending=TurnRecord(state,subs,old_value,int(obs["day"])*24+int(obs["hour"]))
