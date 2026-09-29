@@ -105,7 +105,7 @@ Animal products now receive a much stronger lifecycle value because the v4 train
 
 The reward deliberately puts most value on **delivery**, so harvesting animal output without moving it to the shed is no longer close to completing the lifecycle. Planner/PASS preference is no longer added to the shared turn reward. It is attached directly to the PPO worker subdecision so one worker's PLANT bonus or PASS penalty cannot incorrectly reinforce or punish every other worker choice made in the same turn. The animal-maintenance shaping is also changed from the previous contract: normal FEED is worth more than critical rescue FEED, effective CARE is credited at day rollover only when the animal actually finished that day both fed and cared, a fed animal surviving a day rollover receives dense credit, and animal escape is more expensive. These fixed values still ignore market-price movement.
 
-`PLANT -> WEED` is treated as a near-catastrophic worker-efficiency failure (`-256` plus `-32` per lost harvestable unit). Random `None -> WEED` spawning is not penalized. More importantly, weed prevention is now a scheduler invariant rather than relying only on delayed punishment: any WATER task with `consecutive_unwatered >= 1` preempts unrelated persistent routes and filters non-critical choices until the at-risk crop is reserved. New PLANT tasks are infeasible unless movement + planting leaves at least one later turn in the same day for WATER.
+`PLANT -> WEED` is treated as a near-catastrophic worker-efficiency failure (`-256` plus `-32` per lost harvestable unit). Random `None -> WEED` spawning is not penalized. More importantly, weed prevention is now a scheduler invariant rather than relying only on delayed punishment. Critical WATER uses a reachability matching check: a non-critical persistent route is preempted only when keeping that worker committed would reduce the maximum number of at-risk crops that can be covered. Once the required workers are reserved, unrelated persistent routes continue normally. New PLANT tasks are infeasible unless movement + planting leaves at least one later turn in the same day for WATER.
 
 A deliberate `DIG` of a fully exhausted crop with no remaining yield and age beyond its useful production window is treated as valid cleanup and is **not** assigned the crop-death penalty. Destroying a still-productive crop remains a heavy failure.
 
@@ -211,12 +211,14 @@ one turn-level GAE advantage: A_t
 actor_advantage_i = clip(A_t + B_i, -5, +5)
 
 B_i examples:
-    planned PLANT            +2.00
-    planned BUILD            +1.00
-    planned animal PICKUP    +1.00
-    planned PLACE_ANIMAL     +1.50
-    defer feasible PLANT     -0.75
-    avoidable PASS           -1.00
+    completed planned PLANT          +2.00
+    completed planned BUILD          +1.00
+    completed planned animal PICKUP  +1.00
+    completed planned PLACE_ANIMAL   +1.50
+    defer feasible PLANT             -0.75
+    avoidable PASS                   -1.00
+
+For a remote planned task, the positive planner bonus is held on the originating PPO sample and is added only when that committed route reaches its execution point. If the route becomes invalid, is interrupted for critical WATER, or crosses a day boundary, the pending positive bonus is discarded. This prevents repeated incomplete route selections from farming planner shaping.
 
 ratio_i = exp(new_log_prob_i - old_log_prob_i)
 
@@ -263,7 +265,7 @@ Validation has an automatic catastrophic-collapse guard. The reference reward is
 --collapse-restore-ratio 0.70
 ```
 
-of that reference, the trainer records `collapse_warning=true`, reloads `best.pt` including optimizer state, and writes the restored policy to `latest.pt`. The raw collapsed post-update checkpoint remains available as `update_NNNN.pt` for diagnosis.
+of that reference **without improving the weed-first objective**, the trainer records `collapse_warning=true`, reloads `best.pt` including optimizer state, and writes the restored policy to `latest.pt`. A lower-reward checkpoint with strictly fewer weeds is accepted and can become `best.pt`; reward collapse alone cannot discard a weed improvement. The raw collapsed post-update checkpoint remains available as `update_NNNN.pt` for diagnosis.
 
 ## Files
 
