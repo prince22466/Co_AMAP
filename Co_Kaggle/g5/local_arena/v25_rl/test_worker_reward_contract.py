@@ -181,6 +181,41 @@ class WorkerRewardContractTest(unittest.TestCase):
         )
         self.assertEqual(result.animal_product_units_harvested_total, 3)
 
+
+    def test_shed_sourced_wheat_redelivery_gets_zero_reward(self):
+        before = _obs(None, inventory={"WHEAT": 4})
+        after = _obs(None, inventory={})
+        result = compute_worker_reward(
+            EXECUTOR,
+            before,
+            {
+                "farmer": ["PLACE", "WHEAT", 4],
+                "hands": [],
+                "_delivery_credit": [{"WHEAT": 0}],
+            },
+            after,
+        )
+        self.assertEqual(result.products_delivered, 0.0)
+        self.assertEqual(result.product_units_moved_to_shed_total, 0.0)
+        self.assertEqual(result.reward, 0.0)
+
+    def test_wheat_delivery_reward_is_capped_by_fresh_credit(self):
+        before = _obs(None, inventory={"WHEAT": 6})
+        after = _obs(None, inventory={})
+        result = compute_worker_reward(
+            EXECUTOR,
+            before,
+            {
+                "farmer": ["PLACE", "WHEAT", 6],
+                "hands": [],
+                "_delivery_credit": [{"WHEAT": 2}],
+            },
+            after,
+        )
+        self.assertEqual(result.products_delivered, 2.0)
+        self.assertEqual(result.product_units_moved_to_shed_total, 2.0)
+        self.assertEqual(result.reward, 2 * PRODUCT_DELIVERED_REWARD)
+
     def test_actual_delivery_uses_animal_premium(self):
         before = _obs(None, inventory={"MILK": 3})
         after = _obs(None, inventory={})
