@@ -353,7 +353,7 @@ Outputs are written under `runs/worker_ppo_static_v20_v9_animal_survival`.
 - `validation.jsonl` — deterministic held-out aggregate worker metrics.
 - `validation_episodes.jsonl` — deterministic held-out per-replay worker metrics.
 - `checkpoints/latest.pt` — latest checkpoint.
-- `checkpoints/best.pt` — weed-first checkpoint: lowest held-out `mean_crops_to_weed`, then highest worker reward as tie-breaker.
+- `checkpoints/best.pt` — asset-survival checkpoint: minimize held-out `mean_crops_to_weed + mean_animals_escaped`, then prefer fewer escapes, then higher worker reward.
 
 Primary health metrics are:
 
