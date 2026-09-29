@@ -39,10 +39,10 @@ assert PRODUCT_GENERATED_REWARD + PRODUCT_HARVESTED_REWARD + PRODUCT_DELIVERED_R
 # Animal products have a longer, more worker-intensive production chain
 # (build/place/feed/care/harvest/deliver), so give completed animal output a
 # 2x lifecycle value while leaving crop rewards unchanged.
-ANIMAL_PRODUCT_VALUE = 16.0
-ANIMAL_PRODUCT_GENERATED_REWARD = 4.0
-ANIMAL_PRODUCT_HARVESTED_REWARD = 4.0
-ANIMAL_PRODUCT_DELIVERED_REWARD = 8.0
+ANIMAL_PRODUCT_VALUE = 128.0
+ANIMAL_PRODUCT_GENERATED_REWARD = 16.0
+ANIMAL_PRODUCT_HARVESTED_REWARD = 16.0
+ANIMAL_PRODUCT_DELIVERED_REWARD = 96.0
 assert (
     ANIMAL_PRODUCT_GENERATED_REWARD
     + ANIMAL_PRODUCT_HARVESTED_REWARD
@@ -50,7 +50,7 @@ assert (
     == ANIMAL_PRODUCT_VALUE
 )
 
-ANIMAL_ESCAPE_PENALTY = -40.0
+ANIMAL_ESCAPE_PENALTY = -100.0
 CROP_TO_WEED_PENALTY = -32.0
 CROP_DEATH_PENALTY = -32.0
 LOST_HARVESTABLE_UNIT_PENALTY = -PRODUCT_VALUE
@@ -58,12 +58,13 @@ LOST_HARVESTABLE_UNIT_PENALTY = -PRODUCT_VALUE
 SUCCESSFUL_PLANT_REWARD = 1.0
 BUILD_STRUCTURE_REWARD = 0.5
 PLACE_ANIMAL_REWARD = 1.0
-EFFECTIVE_CARE_REWARD = 1.0
+EFFECTIVE_CARE_REWARD = 3.0
 EFFECTIVE_FERTILIZE_REWARD = 1.0
 COLLECT_FERTILIZER_REWARD = 1.0
-NORMAL_FEED_REWARD = 1.0
+NORMAL_FEED_REWARD = 6.0
 NORMAL_WATER_REWARD = 1.0
-CRITICAL_FEED_REWARD = 4.0
+CRITICAL_FEED_REWARD = 2.0
+HEALTHY_ANIMAL_DAY_REWARD = 4.0
 CRITICAL_WATER_REWARD = 4.0
 
 
@@ -134,6 +135,7 @@ class RewardBreakdown:
     fertilizer_collected: int = 0
     normal_feed: int = 0
     critical_feed: int = 0
+    healthy_animal_days: int = 0
     normal_water: int = 0
     critical_water: int = 0
 
@@ -402,6 +404,18 @@ def compute_worker_reward(executor, before, worker_action, after) -> RewardBreak
                     else:
                         out.normal_feed += 1
                         out.reward += NORMAL_FEED_REWARD
+
+            # Dense maintenance credit: reward carrying a fed animal safely
+            # across the day boundary. This gives FEED/CARE decisions useful
+            # credit before the much sparser product-generation event arrives.
+            if day_rolled and isinstance(bt, dict) and bt.get("animal"):
+                same = isinstance(at, dict) and at.get("animal") == bt.get("animal")
+                fed_for_day = bool(bt.get("fed_today"))
+                if "FEED" in ops_here and same:
+                    fed_for_day = fed_for_day or int(at.get("consecutive_unfed", 99)) == 0
+                if same and fed_for_day:
+                    out.healthy_animal_days += 1
+                    out.reward += HEALTHY_ANIMAL_DAY_REWARD
 
             # Real output generated this turn.  If the same tile was harvested,
             # add harvested units back before differencing so production after a
