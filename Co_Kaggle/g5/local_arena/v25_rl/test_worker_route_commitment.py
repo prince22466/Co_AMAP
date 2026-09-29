@@ -104,6 +104,14 @@ def _obs(worker_x=0, fed=False, wheat=1):
     }
 
 
+def _critical_animal_obs(worker_x=0, hour=5, wheat=1):
+    obs = _obs(worker_x=worker_x, fed=False, wheat=wheat)
+    obs["hour"] = hour
+    cow = obs["farms"][0]["tiles"][0][3]
+    cow["consecutive_unfed"] = 1
+    return obs
+
+
 def _critical_crop_obs(worker_x=0, hour=5):
     obs = _obs(worker_x=worker_x, fed=False, wheat=1)
     obs["day"] = 1
@@ -165,6 +173,104 @@ class WorkerRouteCommitmentTest(unittest.TestCase):
         second = policy.unit_actions(_obs(worker_x=1), {}, {})
         self.assertEqual(second[0], ["EAST"])
         self.assertEqual(policy.active_tasks[0].key, ((3, 0), "FEED", "WHEAT", 0))
+
+    def test_critical_feed_preempts_pass(self):
+        policy = WorkerPolicy(
+            _Executor(),
+            _PassLovingModel(),
+            torch.device("cpu"),
+            deterministic=True,
+            collect=False,
+        )
+        obs = _critical_animal_obs(worker_x=3, wheat=1)
+
+        actions = policy.unit_actions(obs, {}, {})
+        self.assertEqual(actions[0], ["FEED"])
+
+    def test_critical_feed_preempts_noncritical_route(self):
+        policy = WorkerPolicy(
+            _Executor(),
+            _PassLovingModel(),
+            torch.device("cpu"),
+            deterministic=True,
+            collect=False,
+        )
+        obs = _critical_animal_obs(worker_x=0, wheat=1)
+        obs["farms"][0]["tiles"][0][3]["cared_today"] = False
+        policy.active_day = 0
+        policy.active_tasks[0] = Task((3, 0), "CARE", "COW")
+
+        actions = policy.unit_actions(obs, {}, {})
+        self.assertEqual(actions[0], ["EAST"])
+        self.assertEqual(policy.active_tasks[0].op, "FEED")
+
+    def test_critical_feed_without_carried_wheat_forces_pickup(self):
+        policy = WorkerPolicy(
+            _Executor(),
+            _PassLovingModel(),
+            torch.device("cpu"),
+            deterministic=True,
+            collect=False,
+        )
+        obs = _critical_animal_obs(worker_x=0, wheat=0)
+        obs["private"]["shed"] = {"WHEAT": 20}
+
+        actions = policy.unit_actions(obs, {}, {})
+        self.assertEqual(actions[0], ["PICKUP", "WHEAT", 1])
+        self.assertEqual(policy.turn_avoidable_pass, [False])
+
+    def test_emergency_wheat_pickup_leaves_a_later_feed_turn(self):
+        policy = WorkerPolicy(
+            _Executor(),
+            _PassLovingModel(),
+            torch.device("cpu"),
+            deterministic=True,
+            collect=False,
+        )
+        obs = _critical_animal_obs(worker_x=0, hour=22, wheat=0)
+        pickup = next(
+            t for t in policy.tasks(obs, {}, {})
+            if t.op == "PICKUP" and t.item == "WHEAT" and t.critical >= 1
+        )
+        self.assertTrue(
+            policy.feasible(
+                obs, 0, pickup, {}, dict(obs["private"]["shed"])
+            )
+        )
+
+        obs["hour"] = 23
+        pickup = next(
+            t for t in policy.tasks(obs, {}, {})
+            if t.op == "PICKUP" and t.item == "WHEAT" and t.critical >= 1
+        )
+        self.assertFalse(
+            policy.feasible(
+                obs, 0, pickup, {}, dict(obs["private"]["shed"])
+            )
+        )
+
+    def test_critical_feed_outranks_imminent_decay_harvest(self):
+        policy = WorkerPolicy(
+            _Executor(),
+            _PassLovingModel(),
+            torch.device("cpu"),
+            deterministic=True,
+            collect=False,
+        )
+        obs = _decay_crop_obs(
+            worker_x=3, hour=22, max_lifespan_step=120
+        )
+        cow = obs["farms"][0]["tiles"][0][3]
+        cow["consecutive_unfed"] = 1
+        cow["fed_today"] = False
+        obs["private"]["inventories"] = [{"WHEAT": 1}]
+
+        actions = policy.unit_actions(
+            obs,
+            {},
+            {(0, 0): "WHEAT"},
+        )
+        self.assertEqual(actions[0], ["FEED"])
 
     def test_critical_water_preempts_pass_and_noncritical_route(self):
         policy = WorkerPolicy(
