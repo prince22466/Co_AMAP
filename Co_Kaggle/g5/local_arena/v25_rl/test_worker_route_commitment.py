@@ -13,6 +13,7 @@ from worker_policy import (
     Task,
     WorkerPolicy,
 )
+from worker_reward import RewardBreakdown
 
 
 class _Executor:
@@ -49,6 +50,15 @@ class _Executor:
         if target[1] < pos[1]:
             return ["NORTH"]
         return ["PASS"]
+
+
+class _PlantLovingModel:
+    def value(self, state):
+        return torch.tensor(0.0)
+
+    def logits(self, candidates):
+        plant_col = CANDIDATE_FEATURE_NAMES.index("op_PLANT")
+        return candidates[:, plant_col] * 100.0
 
 
 class _PassLovingModel:
@@ -103,6 +113,14 @@ def _critical_crop_obs(worker_x=0, hour=5):
         "consecutive_unwatered": 1,
         "fertilized_until_day": -1,
     }
+    return obs
+
+
+def _two_worker_critical_obs():
+    obs = _critical_crop_obs(worker_x=0, hour=5)
+    obs["farms"][0]["hands"] = [[1, 0]]
+    obs["farms"][0]["tiles"][0][3]["cared_today"] = False
+    obs["private"]["inventories"] = [{"WHEAT": 1}, {"WHEAT": 1}]
     return obs
 
 
@@ -182,7 +200,11 @@ class WorkerRouteCommitmentTest(unittest.TestCase):
             (0, passed, passed.key),
         ]
         self.assertEqual(
-            policy.actor_bonus_for_choice(0, plant, choices),
+            policy.actor_bonus_for_choice(0, plant, choices, completed=False),
+            0.0,
+        )
+        self.assertEqual(
+            policy.actor_bonus_for_choice(0, plant, choices, completed=True),
             PLANNED_PLANT_ACTOR_BONUS,
         )
         self.assertEqual(
@@ -190,6 +212,81 @@ class WorkerRouteCommitmentTest(unittest.TestCase):
             AVOIDABLE_PASS_ACTOR_PENALTY
             + DEFER_PLANNED_PLANT_ACTOR_PENALTY,
         )
+
+    def test_one_critical_crop_preempts_only_one_of_two_routes(self):
+        policy = WorkerPolicy(
+            _Executor(),
+            _PassLovingModel(),
+            torch.device("cpu"),
+            deterministic=True,
+            collect=False,
+        )
+        policy.active_day = 1
+        feed = Task((3, 0), "FEED", "WHEAT")
+        care = Task((3, 0), "CARE", "COW")
+        policy.active_tasks[0] = feed
+        policy.active_tasks[1] = care
+
+        actions = policy.unit_actions(
+            _two_worker_critical_obs(),
+            {},
+            {(0, 0): "WHEAT"},
+        )
+
+        self.assertEqual(actions[0], ["EAST"])
+        self.assertEqual(actions[1], ["WEST"])
+        self.assertEqual(policy.active_tasks.get(0), feed)
+        self.assertNotEqual(policy.active_tasks.get(1), care)
+
+    def test_remote_planned_bonus_arrives_only_on_route_completion(self):
+        policy = WorkerPolicy(
+            _Executor(),
+            _PlantLovingModel(),
+            torch.device("cpu"),
+            deterministic=True,
+            collect=True,
+        )
+        obs = _obs(worker_x=0)
+        obs["private"]["seeds"] = {"WHEAT": 1}
+        plan = {(2, 0): "WHEAT"}
+
+        actions = policy.unit_actions(obs, {}, plan)
+        self.assertEqual(actions[0], ["EAST"])
+        origin = policy.pending.subdecisions[0]
+        self.assertEqual(origin.actor_bonus, 0.0)
+        policy.finish_turn(RewardBreakdown())
+
+        at_target = _obs(worker_x=2)
+        at_target["private"]["seeds"] = {"WHEAT": 1}
+        actions = policy.unit_actions(at_target, {}, plan)
+        self.assertEqual(actions[0], ["PLANT", "WHEAT"])
+        self.assertEqual(origin.actor_bonus, PLANNED_PLANT_ACTOR_BONUS)
+
+    def test_interrupted_planned_route_gets_no_positive_bonus(self):
+        policy = WorkerPolicy(
+            _Executor(),
+            _PlantLovingModel(),
+            torch.device("cpu"),
+            deterministic=True,
+            collect=True,
+        )
+        obs = _obs(worker_x=0)
+        obs["private"]["seeds"] = {"WHEAT": 1}
+        plan = {(2, 0): "WHEAT"}
+        policy.unit_actions(obs, {}, plan)
+        origin = policy.pending.subdecisions[0]
+        policy.finish_turn(RewardBreakdown())
+
+        urgent = _critical_crop_obs(worker_x=1)
+        urgent["private"]["seeds"] = {"WHEAT": 1}
+        actions = policy.unit_actions(
+            urgent,
+            {},
+            {(0, 0): "WHEAT", (2, 0): "WHEAT"},
+        )
+        self.assertEqual(actions[0], ["WEST"])
+        self.assertEqual(origin.actor_bonus, 0.0)
+        self.assertNotIn(0, policy.active_origins)
 
     def test_commitment_is_released_when_task_becomes_invalid(self):
         policy = WorkerPolicy(
