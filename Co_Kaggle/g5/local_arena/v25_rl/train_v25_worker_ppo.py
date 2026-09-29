@@ -27,7 +27,7 @@ from worker_reward import ANIMAL_ESCAPE_PENALTY,ANIMAL_PRODUCT_DELIVERED_REWARD,
 
 DEFAULT_HISTORY_DIR=G5_ROOT/"game_history"/"v20"
 DEFAULT_EXECUTOR=HERE/"v25_rl.py"
-DEFAULT_OUTPUT_DIR=HERE/"runs"/"worker_ppo_static_v20_v4_animal_pipeline"
+DEFAULT_OUTPUT_DIR=HERE/"runs"/"worker_ppo_static_v20_v6_plan_shaping"
 CHECKPOINT_ALGORITHM="v25_static_worker_ppo_gae_v4_animal_reward"
 
 def load_executor(path):
