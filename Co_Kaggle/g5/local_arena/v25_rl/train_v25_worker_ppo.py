@@ -357,6 +357,7 @@ def device_for(v):
 
 def current_reward_contract():
     return {
+        "semantics":"engine-first-yield-eod-care-v2",
         "crop_product_value":PRODUCT_VALUE,
         "crop_generated":PRODUCT_GENERATED_REWARD,
         "crop_harvested":PRODUCT_HARVESTED_REWARD,
