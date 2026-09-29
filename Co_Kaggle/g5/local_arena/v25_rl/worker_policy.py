@@ -25,6 +25,19 @@ GLOBAL_FEATURE_NAMES=("day","hour","workers","shed_fill","wheat","fertilizer","p
 BASE_FEATURE_NAMES=("day","hour","workers","free_workers","worker_x","worker_y","target_x","target_y","distance","at_target","worker_inv","worker_wheat","worker_fert","worker_products","worker_animals","shed_fill","shed_wheat","shed_fert","seed_count","age","yield_units","consecutive_unwatered","consecutive_unfed","watered","fed","cared","fert_days","care_bonus","fert_available","critical","amount","shed_distance")
 CANDIDATE_FEATURE_NAMES=BASE_FEATURE_NAMES+tuple("op_"+x for x in OPS)+tuple("item_"+(x or "NONE") for x in ITEMS)
 
+# Actor-only shaping is measured in normalized-advantage units.  These values
+# never enter turn reward / critic targets, so planner/PASS credit is attached
+# to the worker subdecision that actually chose (or deferred) the task.
+PLANNED_PLANT_ACTOR_BONUS = 2.0
+PLANNED_BUILD_ACTOR_BONUS = 1.0
+PLANNED_ANIMAL_PICKUP_ACTOR_BONUS = 1.0
+PLANNED_PLACE_ANIMAL_ACTOR_BONUS = 1.5
+DEFER_PLANNED_PLANT_ACTOR_PENALTY = -0.75
+AVOIDABLE_PASS_ACTOR_PENALTY = -1.0
+
+def _weed_prevention_task(task):
+    return task.op=="WATER" and float(task.critical)>=1.0
+
 def totals(private):
     out=defaultdict(int)
     for k,v in private["shed"].items(): out[k]+=int(v)
@@ -75,6 +88,7 @@ class SubDecision:
     candidates: np.ndarray
     action_index: int
     old_log_prob: float
+    actor_bonus: float = 0.0
 
 @dataclass
 class TurnRecord:
@@ -153,7 +167,8 @@ class WorkerPolicy:
         pickups("FERTILIZER",max(0,sum(t.op=="FERTILIZE" for t in tasks)-sum(int(i.get("FERTILIZER",0)) for i in p["inventories"])),3)
         for a,n in need.items():
             shortage=max(0,n-sum(int(i.get(a,0)) for i in p["inventories"]))
-            for slot in range(min(shortage,int(p["shed"].get(a,0)))): tasks.append(Task(None,"PICKUP",a,1,slot=slot))
+            for slot in range(min(shortage,int(p["shed"].get(a,0)))):
+                tasks.append(Task(None,"PICKUP",a,1,slot=slot,planned=True))
         return tasks
 
     def _sync_day(self,obs):
@@ -194,7 +209,15 @@ class WorkerPolicy:
 
     def feasible(self,obs,w,t,seeds,shed):
         e=self.e; inv=obs["private"]["inventories"][w]; pos=_positions(obs)[w]; target=t.target if t.target is not None else tuple(e.nearest_shed(pos))
-        if e.dist(pos,target)>max(0,23-int(obs["hour"])): return False
+        distance=e.dist(pos,target)
+        remaining=max(0,23-int(obs["hour"]))
+        # A newly planted seed starts with consecutive_unwatered=1 and becomes
+        # WEED if it cannot be watered before the day refresh. Reserve one full
+        # later turn for WATER after movement + PLANT.
+        if t.op=="PLANT":
+            if distance+1>remaining: return False
+        elif distance>remaining:
+            return False
         if t.op=="PLANT" and int(seeds.get(t.item,0))<=0: return False
         if t.op=="FEED" and int(inv.get("WHEAT",0))<=0: return False
         if t.op=="FERTILIZE" and int(inv.get("FERTILIZER",0))<=0: return False
@@ -213,12 +236,32 @@ class WorkerPolicy:
         if t.op=="PASS": return ["PASS"]
         return [t.op]
 
+    def actor_bonus_for_choice(self,w,t,choices):
+        same_worker=[ct for cw,ct,_ in choices if cw==w]
+        bonus=0.0
+        if t.op=="PASS" and any(ct.op!="PASS" for ct in same_worker):
+            bonus+=AVOIDABLE_PASS_ACTOR_PENALTY
+        has_planned_plant=any(ct.planned and ct.op=="PLANT" for ct in same_worker)
+        if has_planned_plant and not (t.planned and t.op=="PLANT"):
+            bonus+=DEFER_PLANNED_PLANT_ACTOR_PENALTY
+        if t.planned:
+            if t.op=="PLANT":
+                bonus+=PLANNED_PLANT_ACTOR_BONUS
+            elif t.op in ("BUILD_COOP","BUILD_PASTURE"):
+                bonus+=PLANNED_BUILD_ACTOR_BONUS
+            elif t.op=="PICKUP" and t.item in self.e.ANIMALS:
+                bonus+=PLANNED_ANIMAL_PICKUP_ACTOR_BONUS
+            elif t.op=="PLACE_ANIMAL":
+                bonus+=PLANNED_PLACE_ANIMAL_ACTOR_BONUS
+        return float(bonus)
+
     def unit_actions(self,obs,animal_plan,crop_plan):
         self._sync_day(obs)
         positions=_positions(obs)
         workers=list(range(len(positions)))
         actions=[None]*len(workers)
         tasks=self.tasks(obs,animal_plan,crop_plan)
+        critical_water_tasks=[t for t in tasks if _weed_prevention_task(t)]
         reserved=set()
         seeds=dict(obs["private"]["seeds"])
         shed=dict(obs["private"]["shed"])
@@ -273,6 +316,12 @@ class WorkerPolicy:
             active=self.active_tasks.get(w)
             if active is None:
                 continue
+            # Crop survival is a hard scheduler invariant.  A crop with
+            # consecutive_unwatered>=1 will become WEED at the next missed
+            # day refresh, so suspend unrelated persistent routes first.
+            if critical_water_tasks and not _weed_prevention_task(active):
+                self.active_tasks.pop(w,None)
+                continue
             candidates=tasks+self.extras(obs,w)
             current=next((t for t in candidates if t.key==active.key),None)
             if current is None or not self.feasible(obs,w,current,seeds,shed):
@@ -297,6 +346,18 @@ class WorkerPolicy:
                         continue
                     choices.append((w,t,reservation_key))
                     feats.append(candidate_features(self.e,obs,w,t,len(workers)))
+
+            # If any remaining worker can service a crop that will weed on the
+            # next missed refresh, remove every non-critical choice (including
+            # PASS) until those WATER tasks are reserved.
+            urgent=[
+                i for i,(_w,t,_key) in enumerate(choices)
+                if _weed_prevention_task(t)
+            ]
+            if urgent:
+                choices=[choices[i] for i in urgent]
+                feats=[feats[i] for i in urgent]
+
             if not choices:
                 for w in workers:
                     actions[w]=["PASS"]
@@ -323,9 +384,12 @@ class WorkerPolicy:
                 and any(cw==w and ct.op!="PASS" for cw,ct,_ in choices)
             )
             record_reward_provenance(w,t,pos,target,action,avoidable_pass)
+            actor_bonus=self.actor_bonus_for_choice(w,t,choices)
             self.candidate_counts.append(len(choices))
             if self.collect:
-                subs.append(SubDecision(mat.astype(np.float16),j,float(lp.item())))
+                subs.append(SubDecision(
+                    mat.astype(np.float16),j,float(lp.item()),actor_bonus
+                ))
 
             workers.remove(w)
             if t.op!="PASS":
