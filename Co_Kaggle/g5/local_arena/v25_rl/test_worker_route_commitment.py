@@ -265,10 +265,35 @@ class WorkerRouteCommitmentTest(unittest.TestCase):
         actions = policy.unit_actions(at_target, {}, plan)
         self.assertEqual(actions[0], ["PLANT", "WHEAT"])
         self.assertEqual(origin.actor_bonus, 0.0)
+        self.assertEqual(origin.reward_equiv_bonus, 0.0)
+
+        policy.finish_turn(
+            RewardBreakdown(planned_plants_completed=1)
+        )
         self.assertEqual(
             origin.reward_equiv_bonus,
             PLANNED_PLANT_REWARD_EQUIV,
         )
+
+    def test_emitted_planned_plant_gets_no_credit_if_transition_fails(self):
+        policy = WorkerPolicy(
+            _Executor(),
+            _PlantLovingModel(),
+            torch.device("cpu"),
+            deterministic=True,
+            collect=True,
+        )
+        obs = _obs(worker_x=0)
+        obs["private"]["seeds"] = {"WHEAT": 1}
+        plan = {(0, 0): "WHEAT"}
+
+        actions = policy.unit_actions(obs, {}, plan)
+        self.assertEqual(actions[0], ["PLANT", "WHEAT"])
+        origin = policy.pending.subdecisions[0]
+        self.assertEqual(origin.reward_equiv_bonus, 0.0)
+
+        policy.finish_turn(RewardBreakdown(planned_plants_completed=0))
+        self.assertEqual(origin.reward_equiv_bonus, 0.0)
 
     def test_interrupted_planned_route_gets_no_positive_bonus(self):
         policy = WorkerPolicy(
