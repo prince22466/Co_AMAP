@@ -453,6 +453,30 @@ def parser():
     p.add_argument("--device",default="auto"); p.add_argument("--hidden",type=int,default=128); p.add_argument("--learning-rate",type=float,default=1e-4); p.add_argument("--gamma",type=float,default=.99); p.add_argument("--gae-lambda",type=float,default=.95); p.add_argument("--ppo-epochs",type=int,default=4); p.add_argument("--minibatch-size",type=int,default=128); p.add_argument("--clip-ratio",type=float,default=.10); p.add_argument("--target-kl",type=float,default=.01); p.add_argument("--rollout-temperature",type=float,default=.20); p.add_argument("--collapse-restore-ratio",type=float,default=.70); p.add_argument("--value-coef",type=float,default=.5); p.add_argument("--entropy-coef",type=float,default=.001); p.add_argument("--max-grad-norm",type=float,default=.5); p.add_argument("--preflight-only",action="store_true")
     return p
 
+def validation_checkpoint_decision(
+    score,weed,reference,best,best_weed,collapse_restore_ratio
+):
+    """Lexicographic validation policy: weeds first, reward second."""
+    weed_improved=(
+        weed is not None
+        and (
+            float(weed)<best_weed-1e-9
+            or (
+                abs(float(weed)-best_weed)<=1e-9
+                and score is not None
+                and float(score)>best
+            )
+        )
+    )
+    ratio=None
+    reward_collapsed=False
+    if score is not None and math.isfinite(reference) and reference>0:
+        ratio=float(score)/reference
+        reward_collapsed=ratio<collapse_restore_ratio
+    # A safer weed policy is never discarded solely for lower throughput.
+    rollback=bool(reward_collapsed and not weed_improved)
+    return weed_improved,rollback,ratio
+
 def main():
     args=parser().parse_args()
     if args.rollout_temperature<=0: raise SystemExit("--rollout-temperature must be > 0")
@@ -519,40 +543,42 @@ def main():
             rows,s=evaluate(val,model,device,ex,f"validation u{u}")
             score=s.get("mean_worker_reward")
             weed=s.get("mean_crops_to_weed")
-            rollback=False
             reference=max(
                 float(baseline_worker_reward) if baseline_worker_reward is not None else -math.inf,
                 float(best),
             )
-            if score is not None and math.isfinite(reference) and reference>0:
-                ratio=float(score)/reference
+            weed_improved,rollback,ratio=validation_checkpoint_decision(
+                score,weed,reference,best,best_weed,args.collapse_restore_ratio
+            )
+            if ratio is not None:
                 s["reward_vs_reference"]=ratio
-                s["collapse_warning"]=bool(ratio<args.collapse_restore_ratio)
-                if ratio<args.collapse_restore_ratio:
-                    rollback=True
-                    s["rollback_to_best"]=True
-                    print(
-                        f"WARNING: validation worker reward collapsed to {ratio:.1%} "
-                        f"of reference ({float(score):+.1f} vs {reference:+.1f}); "
-                        "restoring best.pt",
-                        flush=True,
-                    )
+                s["collapse_warning"]=bool(
+                    ratio<args.collapse_restore_ratio
+                )
+            if rollback:
+                s["rollback_to_best"]=True
+                print(
+                    f"WARNING: validation worker reward collapsed to {ratio:.1%} "
+                    f"of reference ({float(score):+.1f} vs {reference:+.1f}) "
+                    "without improving weeds; restoring best.pt",
+                    flush=True,
+                )
+            elif (
+                ratio is not None
+                and ratio<args.collapse_restore_ratio
+                and weed_improved
+            ):
+                s["reward_collapse_accepted_for_weed_improvement"]=True
+                print(
+                    f"accepting lower reward ({ratio:.1%} of reference) because "
+                    f"validation weeds improved to {float(weed):.3f}",
+                    flush=True,
+                )
 
             write_jsonl(out/"validation.jsonl",{"update":u,**s})
             for r in rows:
                 write_jsonl(out/"validation_episodes.jsonl",{"update":u,**r.__dict__})
 
-            weed_improved=(
-                weed is not None
-                and (
-                    float(weed)<best_weed-1e-9
-                    or (
-                        abs(float(weed)-best_weed)<=1e-9
-                        and score is not None
-                        and float(score)>best
-                    )
-                )
-            )
             if rollback:
                 _,restored_best,restored_weed=load_checkpoint(ck/"best.pt",model,opt,device)
                 best=max(best,restored_best)
