@@ -7,7 +7,7 @@ import numpy as np
 import torch
 from torch import nn
 from torch.distributions import Categorical
-from worker_reward import ANIMAL_PRODUCTS, ITEMS, OPS, PRODUCTS, RewardBreakdown, _positions
+from worker_reward import ANIMAL_PRODUCTS, ITEMS, MOVE_ACTIONS, OPS, PRODUCTS, RewardBreakdown, _positions
 
 @dataclass(frozen=True)
 class Task:
@@ -17,6 +17,7 @@ class Task:
     amount: int=1
     critical: float=0.0
     slot: int=0
+    planned: bool=False
     @property
     def key(self): return (self.target,self.op,self.item,self.slot)
 
@@ -101,13 +102,18 @@ class WorkerPolicy:
         # the shed cannot masquerade as newly completed production logistics.
         self.shed_sourced_wheat: dict[int, int] = defaultdict(int)
         self.turn_delivery_credit: list[dict[str, int]] = []
+        # Reward-only provenance for planner execution, useful route movement,
+        # and PASS choices that skipped feasible work.
+        self.turn_plan_credit: list[dict[str, str]] = []
+        self.turn_route_progress: list[bool] = []
+        self.turn_avoidable_pass: list[bool] = []
 
     def tasks(self,obs,animal_plan,crop_plan):
         e=self.e; farm=obs["farms"][obs["player"]]; p=obs["private"]; day=obs["day"]; tasks=[]; need=defaultdict(int)
         for pt,planned in crop_plan.items():
             pt=tuple(pt); t=e.tile(farm,pt)
             if t is None:
-                if int(p["seeds"].get(planned,0)): tasks.append(Task(pt,"PLANT",planned))
+                if int(p["seeds"].get(planned,0)): tasks.append(Task(pt,"PLANT",planned,planned=True))
                 continue
             if not isinstance(t,dict): continue
             if t.get("kind")=="WEED": tasks.append(Task(pt,"DIG")); continue
@@ -125,10 +131,10 @@ class WorkerPolicy:
             if age>useful and float(t.get("yield_units",0) or 0)<=0: tasks.append(Task(pt,"DIG"))
         for pt,a in animal_plan.items():
             pt=tuple(pt); t=e.tile(farm,pt); structure="COOP" if a=="GOOSE" else "PASTURE"
-            if t is None: tasks.append(Task(pt,"BUILD_COOP" if a=="GOOSE" else "BUILD_PASTURE",a))
+            if t is None: tasks.append(Task(pt,"BUILD_COOP" if a=="GOOSE" else "BUILD_PASTURE",a,planned=True))
             elif isinstance(t,dict) and t.get("kind")=="WEED": tasks.append(Task(pt,"DIG"))
             elif isinstance(t,dict) and t.get("kind") in ("COOP","PASTURE") and not t.get("animal"):
-                if t.get("kind")==structure: tasks.append(Task(pt,"PLACE_ANIMAL",a)); need[a]+=1
+                if t.get("kind")==structure: tasks.append(Task(pt,"PLACE_ANIMAL",a,planned=True)); need[a]+=1
                 else: tasks.append(Task(pt,"DIG"))
         unfed=0
         for y,row in enumerate(farm["tiles"]):
@@ -221,6 +227,9 @@ class WorkerPolicy:
         self.turn_delivery_credit=[
             self._delivery_credit_for_worker(obs,w) for w in workers
         ]
+        self.turn_plan_credit=[{} for _ in workers]
+        self.turn_route_progress=[False for _ in workers]
+        self.turn_avoidable_pass=[False for _ in workers]
 
         state=global_features(self.e,obs,animal_plan,crop_plan,len(workers))
         st=torch.as_tensor(state,dtype=torch.float32,device=self.device)
@@ -234,11 +243,20 @@ class WorkerPolicy:
             elif t.op=="PICKUP":
                 shed[t.item]=max(0,int(shed.get(t.item,0))-t.amount)
 
+        def record_reward_provenance(w,t,pos,target,action,avoidable_pass=False):
+            if t.planned and pos==target and t.op in ("PLANT","PLACE_ANIMAL"):
+                self.turn_plan_credit[w]={"op":t.op,"item":t.item}
+            if t.op!="PASS" and pos!=target and action and action[0] in MOVE_ACTIONS:
+                self.turn_route_progress[w]=True
+            if t.op=="PASS" and avoidable_pass:
+                self.turn_avoidable_pass[w]=True
+
         def assign_committed(w,t,reservation_key):
             pos=positions[w]
             target=t.target if t.target is not None else tuple(self.e.nearest_shed(pos))
             action=self.emit(obs,w,t)
             actions[w]=action
+            record_reward_provenance(w,t,pos,target,action)
             reserved.add(reservation_key)
             reserve_resources(t)
             # Only actual resource operations change provenance; movement does not.
@@ -300,6 +318,11 @@ class WorkerPolicy:
             target=t.target if t.target is not None else tuple(self.e.nearest_shed(pos))
             action=self.emit(obs,w,t)
             actions[w]=action
+            avoidable_pass=(
+                t.op=="PASS"
+                and any(cw==w and ct.op!="PASS" for cw,ct,_ in choices)
+            )
+            record_reward_provenance(w,t,pos,target,action,avoidable_pass)
             self.candidate_counts.append(len(choices))
             if self.collect:
                 subs.append(SubDecision(mat.astype(np.float16),j,float(lp.item())))

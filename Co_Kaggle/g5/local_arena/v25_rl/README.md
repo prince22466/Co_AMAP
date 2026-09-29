@@ -69,9 +69,9 @@ so the number of RL transitions is `len(history["steps"]) - 1`; it is not hard-c
 | Worker outcome | Reward |
 | --- | ---: |
 | animal escapes | -100 |
-| PLANT -> WEED | -32 |
-| still-productive plant is destroyed/disappears without HARVEST | -32 |
-| each harvestable unit lost with a destroyed asset | -8 |
+| PLANT -> WEED | -64 |
+| still-productive plant is destroyed/disappears without HARVEST | -64 |
+| each harvestable unit lost with a destroyed asset | -16 |
 | crop product unit generated | +2 |
 | crop product unit harvested | +2 |
 | crop product unit explicitly delivered to shed | +4 |
@@ -79,8 +79,13 @@ so the number of RL transitions is `len(history["steps"]) - 1`; it is not hard-c
 | animal product unit harvested | +16 |
 | animal product unit explicitly delivered to shed | +96 |
 | successful PLANT | +1 |
+| successful PLANT matching `crop_plan` | +10 additional |
 | successful BUILD_COOP / BUILD_PASTURE | +0.5 |
 | successful animal placement | +1 |
+| successful animal placement matching `animal_plan` | +16 additional |
+| purposeful movement toward a selected/committed task | +0.05 |
+| PASS while that worker has feasible non-PASS work | -0.10 |
+| PASS with no feasible non-PASS work | 0 |
 | effective CARE day (animal finishes day fed + cared) | +3 |
 | effective FERTILIZE | +1 |
 | COLLECT_FERTILIZER from an available animal | +1 |
@@ -98,9 +103,9 @@ Animal products now receive a much stronger lifecycle value because the v4 train
 
 `16 generated + 16 harvested + 96 delivered = 128`
 
-The reward deliberately puts most value on **delivery**, so harvesting animal output without moving it to the shed is no longer close to completing the lifecycle. The animal-maintenance shaping is also changed from the previous contract: normal FEED is worth more than critical rescue FEED, effective CARE is credited at day rollover only when the animal actually finished that day both fed and cared, a fed animal surviving a day rollover receives dense credit, and animal escape is more expensive. These fixed values still ignore market-price movement.
+The reward deliberately puts most value on **delivery**, so harvesting animal output without moving it to the shed is no longer close to completing the lifecycle. Planner execution now also receives explicit shaping: successful crop-plan PLANT and animal-plan placement get additional reward, while the existing animal lifecycle rewards are unchanged. The bonuses are reward-provenance qualified and are only credited after the planned tile transition succeeds. The animal-maintenance shaping is also changed from the previous contract: normal FEED is worth more than critical rescue FEED, effective CARE is credited at day rollover only when the animal actually finished that day both fed and cared, a fed animal surviving a day rollover receives dense credit, and animal escape is more expensive. These fixed values still ignore market-price movement.
 
-`PLANT -> WEED` is always treated as a heavy worker-efficiency failure, including expiration caused by failing to harvest in time. Random `None -> WEED` spawning is not penalized.
+`PLANT -> WEED` is always treated as a heavy worker-efficiency failure, including expiration caused by failing to harvest in time. Random `None -> WEED` spawning is not penalized. Crop neglect is now more expensive (`-64` plus `-16` per lost harvestable unit) so routine animal work should not dominate crop survival indefinitely.
 
 A deliberate `DIG` of a fully exhausted crop with no remaining yield and age beyond its useful production window is treated as valid cleanup and is **not** assigned the crop-death penalty. Destroying a still-productive crop remains a heavy failure.
 
@@ -188,7 +193,7 @@ mean_product_units_moved_to_shed_by_product_egg
 
 Workers are assigned autoregressively within a turn. After each worker choice, feasibility/reservation state is updated and the next worker is selected from the remaining candidates.
 
-If a selected task is remote, the emitted environment action is one deterministic Manhattan move toward its target. The network therefore learns **task/worker assignment and task ordering**, not free-form pathfinding.
+If a selected task is remote, the emitted environment action is one deterministic Manhattan move toward its target. The network therefore learns **task/worker assignment and task ordering**, not free-form pathfinding. A small `+0.05` shaping reward is attached only to these target-reducing task-route steps. PASS receives `-0.10` only when the same worker had at least one feasible non-PASS candidate; necessary idle time remains neutral.
 
 One PPO record corresponds to one environment turn. The turn still contains an autoregressive sequence of worker assignments, but PPO **does not form one probability ratio from the sum of all worker log probabilities**.
 
@@ -245,7 +250,7 @@ KL is checked before every actor minibatch update. If the current per-subdecisio
 Validation has an automatic catastrophic-collapse guard. The reference reward is the best of the initial deterministic baseline and the best held-out reward achieved so far. If validation falls below:
 
 ```text
---collapse-restore-ratio 0.25
+--collapse-restore-ratio 0.70
 ```
 
 of that reference, the trainer records `collapse_warning=true`, reloads `best.pt` including optimizer state, and writes the restored policy to `latest.pt`. The raw collapsed post-update checkpoint remains available as `update_NNNN.pt` for diagnosis.
@@ -287,7 +292,7 @@ python train_v25_worker_ppo.py \
 
 This animal-pipeline update intentionally keeps checkpoint algorithm `v25_static_worker_ppo_gae_v4_animal_reward` so the trained v4 actor/critic can be resumed. Model architecture and feature dimensions are unchanged. When an older v4 checkpoint is loaded under the new reward contract, the **actor weights are kept**, while the critic is reinitialized and Adam optimizer state plus the old validation-best score are reset. The old critic was trained against the previous reward scale (including falsely rewarded immature HARVEST no-ops), so its value estimates are not reused.
 
-To keep metrics from the two reward contracts separate, new runs write by default to `runs/worker_ppo_static_v20_v4_animal_pipeline`.
+To keep metrics from the reward contracts separate, new runs write by default to `runs/worker_ppo_static_v20_v6_plan_shaping`.
 
 `--minibatch-size` now batches worker subdecisions for the actor and turn records for the critic. The default remains 128.
 
@@ -304,7 +309,7 @@ python train_v25_worker_ppo.py \
 
 ## Outputs
 
-Outputs are written under `runs/worker_ppo_static_v20_v4_animal_pipeline`.
+Outputs are written under `runs/worker_ppo_static_v20_v6_plan_shaping`.
 
 - `metrics.jsonl` — PPO statistics, mean worker reward, and mean reward-component counts.
 - `episodes.jsonl` — per-training-replay worker metrics.
@@ -329,6 +334,10 @@ Primary health metrics are:
 - `mean_crops_to_weed`
 - `mean_crops_died`
 - `mean_worker_reward`
+- `mean_planned_plants_completed`
+- `mean_planned_animals_placed`
+- `mean_route_progress_steps`
+- `mean_avoidable_passes`
 
 The worker policy should improve these operational metrics independently of whether the overall game is ultimately won or lost.
 
@@ -381,4 +390,4 @@ PLACE 2 WHEAT into shed
 → 2 units receive delivery credit
 ```
 
-Reward metadata semantics are versioned as `engine-first-yield-eod-care-route-commit-provenance-v3`. Loading an older checkpoint therefore keeps compatible actor weights but resets critic, optimizer state, and the historical validation-best threshold.
+Reward metadata semantics are versioned as `engine-first-yield-eod-care-route-plan-shaping-v4`. Loading an older checkpoint therefore keeps compatible actor weights but resets critic, optimizer state, and the historical validation-best threshold.

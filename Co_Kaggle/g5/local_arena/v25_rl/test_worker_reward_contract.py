@@ -10,14 +10,18 @@ from worker_reward import (
     ANIMAL_PRODUCT_HARVESTED_REWARD,
     ANIMAL_PRODUCT_VALUE,
     ANIMAL_ESCAPE_PENALTY,
+    AVOIDABLE_PASS_PENALTY,
     CRITICAL_FEED_REWARD,
     EFFECTIVE_CARE_REWARD,
     HEALTHY_ANIMAL_DAY_REWARD,
     NORMAL_FEED_REWARD,
+    PLANNED_PLACE_ANIMAL_REWARD,
+    PLANNED_PLANT_REWARD,
     PRODUCT_DELIVERED_REWARD,
     PRODUCT_GENERATED_REWARD,
     PRODUCT_HARVESTED_REWARD,
     PRODUCT_VALUE,
+    ROUTE_PROGRESS_REWARD,
     compute_worker_reward,
 )
 
@@ -74,6 +78,104 @@ class WorkerRewardContractTest(unittest.TestCase):
         self.assertEqual(ANIMAL_PRODUCT_VALUE, 16.0 * PRODUCT_VALUE)
 
 
+
+
+    def test_successful_planned_plant_gets_plan_bonus(self):
+        before = _obs(None, inventory={}, day=0)
+        before["private"]["seeds"] = {"WHEAT": 1}
+        after = _obs({
+            "kind": "PLANT",
+            "crop": "WHEAT",
+            "planted_day": 0,
+            "yield_units": 0,
+        }, day=0)
+        result = compute_worker_reward(
+            EXECUTOR,
+            before,
+            {
+                "farmer": ["PLANT", "WHEAT"],
+                "hands": [],
+                "_plan_credit": [{"op": "PLANT", "item": "WHEAT"}],
+            },
+            after,
+        )
+        self.assertEqual(result.planned_plants_completed, 1)
+        self.assertEqual(result.reward, 1.0 + PLANNED_PLANT_REWARD)
+
+    def test_failed_planned_plant_gets_no_plan_bonus(self):
+        before = _obs(None, day=0)
+        after = _obs(None, day=0)
+        result = compute_worker_reward(
+            EXECUTOR,
+            before,
+            {
+                "farmer": ["PLANT", "WHEAT"],
+                "hands": [],
+                "_plan_credit": [{"op": "PLANT", "item": "WHEAT"}],
+            },
+            after,
+        )
+        self.assertEqual(result.planned_plants_completed, 0)
+        self.assertEqual(result.reward, 0.0)
+
+    def test_successful_planned_animal_placement_gets_plan_bonus(self):
+        before = _obs({"kind": "PASTURE", "animal": None}, inventory={"COW": 1})
+        after = _obs({"kind": "PASTURE", "animal": "COW", "yield_units": 0})
+        result = compute_worker_reward(
+            EXECUTOR,
+            before,
+            {
+                "farmer": ["PLACE", "COW"],
+                "hands": [],
+                "_plan_credit": [{"op": "PLACE_ANIMAL", "item": "COW"}],
+            },
+            after,
+        )
+        self.assertEqual(result.planned_animals_placed, 1)
+        self.assertEqual(result.reward, 1.0 + PLANNED_PLACE_ANIMAL_REWARD)
+
+    def test_route_progress_and_avoidable_pass_shaping(self):
+        before = _obs(None)
+        after = _obs(None)
+
+        progress = compute_worker_reward(
+            EXECUTOR,
+            before,
+            {
+                "farmer": ["EAST"],
+                "hands": [],
+                "_route_progress": [True],
+            },
+            after,
+        )
+        self.assertEqual(progress.route_progress_steps, 1)
+        self.assertEqual(progress.reward, ROUTE_PROGRESS_REWARD)
+
+        avoidable = compute_worker_reward(
+            EXECUTOR,
+            before,
+            {
+                "farmer": ["PASS"],
+                "hands": [],
+                "_avoidable_pass": [True],
+            },
+            after,
+        )
+        self.assertEqual(avoidable.avoidable_passes, 1)
+        self.assertEqual(avoidable.reward, AVOIDABLE_PASS_PENALTY)
+
+        necessary = compute_worker_reward(
+            EXECUTOR,
+            before,
+            {
+                "farmer": ["PASS"],
+                "hands": [],
+                "_avoidable_pass": [False],
+            },
+            after,
+        )
+        self.assertEqual(necessary.avoidable_passes, 0)
+        self.assertEqual(necessary.reward, 0.0)
 
     def test_immature_crop_harvest_noop_gets_no_reward(self):
         before = _obs({
