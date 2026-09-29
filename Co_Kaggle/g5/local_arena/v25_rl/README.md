@@ -79,7 +79,8 @@ so the number of RL transitions is `len(history["steps"]) - 1`; it is not hard-c
 | animal product unit harvested | +16 |
 | animal product unit explicitly delivered to shed | +96 |
 | successful planned PLANT | +10 |
-| successful BUILD_COOP / BUILD_PASTURE | +0.5 |
+| successful planned BUILD_COOP / BUILD_PASTURE | +8 |
+| successful planned animal PICKUP from shed | +2 per animal |
 | successful planned animal placement | +16 |
 | effective CARE day (animal finishes day fed + cared) | +3 |
 | effective FERTILIZE | +1 |
@@ -93,7 +94,7 @@ so the number of RL transitions is `len(history["steps"]) - 1`; it is not hard-c
 | PASS while that worker has another feasible non-PASS task | -0.10 |
 | PASS with no feasible useful alternative | 0 |
 
-Capacity creation is deliberately planner-aligned: PLANT candidates come from `crop_plan` and animal placement candidates come from `animal_plan`, so the stronger capacity rewards reinforce execution of the existing production planners rather than arbitrary expansion. The PASS penalty is metadata-gated and applies only when the same worker had another feasible non-PASS candidate; legitimate idle time is neutral. Route progress credit applies only when an emitted movement step reduces Manhattan distance to the selected or persistent task target.
+Capacity creation is deliberately planner-aligned: PLANT candidates come from `crop_plan`; BUILD, animal PICKUP, and animal placement candidates are generated from unmet `animal_plan` setup needs. The stronger capacity rewards therefore reinforce execution of the existing production planners rather than arbitrary expansion. Animal setup now receives dense credit across the full `BUILD -> PICKUP -> PLACE` chain instead of concentrating almost all setup value at the final placement step. The PASS penalty is metadata-gated and applies only when the same worker had another feasible non-PASS candidate; legitimate idle time is neutral. Route progress credit applies only when an emitted movement step reduces Manhattan distance to the selected or persistent task target.
 
 Crop products keep the original lifecycle value:
 
@@ -322,6 +323,7 @@ Primary health metrics are:
 
 - `mean_seeds_planted_total`
 - `mean_crop_units_harvested_total`
+- `mean_animals_picked_up`
 - `mean_animal_product_units_generated_total`
 - `mean_animal_product_units_harvested_total`
 - `mean_animal_product_units_moved_to_shed_total`
