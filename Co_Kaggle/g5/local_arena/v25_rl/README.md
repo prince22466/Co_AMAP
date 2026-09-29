@@ -272,7 +272,7 @@ python train_v25_worker_ppo.py --preflight-only
 Regression tests:
 
 ```bash
-python -m unittest test_ppo_subdecision_ratio.py test_worker_reward_contract.py test_worker_delivery_reservation.py test_worker_crop_harvest_maturity.py
+python -m unittest test_ppo_subdecision_ratio.py test_worker_reward_contract.py test_worker_delivery_reservation.py test_worker_crop_harvest_maturity.py test_worker_route_commitment.py
 ```
 
 Train:
@@ -344,3 +344,41 @@ This version means:
 - CARE that is never paired with feeding receives no effective-care reward.
 
 A checkpoint with older reward semantics keeps compatible actor weights, while critic/optimizer/best-score state is reset by the existing reward-contract mismatch handling.
+
+
+## Persistent worker routes
+
+Worker assignment is now treated as a short macro-action rather than a fresh routing decision every turn.
+
+When PPO assigns a worker to a remote task, the worker keeps that task while moving toward its target. The route is released when:
+
+- the worker reaches the target and executes the task;
+- the task disappears or becomes infeasible;
+- the day changes.
+
+This prevents stochastic rollouts from repeatedly sending the same worker back and forth between unrelated targets. Route continuation does not create a new actor sample; the original task decision receives delayed credit through turn-level GAE.
+
+## Provenance-qualified delivery reward
+
+Explicit shed delivery reward now measures newly produced logistics rather than raw shed traffic.
+
+WHEAT picked up from the shed is tracked per worker as shed-sourced inventory. That WHEAT remains usable for FEED, but it is excluded from delivery candidates and from delivery reward if returned to the shed. If a worker carries a mixture of shed-sourced and newly harvested WHEAT, only the newly harvested quantity is eligible for delivery credit.
+
+Example:
+
+```text
+PICKUP 4 WHEAT from shed
+PLACE 4 WHEAT back into shed
+→ delivery reward = 0
+```
+
+while:
+
+```text
+carry 4 shed-sourced WHEAT
+HARVEST 2 new WHEAT
+PLACE 2 WHEAT into shed
+→ 2 units receive delivery credit
+```
+
+Reward metadata semantics are versioned as `engine-first-yield-eod-care-route-commit-provenance-v3`. Loading an older checkpoint therefore keeps compatible actor weights but resets critic, optimizer state, and the historical validation-best threshold.
