@@ -36,9 +36,10 @@ PRODUCT_HARVESTED_REWARD = 2.0
 PRODUCT_DELIVERED_REWARD = 4.0
 assert PRODUCT_GENERATED_REWARD + PRODUCT_HARVESTED_REWARD + PRODUCT_DELIVERED_REWARD == PRODUCT_VALUE
 
-# Animal products have a longer, more worker-intensive production chain
-# (build/place/feed/care/harvest/deliver), so give completed animal output a
-# 2x lifecycle value while leaving crop rewards unchanged.
+# Animal products have a longer, lower-throughput production chain
+# (build/place/feed/care/harvest/deliver). The observed v4 run produced roughly
+# two orders of magnitude fewer animal units than crop units, so animal output
+# uses a much larger lifecycle value while crop rewards remain unchanged.
 ANIMAL_PRODUCT_VALUE = 128.0
 ANIMAL_PRODUCT_GENERATED_REWARD = 16.0
 ANIMAL_PRODUCT_HARVESTED_REWARD = 16.0
