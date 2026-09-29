@@ -103,6 +103,44 @@ class WorkerRouteCommitmentTest(unittest.TestCase):
         self.assertEqual(second[0], ["EAST"])
         self.assertEqual(policy.active_tasks[0].key, ((3, 0), "FEED", "WHEAT", 0))
 
+    def test_committed_movement_exposes_route_target_for_reward(self):
+        policy = WorkerPolicy(
+            _Executor(),
+            _PassLovingModel(),
+            torch.device("cpu"),
+            deterministic=True,
+            collect=False,
+        )
+        policy.active_day = 0
+        policy.active_tasks[0] = Task((3, 0), "FEED", "WHEAT")
+
+        actions = policy.unit_actions(_obs(worker_x=0), {}, {})
+        self.assertEqual(actions[0], ["EAST"])
+        self.assertEqual(policy.turn_route_targets[0], (3, 0))
+
+    def test_pass_is_marked_avoidable_only_when_same_worker_has_useful_work(self):
+        policy = WorkerPolicy(
+            _Executor(),
+            _PassLovingModel(),
+            torch.device("cpu"),
+            deterministic=True,
+            collect=False,
+        )
+        actions = policy.unit_actions(_obs(worker_x=3, fed=False, wheat=1), {}, {})
+        self.assertEqual(actions[0], ["PASS"])
+        self.assertTrue(policy.turn_avoidable_pass[0])
+
+        no_work = WorkerPolicy(
+            _Executor(),
+            _PassLovingModel(),
+            torch.device("cpu"),
+            deterministic=True,
+            collect=False,
+        )
+        actions = no_work.unit_actions(_obs(worker_x=3, fed=True, wheat=0), {}, {})
+        self.assertEqual(actions[0], ["PASS"])
+        self.assertFalse(no_work.turn_avoidable_pass[0])
+
     def test_commitment_is_released_when_task_becomes_invalid(self):
         policy = WorkerPolicy(
             _Executor(),
