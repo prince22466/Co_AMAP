@@ -272,7 +272,7 @@ python train_v25_worker_ppo.py --preflight-only
 Regression tests:
 
 ```bash
-python -m unittest test_ppo_subdecision_ratio.py test_worker_reward_contract.py test_worker_delivery_reservation.py
+python -m unittest test_ppo_subdecision_ratio.py test_worker_reward_contract.py test_worker_delivery_reservation.py test_worker_crop_harvest_maturity.py
 ```
 
 Train:
