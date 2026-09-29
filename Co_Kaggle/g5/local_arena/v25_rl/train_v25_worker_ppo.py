@@ -385,13 +385,17 @@ def load_checkpoint(path,model,opt,device):
     saved_contract=p.get("reward_contract") or {}
     contract_changed=saved_contract != current_reward_contract()
     if contract_changed:
-        # Actor/critic tensor shapes are compatible, but optimizer moments and
-        # the historical best score belong to a different reward scale.  Keep
-        # the learned weights, reset optimizer state, and establish a fresh
-        # best score from deterministic baseline evaluation under this contract.
+        # Keep the learned actor, but the critic/value scale is stale when the
+        # reward contract changes (especially after removing falsely rewarded
+        # immature HARVEST no-ops). Reinitialize critic parameters, reset Adam,
+        # and establish a fresh best score under the corrected reward function.
+        for module in model.critic.modules():
+            reset=getattr(module,"reset_parameters",None)
+            if callable(reset):
+                reset()
         print(
-            "WARNING: reward contract changed; keeping model weights but "
-            "resetting optimizer state and validation-best score",
+            "WARNING: reward contract changed; keeping actor weights but "
+            "resetting critic, optimizer state, and validation-best score",
             flush=True,
         )
         best=-math.inf
