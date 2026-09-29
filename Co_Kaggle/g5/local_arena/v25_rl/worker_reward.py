@@ -162,9 +162,10 @@ class RewardBreakdown:
 def compute_worker_reward(executor, before, worker_action, after) -> RewardBreakdown:
     """Calculate reward for worker execution only.
 
-    worker_action must contain only farmer and hands. Market orders are
-    intentionally not accepted by this API, so buying/selling/hiring/land
-    actions cannot directly enter worker reward attribution.
+    worker_action contains farmer/hands plus optional reward-only delivery
+    provenance metadata. Market orders are intentionally not accepted by this
+    API, so buying/selling/hiring/land actions cannot directly enter worker
+    reward attribution.
 
     The before/after observations still come from the real environment turn,
     which may include frozen market actions and day refresh. The emitted worker
