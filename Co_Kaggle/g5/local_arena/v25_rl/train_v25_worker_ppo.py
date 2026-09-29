@@ -78,7 +78,13 @@ def worker_policy_action(e,policy,obs):
     animal=e.animal_plan(obs,signals)
     crops=e.crop_plan(obs,signals)
     workers=policy.unit_actions(obs,animal,crops)
-    return {"farmer":workers[0],"hands":workers[1:]}
+    return {
+        "farmer":workers[0],
+        "hands":workers[1:],
+        # Reward-only metadata. compose_environment_action() deliberately drops
+        # this field before env.step().
+        "_delivery_credit":copy.deepcopy(policy.turn_delivery_credit),
+    }
 
 
 def recorded_market_action(recorded_candidate):
