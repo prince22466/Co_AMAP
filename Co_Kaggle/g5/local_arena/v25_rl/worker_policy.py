@@ -101,6 +101,9 @@ class WorkerPolicy:
         # the shed cannot masquerade as newly completed production logistics.
         self.shed_sourced_wheat: dict[int, int] = defaultdict(int)
         self.turn_delivery_credit: list[dict[str, int]] = []
+        # Reward-only per-worker metadata for scheduler-efficiency shaping.
+        self.turn_avoidable_pass: list[bool] = []
+        self.turn_route_targets: list[tuple[int, int] | None] = []
 
     def tasks(self,obs,animal_plan,crop_plan):
         e=self.e; farm=obs["farms"][obs["player"]]; p=obs["private"]; day=obs["day"]; tasks=[]; need=defaultdict(int)
@@ -221,6 +224,8 @@ class WorkerPolicy:
         self.turn_delivery_credit=[
             self._delivery_credit_for_worker(obs,w) for w in workers
         ]
+        self.turn_avoidable_pass=[False for _ in positions]
+        self.turn_route_targets=[None for _ in positions]
 
         state=global_features(self.e,obs,animal_plan,crop_plan,len(workers))
         st=torch.as_tensor(state,dtype=torch.float32,device=self.device)
@@ -239,6 +244,8 @@ class WorkerPolicy:
             target=t.target if t.target is not None else tuple(self.e.nearest_shed(pos))
             action=self.emit(obs,w,t)
             actions[w]=action
+            if action and action[0] in MOVE_ACTIONS:
+                self.turn_route_targets[w]=target
             reserved.add(reservation_key)
             reserve_resources(t)
             # Only actual resource operations change provenance; movement does not.
@@ -300,6 +307,12 @@ class WorkerPolicy:
             target=t.target if t.target is not None else tuple(self.e.nearest_shed(pos))
             action=self.emit(obs,w,t)
             actions[w]=action
+            if action and action[0] in MOVE_ACTIONS:
+                self.turn_route_targets[w]=target
+            if t.op=="PASS":
+                self.turn_avoidable_pass[w]=any(
+                    cw==w and ct.op!="PASS" for cw,ct,_ in choices
+                )
             self.candidate_counts.append(len(choices))
             if self.collect:
                 subs.append(SubDecision(mat.astype(np.float16),j,float(lp.item())))
