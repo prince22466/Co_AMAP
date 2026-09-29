@@ -105,10 +105,10 @@ class WorkerPolicy:
             if t.get("kind")=="WEED": tasks.append(Task(pt,"DIG")); continue
             if t.get("kind")!="PLANT": continue
             crop=t.get("crop",planned); age=day-int(t.get("planted_day",day)); spec=e.CROPS.get(crop)
-            first_yield_age=min((a for a,_ in spec[2]),default=10**9) if spec else 10**9
-            # The environment rejects crop HARVEST before first_yield_age even
-            # when yield_units is already positive. Never expose guaranteed
-            # no-op harvests to the policy.
+            first_yield_age=int(getattr(e,"CROP_FIRST_YIELD_DAY",{}).get(crop,10**9))
+            # HARVEST legality comes from the engine's first_yield_day, not
+            # from the planner's yield schedule. WHEAT/CARROT are legal at age
+            # 2 even though the planner schedules their nominal yield later.
             if float(t.get("yield_units",0) or 0)>0 and age>=first_yield_age:
                 tasks.append(Task(pt,"HARVEST",crop))
             if day<29 and not t.get("watered_today"): tasks.append(Task(pt,"WATER",crop,critical=float(int(t.get("consecutive_unwatered",0) or 0)>=1)))
