@@ -42,7 +42,8 @@ def _weed_prevention_task(task):
 
 def _crop_decay_start_step(e,tile):
     """Best available absolute step at which crop yield decay begins."""
-    raw=int(tile.get("max_lifespan_step",-1) or -1)
+    raw_value=tile.get("max_lifespan_step",-1)
+    raw=int(raw_value if raw_value is not None else -1)
     if raw>=0:
         return raw
     crop=tile.get("crop")
