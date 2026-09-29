@@ -40,6 +40,16 @@ AVOIDABLE_PASS_ACTOR_PENALTY = -1.0
 def _weed_prevention_task(task):
     return task.op=="WATER" and float(task.critical)>=1.0
 
+def _animal_survival_task(task):
+    return (
+        (task.op=="FEED" and float(task.critical)>=1.0)
+        or (
+            task.op=="PICKUP"
+            and task.item=="WHEAT"
+            and float(task.critical)>=1.0
+        )
+    )
+
 def _crop_decay_start_step(e,tile):
     """Best available absolute step at which crop yield decay begins."""
     raw_value=tile.get("max_lifespan_step",-1)
@@ -199,20 +209,46 @@ class WorkerPolicy:
             elif isinstance(t,dict) and t.get("kind") in ("COOP","PASTURE") and not t.get("animal"):
                 if t.get("kind")==structure: tasks.append(Task(pt,"PLACE_ANIMAL",a,planned=True)); need[a]+=1
                 else: tasks.append(Task(pt,"DIG"))
-        unfed=0
+        unfed=0; critical_unfed=0
         for y,row in enumerate(farm["tiles"]):
             for x,t in enumerate(row):
                 if not isinstance(t,dict) or not t.get("animal"): continue
                 pt=(x,y); a=t["animal"]
-                if day<29 and not t.get("fed_today"): tasks.append(Task(pt,"FEED","WHEAT",critical=float(int(t.get("consecutive_unfed",0) or 0)>=1))); unfed+=1
+                if day<29 and not t.get("fed_today"):
+                    is_critical=int(t.get("consecutive_unfed",0) or 0)>=1
+                    tasks.append(Task(
+                        pt,"FEED","WHEAT",critical=float(is_critical)
+                    ))
+                    unfed+=1
+                    critical_unfed+=int(is_critical)
                 if day<29 and not t.get("cared_today"): tasks.append(Task(pt,"CARE",a))
                 if float(t.get("yield_units",0) or 0)>0: tasks.append(Task(pt,"HARVEST",ANIMAL_PRODUCTS.get(a,"")))
                 if t.get("fertilizer_available"): tasks.append(Task(pt,"COLLECT_FERTILIZER","FERTILIZER"))
-        def pickups(item,short,cap):
-            left=min(short,int(p["shed"].get(item,0))); slot=0
+
+        def pickups(item,short,cap,critical_units=0):
+            left=min(short,int(p["shed"].get(item,0)))
+            critical_left=min(max(0,int(critical_units)),left)
+            slot=0
             while left>0:
-                n=min(cap,left); tasks.append(Task(None,"PICKUP",item,n,slot=slot)); left-=n; slot+=1
-        pickups("WHEAT",max(0,unfed-sum(int(i.get("WHEAT",0)) for i in p["inventories"])),4)
+                n=min(cap,left)
+                tasks.append(Task(
+                    None,"PICKUP",item,n,
+                    critical=float(critical_left>0),
+                    slot=slot,
+                ))
+                left-=n
+                critical_left=max(0,critical_left-n)
+                slot+=1
+
+        carried_wheat=sum(
+            int(inv.get("WHEAT",0) or 0) for inv in p["inventories"]
+        )
+        wheat_short=max(0,unfed-carried_wheat)
+        critical_wheat_short=max(0,critical_unfed-carried_wheat)
+        pickups(
+            "WHEAT",wheat_short,4,
+            critical_units=critical_wheat_short,
+        )
         pickups("FERTILIZER",max(0,sum(t.op=="FERTILIZE" for t in tasks)-sum(int(i.get("FERTILIZER",0)) for i in p["inventories"])),3)
         for a,n in need.items():
             shortage=max(0,n-sum(int(i.get(a,0)) for i in p["inventories"]))
@@ -265,6 +301,14 @@ class WorkerPolicy:
         # WEED if it cannot be watered before the day refresh. Reserve one full
         # later turn for WATER after movement + PLANT.
         if t.op=="PLANT":
+            if distance+1>remaining: return False
+        elif (
+            t.op=="PICKUP"
+            and t.item=="WHEAT"
+            and float(t.critical)>=1.0
+        ):
+            # Emergency WHEAT pickup is only useful if at least one later turn
+            # remains for the actual FEED after reaching the shed and PICKUP.
             if distance+1>remaining: return False
         elif distance>remaining:
             return False
@@ -378,15 +422,32 @@ class WorkerPolicy:
         workers=list(range(len(positions)))
         actions=[None]*len(workers)
         tasks=self.tasks(obs,animal_plan,crop_plan)
+        seeds=dict(obs["private"]["seeds"])
+        shed=dict(obs["private"]["shed"])
         critical_water_tasks=[t for t in tasks if _weed_prevention_task(t)]
+        critical_feed_tasks=[
+            t for t in tasks
+            if t.op=="FEED" and float(t.critical)>=1.0
+        ]
+        critical_wheat_pickups=[
+            t for t in tasks
+            if (
+                t.op=="PICKUP"
+                and t.item=="WHEAT"
+                and float(t.critical)>=1.0
+            )
+        ]
+        direct_survival_tasks=critical_water_tasks+critical_feed_tasks
+        survival_tasks=direct_survival_tasks+critical_wheat_pickups
         deadline_harvest_tasks=self._urgent_harvest_tasks(
             obs,workers,tasks
         )
-        critical_tasks=critical_water_tasks+deadline_harvest_tasks
+        critical_tasks=survival_tasks+deadline_harvest_tasks
+        direct_survival_keys={t.key for t in direct_survival_tasks}
+        survival_pickup_keys={t.key for t in critical_wheat_pickups}
+        deadline_harvest_keys={t.key for t in deadline_harvest_tasks}
         critical_keys={t.key for t in critical_tasks}
         reserved=set()
-        seeds=dict(obs["private"]["seeds"])
-        shed=dict(obs["private"]["shed"])
         # Snapshot provenance before this turn's actions. Reward attribution uses
         # this to cap delivery credit to goods that did not originate in the shed.
         self.turn_delivery_credit=[
@@ -446,23 +507,59 @@ class WorkerPolicy:
             active=self.active_tasks.get(w)
             if active is None:
                 continue
-            # Preserve a non-critical committed route whenever the *other*
-            # available workers can still cover every unreserved hard deadline:
-            # critical WATER plus imminent crop-decay HARVEST. Only preempt the
-            # minimum routes required for crop survival / harvest preservation.
+            # Preserve a non-critical committed route unless this worker is
+            # required for lexicographic hard-deadline coverage:
+            #   1) immediate survival (critical WATER / FEED)
+            #   2) survival resource prerequisite (critical WHEAT PICKUP)
+            #   3) imminent crop-decay HARVEST
+            # This prevents harvest protection from sacrificing animals and
+            # still preempts only the minimum number of unrelated routes.
             if active.key not in critical_keys:
-                remaining_critical=[
-                    t for t in critical_tasks if t.key not in reserved
+                remaining_direct=[
+                    t for t in direct_survival_tasks if t.key not in reserved
+                ]
+                remaining_supply=[
+                    t for t in critical_wheat_pickups if t.key not in reserved
+                ]
+                remaining_harvest=[
+                    t for t in deadline_harvest_tasks if t.key not in reserved
                 ]
                 other_workers=[q for q in workers if q!=w]
-                if remaining_critical:
-                    cover_with_w=self._max_critical_task_matching(
-                        obs,workers,remaining_critical,seeds,shed
+                if remaining_direct or remaining_supply or remaining_harvest:
+                    with_direct=self._max_critical_task_matching(
+                        obs,workers,remaining_direct,seeds,shed
                     )
-                    cover_without_w=self._max_critical_task_matching(
-                        obs,other_workers,remaining_critical,seeds,shed
+                    without_direct=self._max_critical_task_matching(
+                        obs,other_workers,remaining_direct,seeds,shed
                     )
-                    if cover_without_w < cover_with_w:
+                    with_supply=self._max_critical_task_matching(
+                        obs,workers,remaining_direct+remaining_supply,seeds,shed
+                    )
+                    without_supply=self._max_critical_task_matching(
+                        obs,other_workers,remaining_direct+remaining_supply,seeds,shed
+                    )
+                    with_total=self._max_critical_task_matching(
+                        obs,workers,
+                        remaining_direct+remaining_supply+remaining_harvest,
+                        seeds,shed
+                    )
+                    without_total=self._max_critical_task_matching(
+                        obs,other_workers,
+                        remaining_direct+remaining_supply+remaining_harvest,
+                        seeds,shed
+                    )
+                    if (
+                        without_direct < with_direct
+                        or (
+                            without_direct == with_direct
+                            and without_supply < with_supply
+                        )
+                        or (
+                            without_direct == with_direct
+                            and without_supply == with_supply
+                            and without_total < with_total
+                        )
+                    ):
                         self.active_tasks.pop(w,None)
                         self.active_origins.pop(w,None)
                         continue
@@ -493,13 +590,23 @@ class WorkerPolicy:
                     choices.append((w,t,reservation_key))
                     feats.append(candidate_features(self.e,obs,w,t,len(workers)))
 
-            # Hard deadlines are not left to PPO discretion. While a reachable
-            # critical WATER or imminent decay-HARVEST remains unreserved,
-            # remove every non-critical choice (including PASS).
+            # Survival comes before production preservation. First force
+            # critical WATER/FEED, then any WHEAT pickup needed to make
+            # emergency FEED possible, and only then imminent decay-HARVEST.
             urgent=[
                 i for i,(_w,t,_key) in enumerate(choices)
-                if t.key in critical_keys
+                if t.key in direct_survival_keys
             ]
+            if not urgent:
+                urgent=[
+                    i for i,(_w,t,_key) in enumerate(choices)
+                    if t.key in survival_pickup_keys
+                ]
+            if not urgent:
+                urgent=[
+                    i for i,(_w,t,_key) in enumerate(choices)
+                    if t.key in deadline_harvest_keys
+                ]
             if urgent:
                 choices=[choices[i] for i in urgent]
                 feats=[feats[i] for i in urgent]
