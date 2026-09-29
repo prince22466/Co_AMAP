@@ -209,7 +209,7 @@ class WorkerPolicy:
             elif isinstance(t,dict) and t.get("kind") in ("COOP","PASTURE") and not t.get("animal"):
                 if t.get("kind")==structure: tasks.append(Task(pt,"PLACE_ANIMAL",a,planned=True)); need[a]+=1
                 else: tasks.append(Task(pt,"DIG"))
-        unfed=0; critical_unfed=0
+        unfed=0; critical_unfed=0; critical_feed_targets=[]
         for y,row in enumerate(farm["tiles"]):
             for x,t in enumerate(row):
                 if not isinstance(t,dict) or not t.get("animal"): continue
@@ -221,6 +221,8 @@ class WorkerPolicy:
                     ))
                     unfed+=1
                     critical_unfed+=int(is_critical)
+                    if is_critical:
+                        critical_feed_targets.append(pt)
                 if day<29 and not t.get("cared_today"): tasks.append(Task(pt,"CARE",a))
                 if float(t.get("yield_units",0) or 0)>0: tasks.append(Task(pt,"HARVEST",ANIMAL_PRODUCTS.get(a,"")))
                 if t.get("fertilizer_available"): tasks.append(Task(pt,"COLLECT_FERTILIZER","FERTILIZER"))
@@ -243,8 +245,22 @@ class WorkerPolicy:
         carried_wheat=sum(
             int(inv.get("WHEAT",0) or 0) for inv in p["inventories"]
         )
+        remaining=max(0,23-int(obs["hour"]))
+        positions=_positions(obs)
+        reachable_critical_wheat=0
+        for w,pos in enumerate(positions):
+            units=int(p["inventories"][w].get("WHEAT",0) or 0)
+            if units<=0:
+                continue
+            if any(
+                e.dist(pos,target)<=remaining
+                for target in critical_feed_targets
+            ):
+                reachable_critical_wheat+=units
         wheat_short=max(0,unfed-carried_wheat)
-        critical_wheat_short=max(0,critical_unfed-carried_wheat)
+        critical_wheat_short=max(
+            0,critical_unfed-reachable_critical_wheat
+        )
         pickups(
             "WHEAT",wheat_short,4,
             critical_units=critical_wheat_short,
