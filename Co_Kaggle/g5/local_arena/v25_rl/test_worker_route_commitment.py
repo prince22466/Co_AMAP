@@ -258,7 +258,7 @@ class WorkerRouteCommitmentTest(unittest.TestCase):
             collect=False,
         )
         obs = _decay_crop_obs(
-            worker_x=3, hour=22, max_lifespan_step=120
+            worker_x=3, hour=22, max_lifespan_step=122
         )
         cow = obs["farms"][0]["tiles"][0][3]
         cow["consecutive_unfed"] = 1
@@ -271,6 +271,25 @@ class WorkerRouteCommitmentTest(unittest.TestCase):
             {(0, 0): "WHEAT"},
         )
         self.assertEqual(actions[0], ["FEED"])
+
+    def test_unreachable_critical_feed_does_not_destroy_useful_route(self):
+        policy = WorkerPolicy(
+            _Executor(),
+            _PassLovingModel(),
+            torch.device("cpu"),
+            deterministic=True,
+            collect=False,
+        )
+        obs = _critical_animal_obs(worker_x=0, hour=23, wheat=0)
+        obs["private"]["shed"] = {"WHEAT": 0}
+        obs["farms"][0]["tiles"][0][3]["cared_today"] = False
+        policy.active_day = 0
+        care = Task((3, 0), "CARE", "COW")
+        policy.active_tasks[0] = care
+
+        actions = policy.unit_actions(obs, {}, {})
+        self.assertEqual(actions[0], ["EAST"])
+        self.assertEqual(policy.active_tasks.get(0), care)
 
     def test_critical_water_preempts_pass_and_noncritical_route(self):
         policy = WorkerPolicy(
