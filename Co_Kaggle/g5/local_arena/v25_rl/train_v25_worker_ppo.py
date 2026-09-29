@@ -22,12 +22,12 @@ G5_ROOT=LOCAL_ARENA.parent
 V20_RL=LOCAL_ARENA/"v20_rl"
 if str(V20_RL) not in sys.path: sys.path.insert(0,str(V20_RL))
 from evaluate_v20_v19_losses import _agent_observation,_environment_from_history,_field,_recorded_step_actions,_saved_final_rewards,_seed_hint,recorded_action_parity
-from worker_policy import ActorCritic,CANDIDATE_FEATURE_NAMES,GLOBAL_FEATURE_NAMES,TurnRecord,WorkerPolicy
-from worker_reward import ANIMAL_ESCAPE_PENALTY,ANIMAL_PRODUCT_DELIVERED_REWARD,ANIMAL_PRODUCT_GENERATED_REWARD,ANIMAL_PRODUCT_HARVESTED_REWARD,ANIMAL_PRODUCT_VALUE,AVOIDABLE_PASS_PENALTY,CRITICAL_FEED_REWARD,CROP_DEATH_PENALTY,CROP_TO_WEED_PENALTY,EFFECTIVE_CARE_REWARD,HEALTHY_ANIMAL_DAY_REWARD,LOST_HARVESTABLE_UNIT_PENALTY,NORMAL_FEED_REWARD,PLANNED_PLACE_ANIMAL_REWARD,PLANNED_PLANT_REWARD,PRODUCT_DELIVERED_REWARD,PRODUCT_GENERATED_REWARD,PRODUCT_HARVESTED_REWARD,PRODUCT_VALUE,ROUTE_PROGRESS_REWARD,RewardBreakdown,compute_worker_reward
+from worker_policy import AVOIDABLE_PASS_ACTOR_PENALTY,DEFER_PLANNED_PLANT_ACTOR_PENALTY,PLANNED_ANIMAL_PICKUP_ACTOR_BONUS,PLANNED_BUILD_ACTOR_BONUS,PLANNED_PLACE_ANIMAL_ACTOR_BONUS,PLANNED_PLANT_ACTOR_BONUS,ActorCritic,CANDIDATE_FEATURE_NAMES,GLOBAL_FEATURE_NAMES,TurnRecord,WorkerPolicy
+from worker_reward import ANIMAL_ESCAPE_PENALTY,ANIMAL_PRODUCT_DELIVERED_REWARD,ANIMAL_PRODUCT_GENERATED_REWARD,ANIMAL_PRODUCT_HARVESTED_REWARD,ANIMAL_PRODUCT_VALUE,AVOIDABLE_PASS_PENALTY,CRITICAL_FEED_REWARD,CRITICAL_WATER_REWARD,CROP_DEATH_PENALTY,CROP_TO_WEED_PENALTY,EFFECTIVE_CARE_REWARD,HEALTHY_ANIMAL_DAY_REWARD,LOST_HARVESTABLE_UNIT_PENALTY,NORMAL_FEED_REWARD,PLANNED_PLACE_ANIMAL_REWARD,PLANNED_PLANT_REWARD,PRODUCT_DELIVERED_REWARD,PRODUCT_GENERATED_REWARD,PRODUCT_HARVESTED_REWARD,PRODUCT_VALUE,ROUTE_PROGRESS_REWARD,RewardBreakdown,compute_worker_reward
 
 DEFAULT_HISTORY_DIR=G5_ROOT/"game_history"/"v20"
 DEFAULT_EXECUTOR=HERE/"v25_rl.py"
-DEFAULT_OUTPUT_DIR=HERE/"runs"/"worker_ppo_static_v20_v6_plan_shaping"
+DEFAULT_OUTPUT_DIR=HERE/"runs"/"worker_ppo_static_v20_v7_subdecision_zero_weed"
 CHECKPOINT_ALGORITHM="v25_static_worker_ppo_gae_v4_animal_reward"
 
 def load_executor(path):
@@ -152,6 +152,27 @@ def subdecision_logprob_entropy(model,sub,device,rollout_temperature):
     idx=torch.tensor(sub.action_index,device=device)
     return d.log_prob(idx),d.entropy().mean()
 
+def actor_samples_and_advantages(records):
+    """Return PPO actor samples with subdecision-specific shaped advantages."""
+    turn_adv=np.asarray([r.advantage for r in records],np.float32)
+    turn_adv=(turn_adv-turn_adv.mean())/(turn_adv.std()+1e-8)
+    actor_samples=[
+        (turn_idx,sub)
+        for turn_idx,record in enumerate(records)
+        for sub in record.subdecisions
+    ]
+    if not actor_samples:
+        raise ValueError("no PPO worker subdecisions")
+    bonuses=np.asarray(
+        [float(sub.actor_bonus) for _,sub in actor_samples],np.float32
+    )
+    actor_adv=np.asarray(
+        [turn_adv[turn_idx] for turn_idx,_ in actor_samples],np.float32
+    )+bonuses
+    # Keep actor-only shaping bounded even when several preferences combine.
+    actor_adv=np.clip(actor_adv,-5.0,5.0)
+    return turn_adv,actor_samples,actor_adv,bonuses
+
 def ppo_update(model,opt,device,records,args):
     """Conservative PPO over worker subdecisions.
 
@@ -163,19 +184,8 @@ def ppo_update(model,opt,device,records,args):
     if not records:
         raise ValueError("no PPO records")
 
-    turn_adv=np.asarray([r.advantage for r in records],np.float32)
-    turn_adv=(turn_adv-turn_adv.mean())/(turn_adv.std()+1e-8)
+    turn_adv,actor_samples,actor_adv,actor_bonus=actor_samples_and_advantages(records)
     ret=np.asarray([r.return_target for r in records],np.float32)
-
-    actor_samples=[
-        (turn_idx,sub)
-        for turn_idx,record in enumerate(records)
-        for sub in record.subdecisions
-    ]
-    if not actor_samples:
-        raise ValueError("no PPO worker subdecisions")
-
-    actor_adv=np.asarray([turn_adv[turn_idx] for turn_idx,_ in actor_samples],np.float32)
     actor_old=np.asarray([sub.old_log_prob for _,sub in actor_samples],np.float32)
 
     actor_stats=[]
@@ -286,6 +296,10 @@ def ppo_update(model,opt,device,records,args):
         "return_mean":float(ret.mean()),
         "actor_samples":len(actor_samples),
         "mean_subdecisions_per_turn":float(len(actor_samples)/len(records)),
+        "actor_bonus_mean":float(actor_bonus.mean()),
+        "actor_bonus_abs_mean":float(np.abs(actor_bonus).mean()),
+        "actor_bonus_positive_fraction":float(np.mean(actor_bonus>0)),
+        "actor_bonus_negative_fraction":float(np.mean(actor_bonus<0)),
         "actor_minibatches_completed":actor_minibatches_completed,
         "ppo_epochs_completed":epochs_completed,
         "kl_early_stop":kl_early_stop,
@@ -366,7 +380,7 @@ def device_for(v):
 
 def current_reward_contract():
     return {
-        "semantics":"engine-first-yield-eod-care-route-plan-shaping-v4",
+        "semantics":"engine-first-yield-eod-care-subdecision-zero-weed-v5",
         "crop_product_value":PRODUCT_VALUE,
         "crop_generated":PRODUCT_GENERATED_REWARD,
         "crop_harvested":PRODUCT_HARVESTED_REWARD,
@@ -378,19 +392,28 @@ def current_reward_contract():
         "animal_escape":ANIMAL_ESCAPE_PENALTY,
         "normal_feed":NORMAL_FEED_REWARD,
         "critical_feed":CRITICAL_FEED_REWARD,
+        "critical_water":CRITICAL_WATER_REWARD,
         "effective_care":EFFECTIVE_CARE_REWARD,
         "healthy_animal_day":HEALTHY_ANIMAL_DAY_REWARD,
         "crop_to_weed":CROP_TO_WEED_PENALTY,
         "crop_death":CROP_DEATH_PENALTY,
         "lost_harvestable_unit":LOST_HARVESTABLE_UNIT_PENALTY,
-        "planned_plant":PLANNED_PLANT_REWARD,
-        "planned_place_animal":PLANNED_PLACE_ANIMAL_REWARD,
+        "planned_plant_turn_reward":PLANNED_PLANT_REWARD,
+        "planned_place_animal_turn_reward":PLANNED_PLACE_ANIMAL_REWARD,
         "route_progress":ROUTE_PROGRESS_REWARD,
-        "avoidable_pass":AVOIDABLE_PASS_PENALTY,
+        "avoidable_pass_turn_reward":AVOIDABLE_PASS_PENALTY,
+        "planned_plant_actor_bonus":PLANNED_PLANT_ACTOR_BONUS,
+        "planned_build_actor_bonus":PLANNED_BUILD_ACTOR_BONUS,
+        "planned_animal_pickup_actor_bonus":PLANNED_ANIMAL_PICKUP_ACTOR_BONUS,
+        "planned_place_animal_actor_bonus":PLANNED_PLACE_ANIMAL_ACTOR_BONUS,
+        "defer_planned_plant_actor_penalty":DEFER_PLANNED_PLANT_ACTOR_PENALTY,
+        "avoidable_pass_actor_penalty":AVOIDABLE_PASS_ACTOR_PENALTY,
+        "critical_water_preemption":True,
+        "late_plant_requires_future_water_turn":True,
     }
 
-def save_checkpoint(path,model,opt,update,args,best):
-    torch.save({"algorithm":CHECKPOINT_ALGORITHM,"update":update,"model_state_dict":model.state_dict(),"optimizer_state_dict":opt.state_dict(),"candidate_feature_names":CANDIDATE_FEATURE_NAMES,"global_feature_names":GLOBAL_FEATURE_NAMES,"best_validation_worker_reward":best,"reward_contract":current_reward_contract(),"args":vars(args),"note":"PPO controls farmer/hands only; low-temperature stochastic rollouts; per-worker subdecision ratios; turn-level GAE/value; minibatch KL guard; rollback on catastrophic validation collapse; recorded market list is an unlearned env input; no final game result/money/margin/market reward"},path)
+def save_checkpoint(path,model,opt,update,args,best,best_weed=math.inf):
+    torch.save({"algorithm":CHECKPOINT_ALGORITHM,"update":update,"model_state_dict":model.state_dict(),"optimizer_state_dict":opt.state_dict(),"candidate_feature_names":CANDIDATE_FEATURE_NAMES,"global_feature_names":GLOBAL_FEATURE_NAMES,"best_validation_worker_reward":best,"best_validation_crops_to_weed":best_weed,"reward_contract":current_reward_contract(),"args":vars(args),"note":"PPO controls farmer/hands only; per-subdecision actor shaping; critical WATER preempts noncritical work; best checkpoint minimizes crop-to-weed before maximizing reward; recorded market list is an unlearned env input"},path)
 
 def load_checkpoint(path,model,opt,device):
     p=torch.load(path,map_location=device,weights_only=False)
@@ -414,11 +437,13 @@ def load_checkpoint(path,model,opt,device):
             flush=True,
         )
         best=-math.inf
+        best_weed=math.inf
     else:
         if p.get("optimizer_state_dict"):
             opt.load_state_dict(p["optimizer_state_dict"])
         best=float(p.get("best_validation_worker_reward",-math.inf))
-    return int(p.get("update",-1))+1,best
+        best_weed=float(p.get("best_validation_crops_to_weed",math.inf))
+    return int(p.get("update",-1))+1,best,best_weed
 
 def parser():
     p=argparse.ArgumentParser(description=__doc__)
@@ -443,20 +468,23 @@ def main():
     print(f"preflight replay parity OK: {paths[0].stem}",flush=True)
     if args.preflight_only: return 0
     device=device_for(args.device); random.seed(args.training_seed); np.random.seed(args.training_seed); torch.manual_seed(args.training_seed); rng=random.Random(args.training_seed)
-    model=ActorCritic(len(CANDIDATE_FEATURE_NAMES),len(GLOBAL_FEATURE_NAMES),args.hidden).to(device); opt=torch.optim.Adam(model.parameters(),lr=args.learning_rate); start=0; best=-math.inf
-    if args.resume: start,best=load_checkpoint(args.resume.expanduser().resolve(),model,opt,device)
+    model=ActorCritic(len(CANDIDATE_FEATURE_NAMES),len(GLOBAL_FEATURE_NAMES),args.hidden).to(device); opt=torch.optim.Adam(model.parameters(),lr=args.learning_rate); start=0; best=-math.inf; best_weed=math.inf
+    if args.resume: start,best,best_weed=load_checkpoint(args.resume.expanduser().resolve(),model,opt,device)
     (out/"split.json").write_text(json.dumps({"train":[p.name for p in train],"validation":[p.name for p in val],"split_seed":args.split_seed},indent=2)+"\n")
-    (out/"config.json").write_text(json.dumps({**vars(args),"executor":str(ex),"device_resolved":str(device),"algorithm":CHECKPOINT_ALGORITHM,"objective":"worker efficiency only; farmer/hands replaced by RL, recorded v20 market orders replayed unchanged; no final game result reward","policy_semantics":"persistent task routes; provenance-qualified delivery reward","crop_product_value":PRODUCT_VALUE,"animal_product_value":ANIMAL_PRODUCT_VALUE,"reward_contract":current_reward_contract()},indent=2,default=str)+"\n")
+    (out/"config.json").write_text(json.dumps({**vars(args),"executor":str(ex),"device_resolved":str(device),"algorithm":CHECKPOINT_ALGORITHM,"objective":"worker efficiency only; farmer/hands replaced by RL, recorded v20 market orders replayed unchanged; no final game result reward","policy_semantics":"persistent task routes; subdecision actor shaping; critical-water preemption; late-plant water reserve","crop_product_value":PRODUCT_VALUE,"animal_product_value":ANIMAL_PRODUCT_VALUE,"reward_contract":current_reward_contract()},indent=2,default=str)+"\n")
     rows,base=evaluate(val,model,device,ex,"baseline"); write_jsonl(out/"validation.jsonl",{"update":-1,**base})
     for r in rows: write_jsonl(out/"validation_episodes.jsonl",{"update":-1,**r.__dict__})
     baseline_worker_reward=base.get("mean_worker_reward")
+    baseline_weed=base.get("mean_crops_to_weed")
     if baseline_worker_reward is not None:
         best=max(best,float(baseline_worker_reward))
+    if baseline_weed is not None:
+        best_weed=min(best_weed,float(baseline_weed))
         # Preserve the source update when starting from --resume.  Writing -1
         # here would make a later resume from this new best.pt restart at u0
         # even though the weights came from a later checkpoint.
         baseline_checkpoint_update=start-1
-        save_checkpoint(ck/"best.pt",model,opt,baseline_checkpoint_update,args,best)
+        save_checkpoint(ck/"best.pt",model,opt,baseline_checkpoint_update,args,best,best_weed)
     started=time.perf_counter(); last=start-1
     for u in range(start,args.updates):
         if (time.perf_counter()-started)/3600>=args.max_training_hours: break
@@ -485,11 +513,12 @@ def main():
         if u%args.checkpoint_every_updates==0:
             # Keep the raw post-update checkpoint for diagnosis even if
             # validation subsequently decides that the policy collapsed.
-            save_checkpoint(ck/f"update_{u:04d}.pt",model,opt,u,args,best)
+            save_checkpoint(ck/f"update_{u:04d}.pt",model,opt,u,args,best,best_weed)
 
         if u%args.validate_every_updates==0:
             rows,s=evaluate(val,model,device,ex,f"validation u{u}")
             score=s.get("mean_worker_reward")
+            weed=s.get("mean_crops_to_weed")
             rollback=False
             reference=max(
                 float(baseline_worker_reward) if baseline_worker_reward is not None else -math.inf,
@@ -513,17 +542,33 @@ def main():
             for r in rows:
                 write_jsonl(out/"validation_episodes.jsonl",{"update":u,**r.__dict__})
 
+            weed_improved=(
+                weed is not None
+                and (
+                    float(weed)<best_weed-1e-9
+                    or (
+                        abs(float(weed)-best_weed)<=1e-9
+                        and score is not None
+                        and float(score)>best
+                    )
+                )
+            )
             if rollback:
-                _,restored_best=load_checkpoint(ck/"best.pt",model,opt,device)
+                _,restored_best,restored_weed=load_checkpoint(ck/"best.pt",model,opt,device)
                 best=max(best,restored_best)
-            elif score is not None and float(score)>best:
-                best=float(score)
-                save_checkpoint(ck/"best.pt",model,opt,u,args,best)
-                print(f"new best worker reward={best:+.3f}",flush=True)
+                best_weed=min(best_weed,restored_weed)
+            elif weed_improved:
+                best_weed=float(weed)
+                best=float(score) if score is not None else best
+                save_checkpoint(ck/"best.pt",model,opt,u,args,best,best_weed)
+                print(
+                    f"new best weed/reward={best_weed:.3f}/{best:+.3f}",
+                    flush=True,
+                )
 
         # latest.pt is always the policy that will actually continue training.
         # After a catastrophic validation result this is the restored best.
-        save_checkpoint(ck/"latest.pt",model,opt,u,args,best)
-    save_checkpoint(ck/"latest.pt",model,opt,last,args,best); return 0
+        save_checkpoint(ck/"latest.pt",model,opt,u,args,best,best_weed)
+    save_checkpoint(ck/"latest.pt",model,opt,last,args,best,best_weed); return 0
 
 if __name__=="__main__": raise SystemExit(main())
