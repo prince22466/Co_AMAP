@@ -125,6 +125,7 @@ class WorkerPolicy:
         # Reward-only provenance for planner execution, useful route movement,
         # and PASS choices that skipped feasible work.
         self.turn_plan_credit: list[dict[str, str]] = []
+        self.turn_planned_plant_origins: list[SubDecision] = []
         self.turn_route_progress: list[bool] = []
         self.turn_avoidable_pass: list[bool] = []
 
@@ -320,6 +321,7 @@ class WorkerPolicy:
             self._delivery_credit_for_worker(obs,w) for w in workers
         ]
         self.turn_plan_credit=[{} for _ in workers]
+        self.turn_planned_plant_origins=[]
         self.turn_route_progress=[False for _ in workers]
         self.turn_avoidable_pass=[False for _ in workers]
 
@@ -356,7 +358,10 @@ class WorkerPolicy:
                 origin=self.active_origins.pop(w,None)
                 if origin is not None:
                     origin.actor_bonus+=self.planned_completion_bonus(t)
-                    origin.reward_equiv_bonus+=self.planned_completion_reward_equiv(t)
+                    if t.planned and t.op=="PLANT":
+                        self.turn_planned_plant_origins.append(origin)
+                    else:
+                        origin.reward_equiv_bonus+=self.planned_completion_reward_equiv(t)
                 self._track_resource_action(w,action)
                 self.active_tasks.pop(w,None)
             else:
@@ -456,10 +461,9 @@ class WorkerPolicy:
             actor_bonus=self.actor_bonus_for_choice(
                 w,t,choices,completed=completed_now
             )
-            reward_equiv_bonus=(
-                self.planned_completion_reward_equiv(t)
-                if completed_now else 0.0
-            )
+            # Planned PLANT reward-equivalent credit is held until finish_turn()
+            # confirms the actual tile transition succeeded.
+            reward_equiv_bonus=0.0
             self.candidate_counts.append(len(choices))
             sub=None
             if self.collect:
@@ -468,6 +472,10 @@ class WorkerPolicy:
                     actor_bonus,reward_equiv_bonus
                 )
                 subs.append(sub)
+                if completed_now and t.planned and t.op=="PLANT":
+                    self.turn_planned_plant_origins.append(sub)
+                elif completed_now:
+                    sub.reward_equiv_bonus+=self.planned_completion_reward_equiv(t)
 
             workers.remove(w)
             if t.op!="PASS":
@@ -495,4 +503,10 @@ class WorkerPolicy:
     def finish_turn(self,reward: RewardBreakdown):
         if not self.collect: return
         if self.pending is None: raise RuntimeError("missing pending turn")
+        # Credit only engine-confirmed planned PLANT completions.  This mirrors
+        # HARVEST reward semantics: emitting the action is not enough.
+        completed=max(0,int(reward.planned_plants_completed))
+        for origin in self.turn_planned_plant_origins[:completed]:
+            origin.reward_equiv_bonus+=PLANNED_PLANT_REWARD_EQUIV
+        self.turn_planned_plant_origins=[]
         self.pending.reward=float(reward.reward); self.pending.reward_breakdown=reward.as_dict(); self.records.append(self.pending); self.pending=None
