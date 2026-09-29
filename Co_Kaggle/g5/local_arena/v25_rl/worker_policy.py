@@ -93,6 +93,14 @@ class WorkerPolicy:
         self.e=executor; self.model=model; self.device=device; self.deterministic=deterministic; self.collect=collect
         self.rollout_temperature=float(rollout_temperature)
         self.records=[]; self.pending=None; self.candidate_counts=[]
+        # A policy decision selects a job, not a one-turn direction. Workers keep
+        # moving toward that job until it completes or becomes invalid.
+        self.active_tasks: dict[int, Task] = {}
+        self.active_day: int | None = None
+        # Track WHEAT that came from the shed so returning the same resource to
+        # the shed cannot masquerade as newly completed production logistics.
+        self.shed_sourced_wheat: dict[int, int] = defaultdict(int)
+        self.turn_delivery_credit: list[dict[str, int]] = []
 
     def tasks(self,obs,animal_plan,crop_plan):
         e=self.e; farm=obs["farms"][obs["player"]]; p=obs["private"]; day=obs["day"]; tasks=[]; need=defaultdict(int)
@@ -142,13 +150,41 @@ class WorkerPolicy:
             for slot in range(min(shortage,int(p["shed"].get(a,0)))): tasks.append(Task(None,"PICKUP",a,1,slot=slot))
         return tasks
 
+    def _sync_day(self,obs):
+        day=int(obs["day"])
+        if self.active_day != day:
+            self.active_day=day
+            self.active_tasks.clear()
+            self.shed_sourced_wheat.clear()
+
+    def _delivery_credit_for_worker(self,obs,w):
+        inv=obs["private"]["inventories"][w]
+        out={}
+        for q in PRODUCTS:
+            n=max(0,int(inv.get(q,0) or 0))
+            if q=="WHEAT":
+                n=max(0,n-int(self.shed_sourced_wheat.get(w,0)))
+            out[q]=n
+        return out
+
     def extras(self,obs,w):
         pos=_positions(obs)[w]; inv=obs["private"]["inventories"][w]; shed=tuple(self.e.nearest_shed(pos)); out=[]
+        credit=self._delivery_credit_for_worker(obs,w)
         for q in PRODUCTS:
-            n=int(inv.get(q,0) or 0)
+            n=int(credit.get(q,0) or 0)
             if n: out.append(Task(shed,"DELIVER",q,n))
         out.append(Task(pos,"PASS"))
         return out
+
+    def _track_resource_action(self,w,action):
+        if not action:
+            return
+        op=action[0]
+        if op=="PICKUP" and len(action)>=2 and action[1]=="WHEAT":
+            n=int(action[2]) if len(action)>=3 else 1
+            self.shed_sourced_wheat[w]+=max(0,n)
+        elif op=="FEED" and self.shed_sourced_wheat.get(w,0)>0:
+            self.shed_sourced_wheat[w]-=1
 
     def feasible(self,obs,w,t,seeds,shed):
         e=self.e; inv=obs["private"]["inventories"][w]; pos=_positions(obs)[w]; target=t.target if t.target is not None else tuple(e.nearest_shed(pos))
@@ -172,39 +208,118 @@ class WorkerPolicy:
         return [t.op]
 
     def unit_actions(self,obs,animal_plan,crop_plan):
-        workers=list(range(len(_positions(obs)))); actions=[None]*len(workers); tasks=self.tasks(obs,animal_plan,crop_plan); reserved=set(); seeds=dict(obs["private"]["seeds"]); shed=dict(obs["private"]["shed"])
-        state=global_features(self.e,obs,animal_plan,crop_plan,len(workers)); st=torch.as_tensor(state,dtype=torch.float32,device=self.device)
-        with torch.no_grad(): old_value=float(self.model.value(st).item())
+        self._sync_day(obs)
+        positions=_positions(obs)
+        workers=list(range(len(positions)))
+        actions=[None]*len(workers)
+        tasks=self.tasks(obs,animal_plan,crop_plan)
+        reserved=set()
+        seeds=dict(obs["private"]["seeds"])
+        shed=dict(obs["private"]["shed"])
+        # Snapshot provenance before this turn's actions. Reward attribution uses
+        # this to cap delivery credit to goods that did not originate in the shed.
+        self.turn_delivery_credit=[
+            self._delivery_credit_for_worker(obs,w) for w in workers
+        ]
+
+        state=global_features(self.e,obs,animal_plan,crop_plan,len(workers))
+        st=torch.as_tensor(state,dtype=torch.float32,device=self.device)
+        with torch.no_grad():
+            old_value=float(self.model.value(st).item())
         subs=[]
+
+        def reserve_resources(t):
+            if t.op=="PLANT":
+                seeds[t.item]=max(0,int(seeds.get(t.item,0))-1)
+            elif t.op=="PICKUP":
+                shed[t.item]=max(0,int(shed.get(t.item,0))-t.amount)
+
+        def assign_committed(w,t,reservation_key):
+            pos=positions[w]
+            target=t.target if t.target is not None else tuple(self.e.nearest_shed(pos))
+            action=self.emit(obs,w,t)
+            actions[w]=action
+            reserved.add(reservation_key)
+            reserve_resources(t)
+            # Only actual resource operations change provenance; movement does not.
+            if pos==target:
+                self._track_resource_action(w,action)
+                self.active_tasks.pop(w,None)
+            else:
+                self.active_tasks[w]=t
+
+        # First honor valid routes chosen on earlier turns. A committed route does
+        # not create a new PPO actor sample: the actor already chose this job when
+        # the route started.
+        for w in list(workers):
+            active=self.active_tasks.get(w)
+            if active is None:
+                continue
+            candidates=tasks+self.extras(obs,w)
+            current=next((t for t in candidates if t.key==active.key),None)
+            if current is None or not self.feasible(obs,w,current,seeds,shed):
+                self.active_tasks.pop(w,None)
+                continue
+            reservation_key=(w,current.key) if current.op=="DELIVER" else current.key
+            if reservation_key in reserved:
+                self.active_tasks.pop(w,None)
+                continue
+            assign_committed(w,current,reservation_key)
+            workers.remove(w)
+
+        # Uncommitted workers receive new PPO task assignments.
         while workers:
             choices=[]; feats=[]
             for w in workers:
                 for t in tasks+self.extras(obs,w):
-                    # Shared farm tasks (HARVEST/FEED/etc.) must only be assigned
-                    # once, but DELIVER is backed by this specific worker's
-                    # inventory. Multiple workers may validly deliver the same
-                    # product to the same shed in one turn.
                     reservation_key=(w,t.key) if t.op=="DELIVER" else t.key
-                    if t.op!="PASS" and reservation_key in reserved: continue
-                    if not self.feasible(obs,w,t,seeds,shed): continue
-                    choices.append((w,t,reservation_key)); feats.append(candidate_features(self.e,obs,w,t,len(workers)))
+                    if t.op!="PASS" and reservation_key in reserved:
+                        continue
+                    if not self.feasible(obs,w,t,seeds,shed):
+                        continue
+                    choices.append((w,t,reservation_key))
+                    feats.append(candidate_features(self.e,obs,w,t,len(workers)))
             if not choices:
-                for w in workers: actions[w]=["PASS"]
+                for w in workers:
+                    actions[w]=["PASS"]
+                    self.active_tasks.pop(w,None)
                 break
-            mat=np.stack(feats).astype(np.float32); ct=torch.as_tensor(mat,dtype=torch.float32,device=self.device)
+
+            mat=np.stack(feats).astype(np.float32)
+            ct=torch.as_tensor(mat,dtype=torch.float32,device=self.device)
             with torch.no_grad():
                 raw_logits=self.model.logits(ct)
                 behavior_logits=raw_logits if self.deterministic else raw_logits/self.rollout_temperature
                 dist=Categorical(logits=behavior_logits)
                 a=torch.argmax(raw_logits) if self.deterministic else dist.sample()
                 lp=dist.log_prob(a)
-            j=int(a.item()); w,t,reservation_key=choices[j]; actions[w]=self.emit(obs,w,t); self.candidate_counts.append(len(choices))
-            if self.collect: subs.append(SubDecision(mat.astype(np.float16),j,float(lp.item())))
+
+            j=int(a.item())
+            w,t,reservation_key=choices[j]
+            pos=positions[w]
+            target=t.target if t.target is not None else tuple(self.e.nearest_shed(pos))
+            action=self.emit(obs,w,t)
+            actions[w]=action
+            self.candidate_counts.append(len(choices))
+            if self.collect:
+                subs.append(SubDecision(mat.astype(np.float16),j,float(lp.item())))
+
             workers.remove(w)
-            if t.op!="PASS": reserved.add(reservation_key)
-            if t.op=="PLANT": seeds[t.item]=max(0,int(seeds.get(t.item,0))-1)
-            elif t.op=="PICKUP": shed[t.item]=max(0,int(shed.get(t.item,0))-t.amount)
-        if self.collect: self.pending=TurnRecord(state,subs,old_value,int(obs["day"])*24+int(obs["hour"]))
+            if t.op!="PASS":
+                reserved.add(reservation_key)
+            reserve_resources(t)
+
+            if t.op!="PASS" and pos!=target:
+                self.active_tasks[w]=t
+            else:
+                self.active_tasks.pop(w,None)
+                if pos==target:
+                    self._track_resource_action(w,action)
+
+        if self.collect:
+            self.pending=TurnRecord(
+                state,subs,old_value,int(obs["day"])*24+int(obs["hour"])
+            )
         return [a or ["PASS"] for a in actions]
 
     def finish_turn(self,reward: RewardBreakdown):
