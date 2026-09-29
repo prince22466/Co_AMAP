@@ -60,7 +60,8 @@ LOST_HARVESTABLE_UNIT_PENALTY = -16.0
 # so successful execution is direct planner-compliance shaping rather than a
 # generic incentive to create arbitrary capacity.
 SUCCESSFUL_PLANT_REWARD = 10.0
-BUILD_STRUCTURE_REWARD = 0.5
+BUILD_STRUCTURE_REWARD = 8.0
+ANIMAL_PICKUP_REWARD = 2.0
 PLACE_ANIMAL_REWARD = 16.0
 
 # Small scheduler-efficiency shaping.  PASS is penalized only when the policy
@@ -140,6 +141,7 @@ class RewardBreakdown:
 
     plants_created: int = 0
     structures_built: int = 0
+    animals_picked_up: int = 0
     animals_placed: int = 0
     effective_care: int = 0
     effective_fertilize: int = 0
@@ -272,6 +274,22 @@ def compute_worker_reward(executor, before, worker_action, after) -> RewardBreak
                 # available again, so the valid precondition is the stable signal.
                 out.fertilizer_collected += 1
                 out.reward += COLLECT_FERTILIZER_REWARD
+
+        elif op == "PICKUP" and len(action) >= 2 and action[1] in ANIMAL_PRODUCTS:
+            animal = action[1]
+            requested = int(action[2]) if len(action) >= 3 else 1
+            inv_after = after_invs[i] if i < len(after_invs) else {}
+            gained = max(
+                0,
+                min(
+                    requested,
+                    int(inv_after.get(animal, 0) or 0)
+                    - int(inv_before.get(animal, 0) or 0),
+                ),
+            )
+            if gained:
+                out.animals_picked_up += gained
+                out.reward += ANIMAL_PICKUP_REWARD * gained
 
         elif (
             op == "PLACE" and len(action) >= 2 and action[1] in PRODUCTS
