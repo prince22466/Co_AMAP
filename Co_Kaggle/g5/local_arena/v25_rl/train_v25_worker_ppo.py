@@ -23,7 +23,7 @@ V20_RL=LOCAL_ARENA/"v20_rl"
 if str(V20_RL) not in sys.path: sys.path.insert(0,str(V20_RL))
 from evaluate_v20_v19_losses import _agent_observation,_environment_from_history,_field,_recorded_step_actions,_saved_final_rewards,_seed_hint,recorded_action_parity
 from worker_policy import ActorCritic,CANDIDATE_FEATURE_NAMES,GLOBAL_FEATURE_NAMES,TurnRecord,WorkerPolicy
-from worker_reward import ANIMAL_ESCAPE_PENALTY,ANIMAL_PRODUCT_DELIVERED_REWARD,ANIMAL_PRODUCT_GENERATED_REWARD,ANIMAL_PRODUCT_HARVESTED_REWARD,ANIMAL_PRODUCT_VALUE,CRITICAL_FEED_REWARD,CROP_DEATH_PENALTY,CROP_TO_WEED_PENALTY,EFFECTIVE_CARE_REWARD,HEALTHY_ANIMAL_DAY_REWARD,LOST_HARVESTABLE_UNIT_PENALTY,NORMAL_FEED_REWARD,PRODUCT_DELIVERED_REWARD,PRODUCT_GENERATED_REWARD,PRODUCT_HARVESTED_REWARD,PRODUCT_VALUE,RewardBreakdown,compute_worker_reward
+from worker_reward import ANIMAL_ESCAPE_PENALTY,ANIMAL_PRODUCT_DELIVERED_REWARD,ANIMAL_PRODUCT_GENERATED_REWARD,ANIMAL_PRODUCT_HARVESTED_REWARD,ANIMAL_PRODUCT_VALUE,AVOIDABLE_PASS_PENALTY,CRITICAL_FEED_REWARD,CROP_DEATH_PENALTY,CROP_TO_WEED_PENALTY,EFFECTIVE_CARE_REWARD,HEALTHY_ANIMAL_DAY_REWARD,LOST_HARVESTABLE_UNIT_PENALTY,NORMAL_FEED_REWARD,PLACE_ANIMAL_REWARD,PRODUCT_DELIVERED_REWARD,PRODUCT_GENERATED_REWARD,PRODUCT_HARVESTED_REWARD,PRODUCT_VALUE,PRODUCTIVE_ROUTE_PROGRESS_REWARD,SUCCESSFUL_PLANT_REWARD,RewardBreakdown,compute_worker_reward
 
 DEFAULT_HISTORY_DIR=G5_ROOT/"game_history"/"v20"
 DEFAULT_EXECUTOR=HERE/"v25_rl.py"
@@ -84,6 +84,8 @@ def worker_policy_action(e,policy,obs):
         # Reward-only metadata. compose_environment_action() deliberately drops
         # this field before env.step().
         "_delivery_credit":copy.deepcopy(policy.turn_delivery_credit),
+        "_avoidable_pass":list(policy.turn_avoidable_pass),
+        "_route_targets":copy.deepcopy(policy.turn_route_targets),
     }
 
 
@@ -363,7 +365,7 @@ def device_for(v):
 
 def current_reward_contract():
     return {
-        "semantics":"engine-first-yield-eod-care-route-commit-provenance-v3",
+        "semantics":"engine-first-yield-eod-care-route-commit-provenance-plan-shaping-v4",
         "crop_product_value":PRODUCT_VALUE,
         "crop_generated":PRODUCT_GENERATED_REWARD,
         "crop_harvested":PRODUCT_HARVESTED_REWARD,
@@ -380,6 +382,10 @@ def current_reward_contract():
         "crop_to_weed":CROP_TO_WEED_PENALTY,
         "crop_death":CROP_DEATH_PENALTY,
         "lost_harvestable_unit":LOST_HARVESTABLE_UNIT_PENALTY,
+        "successful_planned_plant":SUCCESSFUL_PLANT_REWARD,
+        "successful_planned_animal_place":PLACE_ANIMAL_REWARD,
+        "avoidable_pass":AVOIDABLE_PASS_PENALTY,
+        "productive_route_progress":PRODUCTIVE_ROUTE_PROGRESS_REWARD,
     }
 
 def save_checkpoint(path,model,opt,update,args,best):
