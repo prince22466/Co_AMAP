@@ -16,7 +16,7 @@ if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
 from worker_policy import ActorCritic, SubDecision, TurnRecord
-from train_v25_worker_ppo import ppo_update
+from train_v25_worker_ppo import actor_samples_and_advantages, ppo_update
 
 
 class SubdecisionPPOTest(unittest.TestCase):
@@ -36,6 +36,29 @@ class SubdecisionPPOTest(unittest.TestCase):
         joint_ratio = math.exp(workers * math.log(per_worker_ratio))
         self.assertLess(per_worker_ratio, 1.2)
         self.assertGreater(joint_ratio, 1.2)
+
+    def test_subdecision_bonus_breaks_same_turn_credit_smearing(self):
+        state = np.zeros(4, dtype=np.float32)
+        candidates = np.zeros((2, 6), dtype=np.float16)
+        positive = SubDecision(candidates, 0, 0.0, actor_bonus=2.0)
+        negative = SubDecision(candidates, 1, 0.0, actor_bonus=-1.0)
+        record = TurnRecord(
+            state=state,
+            subdecisions=[positive, negative],
+            old_value=0.0,
+            turn=0,
+        )
+        record.advantage = 7.0
+        record.return_target = 7.0
+
+        _turn_adv, samples, actor_adv, bonuses = actor_samples_and_advantages(
+            [record]
+        )
+        self.assertEqual(len(samples), 2)
+        np.testing.assert_allclose(bonuses, [2.0, -1.0], atol=1e-6)
+        # A single turn normalizes to base advantage 0, so the two worker
+        # choices now receive their own shaping rather than one shared signal.
+        np.testing.assert_allclose(actor_adv, [2.0, -1.0], atol=1e-6)
 
     def test_ppo_update_consumes_individual_worker_samples(self):
         torch.manual_seed(7)
@@ -102,6 +125,9 @@ class SubdecisionPPOTest(unittest.TestCase):
         self.assertAlmostEqual(stats["mean_subdecisions_per_turn"], 4.0)
         self.assertGreaterEqual(stats["ppo_epochs_completed"], 1)
         self.assertGreaterEqual(stats["actor_minibatches_completed"], 1)
+        self.assertTrue(math.isfinite(stats["actor_bonus_mean"]))
+        self.assertGreaterEqual(stats["actor_bonus_positive_fraction"], 0.0)
+        self.assertLessEqual(stats["actor_bonus_positive_fraction"], 1.0)
         self.assertTrue(math.isfinite(stats["approx_kl"]))
         self.assertTrue(math.isfinite(stats["ratio_mean"]))
         self.assertGreaterEqual(stats["clip_fraction"], 0.0)
