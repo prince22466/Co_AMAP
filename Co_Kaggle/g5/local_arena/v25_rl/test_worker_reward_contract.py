@@ -264,6 +264,97 @@ class WorkerRewardContractTest(unittest.TestCase):
         self.assertEqual(result.healthy_animal_days, 1)
         self.assertEqual(result.reward, HEALTHY_ANIMAL_DAY_REWARD)
 
+
+    def test_care_earlier_then_feed_later_gets_credit_at_rollover(self):
+        before = _obs({
+            "kind": "PASTURE",
+            "animal": "COW",
+            "yield_units": 0,
+            "fed_today": True,
+            "cared_today": True,
+            "consecutive_unfed": 0,
+            "pending_care_bonus": 0,
+        }, day=0, hour=23)
+        after = _obs({
+            "kind": "PASTURE",
+            "animal": "COW",
+            "yield_units": 0,
+            "fed_today": False,
+            "cared_today": False,
+            "consecutive_unfed": 0,
+            "pending_care_bonus": 1,
+        }, day=1, hour=0)
+        result = compute_worker_reward(
+            EXECUTOR,
+            before,
+            {"farmer": ["PASS"], "hands": []},
+            after,
+        )
+        self.assertEqual(result.effective_care, 1)
+        self.assertEqual(
+            result.reward,
+            HEALTHY_ANIMAL_DAY_REWARD + EFFECTIVE_CARE_REWARD,
+        )
+
+    def test_care_without_feed_gets_no_effective_care_credit(self):
+        before = _obs({
+            "kind": "PASTURE",
+            "animal": "COW",
+            "yield_units": 0,
+            "fed_today": False,
+            "cared_today": True,
+            "consecutive_unfed": 0,
+            "pending_care_bonus": 0,
+        }, day=0, hour=23)
+        after = _obs({
+            "kind": "PASTURE",
+            "animal": "COW",
+            "yield_units": 0,
+            "fed_today": False,
+            "cared_today": False,
+            "consecutive_unfed": 1,
+            "pending_care_bonus": 0,
+        }, day=1, hour=0)
+        result = compute_worker_reward(
+            EXECUTOR,
+            before,
+            {"farmer": ["PASS"], "hands": []},
+            after,
+        )
+        self.assertEqual(result.effective_care, 0)
+        self.assertEqual(result.reward, 0.0)
+
+    def test_final_turn_care_is_credited_after_flags_reset(self):
+        before = _obs({
+            "kind": "PASTURE",
+            "animal": "COW",
+            "yield_units": 0,
+            "fed_today": True,
+            "cared_today": False,
+            "consecutive_unfed": 0,
+            "pending_care_bonus": 0,
+        }, day=0, hour=23)
+        after = _obs({
+            "kind": "PASTURE",
+            "animal": "COW",
+            "yield_units": 0,
+            "fed_today": False,
+            "cared_today": False,
+            "consecutive_unfed": 0,
+            "pending_care_bonus": 1,
+        }, day=1, hour=0)
+        result = compute_worker_reward(
+            EXECUTOR,
+            before,
+            {"farmer": ["CARE"], "hands": []},
+            after,
+        )
+        self.assertEqual(result.effective_care, 1)
+        self.assertEqual(
+            result.reward,
+            HEALTHY_ANIMAL_DAY_REWARD + EFFECTIVE_CARE_REWARD,
+        )
+
     def test_escape_penalty_is_stronger(self):
         before = _obs({
             "kind": "PASTURE",
