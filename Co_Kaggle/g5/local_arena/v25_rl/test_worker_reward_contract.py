@@ -10,6 +10,7 @@ from worker_reward import (
     ANIMAL_PRODUCT_HARVESTED_REWARD,
     ANIMAL_PRODUCT_VALUE,
     ANIMAL_ESCAPE_PENALTY,
+    AVOIDABLE_PASS_PENALTY,
     CRITICAL_FEED_REWARD,
     EFFECTIVE_CARE_REWARD,
     HEALTHY_ANIMAL_DAY_REWARD,
@@ -18,6 +19,12 @@ from worker_reward import (
     PRODUCT_GENERATED_REWARD,
     PRODUCT_HARVESTED_REWARD,
     PRODUCT_VALUE,
+    PRODUCTIVE_ROUTE_PROGRESS_REWARD,
+    SUCCESSFUL_PLANT_REWARD,
+    PLACE_ANIMAL_REWARD,
+    CROP_TO_WEED_PENALTY,
+    CROP_DEATH_PENALTY,
+    LOST_HARVESTABLE_UNIT_PENALTY,
     compute_worker_reward,
 )
 
@@ -74,6 +81,52 @@ class WorkerRewardContractTest(unittest.TestCase):
         self.assertEqual(ANIMAL_PRODUCT_VALUE, 16.0 * PRODUCT_VALUE)
 
 
+
+    def test_capacity_and_neglect_shaping_constants(self):
+        self.assertEqual(SUCCESSFUL_PLANT_REWARD, 10.0)
+        self.assertEqual(PLACE_ANIMAL_REWARD, 16.0)
+        self.assertEqual(CROP_TO_WEED_PENALTY, -64.0)
+        self.assertEqual(CROP_DEATH_PENALTY, -64.0)
+        self.assertEqual(LOST_HARVESTABLE_UNIT_PENALTY, -16.0)
+
+    def test_avoidable_pass_penalty_is_metadata_gated(self):
+        before = _obs(None)
+        after = _obs(None)
+        neutral = compute_worker_reward(
+            EXECUTOR,
+            before,
+            {"farmer": ["PASS"], "hands": [], "_avoidable_pass": [False]},
+            after,
+        )
+        penalized = compute_worker_reward(
+            EXECUTOR,
+            before,
+            {"farmer": ["PASS"], "hands": [], "_avoidable_pass": [True]},
+            after,
+        )
+        self.assertEqual(neutral.reward, 0.0)
+        self.assertEqual(penalized.avoidable_passes, 1)
+        self.assertEqual(penalized.reward, AVOIDABLE_PASS_PENALTY)
+
+    def test_productive_route_progress_gets_minor_credit(self):
+        before = _obs(None)
+        after = _obs(None)
+        before["farms"][0]["farmer"] = [0, 0]
+        after["farms"][0]["farmer"] = [1, 0]
+        executor = SimpleNamespace(**EXECUTOR.__dict__)
+        executor.dist = lambda a, b: abs(a[0] - b[0]) + abs(a[1] - b[1])
+        result = compute_worker_reward(
+            executor,
+            before,
+            {
+                "farmer": ["EAST"],
+                "hands": [],
+                "_route_targets": [(3, 0)],
+            },
+            after,
+        )
+        self.assertEqual(result.productive_route_progress, 1)
+        self.assertEqual(result.reward, PRODUCTIVE_ROUTE_PROGRESS_REWARD)
 
     def test_immature_crop_harvest_noop_gets_no_reward(self):
         before = _obs({
