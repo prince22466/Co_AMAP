@@ -25,6 +25,20 @@ GLOBAL_FEATURE_NAMES=("day","hour","workers","shed_fill","wheat","fertilizer","p
 BASE_FEATURE_NAMES=("day","hour","workers","free_workers","worker_x","worker_y","target_x","target_y","distance","at_target","worker_inv","worker_wheat","worker_fert","worker_products","worker_animals","shed_fill","shed_wheat","shed_fert","seed_count","age","yield_units","consecutive_unwatered","consecutive_unfed","watered","fed","cared","fert_days","care_bonus","fert_available","critical","amount","shed_distance")
 CANDIDATE_FEATURE_NAMES=BASE_FEATURE_NAMES+tuple("op_"+x for x in OPS)+tuple("item_"+(x or "NONE") for x in ITEMS)
 
+# PASS/defer and non-plant planner shaping below are measured directly in
+# normalized-advantage units.  Planned PLANT is intentionally different: its
+# completion credit is expressed in raw reward-equivalent units so it can be
+# calibrated against an ordinary crop HARVEST before PPO normalization.
+PLANNED_PLANT_REWARD_EQUIV = 8.0
+PLANNED_BUILD_ACTOR_BONUS = 1.0
+PLANNED_ANIMAL_PICKUP_ACTOR_BONUS = 1.0
+PLANNED_PLACE_ANIMAL_ACTOR_BONUS = 1.5
+DEFER_PLANNED_PLANT_ACTOR_PENALTY = -0.75
+AVOIDABLE_PASS_ACTOR_PENALTY = -1.0
+
+def _weed_prevention_task(task):
+    return task.op=="WATER" and float(task.critical)>=1.0
+
 def totals(private):
     out=defaultdict(int)
     for k,v in private["shed"].items(): out[k]+=int(v)
@@ -75,6 +89,8 @@ class SubDecision:
     candidates: np.ndarray
     action_index: int
     old_log_prob: float
+    actor_bonus: float = 0.0
+    reward_equiv_bonus: float = 0.0
 
 @dataclass
 class TurnRecord:
@@ -97,6 +113,10 @@ class WorkerPolicy:
         # A policy decision selects a job, not a one-turn direction. Workers keep
         # moving toward that job until it completes or becomes invalid.
         self.active_tasks: dict[int, Task] = {}
+        # Originating PPO sample for a remote planned route.  Positive planner
+        # shaping is credited to this original choice only when the route
+        # reaches its execution point; interrupted/invalid routes earn nothing.
+        self.active_origins: dict[int, SubDecision] = {}
         self.active_day: int | None = None
         # Track WHEAT that came from the shed so returning the same resource to
         # the shed cannot masquerade as newly completed production logistics.
@@ -105,6 +125,7 @@ class WorkerPolicy:
         # Reward-only provenance for planner execution, useful route movement,
         # and PASS choices that skipped feasible work.
         self.turn_plan_credit: list[dict[str, str]] = []
+        self.turn_planned_plant_origins: list[SubDecision] = []
         self.turn_route_progress: list[bool] = []
         self.turn_avoidable_pass: list[bool] = []
 
@@ -153,7 +174,8 @@ class WorkerPolicy:
         pickups("FERTILIZER",max(0,sum(t.op=="FERTILIZE" for t in tasks)-sum(int(i.get("FERTILIZER",0)) for i in p["inventories"])),3)
         for a,n in need.items():
             shortage=max(0,n-sum(int(i.get(a,0)) for i in p["inventories"]))
-            for slot in range(min(shortage,int(p["shed"].get(a,0)))): tasks.append(Task(None,"PICKUP",a,1,slot=slot))
+            for slot in range(min(shortage,int(p["shed"].get(a,0)))):
+                tasks.append(Task(None,"PICKUP",a,1,slot=slot,planned=True))
         return tasks
 
     def _sync_day(self,obs):
@@ -161,6 +183,7 @@ class WorkerPolicy:
         if self.active_day != day:
             self.active_day=day
             self.active_tasks.clear()
+            self.active_origins.clear()
             self.shed_sourced_wheat.clear()
 
     def _delivery_credit_for_worker(self,obs,w):
@@ -194,7 +217,15 @@ class WorkerPolicy:
 
     def feasible(self,obs,w,t,seeds,shed):
         e=self.e; inv=obs["private"]["inventories"][w]; pos=_positions(obs)[w]; target=t.target if t.target is not None else tuple(e.nearest_shed(pos))
-        if e.dist(pos,target)>max(0,23-int(obs["hour"])): return False
+        distance=e.dist(pos,target)
+        remaining=max(0,23-int(obs["hour"]))
+        # A newly planted seed starts with consecutive_unwatered=1 and becomes
+        # WEED if it cannot be watered before the day refresh. Reserve one full
+        # later turn for WATER after movement + PLANT.
+        if t.op=="PLANT":
+            if distance+1>remaining: return False
+        elif distance>remaining:
+            return False
         if t.op=="PLANT" and int(seeds.get(t.item,0))<=0: return False
         if t.op=="FEED" and int(inv.get("WHEAT",0))<=0: return False
         if t.op=="FERTILIZE" and int(inv.get("FERTILIZER",0))<=0: return False
@@ -213,12 +244,74 @@ class WorkerPolicy:
         if t.op=="PASS": return ["PASS"]
         return [t.op]
 
+    def planned_completion_bonus(self,t):
+        """Normalized actor-only completion bonus for non-plant plan steps."""
+        if not t.planned:
+            return 0.0
+        if t.op in ("BUILD_COOP","BUILD_PASTURE"):
+            return PLANNED_BUILD_ACTOR_BONUS
+        if t.op=="PICKUP" and t.item in self.e.ANIMALS:
+            return PLANNED_ANIMAL_PICKUP_ACTOR_BONUS
+        if t.op=="PLACE_ANIMAL":
+            return PLANNED_PLACE_ANIMAL_ACTOR_BONUS
+        return 0.0
+
+    def planned_completion_reward_equiv(self,t):
+        """Raw reward-equivalent credit, normalized later with rollout GAE."""
+        if t.planned and t.op=="PLANT":
+            return PLANNED_PLANT_REWARD_EQUIV
+        return 0.0
+
+    def actor_bonus_for_choice(self,w,t,choices,completed=False):
+        same_worker=[ct for cw,ct,_ in choices if cw==w]
+        bonus=0.0
+        if t.op=="PASS" and any(ct.op!="PASS" for ct in same_worker):
+            bonus+=AVOIDABLE_PASS_ACTOR_PENALTY
+        has_planned_plant=any(ct.planned and ct.op=="PLANT" for ct in same_worker)
+        if has_planned_plant and not (t.planned and t.op=="PLANT"):
+            bonus+=DEFER_PLANNED_PLANT_ACTOR_PENALTY
+        if completed:
+            bonus+=self.planned_completion_bonus(t)
+        return float(bonus)
+
+    def _max_critical_water_matching(self,obs,worker_ids,tasks,seeds,shed):
+        """Maximum reachable critical-WATER assignments for these workers."""
+        if not tasks or not worker_ids:
+            return 0
+        feasible_by_task=[
+            [
+                w for w in worker_ids
+                if self.feasible(obs,w,t,seeds,shed)
+            ]
+            for t in tasks
+        ]
+        order=sorted(range(len(tasks)),key=lambda i:len(feasible_by_task[i]))
+        worker_match={}
+
+        def augment(task_i,seen):
+            for w in feasible_by_task[task_i]:
+                if w in seen:
+                    continue
+                seen.add(w)
+                prev=worker_match.get(w)
+                if prev is None or augment(prev,seen):
+                    worker_match[w]=task_i
+                    return True
+            return False
+
+        matched=0
+        for task_i in order:
+            if augment(task_i,set()):
+                matched+=1
+        return matched
+
     def unit_actions(self,obs,animal_plan,crop_plan):
         self._sync_day(obs)
         positions=_positions(obs)
         workers=list(range(len(positions)))
         actions=[None]*len(workers)
         tasks=self.tasks(obs,animal_plan,crop_plan)
+        critical_water_tasks=[t for t in tasks if _weed_prevention_task(t)]
         reserved=set()
         seeds=dict(obs["private"]["seeds"])
         shed=dict(obs["private"]["shed"])
@@ -228,6 +321,7 @@ class WorkerPolicy:
             self._delivery_credit_for_worker(obs,w) for w in workers
         ]
         self.turn_plan_credit=[{} for _ in workers]
+        self.turn_planned_plant_origins=[]
         self.turn_route_progress=[False for _ in workers]
         self.turn_avoidable_pass=[False for _ in workers]
 
@@ -261,6 +355,13 @@ class WorkerPolicy:
             reserve_resources(t)
             # Only actual resource operations change provenance; movement does not.
             if pos==target:
+                origin=self.active_origins.pop(w,None)
+                if origin is not None:
+                    origin.actor_bonus+=self.planned_completion_bonus(t)
+                    if t.planned and t.op=="PLANT":
+                        self.turn_planned_plant_origins.append(origin)
+                    else:
+                        origin.reward_equiv_bonus+=self.planned_completion_reward_equiv(t)
                 self._track_resource_action(w,action)
                 self.active_tasks.pop(w,None)
             else:
@@ -273,14 +374,35 @@ class WorkerPolicy:
             active=self.active_tasks.get(w)
             if active is None:
                 continue
+            # Preserve a non-critical committed route whenever the *other*
+            # available workers can still cover every unreserved critical WATER
+            # task.  Only preempt the minimum routes required for crop survival.
+            if not _weed_prevention_task(active):
+                remaining_critical=[
+                    t for t in critical_water_tasks if t.key not in reserved
+                ]
+                other_workers=[q for q in workers if q!=w]
+                if remaining_critical:
+                    cover_with_w=self._max_critical_water_matching(
+                        obs,workers,remaining_critical,seeds,shed
+                    )
+                    cover_without_w=self._max_critical_water_matching(
+                        obs,other_workers,remaining_critical,seeds,shed
+                    )
+                    if cover_without_w < cover_with_w:
+                        self.active_tasks.pop(w,None)
+                        self.active_origins.pop(w,None)
+                        continue
             candidates=tasks+self.extras(obs,w)
             current=next((t for t in candidates if t.key==active.key),None)
             if current is None or not self.feasible(obs,w,current,seeds,shed):
                 self.active_tasks.pop(w,None)
+                self.active_origins.pop(w,None)
                 continue
             reservation_key=(w,current.key) if current.op=="DELIVER" else current.key
             if reservation_key in reserved:
                 self.active_tasks.pop(w,None)
+                self.active_origins.pop(w,None)
                 continue
             assign_committed(w,current,reservation_key)
             workers.remove(w)
@@ -297,6 +419,18 @@ class WorkerPolicy:
                         continue
                     choices.append((w,t,reservation_key))
                     feats.append(candidate_features(self.e,obs,w,t,len(workers)))
+
+            # If any remaining worker can service a crop that will weed on the
+            # next missed refresh, remove every non-critical choice (including
+            # PASS) until those WATER tasks are reserved.
+            urgent=[
+                i for i,(_w,t,_key) in enumerate(choices)
+                if _weed_prevention_task(t)
+            ]
+            if urgent:
+                choices=[choices[i] for i in urgent]
+                feats=[feats[i] for i in urgent]
+
             if not choices:
                 for w in workers:
                     actions[w]=["PASS"]
@@ -323,9 +457,25 @@ class WorkerPolicy:
                 and any(cw==w and ct.op!="PASS" for cw,ct,_ in choices)
             )
             record_reward_provenance(w,t,pos,target,action,avoidable_pass)
+            completed_now=(pos==target)
+            actor_bonus=self.actor_bonus_for_choice(
+                w,t,choices,completed=completed_now
+            )
+            # Planned PLANT reward-equivalent credit is held until finish_turn()
+            # confirms the actual tile transition succeeded.
+            reward_equiv_bonus=0.0
             self.candidate_counts.append(len(choices))
+            sub=None
             if self.collect:
-                subs.append(SubDecision(mat.astype(np.float16),j,float(lp.item())))
+                sub=SubDecision(
+                    mat.astype(np.float16),j,float(lp.item()),
+                    actor_bonus,reward_equiv_bonus
+                )
+                subs.append(sub)
+                if completed_now and t.planned and t.op=="PLANT":
+                    self.turn_planned_plant_origins.append(sub)
+                elif completed_now:
+                    sub.reward_equiv_bonus+=self.planned_completion_reward_equiv(t)
 
             workers.remove(w)
             if t.op!="PASS":
@@ -334,8 +484,13 @@ class WorkerPolicy:
 
             if t.op!="PASS" and pos!=target:
                 self.active_tasks[w]=t
+                if self.collect and sub is not None and t.planned:
+                    self.active_origins[w]=sub
+                else:
+                    self.active_origins.pop(w,None)
             else:
                 self.active_tasks.pop(w,None)
+                self.active_origins.pop(w,None)
                 if pos==target:
                     self._track_resource_action(w,action)
 
@@ -348,4 +503,10 @@ class WorkerPolicy:
     def finish_turn(self,reward: RewardBreakdown):
         if not self.collect: return
         if self.pending is None: raise RuntimeError("missing pending turn")
+        # Credit only engine-confirmed planned PLANT completions.  This mirrors
+        # HARVEST reward semantics: emitting the action is not enough.
+        completed=max(0,int(reward.planned_plants_completed))
+        for origin in self.turn_planned_plant_origins[:completed]:
+            origin.reward_equiv_bonus+=PLANNED_PLANT_REWARD_EQUIV
+        self.turn_planned_plant_origins=[]
         self.pending.reward=float(reward.reward); self.pending.reward_breakdown=reward.as_dict(); self.records.append(self.pending); self.pending=None

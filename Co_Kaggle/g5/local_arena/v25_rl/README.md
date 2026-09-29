@@ -69,9 +69,9 @@ so the number of RL transitions is `len(history["steps"]) - 1`; it is not hard-c
 | Worker outcome | Reward |
 | --- | ---: |
 | animal escapes | -100 |
-| PLANT -> WEED | -64 |
-| still-productive plant is destroyed/disappears without HARVEST | -64 |
-| each harvestable unit lost with a destroyed asset | -16 |
+| PLANT -> WEED | -256 |
+| still-productive plant is destroyed/disappears without HARVEST | -128 |
+| each harvestable unit lost with a destroyed asset | -32 |
 | crop product unit generated | +2 |
 | crop product unit harvested | +2 |
 | crop product unit explicitly delivered to shed | +4 |
@@ -79,12 +79,12 @@ so the number of RL transitions is `len(history["steps"]) - 1`; it is not hard-c
 | animal product unit harvested | +16 |
 | animal product unit explicitly delivered to shed | +96 |
 | successful PLANT | +1 |
-| successful PLANT matching `crop_plan` | +10 additional |
-| successful BUILD_COOP / BUILD_PASTURE | +0.5 |
+| successful PLANT matching `crop_plan` | tracked; actor-only bonus |
+| successful BUILD_COOP / BUILD_PASTURE | +0.5 turn reward; planned BUILD gets actor-only bonus |
 | successful animal placement | +1 |
-| successful animal placement matching `animal_plan` | +16 additional |
+| successful animal placement matching `animal_plan` | tracked; actor-only bonus |
 | purposeful movement toward a selected/committed task | +0.05 |
-| PASS while that worker has feasible non-PASS work | -0.10 |
+| PASS while that worker has feasible non-PASS work | tracked; actor-only penalty |
 | PASS with no feasible non-PASS work | 0 |
 | effective CARE day (animal finishes day fed + cared) | +3 |
 | effective FERTILIZE | +1 |
@@ -93,7 +93,7 @@ so the number of RL transitions is `len(history["steps"]) - 1`; it is not hard-c
 | critical FEED where `consecutive_unfed >= 1` | +2 |
 | fed animal survives a day rollover | +4 |
 | normal WATER | +1 |
-| critical WATER where `consecutive_unwatered >= 1` | +4 |
+| critical WATER where `consecutive_unwatered >= 1` | +16 |
 
 Crop products keep the original lifecycle value:
 
@@ -103,9 +103,9 @@ Animal products now receive a much stronger lifecycle value because the v4 train
 
 `16 generated + 16 harvested + 96 delivered = 128`
 
-The reward deliberately puts most value on **delivery**, so harvesting animal output without moving it to the shed is no longer close to completing the lifecycle. Planner execution now also receives explicit shaping: successful crop-plan PLANT and animal-plan placement get additional reward, while the existing animal lifecycle rewards are unchanged. The bonuses are reward-provenance qualified and are only credited after the planned tile transition succeeds. The animal-maintenance shaping is also changed from the previous contract: normal FEED is worth more than critical rescue FEED, effective CARE is credited at day rollover only when the animal actually finished that day both fed and cared, a fed animal surviving a day rollover receives dense credit, and animal escape is more expensive. These fixed values still ignore market-price movement.
+The reward deliberately puts most value on **delivery**, so harvesting animal output without moving it to the shed is no longer close to completing the lifecycle. Planner/PASS preference is no longer added to the shared turn reward. It is attached directly to the PPO worker subdecision so one worker's PLANT bonus or PASS penalty cannot incorrectly reinforce or punish every other worker choice made in the same turn. The animal-maintenance shaping is also changed from the previous contract: normal FEED is worth more than critical rescue FEED, effective CARE is credited at day rollover only when the animal actually finished that day both fed and cared, a fed animal surviving a day rollover receives dense credit, and animal escape is more expensive. These fixed values still ignore market-price movement.
 
-`PLANT -> WEED` is always treated as a heavy worker-efficiency failure, including expiration caused by failing to harvest in time. Random `None -> WEED` spawning is not penalized. Crop neglect is now more expensive (`-64` plus `-16` per lost harvestable unit) so routine animal work should not dominate crop survival indefinitely.
+`PLANT -> WEED` is treated as a near-catastrophic worker-efficiency failure (`-256` plus `-32` per lost harvestable unit). Random `None -> WEED` spawning is not penalized. More importantly, weed prevention is now a scheduler invariant rather than relying only on delayed punishment. Critical WATER uses a reachability matching check: a non-critical persistent route is preempted only when keeping that worker committed would reduce the maximum number of at-risk crops that can be covered. Once the required workers are reserved, unrelated persistent routes continue normally. New PLANT tasks are infeasible unless movement + planting leaves at least one later turn in the same day for WATER.
 
 A deliberate `DIG` of a fully exhausted crop with no remaining yield and age beyond its useful production window is treated as valid cleanup and is **not** assigned the crop-death penalty. Destroying a still-productive crop remains a heavy failure.
 
@@ -197,7 +197,7 @@ If a selected task is remote, the emitted environment action is one deterministi
 
 One PPO record corresponds to one environment turn. The turn still contains an autoregressive sequence of worker assignments, but PPO **does not form one probability ratio from the sum of all worker log probabilities**.
 
-The single observed worker reward is converted by GAE into one turn-level advantage `A_t`. That same `A_t` is shared by every worker subdecision made in the turn. Each subdecision keeps its own behavior-policy log probability and gets its own clipped PPO ratio:
+The environment reward is converted by GAE into one normalized turn-level advantage `A_t`. Each worker subdecision then gets its own actor-only shaping term `B_i`, while the critic remains trained only on the environment return. Each subdecision keeps its own behavior-policy log probability and clipped PPO ratio:
 
 ```text
 turn t:
@@ -208,12 +208,26 @@ turn t:
 
 one turn-level GAE advantage: A_t
 
+actor_advantage_i = clip(A_t + B_i, -5, +5)
+
+B_i examples:
+    completed planned PLANT          +8 raw reward-equivalent / GAE std
+    completed planned BUILD          +1.00 normalized
+    completed planned animal PICKUP  +1.00 normalized
+    completed planned PLACE_ANIMAL   +1.50 normalized
+    defer feasible PLANT             -0.75 normalized
+    avoidable PASS                   -1.00 normalized
+
+For planned PLANT specifically, completion credit is calibrated on the same raw reward scale as crop HARVEST: +8 reward-equivalent units, approximately one normal crop harvest event. PPO divides that +8 by the rollout's raw GAE standard deviation before adding it only to the originating PLANT subdecision. The credit is withheld until the environment confirms the planned tile transition succeeded; merely reaching the tile or emitting PLANT earns nothing.
+
+For a remote planned task, the originating PPO sample is retained while the worker follows its committed route. If the route becomes invalid, is interrupted for critical WATER, or crosses a day boundary, the pending positive credit is discarded. This prevents repeated incomplete route selections from farming planner shaping.
+
 ratio_i = exp(new_log_prob_i - old_log_prob_i)
 
 policy_loss_i =
     -min(
-        ratio_i * A_t,
-        clip(ratio_i, 0.8, 1.2) * A_t
+        ratio_i * actor_advantage_i,
+        clip(ratio_i, 0.8, 1.2) * actor_advantage_i
     )
 ```
 
@@ -223,7 +237,7 @@ This avoids the unstable previous formulation:
 exp(sum(new_log_prob_i - old_log_prob_i))
 ```
 
-where modest probability changes compounded exponentially with the number of workers. The critic remains turn-level: there is still one `V(s_t)` and one return target per environment turn.
+where modest probability changes compounded exponentially with the number of workers. The critic remains turn-level: there is still one `V(s_t)` and one return target per environment turn. Actor-only planner/PASS shaping never enters that value target.
 
 The recorded market list is not part of any PPO action. Market commands may affect the next environment state because they are executed by the game, but they are never passed into `compute_worker_reward()`.
 
@@ -245,15 +259,15 @@ entropy_coef         0.001
 rollout_temperature  0.20
 ```
 
-KL is checked before every actor minibatch update. If the current per-subdecision approximate KL is already above `--target-kl`, that minibatch and the remaining actor updates are skipped. Training metrics include `approx_kl`, `clip_fraction`, `ratio_mean`, `ratio_std`, `ratio_min`, `ratio_max`, `actor_samples`, `mean_subdecisions_per_turn`, `actor_minibatches_completed`, `ppo_epochs_completed`, and `kl_early_stop`.
+KL is checked before every actor minibatch update. If the current per-subdecision approximate KL is already above `--target-kl`, that minibatch and the remaining actor updates are skipped. Training metrics include `approx_kl`, `clip_fraction`, `ratio_mean`, `ratio_std`, `ratio_min`, `ratio_max`, `actor_samples`, `mean_subdecisions_per_turn`, `actor_bonus_mean`, `actor_bonus_abs_mean`, positive/negative actor-bonus fractions, `actor_minibatches_completed`, `ppo_epochs_completed`, and `kl_early_stop`.
 
-Validation has an automatic catastrophic-collapse guard. The reference reward is the best of the initial deterministic baseline and the best held-out reward achieved so far. If validation falls below:
+Validation has an automatic catastrophic-collapse guard. The reference reward is the best of the initial deterministic baseline and the best held-out reward achieved so far. Separately, `best.pt` is selected **weed-first**: lower `mean_crops_to_weed` always wins, and worker reward is the tie-breaker among policies with the same weed count. This makes zero validation weeds the checkpoint-selection target rather than an incidental metric. If validation falls below:
 
 ```text
 --collapse-restore-ratio 0.70
 ```
 
-of that reference, the trainer records `collapse_warning=true`, reloads `best.pt` including optimizer state, and writes the restored policy to `latest.pt`. The raw collapsed post-update checkpoint remains available as `update_NNNN.pt` for diagnosis.
+of that reference **without improving the weed-first objective**, the trainer records `collapse_warning=true`, reloads `best.pt` including optimizer state, and writes the restored policy to `latest.pt`. A lower-reward checkpoint with strictly fewer weeds is accepted and can become `best.pt`; reward collapse alone cannot discard a weed improvement. The raw collapsed post-update checkpoint remains available as `update_NNNN.pt` for diagnosis.
 
 ## Files
 
@@ -292,7 +306,7 @@ python train_v25_worker_ppo.py \
 
 This animal-pipeline update intentionally keeps checkpoint algorithm `v25_static_worker_ppo_gae_v4_animal_reward` so the trained v4 actor/critic can be resumed. Model architecture and feature dimensions are unchanged. When an older v4 checkpoint is loaded under the new reward contract, the **actor weights are kept**, while the critic is reinitialized and Adam optimizer state plus the old validation-best score are reset. The old critic was trained against the previous reward scale (including falsely rewarded immature HARVEST no-ops), so its value estimates are not reused.
 
-To keep metrics from the reward contracts separate, new runs write by default to `runs/worker_ppo_static_v20_v6_plan_shaping`.
+To keep metrics from the reward contracts separate, new runs write by default to `runs/worker_ppo_static_v20_v7_subdecision_zero_weed`.
 
 `--minibatch-size` now batches worker subdecisions for the actor and turn records for the critic. The default remains 128.
 
@@ -309,14 +323,14 @@ python train_v25_worker_ppo.py \
 
 ## Outputs
 
-Outputs are written under `runs/worker_ppo_static_v20_v6_plan_shaping`.
+Outputs are written under `runs/worker_ppo_static_v20_v7_subdecision_zero_weed`.
 
 - `metrics.jsonl` — PPO statistics, mean worker reward, and mean reward-component counts.
 - `episodes.jsonl` — per-training-replay worker metrics.
 - `validation.jsonl` — deterministic held-out aggregate worker metrics.
 - `validation_episodes.jsonl` — deterministic held-out per-replay worker metrics.
 - `checkpoints/latest.pt` — latest checkpoint.
-- `checkpoints/best.pt` — checkpoint with the highest held-out mean worker reward seen so far, including the initial untrained baseline.
+- `checkpoints/best.pt` — weed-first checkpoint: lowest held-out `mean_crops_to_weed`, then highest worker reward as tie-breaker.
 
 Primary health metrics are:
 
@@ -390,4 +404,4 @@ PLACE 2 WHEAT into shed
 → 2 units receive delivery credit
 ```
 
-Reward metadata semantics are versioned as `engine-first-yield-eod-care-route-plan-shaping-v4`. Loading an older checkpoint therefore keeps compatible actor weights but resets critic, optimizer state, and the historical validation-best threshold.
+Reward metadata semantics are versioned as `engine-first-yield-eod-care-subdecision-zero-weed-v6`. Loading an older checkpoint therefore keeps compatible actor weights but resets critic, optimizer state, and the historical validation-best threshold.
