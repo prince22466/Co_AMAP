@@ -278,6 +278,7 @@ class WorkerRouteCommitmentTest(unittest.TestCase):
         policy.finish_turn(RewardBreakdown())
 
         urgent = _critical_crop_obs(worker_x=1)
+        urgent["day"] = 0
         urgent["private"]["seeds"] = {"WHEAT": 1}
         actions = policy.unit_actions(
             urgent,
@@ -287,6 +288,23 @@ class WorkerRouteCommitmentTest(unittest.TestCase):
         self.assertEqual(actions[0], ["WEST"])
         self.assertEqual(origin.actor_bonus, 0.0)
         self.assertNotIn(0, policy.active_origins)
+
+    def test_unreachable_critical_water_does_not_destroy_useful_route(self):
+        policy = WorkerPolicy(
+            _Executor(),
+            _PassLovingModel(),
+            torch.device("cpu"),
+            deterministic=True,
+            collect=False,
+        )
+        obs = _critical_crop_obs(worker_x=3, hour=23)
+        obs["farms"][0]["tiles"][0][3]["cared_today"] = False
+        policy.active_day = 1
+        care = Task((3, 0), "CARE", "COW")
+        policy.active_tasks[0] = care
+
+        actions = policy.unit_actions(obs, {}, {(0, 0): "WHEAT"})
+        self.assertEqual(actions[0], ["CARE"])
 
     def test_commitment_is_released_when_task_becomes_invalid(self):
         policy = WorkerPolicy(
