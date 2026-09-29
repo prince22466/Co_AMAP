@@ -113,7 +113,8 @@ def _same_product(tile_before, tile_after) -> str | None:
 
 
 def _crop_decay_start_step(executor, tile) -> int | None:
-    raw = int(tile.get("max_lifespan_step", -1) or -1)
+    raw_value = tile.get("max_lifespan_step", -1)
+    raw = int(raw_value if raw_value is not None else -1)
     if raw >= 0:
         return raw
     crop = tile.get("crop")
