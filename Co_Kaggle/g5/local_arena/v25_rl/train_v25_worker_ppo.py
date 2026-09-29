@@ -309,6 +309,19 @@ def summary(results,phase):
                 out[f"mean_{k}_{key.lower()}"]=value
         else:
             out["mean_"+k]=float(np.mean([float(value) for value in values])) if values else None
+
+    animal_harvested=out.get("mean_animal_product_units_harvested_total")
+    animal_delivered=out.get("mean_animal_product_units_moved_to_shed_total")
+    placed=out.get("mean_animals_placed")
+    escaped=out.get("mean_animals_escaped")
+    normal_feed=out.get("mean_normal_feed")
+    critical_feed=out.get("mean_critical_feed")
+    if animal_harvested is not None:
+        out["animal_delivery_ratio"]=float(animal_delivered or 0.0)/max(float(animal_harvested),1e-8)
+    if placed is not None:
+        out["animal_escape_per_placed"]=float(escaped or 0.0)/max(float(placed),1e-8)
+    feed_total=float(normal_feed or 0.0)+float(critical_feed or 0.0)
+    out["critical_feed_share"]=float(critical_feed or 0.0)/feed_total if feed_total>0 else 0.0
     return out
 
 def evaluate(paths,model,device,executor,phase):
@@ -322,7 +335,9 @@ def evaluate(paths,model,device,executor,phase):
                 f"planted={r.reward_breakdown.get('seeds_planted_total',0)} "
                 f"crop_harvested={r.reward_breakdown.get('crop_units_harvested_total',0)} "
                 f"animal_made={r.reward_breakdown.get('animal_product_units_generated_total',0)} "
+                f"animal_to_shed={r.reward_breakdown.get('animal_product_units_moved_to_shed_total',0)} "
                 f"to_shed={r.reward_breakdown.get('product_units_moved_to_shed_total',0)} "
+                f"feed={r.reward_breakdown.get('normal_feed',0)}/{r.reward_breakdown.get('critical_feed',0)} "
                 f"escape={r.reward_breakdown.get('animals_escaped',0)} "
                 f"weed={r.reward_breakdown.get('crops_to_weed',0)} "
                 f"{'OK' if r.ok else r.error}",
@@ -428,7 +443,9 @@ def main():
                 f"planted={r.reward_breakdown.get('seeds_planted_total',0)} "
                 f"crop_harvested={r.reward_breakdown.get('crop_units_harvested_total',0)} "
                 f"animal_made={r.reward_breakdown.get('animal_product_units_generated_total',0)} "
+                f"animal_to_shed={r.reward_breakdown.get('animal_product_units_moved_to_shed_total',0)} "
                 f"to_shed={r.reward_breakdown.get('product_units_moved_to_shed_total',0)} "
+                f"feed={r.reward_breakdown.get('normal_feed',0)}/{r.reward_breakdown.get('critical_feed',0)} "
                 f"escape={r.reward_breakdown.get('animals_escaped',0)} "
                 f"weed={r.reward_breakdown.get('crops_to_weed',0)} "
                 f"{'OK' if r.ok else r.error}",
