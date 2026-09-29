@@ -186,7 +186,6 @@ def compute_worker_reward(executor, before, worker_action, after) -> RewardBreak
 
     action_at: dict[tuple[int, int], list[tuple[int, list[Any]]]] = defaultdict(list)
     harvested_by_tile: dict[tuple[int, int], float] = defaultdict(float)
-    feed_tiles: set[tuple[int, int]] = set()
 
     # Action-derived events whose post-state can be obscured by market/day refresh.
     shed_load = sum(int(v) for v in before["private"]["shed"].values())
@@ -232,9 +231,6 @@ def compute_worker_reward(executor, before, worker_action, after) -> RewardBreak
                         out.reward += ANIMAL_PRODUCT_HARVESTED_REWARD * units
                         out.animal_product_units_harvested_total += units
                         out.animal_product_units_harvested_by_product[product] += units
-
-        elif op == "FEED" and isinstance(tile_before, dict) and tile_before.get("animal"):
-            feed_tiles.add(pos)
 
         elif op == "FERTILIZE" and isinstance(tile_before, dict) and tile_before.get("kind") == "PLANT":
             has_resource = float(inv_before.get("FERTILIZER", 0) or 0) > 0
