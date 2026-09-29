@@ -52,13 +52,17 @@ assert (
 )
 
 ANIMAL_ESCAPE_PENALTY = -100.0
-CROP_TO_WEED_PENALTY = -32.0
-CROP_DEATH_PENALTY = -32.0
-LOST_HARVESTABLE_UNIT_PENALTY = -PRODUCT_VALUE
+CROP_TO_WEED_PENALTY = -64.0
+CROP_DEATH_PENALTY = -64.0
+LOST_HARVESTABLE_UNIT_PENALTY = -16.0
 
 SUCCESSFUL_PLANT_REWARD = 1.0
+PLANNED_PLANT_REWARD = 10.0
 BUILD_STRUCTURE_REWARD = 0.5
 PLACE_ANIMAL_REWARD = 1.0
+PLANNED_PLACE_ANIMAL_REWARD = 16.0
+ROUTE_PROGRESS_REWARD = 0.05
+AVOIDABLE_PASS_PENALTY = -0.10
 EFFECTIVE_CARE_REWARD = 3.0
 EFFECTIVE_FERTILIZE_REWARD = 1.0
 COLLECT_FERTILIZER_REWARD = 1.0
@@ -140,6 +144,10 @@ class RewardBreakdown:
     healthy_animal_days: int = 0
     normal_water: int = 0
     critical_water: int = 0
+    planned_plants_completed: int = 0
+    planned_animals_placed: int = 0
+    route_progress_steps: int = 0
+    avoidable_passes: int = 0
 
     def add(self, other: "RewardBreakdown") -> None:
         for name in self.__dataclass_fields__:
@@ -176,13 +184,33 @@ def compute_worker_reward(executor, before, worker_action, after) -> RewardBreak
     player = int(before["player"])
     before_farm = before["farms"][player]
     after_farm = after["farms"][player]
-    if set(worker_action) - {"farmer", "hands", "_delivery_credit"}:
+    if set(worker_action) - {
+        "farmer", "hands", "_delivery_credit", "_plan_credit",
+        "_route_progress", "_avoidable_pass",
+    }:
         raise ValueError("worker reward received unsupported action fields")
     actions = _worker_actions(worker_action)
     before_positions = _positions(before)
     before_invs = list(before["private"]["inventories"])
     after_invs = list(after["private"]["inventories"])
     delivery_credit = worker_action.get("_delivery_credit") or []
+    plan_credit = worker_action.get("_plan_credit") or []
+    route_progress = worker_action.get("_route_progress") or []
+    avoidable_pass = worker_action.get("_avoidable_pass") or []
+
+    for i, action in enumerate(actions):
+        if i < len(route_progress) and bool(route_progress[i]):
+            out.route_progress_steps += 1
+            out.reward += ROUTE_PROGRESS_REWARD
+        if (
+            action
+            and action[0] == "PASS"
+            and i < len(avoidable_pass)
+            and bool(avoidable_pass[i])
+        ):
+            out.avoidable_passes += 1
+            out.reward += AVOIDABLE_PASS_PENALTY
+
     day_rolled = int(after["day"]) != int(before["day"])
     shed_points = {tuple(p) for p in executor.SHED}
 
@@ -370,6 +398,16 @@ def compute_worker_reward(executor, before, worker_action, after) -> RewardBreak
                     out.seeds_planted_total += 1
                     out.seeds_planted_by_crop[crop] += 1
                 out.reward += SUCCESSFUL_PLANT_REWARD
+                for worker_i, _action in action_at.get(p, []):
+                    credit = plan_credit[worker_i] if worker_i < len(plan_credit) else {}
+                    if (
+                        isinstance(credit, dict)
+                        and credit.get("op") == "PLANT"
+                        and credit.get("item") == crop
+                    ):
+                        out.planned_plants_completed += 1
+                        out.reward += PLANNED_PLANT_REWARD
+                        break
             if bt is None and isinstance(at, dict) and at.get("kind") in ("COOP", "PASTURE"):
                 if not at.get("animal"):
                     out.structures_built += 1
@@ -381,6 +419,17 @@ def compute_worker_reward(executor, before, worker_action, after) -> RewardBreak
             ):
                 out.animals_placed += 1
                 out.reward += PLACE_ANIMAL_REWARD
+                animal = at.get("animal")
+                for worker_i, _action in action_at.get(p, []):
+                    credit = plan_credit[worker_i] if worker_i < len(plan_credit) else {}
+                    if (
+                        isinstance(credit, dict)
+                        and credit.get("op") == "PLACE_ANIMAL"
+                        and credit.get("item") == animal
+                    ):
+                        out.planned_animals_placed += 1
+                        out.reward += PLANNED_PLACE_ANIMAL_REWARD
+                        break
 
             # Water/feed are effective only when the same asset survives.
             if isinstance(bt, dict) and bt.get("kind") == "PLANT" and "WATER" in ops_here:
