@@ -8,7 +8,7 @@ import torch
 from worker_policy import (
     AVOIDABLE_PASS_ACTOR_PENALTY,
     DEFER_PLANNED_PLANT_ACTOR_PENALTY,
-    PLANNED_PLANT_ACTOR_BONUS,
+    PLANNED_PLANT_REWARD_EQUIV,
     CANDIDATE_FEATURE_NAMES,
     Task,
     WorkerPolicy,
@@ -205,7 +205,11 @@ class WorkerRouteCommitmentTest(unittest.TestCase):
         )
         self.assertEqual(
             policy.actor_bonus_for_choice(0, plant, choices, completed=True),
-            PLANNED_PLANT_ACTOR_BONUS,
+            0.0,
+        )
+        self.assertEqual(
+            policy.planned_completion_reward_equiv(plant),
+            PLANNED_PLANT_REWARD_EQUIV,
         )
         self.assertEqual(
             policy.actor_bonus_for_choice(0, passed, choices),
@@ -260,7 +264,11 @@ class WorkerRouteCommitmentTest(unittest.TestCase):
         at_target["private"]["seeds"] = {"WHEAT": 1}
         actions = policy.unit_actions(at_target, {}, plan)
         self.assertEqual(actions[0], ["PLANT", "WHEAT"])
-        self.assertEqual(origin.actor_bonus, PLANNED_PLANT_ACTOR_BONUS)
+        self.assertEqual(origin.actor_bonus, 0.0)
+        self.assertEqual(
+            origin.reward_equiv_bonus,
+            PLANNED_PLANT_REWARD_EQUIV,
+        )
 
     def test_interrupted_planned_route_gets_no_positive_bonus(self):
         policy = WorkerPolicy(
@@ -287,6 +295,7 @@ class WorkerRouteCommitmentTest(unittest.TestCase):
         )
         self.assertEqual(actions[0], ["WEST"])
         self.assertEqual(origin.actor_bonus, 0.0)
+        self.assertEqual(origin.reward_equiv_bonus, 0.0)
         self.assertNotIn(0, policy.active_origins)
 
     def test_unreachable_critical_water_does_not_destroy_useful_route(self):
