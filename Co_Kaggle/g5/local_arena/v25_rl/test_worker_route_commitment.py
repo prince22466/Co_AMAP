@@ -219,6 +219,40 @@ class WorkerRouteCommitmentTest(unittest.TestCase):
         self.assertEqual(actions[0], ["PICKUP", "WHEAT", 1])
         self.assertEqual(policy.turn_avoidable_pass, [False])
 
+    def test_stranded_carried_wheat_does_not_suppress_emergency_pickup(self):
+        policy = WorkerPolicy(
+            _Executor(),
+            _PassLovingModel(),
+            torch.device("cpu"),
+            deterministic=True,
+            collect=False,
+        )
+        obs = _critical_animal_obs(worker_x=0, hour=20, wheat=1)
+        obs["farms"][0]["hands"] = [[0, 0]]
+        obs["private"]["inventories"] = [
+            {"WHEAT": 1},
+            {},
+        ]
+        # Move the critical animal farther than worker 0 can reach before EOD,
+        # while worker 1 can still use the shed route after pickup.
+        obs["farms"][0]["farmer"] = [0, 0]
+        obs["farms"][0]["hands"] = [[4, 0]]
+        obs["farms"][0]["tiles"][0][3]["animal"] = None
+        obs["farms"][0]["tiles"].append([
+            None, None, None, {"kind": "PASTURE", "animal": "COW",
+            "yield_units": 0, "fed_today": False, "cared_today": True,
+            "consecutive_unfed": 1, "fertilizer_available": False,
+            "pending_care_bonus": 0, "placed_day": 0}
+        ])
+        # Put the critical animal at (3, 1): worker 0's carried wheat is not
+        # reachable in time under the synthetic deadline, so a critical pickup
+        # must still be generated.
+        critical = [
+            t for t in policy.tasks(obs, {}, {})
+            if t.op == "PICKUP" and t.item == "WHEAT" and t.critical >= 1
+        ]
+        self.assertTrue(critical)
+
     def test_emergency_wheat_pickup_leaves_a_later_feed_turn(self):
         policy = WorkerPolicy(
             _Executor(),
