@@ -427,10 +427,15 @@ def compute_worker_reward(executor, before, worker_action, after) -> RewardBreak
                     out.seeds_planted_total += 1
                     out.seeds_planted_by_crop[crop] += 1
                 out.reward += SUCCESSFUL_PLANT_REWARD
-            if bt is None and isinstance(at, dict) and at.get("kind") in ("COOP", "PASTURE"):
-                if not at.get("animal"):
-                    out.structures_built += 1
-                    out.reward += BUILD_STRUCTURE_REWARD
+            if (
+                bt is None
+                and isinstance(at, dict)
+                and at.get("kind") in ("COOP", "PASTURE")
+                and not at.get("animal")
+                and ({"BUILD_COOP", "BUILD_PASTURE"} & ops_here)
+            ):
+                out.structures_built += 1
+                out.reward += BUILD_STRUCTURE_REWARD
             if (
                 isinstance(bt, dict) and bt.get("kind") in ("COOP", "PASTURE")
                 and not bt.get("animal")
