@@ -257,10 +257,15 @@ class WorkerPolicy:
                 for target in critical_feed_targets
             ):
                 reachable_critical_wheat+=units
-        wheat_short=max(0,unfed-carried_wheat)
+        ordinary_wheat_short=max(0,unfed-carried_wheat)
         critical_wheat_short=max(
             0,critical_unfed-reachable_critical_wheat
         )
+        # Stranded carried WHEAT must not suppress an emergency shed pickup.
+        # Generate at least enough pickup capacity to cover the critical
+        # reachable-supply deficit, even when total carried WHEAT would make
+        # the ordinary aggregate shortage appear to be zero.
+        wheat_short=max(ordinary_wheat_short,critical_wheat_short)
         pickups(
             "WHEAT",wheat_short,4,
             critical_units=critical_wheat_short,
