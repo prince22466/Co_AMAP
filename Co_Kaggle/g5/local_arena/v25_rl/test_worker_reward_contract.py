@@ -58,7 +58,7 @@ class WorkerRewardContractTest(unittest.TestCase):
         )
         self.assertEqual(PRODUCT_VALUE, 8.0)
 
-    def test_animal_lifecycle_is_double_crop_value(self):
+    def test_animal_lifecycle_is_sixteen_times_crop_value(self):
         self.assertEqual(
             ANIMAL_PRODUCT_GENERATED_REWARD
             + ANIMAL_PRODUCT_HARVESTED_REWARD
