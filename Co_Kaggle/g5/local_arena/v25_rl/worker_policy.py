@@ -25,10 +25,11 @@ GLOBAL_FEATURE_NAMES=("day","hour","workers","shed_fill","wheat","fertilizer","p
 BASE_FEATURE_NAMES=("day","hour","workers","free_workers","worker_x","worker_y","target_x","target_y","distance","at_target","worker_inv","worker_wheat","worker_fert","worker_products","worker_animals","shed_fill","shed_wheat","shed_fert","seed_count","age","yield_units","consecutive_unwatered","consecutive_unfed","watered","fed","cared","fert_days","care_bonus","fert_available","critical","amount","shed_distance")
 CANDIDATE_FEATURE_NAMES=BASE_FEATURE_NAMES+tuple("op_"+x for x in OPS)+tuple("item_"+(x or "NONE") for x in ITEMS)
 
-# Actor-only shaping is measured in normalized-advantage units.  These values
-# never enter turn reward / critic targets, so planner/PASS credit is attached
-# to the worker subdecision that actually chose (or deferred) the task.
-PLANNED_PLANT_ACTOR_BONUS = 2.0
+# PASS/defer and non-plant planner shaping below are measured directly in
+# normalized-advantage units.  Planned PLANT is intentionally different: its
+# completion credit is expressed in raw reward-equivalent units so it can be
+# calibrated against an ordinary crop HARVEST before PPO normalization.
+PLANNED_PLANT_REWARD_EQUIV = 8.0
 PLANNED_BUILD_ACTOR_BONUS = 1.0
 PLANNED_ANIMAL_PICKUP_ACTOR_BONUS = 1.0
 PLANNED_PLACE_ANIMAL_ACTOR_BONUS = 1.5
@@ -89,6 +90,7 @@ class SubDecision:
     action_index: int
     old_log_prob: float
     actor_bonus: float = 0.0
+    reward_equiv_bonus: float = 0.0
 
 @dataclass
 class TurnRecord:
@@ -242,16 +244,21 @@ class WorkerPolicy:
         return [t.op]
 
     def planned_completion_bonus(self,t):
+        """Normalized actor-only completion bonus for non-plant plan steps."""
         if not t.planned:
             return 0.0
-        if t.op=="PLANT":
-            return PLANNED_PLANT_ACTOR_BONUS
         if t.op in ("BUILD_COOP","BUILD_PASTURE"):
             return PLANNED_BUILD_ACTOR_BONUS
         if t.op=="PICKUP" and t.item in self.e.ANIMALS:
             return PLANNED_ANIMAL_PICKUP_ACTOR_BONUS
         if t.op=="PLACE_ANIMAL":
             return PLANNED_PLACE_ANIMAL_ACTOR_BONUS
+        return 0.0
+
+    def planned_completion_reward_equiv(self,t):
+        """Raw reward-equivalent credit, normalized later with rollout GAE."""
+        if t.planned and t.op=="PLANT":
+            return PLANNED_PLANT_REWARD_EQUIV
         return 0.0
 
     def actor_bonus_for_choice(self,w,t,choices,completed=False):
@@ -349,6 +356,7 @@ class WorkerPolicy:
                 origin=self.active_origins.pop(w,None)
                 if origin is not None:
                     origin.actor_bonus+=self.planned_completion_bonus(t)
+                    origin.reward_equiv_bonus+=self.planned_completion_reward_equiv(t)
                 self._track_resource_action(w,action)
                 self.active_tasks.pop(w,None)
             else:
@@ -448,11 +456,16 @@ class WorkerPolicy:
             actor_bonus=self.actor_bonus_for_choice(
                 w,t,choices,completed=completed_now
             )
+            reward_equiv_bonus=(
+                self.planned_completion_reward_equiv(t)
+                if completed_now else 0.0
+            )
             self.candidate_counts.append(len(choices))
             sub=None
             if self.collect:
                 sub=SubDecision(
-                    mat.astype(np.float16),j,float(lp.item()),actor_bonus
+                    mat.astype(np.float16),j,float(lp.item()),
+                    actor_bonus,reward_equiv_bonus
                 )
                 subs.append(sub)
 
