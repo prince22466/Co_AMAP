@@ -319,6 +319,11 @@ Primary health metrics are:
 - `mean_crop_units_harvested_total`
 - `mean_animal_product_units_generated_total`
 - `mean_animal_product_units_harvested_total`
+- `mean_animal_product_units_moved_to_shed_total`
+- `animal_delivery_ratio`
+- `critical_feed_share`
+- `animal_escape_per_placed`
+- `mean_healthy_animal_days`
 - `mean_product_units_moved_to_shed_total`
 - `mean_animals_escaped`
 - `mean_crops_to_weed`
