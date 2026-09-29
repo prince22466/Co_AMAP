@@ -139,6 +139,7 @@ class WorkerRewardContractTest(unittest.TestCase):
             3 * ANIMAL_PRODUCT_DELIVERED_REWARD,
         )
         self.assertEqual(result.product_units_moved_to_shed_total, 3)
+        self.assertEqual(result.animal_product_units_moved_to_shed_total, 3)
 
     def test_normal_feed_is_more_valuable_than_emergency_rescue(self):
         self.assertGreater(NORMAL_FEED_REWARD, CRITICAL_FEED_REWARD)
