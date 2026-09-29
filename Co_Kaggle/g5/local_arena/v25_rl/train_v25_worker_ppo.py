@@ -23,11 +23,11 @@ V20_RL=LOCAL_ARENA/"v20_rl"
 if str(V20_RL) not in sys.path: sys.path.insert(0,str(V20_RL))
 from evaluate_v20_v19_losses import _agent_observation,_environment_from_history,_field,_recorded_step_actions,_saved_final_rewards,_seed_hint,recorded_action_parity
 from worker_policy import ActorCritic,CANDIDATE_FEATURE_NAMES,GLOBAL_FEATURE_NAMES,TurnRecord,WorkerPolicy
-from worker_reward import ANIMAL_ESCAPE_PENALTY,ANIMAL_PRODUCT_DELIVERED_REWARD,ANIMAL_PRODUCT_GENERATED_REWARD,ANIMAL_PRODUCT_HARVESTED_REWARD,ANIMAL_PRODUCT_VALUE,CROP_DEATH_PENALTY,CROP_TO_WEED_PENALTY,LOST_HARVESTABLE_UNIT_PENALTY,PRODUCT_DELIVERED_REWARD,PRODUCT_GENERATED_REWARD,PRODUCT_HARVESTED_REWARD,PRODUCT_VALUE,RewardBreakdown,compute_worker_reward
+from worker_reward import ANIMAL_ESCAPE_PENALTY,ANIMAL_PRODUCT_DELIVERED_REWARD,ANIMAL_PRODUCT_GENERATED_REWARD,ANIMAL_PRODUCT_HARVESTED_REWARD,ANIMAL_PRODUCT_VALUE,CRITICAL_FEED_REWARD,CROP_DEATH_PENALTY,CROP_TO_WEED_PENALTY,EFFECTIVE_CARE_REWARD,HEALTHY_ANIMAL_DAY_REWARD,LOST_HARVESTABLE_UNIT_PENALTY,NORMAL_FEED_REWARD,PRODUCT_DELIVERED_REWARD,PRODUCT_GENERATED_REWARD,PRODUCT_HARVESTED_REWARD,PRODUCT_VALUE,RewardBreakdown,compute_worker_reward
 
 DEFAULT_HISTORY_DIR=G5_ROOT/"game_history"/"v20"
 DEFAULT_EXECUTOR=HERE/"v25_rl.py"
-DEFAULT_OUTPUT_DIR=HERE/"runs"/"worker_ppo_static_v20_v4_animal_reward"
+DEFAULT_OUTPUT_DIR=HERE/"runs"/"worker_ppo_static_v20_v4_animal_pipeline"
 CHECKPOINT_ALGORITHM="v25_static_worker_ppo_gae_v4_animal_reward"
 
 def load_executor(path):
@@ -309,6 +309,19 @@ def summary(results,phase):
                 out[f"mean_{k}_{key.lower()}"]=value
         else:
             out["mean_"+k]=float(np.mean([float(value) for value in values])) if values else None
+
+    animal_harvested=out.get("mean_animal_product_units_harvested_total")
+    animal_delivered=out.get("mean_animal_product_units_moved_to_shed_total")
+    placed=out.get("mean_animals_placed")
+    escaped=out.get("mean_animals_escaped")
+    normal_feed=out.get("mean_normal_feed")
+    critical_feed=out.get("mean_critical_feed")
+    if animal_harvested is not None:
+        out["animal_delivery_ratio"]=float(animal_delivered or 0.0)/max(float(animal_harvested),1e-8)
+    if placed is not None:
+        out["animal_escape_per_placed"]=float(escaped or 0.0)/max(float(placed),1e-8)
+    feed_total=float(normal_feed or 0.0)+float(critical_feed or 0.0)
+    out["critical_feed_share"]=float(critical_feed or 0.0)/feed_total if feed_total>0 else 0.0
     return out
 
 def evaluate(paths,model,device,executor,phase):
@@ -322,7 +335,9 @@ def evaluate(paths,model,device,executor,phase):
                 f"planted={r.reward_breakdown.get('seeds_planted_total',0)} "
                 f"crop_harvested={r.reward_breakdown.get('crop_units_harvested_total',0)} "
                 f"animal_made={r.reward_breakdown.get('animal_product_units_generated_total',0)} "
+                f"animal_to_shed={r.reward_breakdown.get('animal_product_units_moved_to_shed_total',0)} "
                 f"to_shed={r.reward_breakdown.get('product_units_moved_to_shed_total',0)} "
+                f"feed={r.reward_breakdown.get('normal_feed',0)}/{r.reward_breakdown.get('critical_feed',0)} "
                 f"escape={r.reward_breakdown.get('animals_escaped',0)} "
                 f"weed={r.reward_breakdown.get('crops_to_weed',0)} "
                 f"{'OK' if r.ok else r.error}",
@@ -340,15 +355,55 @@ def device_for(v):
     if getattr(torch.backends,"mps",None) and torch.backends.mps.is_available(): return torch.device("mps")
     return torch.device("cpu")
 
+def current_reward_contract():
+    return {
+        "crop_product_value":PRODUCT_VALUE,
+        "crop_generated":PRODUCT_GENERATED_REWARD,
+        "crop_harvested":PRODUCT_HARVESTED_REWARD,
+        "crop_delivered":PRODUCT_DELIVERED_REWARD,
+        "animal_product_value":ANIMAL_PRODUCT_VALUE,
+        "animal_generated":ANIMAL_PRODUCT_GENERATED_REWARD,
+        "animal_harvested":ANIMAL_PRODUCT_HARVESTED_REWARD,
+        "animal_delivered":ANIMAL_PRODUCT_DELIVERED_REWARD,
+        "animal_escape":ANIMAL_ESCAPE_PENALTY,
+        "normal_feed":NORMAL_FEED_REWARD,
+        "critical_feed":CRITICAL_FEED_REWARD,
+        "effective_care":EFFECTIVE_CARE_REWARD,
+        "healthy_animal_day":HEALTHY_ANIMAL_DAY_REWARD,
+        "crop_to_weed":CROP_TO_WEED_PENALTY,
+        "crop_death":CROP_DEATH_PENALTY,
+        "lost_harvestable_unit":LOST_HARVESTABLE_UNIT_PENALTY,
+    }
+
 def save_checkpoint(path,model,opt,update,args,best):
-    torch.save({"algorithm":CHECKPOINT_ALGORITHM,"update":update,"model_state_dict":model.state_dict(),"optimizer_state_dict":opt.state_dict(),"candidate_feature_names":CANDIDATE_FEATURE_NAMES,"global_feature_names":GLOBAL_FEATURE_NAMES,"best_validation_worker_reward":best,"reward_contract":{"crop_product_value":PRODUCT_VALUE,"crop_generated":PRODUCT_GENERATED_REWARD,"crop_harvested":PRODUCT_HARVESTED_REWARD,"crop_delivered":PRODUCT_DELIVERED_REWARD,"animal_product_value":ANIMAL_PRODUCT_VALUE,"animal_generated":ANIMAL_PRODUCT_GENERATED_REWARD,"animal_harvested":ANIMAL_PRODUCT_HARVESTED_REWARD,"animal_delivered":ANIMAL_PRODUCT_DELIVERED_REWARD,"animal_escape":ANIMAL_ESCAPE_PENALTY,"crop_to_weed":CROP_TO_WEED_PENALTY,"crop_death":CROP_DEATH_PENALTY,"lost_harvestable_unit":LOST_HARVESTABLE_UNIT_PENALTY},"args":vars(args),"note":"PPO controls farmer/hands only; low-temperature stochastic rollouts; per-worker subdecision ratios; turn-level GAE/value; minibatch KL guard; rollback on catastrophic validation collapse; recorded market list is an unlearned env input; no final game result/money/margin/market reward"},path)
+    torch.save({"algorithm":CHECKPOINT_ALGORITHM,"update":update,"model_state_dict":model.state_dict(),"optimizer_state_dict":opt.state_dict(),"candidate_feature_names":CANDIDATE_FEATURE_NAMES,"global_feature_names":GLOBAL_FEATURE_NAMES,"best_validation_worker_reward":best,"reward_contract":current_reward_contract(),"args":vars(args),"note":"PPO controls farmer/hands only; low-temperature stochastic rollouts; per-worker subdecision ratios; turn-level GAE/value; minibatch KL guard; rollback on catastrophic validation collapse; recorded market list is an unlearned env input; no final game result/money/margin/market reward"},path)
 
 def load_checkpoint(path,model,opt,device):
     p=torch.load(path,map_location=device,weights_only=False)
     if p.get("algorithm")!=CHECKPOINT_ALGORITHM: raise ValueError("checkpoint algorithm mismatch")
     model.load_state_dict(p["model_state_dict"])
-    if p.get("optimizer_state_dict"): opt.load_state_dict(p["optimizer_state_dict"])
-    return int(p.get("update",-1))+1,float(p.get("best_validation_worker_reward",-math.inf))
+    saved_contract=p.get("reward_contract") or {}
+    contract_changed=saved_contract != current_reward_contract()
+    if contract_changed:
+        # Keep the learned actor, but the critic/value scale is stale when the
+        # reward contract changes (especially after removing falsely rewarded
+        # immature HARVEST no-ops). Reinitialize critic parameters, reset Adam,
+        # and establish a fresh best score under the corrected reward function.
+        for module in model.critic.modules():
+            reset=getattr(module,"reset_parameters",None)
+            if callable(reset):
+                reset()
+        print(
+            "WARNING: reward contract changed; keeping actor weights but "
+            "resetting critic, optimizer state, and validation-best score",
+            flush=True,
+        )
+        best=-math.inf
+    else:
+        if p.get("optimizer_state_dict"):
+            opt.load_state_dict(p["optimizer_state_dict"])
+        best=float(p.get("best_validation_worker_reward",-math.inf))
+    return int(p.get("update",-1))+1,best
 
 def parser():
     p=argparse.ArgumentParser(description=__doc__)
@@ -376,15 +431,17 @@ def main():
     model=ActorCritic(len(CANDIDATE_FEATURE_NAMES),len(GLOBAL_FEATURE_NAMES),args.hidden).to(device); opt=torch.optim.Adam(model.parameters(),lr=args.learning_rate); start=0; best=-math.inf
     if args.resume: start,best=load_checkpoint(args.resume.expanduser().resolve(),model,opt,device)
     (out/"split.json").write_text(json.dumps({"train":[p.name for p in train],"validation":[p.name for p in val],"split_seed":args.split_seed},indent=2)+"\n")
-    (out/"config.json").write_text(json.dumps({**vars(args),"executor":str(ex),"device_resolved":str(device),"algorithm":CHECKPOINT_ALGORITHM,"objective":"worker efficiency only; farmer/hands replaced by RL, recorded v20 market orders replayed unchanged; no final game result reward","crop_product_value":PRODUCT_VALUE,"animal_product_value":ANIMAL_PRODUCT_VALUE},indent=2,default=str)+"\n")
+    (out/"config.json").write_text(json.dumps({**vars(args),"executor":str(ex),"device_resolved":str(device),"algorithm":CHECKPOINT_ALGORITHM,"objective":"worker efficiency only; farmer/hands replaced by RL, recorded v20 market orders replayed unchanged; no final game result reward","crop_product_value":PRODUCT_VALUE,"animal_product_value":ANIMAL_PRODUCT_VALUE,"reward_contract":current_reward_contract()},indent=2,default=str)+"\n")
     rows,base=evaluate(val,model,device,ex,"baseline"); write_jsonl(out/"validation.jsonl",{"update":-1,**base})
     for r in rows: write_jsonl(out/"validation_episodes.jsonl",{"update":-1,**r.__dict__})
     baseline_worker_reward=base.get("mean_worker_reward")
     if baseline_worker_reward is not None:
         best=max(best,float(baseline_worker_reward))
-        # Make best.pt truthful even when the untrained baseline remains the
-        # best held-out worker policy for the entire run.
-        save_checkpoint(ck/"best.pt",model,opt,-1,args,best)
+        # Preserve the source update when starting from --resume.  Writing -1
+        # here would make a later resume from this new best.pt restart at u0
+        # even though the weights came from a later checkpoint.
+        baseline_checkpoint_update=start-1
+        save_checkpoint(ck/"best.pt",model,opt,baseline_checkpoint_update,args,best)
     started=time.perf_counter(); last=start-1
     for u in range(start,args.updates):
         if (time.perf_counter()-started)/3600>=args.max_training_hours: break
@@ -399,7 +456,9 @@ def main():
                 f"planted={r.reward_breakdown.get('seeds_planted_total',0)} "
                 f"crop_harvested={r.reward_breakdown.get('crop_units_harvested_total',0)} "
                 f"animal_made={r.reward_breakdown.get('animal_product_units_generated_total',0)} "
+                f"animal_to_shed={r.reward_breakdown.get('animal_product_units_moved_to_shed_total',0)} "
                 f"to_shed={r.reward_breakdown.get('product_units_moved_to_shed_total',0)} "
+                f"feed={r.reward_breakdown.get('normal_feed',0)}/{r.reward_breakdown.get('critical_feed',0)} "
                 f"escape={r.reward_breakdown.get('animals_escaped',0)} "
                 f"weed={r.reward_breakdown.get('crops_to_weed',0)} "
                 f"{'OK' if r.ok else r.error}",
