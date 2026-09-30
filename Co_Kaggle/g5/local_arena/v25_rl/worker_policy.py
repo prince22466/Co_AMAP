@@ -51,6 +51,12 @@ def _animal_survival_task(task):
         )
     )
 
+def _animal_setup_task(task):
+    return task.planned and (
+        task.op in ("BUILD_COOP","BUILD_PASTURE","PLACE_ANIMAL")
+        or (task.op in ("PICKUP","DIG") and task.item in ANIMAL_PRODUCTS)
+    )
+
 def _crop_decay_start_step(e,tile):
     return crop_decay_start_step(e,tile)
 
@@ -205,10 +211,10 @@ class WorkerPolicy:
         for pt,a in animal_plan.items():
             pt=tuple(pt); t=e.tile(farm,pt); structure="COOP" if a=="GOOSE" else "PASTURE"
             if t is None: tasks.append(Task(pt,"BUILD_COOP" if a=="GOOSE" else "BUILD_PASTURE",a,planned=True))
-            elif isinstance(t,dict) and t.get("kind")=="WEED": tasks.append(Task(pt,"DIG"))
+            elif isinstance(t,dict) and t.get("kind")=="WEED": tasks.append(Task(pt,"DIG",a,planned=True))
             elif isinstance(t,dict) and t.get("kind") in ("COOP","PASTURE") and not t.get("animal"):
                 if t.get("kind")==structure: tasks.append(Task(pt,"PLACE_ANIMAL",a,planned=True)); need[a]+=1
-                else: tasks.append(Task(pt,"DIG"))
+                else: tasks.append(Task(pt,"DIG",a,planned=True))
         unfed=0; critical_unfed=0; critical_feed_targets=[]
         for y,row in enumerate(farm["tiles"]):
             for x,t in enumerate(row):
@@ -363,6 +369,7 @@ class WorkerPolicy:
         if t.op=="FEED" and int(inv.get("WHEAT",0))<=0: return False
         if t.op=="FERTILIZE" and int(inv.get("FERTILIZER",0))<=0: return False
         if t.op=="PLACE_ANIMAL" and int(inv.get(t.item,0))<=0: return False
+        if t.op=="PLACE_ANIMAL" and not self._animal_has_capacity(obs,w,t,shed): return False
         if t.op=="PICKUP" and int(shed.get(t.item,0))<=0: return False
         if t.op=="DELIVER" and int(inv.get(t.item,0))<=0: return False
         return True
@@ -527,7 +534,33 @@ class WorkerPolicy:
         covered,_,_=self._deadline_schedule(obs,jobs,states,stock)
         if len(covered)<len({job.key for job in jobs}):
             return False
-        # Also reserve a full day's WATER, FEED and CARE for the enlarged farm.
+        animals=list(self.turn_capacity_animals if in_turn else [])
+        return self._next_day_maintenance_fits(obs,states,proposed,animals)
+
+    def _animal_has_capacity(self,obs,w,t,shed):
+        now=int(obs["day"])*24+int(obs["hour"])
+        in_turn=getattr(self,"_capacity_step",None)==now
+        states=dict(self.turn_capacity_states if in_turn else self._capacity_states(obs))
+        tasks=self.turn_capacity_tasks if in_turn else self.tasks(obs,{}, {})
+        reserved=self.turn_capacity_reserved if in_turn else set()
+        plants=list(self.turn_capacity_plants if in_turn else [])
+        animals=list(self.turn_capacity_animals if in_turn else [])
+        projected=self._advance_capacity_state(obs,t,states[w],int(shed.get("WHEAT",0)))
+        if projected is None:
+            return False
+        states[w]=projected[0]
+        jobs=[job for job in self._maintenance_tasks(obs,tasks) if job.key not in reserved]+plants
+        covered,_,_=self._deadline_schedule(obs,jobs,states,int(shed.get("WHEAT",0)))
+        if len(covered)<len({job.key for job in jobs}):
+            return False
+        # New animals start consecutive_unfed=0: unlike PLANT, PLACE does not
+        # require feeding on its placement day to survive. Reserve tomorrow's
+        # FEED/CARE workload, including other placements assigned this turn.
+        animals.append(t)
+        return self._next_day_maintenance_fits(obs,states,plants,animals)
+
+    def _next_day_maintenance_fits(self,obs,states,plants,animals):
+        # Reserve a full day's WATER, FEED and CARE for the enlarged farm.
         # Use the current workforce; future market hires are not guaranteed.
         if int(obs["day"])>=29:
             return True
@@ -541,7 +574,9 @@ class WorkerPolicy:
                     daily.append(Task((x,y),"WATER",tile.get("crop","")))
                 elif tile.get("animal"):
                     daily.extend((Task((x,y),"FEED","WHEAT"),Task((x,y),"CARE",tile["animal"])))
-        daily.extend(Task(job.target,"WATER",job.item) for job in proposed)
+        daily.extend(Task(job.target,"WATER",job.item) for job in plants)
+        for job in animals:
+            daily.extend((Task(job.target,"FEED","WHEAT"),Task(job.target,"CARE",job.item)))
         # Reserve pickup time per future FEED. Future supply is unknown and may
         # include today's planting/harvest; using today's stock as a hard future
         # limit would forbid WHEAT planting precisely when feed needs renewal.
@@ -660,6 +695,7 @@ class WorkerPolicy:
         self.turn_capacity_tasks=tasks
         self.turn_capacity_reserved=reserved
         self.turn_capacity_plants=[]
+        self.turn_capacity_animals=[]
         # Snapshot provenance before this turn's actions. Reward attribution uses
         # this to cap delivery credit to goods that did not originate in the shed.
         self.turn_delivery_credit=[
@@ -690,6 +726,8 @@ class WorkerPolicy:
                     self.turn_capacity_plants.append(Task(
                         t.target,"WATER",t.item,critical=1.0,release_step=projected[0][1]
                     ))
+                elif t.op=="PLACE_ANIMAL":
+                    self.turn_capacity_animals.append(t)
 
         def record_reward_provenance(w,t,pos,target,action,avoidable_pass=False):
             if t.planned and pos==target and t.op in ("PLANT","PLACE_ANIMAL"):
@@ -856,6 +894,43 @@ class WorkerPolicy:
                 if safe:
                     choices=[choices[i] for i in safe]
                     feats=[feats[i] for i in safe]
+
+            if not urgent:
+                # Finish the planner's animal pipeline before ordinary actor
+                # work. Preserve today's reachable maintenance/deadlines when
+                # considering setup movement, clearing, BUILD and PICKUP too.
+                maintenance=[job for job in self._maintenance_tasks(obs,tasks)
+                             if job.key not in reserved]+self.turn_capacity_plants
+                stock=int(shed.get("WHEAT",0))
+                baseline,_,_=self._deadline_schedule(obs,maintenance,self.turn_capacity_states,stock)
+                setup=[]
+                for i,(w,t,_key) in enumerate(choices):
+                    if not _animal_setup_task(t):
+                        continue
+                    projected=self._advance_capacity_state(obs,t,self.turn_capacity_states[w],stock)
+                    if projected is None:
+                        continue
+                    states=dict(self.turn_capacity_states)
+                    states[w]=projected[0]
+                    covered,_,_=self._deadline_schedule(obs,maintenance,states,stock-projected[1])
+                    if baseline<=covered:
+                        setup.append(i)
+                if setup:
+                    # Prefer completing a placement, then supplying it, before
+                    # starting more structures. PPO still assigns workers/jobs.
+                    rank={"PLACE_ANIMAL":0,"PICKUP":1,"BUILD_COOP":2,"BUILD_PASTURE":2,"DIG":3}
+                    stage=min(rank[choices[i][1].op] for i in setup)
+                    setup=[i for i in setup if rank[choices[i][1].op]==stage]
+                    choices=[choices[i] for i in setup]
+                    feats=[feats[i] for i in setup]
+
+            # PASS remains valid for workers with no feasible unreserved job.
+            # Mask it per worker, so one busy worker does not hide another's
+            # genuinely necessary idle action. PPO samples the filtered set.
+            busy={w for w,t,_ in choices if t.op!="PASS"}
+            keep=[i for i,(w,t,_key) in enumerate(choices) if t.op!="PASS" or w not in busy]
+            choices=[choices[i] for i in keep]
+            feats=[feats[i] for i in keep]
 
             if not choices:
                 for w in workers:

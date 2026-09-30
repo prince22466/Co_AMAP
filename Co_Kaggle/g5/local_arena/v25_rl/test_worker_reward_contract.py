@@ -168,6 +168,7 @@ class WorkerRewardContractTest(unittest.TestCase):
             after,
         )
         self.assertEqual(avoidable.avoidable_passes, 1)
+        self.assertEqual(avoidable.pass_actions, 1)
         self.assertEqual(AVOIDABLE_PASS_PENALTY, 0.0)
         self.assertEqual(avoidable.reward, 0.0)
 
@@ -182,6 +183,7 @@ class WorkerRewardContractTest(unittest.TestCase):
             after,
         )
         self.assertEqual(necessary.avoidable_passes, 0)
+        self.assertEqual(necessary.pass_actions, 1)
         self.assertEqual(necessary.reward, 0.0)
 
     def test_zero_weed_contract_is_deliberately_severe(self):

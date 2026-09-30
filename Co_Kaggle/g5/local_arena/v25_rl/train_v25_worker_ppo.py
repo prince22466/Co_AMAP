@@ -27,7 +27,7 @@ from worker_reward import ANIMAL_ESCAPE_PENALTY,ANIMAL_PRODUCT_DELIVERED_REWARD,
 
 DEFAULT_HISTORY_DIR=G5_ROOT/"game_history"/"v20"
 DEFAULT_EXECUTOR=HERE/"v25_rl.py"
-DEFAULT_OUTPUT_DIR=HERE/"runs"/"worker_ppo_static_v20_v10_lossless_harvest"
+DEFAULT_OUTPUT_DIR=HERE/"runs"/"worker_ppo_static_v20_v11_animal_placement"
 CHECKPOINT_ALGORITHM="v25_static_worker_ppo_gae_v4_animal_reward"
 
 def load_executor(path):
@@ -379,6 +379,7 @@ def evaluate(paths,model,device,executor,phase):
                 f"[{phase}] {i}/{len(paths)} {p.stem} "
                 f"reward={r.worker_reward:+.1f} "
                 f"planted={r.reward_breakdown.get('seeds_planted_total',0)} "
+                f"animals_placed={r.reward_breakdown.get('animals_placed',0)} "
                 f"crop_harvested={r.reward_breakdown.get('crop_units_harvested_total',0)} "
                 f"animal_made={r.reward_breakdown.get('animal_product_units_generated_total',0)} "
                 f"animal_to_shed={r.reward_breakdown.get('animal_product_units_moved_to_shed_total',0)} "
@@ -391,6 +392,8 @@ def evaluate(paths,model,device,executor,phase):
                 f"other={r.reward_breakdown.get('crops_to_weed_other',0)}) "
                 f"lost={r.reward_breakdown.get('lost_harvestable_units',0)} "
                 f"decay_units={r.reward_breakdown.get('crop_units_lost_to_decay',0)} "
+                f"pass={r.reward_breakdown.get('pass_actions',0)} "
+                f"avoidable_pass={r.reward_breakdown.get('avoidable_passes',0)} "
                 f"{'OK' if r.ok else r.error}",
                 flush=True,
             )
@@ -408,7 +411,7 @@ def device_for(v):
 
 def current_reward_contract():
     return {
-        "semantics":"engine-first-decay-capacity-and-spoilage-v9",
+        "semantics":"planned-animal-priority-and-pass-mask-v11",
         "crop_product_value":PRODUCT_VALUE,
         "crop_generated":PRODUCT_GENERATED_REWARD,
         "crop_harvested":PRODUCT_HARVESTED_REWARD,
@@ -451,6 +454,9 @@ def current_reward_contract():
         "cumulative_deadline_capacity":True,
         "plant_requires_maintenance_capacity":True,
         "gradual_decay_units_counted":True,
+        "planned_animal_setup_priority":True,
+        "animal_requires_maintenance_capacity":True,
+        "avoidable_pass_masked_per_worker":True,
     }
 
 def save_checkpoint(
@@ -549,7 +555,7 @@ def main():
         )
     best,best_weed,best_escape=selected_best_stats(ck/"best.pt")
     (out/"split.json").write_text(json.dumps({"train":[p.name for p in train],"validation":[p.name for p in val],"split_seed":args.split_seed},indent=2)+"\n")
-    (out/"config.json").write_text(json.dumps({**vars(args),"executor":str(ex),"device_resolved":str(device),"algorithm":CHECKPOINT_ALGORITHM,"objective":"worker efficiency only; farmer/hands replaced by RL, recorded v20 market orders replayed unchanged; no final game result reward","policy_semantics":"persistent task routes; critical-water/feed survival with shed or field wheat; first-loss cumulative harvest capacity; final ongoing harvest and cleanup commitment; planting maintenance admission; gradual spoilage accounting","crop_product_value":PRODUCT_VALUE,"animal_product_value":ANIMAL_PRODUCT_VALUE,"reward_contract":current_reward_contract()},indent=2,default=str)+"\n")
+    (out/"config.json").write_text(json.dumps({**vars(args),"executor":str(ex),"device_resolved":str(device),"algorithm":CHECKPOINT_ALGORITHM,"objective":"worker efficiency only; farmer/hands replaced by RL, recorded v20 market orders replayed unchanged; no final game result reward","policy_semantics":"persistent task routes; critical-water/feed survival with shed or field wheat; first-loss cumulative harvest capacity; final ongoing harvest and cleanup commitment; shared planting/animal maintenance admission; planned animal setup priority; avoidable PASS masked per worker; gradual spoilage accounting","crop_product_value":PRODUCT_VALUE,"animal_product_value":ANIMAL_PRODUCT_VALUE,"reward_contract":current_reward_contract()},indent=2,default=str)+"\n")
     rows,base=evaluate(val,model,device,ex,"baseline"); write_jsonl(out/"validation.jsonl",{"update":-1,**base})
     for r in rows: write_jsonl(out/"validation_episodes.jsonl",{"update":-1,**r.__dict__})
     baseline_worker_reward=base.get("mean_worker_reward")

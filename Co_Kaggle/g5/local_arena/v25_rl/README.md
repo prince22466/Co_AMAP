@@ -130,10 +130,19 @@ Hard scheduling is therefore lexicographic:
 1. critical WATER / critical FEED
 2. WHEAT PICKUP / mature WHEAT HARVEST required for critical FEED
 3. pressured first-decay HARVEST / final ongoing HARVEST and DIG
-4. ordinary productive PPO work
-5. PASS
+4. capacity-safe planned animal setup: PLACE, then animal PICKUP, then BUILD, then clearing the planned site
+5. ordinary productive PPO work
+6. PASS only for a worker with no feasible unreserved task
 
 The same reachability/matching preemption logic is used so unrelated committed routes are preserved whenever the remaining workers can still cover the higher-priority survival work.
+
+Planned animal setup is a scheduler priority, rather than relying only on actor bonuses. This includes clearing weeds or an empty wrong-kind structure on the planned site, building the correct structure, picking up an available animal and placing it. Setup choices preserve the estimated reachable maintenance/deadline coverage; existing committed routes continue unless survival or harvest deadlines require preemption. PLACE also reserves the enlarged farm's next-day FEED/CARE workload. Animal and crop admissions share same-turn reservations, so neither expansion can spend capacity already promised to the other. A new animal starts `consecutive_unfed=0`, so placement at the last hour is permitted when tomorrow's maintenance fits; feeding on its placement day is not a survival requirement. Future wheat supply and hires remain uncertain, so the estimate does not guarantee zero escapes.
+
+PASS is masked per worker whenever that worker has another feasible unreserved task, including during stochastic training. Necessary idle remains legal. `pass_actions` counts all emitted PASS actions and `avoidable_passes` counts PASS that skips a feasible task; summaries expose `mean_pass_actions` and `mean_avoidable_passes`. These measurements do not detect tasks missing from candidate generation or ineffective movement.
+
+The v11 default output directory is `runs/worker_ppo_static_v20_v11_animal_placement`. Resuming a v10 checkpoint keeps the actor weights and update index, while the changed execution contract resets critic, optimizer and validation-best bookkeeping and evaluates a new baseline. Reward values and reward-based checkpoint selection are unchanged. Seed PLANT still uses its existing completion bonus and deferral penalty; ordinary seed planting is not hard-forced.
+
+See [ANIMAL_PLACEMENT_VALIDATION.md](ANIMAL_PLACEMENT_VALIDATION.md) for paired u157 replays, regression checks, throughput tradeoffs and reproduction instructions.
 
 A deliberate `DIG` of a fully exhausted crop with no remaining yield is valid cleanup, including an ongoing crop's final production day, and receives no crop-death penalty. Destroying a still-productive crop remains a heavy failure.
 
