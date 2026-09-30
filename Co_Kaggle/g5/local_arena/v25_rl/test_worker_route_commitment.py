@@ -420,7 +420,8 @@ class WorkerRouteCommitmentTest(unittest.TestCase):
             collect=False,
         )
         task = Task((0, 0), "PLANT", "WHEAT", planned=True)
-        obs = _obs(worker_x=0)
+        # Isolate planting/watering time from unrelated unfinished feeding.
+        obs = _obs(worker_x=0, fed=True)
         obs["private"]["seeds"] = {"WHEAT": 1}
 
         obs["hour"] = 23
@@ -598,7 +599,9 @@ class WorkerRouteCommitmentTest(unittest.TestCase):
         policy.active_day = 0
         policy.active_tasks[0] = Task((3, 0), "FEED", "WHEAT")
 
-        actions = policy.unit_actions(_obs(worker_x=1, fed=True), {}, {})
+        # No carried product: otherwise DELIVERY makes PASS avoidable even
+        # though the previous FEED route was correctly released.
+        actions = policy.unit_actions(_obs(worker_x=1, fed=True, wheat=0), {}, {})
         self.assertEqual(actions[0], ["PASS"])
         self.assertEqual(policy.turn_avoidable_pass, [False])
         self.assertNotIn(0, policy.active_tasks)

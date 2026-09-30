@@ -9,6 +9,9 @@ CROP_PRODUCTS = ("WHEAT", "CARROT", "TOMATO", "STRAWBERRY", "MELON")
 ANIMAL_PRODUCT_NAMES = ("MILK", "EGG", "WOOL")
 PRODUCTS = CROP_PRODUCTS + ANIMAL_PRODUCT_NAMES
 ANIMAL_PRODUCTS = {"COW": "MILK", "GOOSE": "EGG", "SHEEP": "WOOL"}
+# Official engine lifespan ages. MELON's planner yield age (10) is earlier
+# than its engine max_yield_day (12); do not derive expiry from that plan.
+CROP_DECAY_AGE = {"WHEAT": 5, "CARROT": 4, "TOMATO": 12, "STRAWBERRY": 17, "MELON": 13}
 
 def _zero_crop_counts() -> dict[str, float]:
     return {name: 0.0 for name in CROP_PRODUCTS}
@@ -118,6 +121,8 @@ def _crop_decay_start_step(executor, tile) -> int | None:
     if raw >= 0:
         return raw
     crop = tile.get("crop")
+    if crop in CROP_DECAY_AGE:
+        return (int(tile.get("planted_day", 0) or 0) + CROP_DECAY_AGE[crop]) * 24
     spec = executor.CROPS.get(crop)
     if not spec:
         return None
@@ -156,6 +161,8 @@ class RewardBreakdown:
     crops_to_weed_other: int = 0
     crops_died: int = 0
     lost_harvestable_units: float = 0.0
+    crop_units_lost_to_decay: float = 0.0
+    crop_units_lost_to_decay_by_crop: dict[str, float] = field(default_factory=_zero_crop_counts)
 
     # Existing reward-stage totals.
     products_generated: float = 0.0
@@ -379,7 +386,7 @@ def compute_worker_reward(executor, before, worker_action, after) -> RewardBreak
                 same_animal = isinstance(at, dict) and at.get("animal") == bt.get("animal")
                 if not same_animal:
                     out.animals_escaped += 1
-                    lost = float(bt.get("yield_units", 0) or 0)
+                    lost = max(0.0, float(bt.get("yield_units", 0) or 0) - harvested_by_tile.get(p, 0.0))
                     out.lost_harvestable_units += lost
                     out.reward += ANIMAL_ESCAPE_PENALTY + LOST_HARVESTABLE_UNIT_PENALTY * lost
 
@@ -387,7 +394,17 @@ def compute_worker_reward(executor, before, worker_action, after) -> RewardBreak
             # become WEED through missed watering or through normal lifespan
             # decay after harvestable yield is left on the tile.
             if isinstance(bt, dict) and bt.get("kind") == "PLANT":
-                if isinstance(at, dict) and at.get("kind") == "WEED":
+                # The engine can spawn a random weed on the newly empty tile
+                # in the same turn as a successful one-time HARVEST or DIG.
+                # That is not the crop becoming a weed. A productive DIG is
+                # still a crop death; exhausted cleanup remains valid.
+                removed_by_harvest = (
+                    bt.get("crop") not in ("TOMATO", "STRAWBERRY")
+                    and harvested_by_tile.get(p, 0.0) > 0
+                )
+                weed_after = isinstance(at, dict) and at.get("kind") == "WEED"
+                dug_up = "DIG" in ops_here and (at is None or weed_after)
+                if weed_after and not removed_by_harvest and not dug_up:
                     out.crops_to_weed += 1
                     cause = _classify_crop_to_weed(
                         executor, before, bt, day_rolled
@@ -398,10 +415,15 @@ def compute_worker_reward(executor, before, worker_action, after) -> RewardBreak
                         out.crops_to_weed_decay += 1
                     else:
                         out.crops_to_weed_other += 1
-                    lost = float(bt.get("yield_units", 0) or 0)
+                    lost = max(0.0, float(bt.get("yield_units", 0) or 0) - harvested_by_tile.get(p, 0.0))
                     out.lost_harvestable_units += lost
+                    if cause == "decay":
+                        out.crop_units_lost_to_decay += lost
+                        crop = bt.get("crop")
+                        if crop in CROP_PRODUCTS:
+                            out.crop_units_lost_to_decay_by_crop[crop] += lost
                     out.reward += CROP_TO_WEED_PENALTY + LOST_HARVESTABLE_UNIT_PENALTY * lost
-                elif at is None and "HARVEST" not in ops_here:
+                elif (at is None or dug_up) and not removed_by_harvest:
                     # DIG of a fully exhausted crop is valid cleanup, not crop
                     # death. Destroying a still-productive plant remains a heavy
                     # worker-efficiency failure.
@@ -416,11 +438,11 @@ def compute_worker_reward(executor, before, worker_action, after) -> RewardBreak
                     exhausted_cleanup = (
                         "DIG" in ops_here
                         and float(bt.get("yield_units", 0) or 0) <= 0
-                        and age > useful_age
+                        and (age >= useful_age if crop in ("TOMATO", "STRAWBERRY") else age > useful_age)
                     )
                     if not exhausted_cleanup:
                         out.crops_died += 1
-                        lost = float(bt.get("yield_units", 0) or 0)
+                        lost = max(0.0, float(bt.get("yield_units", 0) or 0) - harvested_by_tile.get(p, 0.0))
                         out.lost_harvestable_units += lost
                         out.reward += CROP_DEATH_PENALTY + LOST_HARVESTABLE_UNIT_PENALTY * lost
 
@@ -549,6 +571,19 @@ def compute_worker_reward(executor, before, worker_action, after) -> RewardBreak
                 before_yield = float(bt.get("yield_units", 0) or 0)
                 after_yield = float(at.get("yield_units", 0) or 0)
                 generated = max(0.0, after_yield + harvested_by_tile.get(p, 0.0) - before_yield)
+                # Count each disappearing unit, not only the last unit when
+                # PLANT becomes WEED. Subtract successful harvests so normal
+                # collection (including ongoing crops) cannot become spoilage.
+                if bt.get("kind") == "PLANT":
+                    decay_start = _crop_decay_start_step(executor, bt)
+                    now = int(before["day"]) * 24 + int(before["hour"])
+                    if decay_start is not None and now >= decay_start:
+                        lost = max(0.0, before_yield - harvested_by_tile.get(p, 0.0) - after_yield)
+                        out.lost_harvestable_units += lost
+                        out.crop_units_lost_to_decay += lost
+                        if product in CROP_PRODUCTS:
+                            out.crop_units_lost_to_decay_by_crop[product] += lost
+                        out.reward += LOST_HARVESTABLE_UNIT_PENALTY * lost
                 if generated:
                     out.products_generated += generated
                     if bt.get("animal"):

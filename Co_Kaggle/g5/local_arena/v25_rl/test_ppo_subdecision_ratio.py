@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+import tempfile
 import sys
 import unittest
 from pathlib import Path
@@ -19,11 +20,40 @@ from worker_policy import ActorCritic, SubDecision, TurnRecord
 from train_v25_worker_ppo import (
     actor_samples_and_advantages,
     ppo_update,
+    save_checkpoint,
+    load_checkpoint,
+    selected_best_stats,
     validation_checkpoint_decision,
 )
 
 
 class SubdecisionPPOTest(unittest.TestCase):
+    def test_new_checkpoint_roundtrip_keeps_reward_selection(self):
+        model=ActorCritic(6,4,hidden=8)
+        optimizer=torch.optim.Adam(model.parameters())
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/"checkpoint.pt"
+            save_checkpoint(path,model,optimizer,147,SimpleNamespace(),40000,0,0)
+            self.assertEqual(load_checkpoint(path,model,optimizer,torch.device("cpu")),
+                             (148,40000,0,0))
+            self.assertEqual(selected_best_stats(path),(40000,0,0))
+
+    def test_old_contract_resume_keeps_actor_and_resets_stale_baselines(self):
+        model=ActorCritic(6,4,hidden=8)
+        optimizer=torch.optim.Adam(model.parameters())
+        actor={k:v.clone() for k,v in model.actor.state_dict().items()}
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/"checkpoint.pt"
+            save_checkpoint(path,model,optimizer,147,SimpleNamespace(),40000,0,0)
+            payload=torch.load(path,weights_only=False)
+            payload["reward_contract"]={"semantics":"old"}
+            torch.save(payload,path)
+            loaded=load_checkpoint(path,model,optimizer,torch.device("cpu"))
+            self.assertEqual(loaded,(148,-math.inf,math.inf,math.inf))
+            self.assertEqual(selected_best_stats(path),(-math.inf,math.inf,math.inf))
+            for key,value in model.actor.state_dict().items():
+                self.assertTrue(torch.equal(value,actor[key]))
+
     def test_low_temperature_concentrates_probability_on_argmax(self):
         logits = torch.tensor([0.10, 0.08, 0.00, -0.05])
         normal = Categorical(logits=logits)

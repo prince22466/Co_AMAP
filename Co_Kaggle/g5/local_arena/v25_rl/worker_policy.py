@@ -1,13 +1,13 @@
 """RL worker policy that replaces v25_rl.unit_actions completely."""
 from __future__ import annotations
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 import numpy as np
 import torch
 from torch import nn
 from torch.distributions import Categorical
-from worker_reward import ANIMAL_PRODUCTS, ITEMS, MOVE_ACTIONS, OPS, PRODUCTS, RewardBreakdown, _positions
+from worker_reward import ANIMAL_PRODUCTS, ITEMS, MOVE_ACTIONS, OPS, PRODUCTS, RewardBreakdown, _positions, _crop_decay_start_step as crop_decay_start_step
 
 @dataclass(frozen=True)
 class Task:
@@ -19,6 +19,7 @@ class Task:
     slot: int=0
     planned: bool=False
     deadline_step: int | None=None
+    release_step: int=0
     @property
     def key(self): return (self.target,self.op,self.item,self.slot)
 
@@ -44,49 +45,42 @@ def _animal_survival_task(task):
     return (
         (task.op=="FEED" and float(task.critical)>=1.0)
         or (
-            task.op=="PICKUP"
+            task.op in ("PICKUP","HARVEST")
             and task.item=="WHEAT"
             and float(task.critical)>=1.0
         )
     )
 
 def _crop_decay_start_step(e,tile):
-    """Best available absolute step at which crop yield decay begins."""
-    raw_value=tile.get("max_lifespan_step",-1)
-    raw=int(raw_value if raw_value is not None else -1)
-    if raw>=0:
-        return raw
-    crop=tile.get("crop")
-    spec=e.CROPS.get(crop)
-    if not spec:
-        return None
-    events=tuple(spec[2] or ())
-    if not events:
-        return None
-    # Rules: one-time crops decay one day after max-yield day; ongoing crops
-    # decay one day after their final capped production event.
-    final_age=max(int(age) for age,_units in events)
-    planted=int(tile.get("planted_day",0) or 0)
-    return (planted+final_age+1)*24
+    return crop_decay_start_step(e,tile)
 
 def _crop_decay_deadline_step(e,obs,tile):
-    """Conservative last step to harvest currently held crop units.
+    """Harvest/retire before the first decay, independent of held quantity.
 
-    Decay removes one held unit every other turn and turns the plant into WEED
-    when the held yield reaches zero.  Before decay starts we can derive the
-    zero-yield step directly.  Once decay is already active, current yield is
-    authoritative and we conservatively assume the next decrement can occur on
-    the next environment step.
+    The engine applies worker actions before decay at the same absolute step,
+    so HARVEST at decay_start itself is still lossless.
     """
-    units=int(np.ceil(float(tile.get("yield_units",0) or 0)))
-    if units<=0:
-        return None
     start=_crop_decay_start_step(e,tile)
     if start is None:
         return None
+    # Ongoing crops remain on the tile after HARVEST. Leave an action for DIG
+    # before the engine turns an exhausted zero-yield plant into a weed.
+    if tile.get("crop") in ("TOMATO","STRAWBERRY"):
+        # Hands disappear and the farmer returns to the shed at midnight.
+        # Finish both HARVEST and DIG using today's workforce, before reset.
+        return start-(2 if float(tile.get("yield_units",0) or 0)>0 else 1)
+    return start
+
+
+def _crop_salvage_deadline_step(e,obs,tile):
+    """Last action step that can still collect positive yield after spoilage."""
+    start=_crop_decay_start_step(e,tile)
+    units=int(np.ceil(float(tile.get("yield_units",0) or 0)))
+    if start is None or units<=0:
+        return None
     now=int(obs["day"])*24+int(obs["hour"])
-    next_decay=start if now<start else now+1
-    return int(next_decay+2*(units-1))
+    next_decay=start if now<=start else now+(now-start)%2
+    return next_decay+2*(units-1)
 
 def totals(private):
     out=defaultdict(int)
@@ -187,7 +181,11 @@ class WorkerPolicy:
                 continue
             if not isinstance(t,dict): continue
             if t.get("kind")=="WEED": tasks.append(Task(pt,"DIG")); continue
-            if t.get("kind")!="PLANT": continue
+        # Planner changes must not orphan assets already on the farm.
+        live_plants=[((x,y),t) for y,row in enumerate(farm["tiles"]) for x,t in enumerate(row)]
+        for pt,t in live_plants:
+            if not isinstance(t,dict) or t.get("kind")!="PLANT": continue
+            planned=t.get("crop","")
             crop=t.get("crop",planned); age=day-int(t.get("planted_day",day)); spec=e.CROPS.get(crop)
             first_yield_age=int(getattr(e,"CROP_FIRST_YIELD_DAY",{}).get(crop,10**9))
             # HARVEST legality comes from the engine's first_yield_day, not
@@ -201,7 +199,9 @@ class WorkerPolicy:
             if day<29 and not t.get("watered_today"): tasks.append(Task(pt,"WATER",crop,critical=float(int(t.get("consecutive_unwatered",0) or 0)>=1)))
             useful=max(a for a,_ in spec[2]) if spec and crop in ("TOMATO","STRAWBERRY") else (int(spec[3]) if spec else 0)
             if day<29 and age<=useful and int(t.get("fertilized_until_day",-1))<day: tasks.append(Task(pt,"FERTILIZE","FERTILIZER"))
-            if age>useful and float(t.get("yield_units",0) or 0)<=0: tasks.append(Task(pt,"DIG"))
+            exhausted=(age>=useful if crop in ("TOMATO","STRAWBERRY") else age>useful)
+            if exhausted and float(t.get("yield_units",0) or 0)<=0:
+                tasks.append(Task(pt,"DIG",deadline_step=_crop_decay_deadline_step(e,obs,t)))
         for pt,a in animal_plan.items():
             pt=tuple(pt); t=e.tile(farm,pt); structure="COOP" if a=="GOOSE" else "PASTURE"
             if t is None: tasks.append(Task(pt,"BUILD_COOP" if a=="GOOSE" else "BUILD_PASTURE",a,planned=True))
@@ -261,6 +261,10 @@ class WorkerPolicy:
         critical_wheat_short=max(
             0,critical_unfed-reachable_critical_wheat
         )
+        # Frozen market orders may leave the shed empty. Mature field WHEAT
+        # is also a feed prerequisite; reserve its HARVEST before ordinary work.
+        if critical_wheat_short>int(p["shed"].get("WHEAT",0)):
+            tasks=[replace(t,critical=1.0) if t.op=="HARVEST" and t.item=="WHEAT" else t for t in tasks]
         # Stranded carried WHEAT must not suppress an emergency shed pickup.
         # Generate at least enough pickup capacity to cover the critical
         # reachable-supply deficit, even when total carried WHEAT would make
@@ -324,12 +328,12 @@ class WorkerPolicy:
         if t.op=="PLANT":
             if distance+1>remaining: return False
         elif (
-            t.op=="PICKUP"
+            t.op in ("PICKUP","HARVEST")
             and t.item=="WHEAT"
             and float(t.critical)>=1.0
         ):
-            # Emergency WHEAT pickup is useful only if this worker can reach
-            # the shed, PICKUP, then reach at least one currently critical
+            # Emergency WHEAT supply is useful only if this worker can reach
+            # the source, PICKUP/HARVEST, then reach at least one critical
             # animal and FEED it before the end-of-day escape refresh.
             farm=obs["farms"][obs["player"]]
             critical_animals=[]
@@ -348,13 +352,14 @@ class WorkerPolicy:
             if distance+1+followup>remaining: return False
         elif distance>remaining:
             return False
-        if (
-            t.op=="HARVEST"
-            and t.deadline_step is not None
-            and int(obs["day"])*24+int(obs["hour"])+distance>t.deadline_step
-        ):
-            return False
+        if t.op=="HARVEST" and t.deadline_step is not None:
+            # Missing the first-loss deadline makes salvage urgent, not illegal.
+            tile=e.tile(obs["farms"][obs["player"]],target)
+            salvage=_crop_salvage_deadline_step(e,obs,tile)
+            if salvage is not None and int(obs["day"])*24+int(obs["hour"])+distance>salvage:
+                return False
         if t.op=="PLANT" and int(seeds.get(t.item,0))<=0: return False
+        if t.op=="PLANT" and not self._plant_has_capacity(obs,w,t,seeds,shed): return False
         if t.op=="FEED" and int(inv.get("WHEAT",0))<=0: return False
         if t.op=="FERTILIZE" and int(inv.get("FERTILIZER",0))<=0: return False
         if t.op=="PLACE_ANIMAL" and int(inv.get(t.item,0))<=0: return False
@@ -402,24 +407,190 @@ class WorkerPolicy:
             bonus+=self.planned_completion_bonus(t)
         return float(bonus)
 
+    def _capacity_states(self,obs):
+        now=int(obs["day"])*24+int(obs["hour"])
+        return {
+            w:(pos,now,int(obs["private"]["inventories"][w].get("WHEAT",0)))
+            for w,pos in enumerate(_positions(obs))
+        }
+
+    def _advance_capacity_state(self,obs,t,state,shed_wheat,allow_pickup=False):
+        """Project travel + action, including the FEED wheat prerequisite."""
+        pos,ready,wheat=state
+        target=t.target if t.target is not None else tuple(self.e.nearest_shed(pos))
+        used=0
+        if t.op=="FEED" and wheat<=0:
+            if not allow_pickup or shed_wheat<=0:
+                return None
+            shed_pos=tuple(self.e.nearest_shed(pos))
+            ready+=self.e.dist(pos,shed_pos)+1
+            pos=shed_pos
+            wheat+=1
+            used=1
+        action_step=max(ready+self.e.dist(pos,target),int(t.release_step))
+        if t.op=="FEED":
+            wheat-=1
+        elif t.op=="PICKUP" and t.item=="WHEAT":
+            if t.amount>shed_wheat:
+                return None
+            used=t.amount
+            wheat+=t.amount
+        elif t.op=="HARVEST" and t.item=="WHEAT":
+            tile=self.e.tile(obs["farms"][obs["player"]],target)
+            if isinstance(tile,dict):
+                wheat+=int(tile.get("yield_units",0) or 0)
+        ready=action_step+1
+        if t.op=="HARVEST" and t.item in ("TOMATO","STRAWBERRY"):
+            tile=self.e.tile(obs["farms"][obs["player"]],target)
+            start=_crop_decay_start_step(self.e,tile) if isinstance(tile,dict) else None
+            if start is not None and action_step>=start-24:
+                ready+=1  # final harvest must be followed by exhausted cleanup
+        return (target,ready,wheat),used,action_step
+
+    def _deadline_schedule(self,obs,tasks,states=None,shed_wheat=None,delay=0):
+        """Bounded EDF route estimate; a worker may finish several jobs.
+
+        This is a conservative capacity guard, not an optimal-routing proof.
+        It accounts for movement, each action, shared wheat, and release times.
+        Unlike one-task-per-worker matching it exposes queued harvest pressure.
+        """
+        states=dict(self._capacity_states(obs) if states is None else states)
+        states={w:(p,ready+delay,wheat) for w,(p,ready,wheat) in states.items()}
+        stock=int(obs["private"]["shed"].get("WHEAT",0)) if shed_wheat is None else shed_wheat
+        end=int(obs["day"])*24+23
+        routes={w:[] for w in states}
+        completed=set()
+        slack={w:float("inf") for w in states}
+        # Stable order, with survival first on equal deadlines. Planning each
+        # action from its predecessor reserves cumulative worker time.
+        def compatible_workers(t):
+            deadline=end if t.deadline_step is None else min(end,t.deadline_step)
+            return sum(
+                (p:=self._advance_capacity_state(obs,t,state,stock,allow_pickup=True)) is not None
+                and p[2]<=deadline for state in states.values()
+            )
+        def first_completion(t):
+            finishes=[p[2] for state in states.values() if
+                (p:=self._advance_capacity_state(obs,t,state,stock,allow_pickup=True)) is not None]
+            return min(finishes,default=float("inf"))
+        ordered=sorted(tasks,key=lambda t:(
+            end if t.deadline_step is None else min(end,t.deadline_step),
+            compatible_workers(t),
+            0 if _weed_prevention_task(t) or _animal_survival_task(t) else 1,
+            first_completion(t),
+            repr(t.key),
+        ))
+        for t in ordered:
+            deadline=end if t.deadline_step is None else min(end,int(t.deadline_step))
+            candidates=[]
+            for w,state in states.items():
+                projected=self._advance_capacity_state(obs,t,state,stock,allow_pickup=True)
+                if projected is not None and projected[2]<=deadline:
+                    candidates.append((projected[2],w,projected))
+            if not candidates:
+                continue
+            _,w,(new_state,used,action_step)=min(candidates,key=lambda c:(c[0],c[1]))
+            stock-=used
+            states[w]=new_state
+            routes[w].append(t)
+            slack[w]=min(slack[w],deadline-action_step)
+            completed.add(t.key)
+        return completed,routes,slack
+
+    def _maintenance_tasks(self,obs,tasks):
+        end=int(obs["day"])*24+23
+        return [t for t in tasks if (
+            t.op in ("WATER","FEED")
+            or (t.op in ("HARVEST","DIG") and t.deadline_step is not None and t.deadline_step<=end+1)
+        )]
+
+    def _plant_has_capacity(self,obs,w,t,seeds,shed):
+        now=int(obs["day"])*24+int(obs["hour"])
+        in_turn=getattr(self,"_capacity_step",None)==now
+        states=dict(self.turn_capacity_states if in_turn else self._capacity_states(obs))
+        tasks=self.turn_capacity_tasks if in_turn else self.tasks(obs,{}, {})
+        reserved=self.turn_capacity_reserved if in_turn else set()
+        proposed=list(self.turn_capacity_plants if in_turn else [])
+        projected=self._advance_capacity_state(obs,t,states[w],int(shed.get("WHEAT",0)))
+        if projected is None:
+            return False
+        states[w]=projected[0]
+        water=Task(t.target,"WATER",t.item,critical=1.0,release_step=projected[0][1])
+        proposed.append(water)
+        jobs=[job for job in self._maintenance_tasks(obs,tasks) if job.key not in reserved]+proposed
+        stock=int(shed.get("WHEAT",0))
+        if t.item=="WHEAT":
+            # Do not deadlock the feed-production pipeline by forbidding its
+            # renewal when today's wheat is depleted. Reserve realistic pickup
+            # time; actual FEED still requires observed wheat in feasible().
+            stock=max(stock,sum(job.op=="FEED" for job in jobs))
+        covered,_,_=self._deadline_schedule(obs,jobs,states,stock)
+        if len(covered)<len({job.key for job in jobs}):
+            return False
+        # Also reserve a full day's WATER, FEED and CARE for the enlarged farm.
+        # Use the current workforce; future market hires are not guaranteed.
+        if int(obs["day"])>=29:
+            return True
+        tomorrow={**obs,"day":int(obs["day"])+1,"hour":0}
+        daily=[]
+        for y,row in enumerate(obs["farms"][obs["player"]]["tiles"]):
+            for x,tile in enumerate(row):
+                if not isinstance(tile,dict):
+                    continue
+                if tile.get("kind")=="PLANT":
+                    daily.append(Task((x,y),"WATER",tile.get("crop","")))
+                elif tile.get("animal"):
+                    daily.extend((Task((x,y),"FEED","WHEAT"),Task((x,y),"CARE",tile["animal"])))
+        daily.extend(Task(job.target,"WATER",job.item) for job in proposed)
+        # Reserve pickup time per future FEED. Future supply is unknown and may
+        # include today's planting/harvest; using today's stock as a hard future
+        # limit would forbid WHEAT planting precisely when feed needs renewal.
+        future_states={q:(p,int(tomorrow["day"])*24,0) for q,(p,_,_) in states.items()}
+        feed_jobs=sum(job.op=="FEED" for job in daily)
+        covered,_,_=self._deadline_schedule(tomorrow,daily,future_states,feed_jobs)
+        return len(covered)==len({job.key for job in daily})
+
     def _urgent_harvest_tasks(self,obs,worker_ids,tasks):
-        """Harvest jobs that have reached their latest safe departure window."""
+        """Reserve cumulative travel/action time before the first crop loss."""
         if not worker_ids:
             return []
         now=int(obs["day"])*24+int(obs["hour"])
         positions=_positions(obs)
         urgent=[]
+        end=int(obs["day"])*24+23
+        due=[t for t in tasks if t.op in ("HARVEST","DIG") and t.deadline_step is not None and t.deadline_step<=end+1]
+        critical=[t for t in tasks if _weed_prevention_task(t) or (t.op=="FEED" and _animal_survival_task(t))]
+        states={w:self._capacity_states(obs)[w] for w in worker_ids}
+        covered,routes,slack=self._deadline_schedule(obs,critical+due,states)
+        delayed,_,_=self._deadline_schedule(obs,critical+due,states,delay=1)
+        pressured={t.key for w,route in routes.items() if slack[w]<=1 for t in route if t.op in ("HARVEST","DIG")}
+        if len(delayed)<len(covered):
+            pressured.update(t.key for route in routes.values() for t in route if t.op in ("HARVEST","DIG"))
         for t in tasks:
-            if t.op!="HARVEST" or t.deadline_step is None or t.target is None:
+            if t.op not in ("HARVEST","DIG") or t.deadline_step is None or t.target is None:
                 continue
             distances=[self.e.dist(positions[w],t.target) for w in worker_ids]
             if not distances:
                 continue
             # One-turn reserve: when waiting one more turn would consume the
             # last safe start opportunity, reserve a worker now.
-            if now+min(distances)+1>=int(t.deadline_step):
+            # An exhausted ongoing plant has no remaining production benefit.
+            # Retire it promptly instead of creating another midnight rescue.
+            final_harvest=self._retirement_after_harvest(obs,t) is not None
+            if t.op=="DIG" or final_harvest or t.key in pressured or now+min(distances)+1>=int(t.deadline_step):
                 urgent.append(t)
         return urgent
+
+    def _retirement_after_harvest(self,obs,t):
+        """Commit cleanup once the ongoing crop has produced its final yield."""
+        if t.op!="HARVEST" or t.item not in ("TOMATO","STRAWBERRY") or t.target is None:
+            return None
+        tile=self.e.tile(obs["farms"][obs["player"]],t.target)
+        start=_crop_decay_start_step(self.e,tile) if isinstance(tile,dict) else None
+        now=int(obs["day"])*24+int(obs["hour"])
+        if start is None or now<start-24:
+            return None
+        return Task(t.target,"DIG",deadline_step=start-1)
 
     def _max_critical_task_matching(self,obs,worker_ids,tasks,seeds,shed):
         """Maximum reachable assignments for hard-deadline scheduler tasks."""
@@ -465,25 +636,30 @@ class WorkerPolicy:
             t for t in tasks
             if t.op=="FEED" and float(t.critical)>=1.0
         ]
-        critical_wheat_pickups=[
+        critical_wheat_supply_tasks=[
             t for t in tasks
             if (
-                t.op=="PICKUP"
+                t.op in ("PICKUP","HARVEST")
                 and t.item=="WHEAT"
                 and float(t.critical)>=1.0
             )
         ]
         direct_survival_tasks=critical_water_tasks+critical_feed_tasks
-        survival_tasks=direct_survival_tasks+critical_wheat_pickups
+        survival_tasks=direct_survival_tasks+critical_wheat_supply_tasks
         deadline_harvest_tasks=self._urgent_harvest_tasks(
             obs,workers,tasks
         )
         critical_tasks=survival_tasks+deadline_harvest_tasks
         direct_survival_keys={t.key for t in direct_survival_tasks}
-        survival_pickup_keys={t.key for t in critical_wheat_pickups}
+        survival_supply_keys={t.key for t in critical_wheat_supply_tasks}
         deadline_harvest_keys={t.key for t in deadline_harvest_tasks}
         critical_keys={t.key for t in critical_tasks}
         reserved=set()
+        self._capacity_step=int(obs["day"])*24+int(obs["hour"])
+        self.turn_capacity_states=self._capacity_states(obs)
+        self.turn_capacity_tasks=tasks
+        self.turn_capacity_reserved=reserved
+        self.turn_capacity_plants=[]
         # Snapshot provenance before this turn's actions. Reward attribution uses
         # this to cap delivery credit to goods that did not originate in the shed.
         self.turn_delivery_credit=[
@@ -506,6 +682,15 @@ class WorkerPolicy:
             elif t.op=="PICKUP":
                 shed[t.item]=max(0,int(shed.get(t.item,0))-t.amount)
 
+        def reserve_capacity(w,t):
+            projected=self._advance_capacity_state(obs,t,self.turn_capacity_states[w],int(shed.get("WHEAT",0)))
+            if projected is not None:
+                self.turn_capacity_states[w]=projected[0]
+                if t.op=="PLANT":
+                    self.turn_capacity_plants.append(Task(
+                        t.target,"WATER",t.item,critical=1.0,release_step=projected[0][1]
+                    ))
+
         def record_reward_provenance(w,t,pos,target,action,avoidable_pass=False):
             if t.planned and pos==target and t.op in ("PLANT","PLACE_ANIMAL"):
                 self.turn_plan_credit[w]={"op":t.op,"item":t.item}
@@ -521,6 +706,7 @@ class WorkerPolicy:
             actions[w]=action
             record_reward_provenance(w,t,pos,target,action)
             reserved.add(reservation_key)
+            reserve_capacity(w,t)
             reserve_resources(t)
             # Only actual resource operations change provenance; movement does not.
             if pos==target:
@@ -532,7 +718,11 @@ class WorkerPolicy:
                     else:
                         origin.reward_equiv_bonus+=self.planned_completion_reward_equiv(t)
                 self._track_resource_action(w,action)
-                self.active_tasks.pop(w,None)
+                cleanup=self._retirement_after_harvest(obs,t)
+                if cleanup is None:
+                    self.active_tasks.pop(w,None)
+                else:
+                    self.active_tasks[w]=cleanup
             else:
                 self.active_tasks[w]=t
 
@@ -555,7 +745,7 @@ class WorkerPolicy:
                     t for t in direct_survival_tasks if t.key not in reserved
                 ]
                 remaining_supply=[
-                    t for t in critical_wheat_pickups if t.key not in reserved
+                    t for t in critical_wheat_supply_tasks if t.key not in reserved
                 ]
                 remaining_harvest=[
                     t for t in deadline_harvest_tasks if t.key not in reserved
@@ -636,7 +826,7 @@ class WorkerPolicy:
             if not urgent:
                 urgent=[
                     i for i,(_w,t,_key) in enumerate(choices)
-                    if t.key in survival_pickup_keys
+                    if t.key in survival_supply_keys
                 ]
             if not urgent:
                 urgent=[
@@ -646,6 +836,26 @@ class WorkerPolicy:
             if urgent:
                 choices=[choices[i] for i in urgent]
                 feats=[feats[i] for i in urgent]
+                # Keep PPO's urgent worker/task choice only when it preserves
+                # the reachable deadline coverage. A greedy actor must not
+                # give a flexible worker the sole job of a specialist worker.
+                remaining=[job for job in direct_survival_tasks+deadline_harvest_tasks if job.key not in reserved]
+                baseline,_,_=self._deadline_schedule(obs,remaining,self.turn_capacity_states,int(shed.get("WHEAT",0)))
+                safe=[]
+                for i,(w,t,_key) in enumerate(choices):
+                    projected=self._advance_capacity_state(obs,t,self.turn_capacity_states[w],int(shed.get("WHEAT",0)))
+                    if projected is None:
+                        continue
+                    states=dict(self.turn_capacity_states)
+                    states[w]=projected[0]
+                    pending=[job for job in remaining if job.key!=t.key]
+                    covered,_,_=self._deadline_schedule(obs,pending,states,int(shed.get("WHEAT",0))-projected[1])
+                    completed=covered|({t.key} if t.key in {job.key for job in remaining} else set())
+                    if baseline<=completed:
+                        safe.append(i)
+                if safe:
+                    choices=[choices[i] for i in safe]
+                    feats=[feats[i] for i in safe]
 
             if not choices:
                 for w in workers:
@@ -696,6 +906,7 @@ class WorkerPolicy:
             workers.remove(w)
             if t.op!="PASS":
                 reserved.add(reservation_key)
+            reserve_capacity(w,t)
             reserve_resources(t)
 
             if t.op!="PASS" and pos!=target:
@@ -705,7 +916,11 @@ class WorkerPolicy:
                 else:
                     self.active_origins.pop(w,None)
             else:
-                self.active_tasks.pop(w,None)
+                cleanup=self._retirement_after_harvest(obs,t) if pos==target else None
+                if cleanup is None:
+                    self.active_tasks.pop(w,None)
+                else:
+                    self.active_tasks[w]=cleanup
                 self.active_origins.pop(w,None)
                 if pos==target:
                     self._track_resource_action(w,action)

@@ -107,23 +107,35 @@ The reward deliberately puts most value on **delivery**, so harvesting animal ou
 
 `PLANT -> WEED` is treated as a near-catastrophic worker-efficiency failure (`-256` plus `-32` per lost harvestable unit). Random `None -> WEED` spawning is not penalized.
 
-There are two worker-preventable paths to `PLANT -> WEED`: missed watering and end-of-life yield decay. Both now have hard scheduler protection. Critical WATER uses reachability matching. Harvestable crops also carry a decay deadline derived from the engine's `max_lifespan_step` when available, with a fallback from the crop's final production age. When waiting another turn would consume the last safe route-start opportunity, that HARVEST becomes a hard deadline: PASS and noncritical PPO choices are masked, and only the minimum number of persistent routes required for deadline coverage are preempted.
+The target is near-zero preventable `PLANT -> WEED`, spoilage, and animal escapes while retaining productive planting, harvesting, and delivery. Crop maintenance scans every live plant, including tiles dropped by a changed crop plan.
 
-New PLANT tasks remain infeasible unless movement + planting leaves at least one later turn in the same day for WATER.
+See [LOSSLESS_VALIDATION.md](LOSSLESS_VALIDATION.md) for paired replays with the unchanged v9 update-147 actor, including the observed throughput tradeoff and reproduction command.
 
-Animal survival is also a scheduler invariant. FEED with `consecutive_unfed >= 1` is hard-critical because one more missed end-of-day refresh makes the animal escape. Critical WATER and critical FEED form the first scheduler tier. If there is not enough WHEAT already carried by workers to cover the current critical-feed count, enough WHEAT PICKUP batches are marked as hard survival prerequisites. These supply tasks outrank decay-HARVEST and ordinary PPO work, and are rejected when they would consume the last turn with no opportunity left to FEED afterward.
+Harvest deadlines protect the **first lost unit**, using the engine's `max_lifespan_step` and engine lifespan ages as fallback. Held yield never extends that deadline. Worker actions execute before decay at the same engine step; a one-time crop can therefore be harvested at that step. Tomato/strawberry require their final harvest and subsequent DIG cleanup **before the preceding midnight worker reset**: the engine leaves ongoing plants on the map after harvesting and will turn an exhausted zero-yield plant into a weed at expiry. Hands disappear and the farmer returns to the shed at day rollover, so relying on cleanup at expiry itself is unsafe.
+
+On an ongoing crop's final production day, HARVEST becomes urgent immediately and commits that worker to a following DIG after the observed crop is empty. This preserves the final yield and avoids deferring cleanup behind another actor assignment.
+
+The scheduler estimates cumulative travel plus action time for multiple queued jobs per worker. It includes survival work and wheat pickup before feeding. When waiting would lose deadline coverage, PASS and noncritical choices are masked. Urgent PPO assignments are restricted to choices that preserve the estimated remaining coverage when such choices exist, preventing a flexible worker from taking the sole reachable job of another worker.
+
+PLANT requires room for movement, planting, follow-up WATER, existing daily WATER/FEED and imminent harvest/cleanup work. It also reserves the enlarged farm's next-day WATER/FEED/CARE time using the current workforce. Simultaneous plant choices share reservations. The next-day estimate reserves wheat pickup time without assuming today's stock is the future supply ceiling. WHEAT renewal planting can also reserve today's feed time despite depleted wheat, avoiding a feed-production deadlock; actual FEED always requires observed carried wheat. This is a bounded route estimate rather than an optimal-routing guarantee; unknown future market hires are not assumed. Impossible already-existing deadlines can still fail, and new planting is restricted instead of expanding that overload. A missed first-loss deadline still permits salvage while positive yield remains.
+
+`lost_harvestable_units` now includes every observed gradual crop-decay decrement as well as remaining yield destroyed in a terminal asset loss. `crop_units_lost_to_decay` and its per-crop dictionary expose spoilage separately. Successful harvested units are subtracted before computing loss, so a final HARVEST followed by an ongoing plant's expiry cannot double-count collected produce. Historical v9 lost-unit values omit gradual spoilage and are not numerically comparable to the new total.
+
+A random weed spawned on a tile cleared by a successful one-time HARVEST or exhausted DIG is excluded from crop loss. Destroying a productive crop with DIG still counts as crop death and lost yield, even if a random weed then occupies that tile.
+
+Animal survival is also a scheduler invariant. FEED with `consecutive_unfed >= 1` is hard-critical because one more missed end-of-day refresh makes the animal escape. Critical WATER and critical FEED form the first scheduler tier. If there is not enough reachable carried WHEAT, WHEAT PICKUP batches become hard survival prerequisites. When shed stock is insufficient, mature field WHEAT HARVEST can also become a survival prerequisite. Both reserve a reachable follow-up FEED action before rollover, outrank ordinary harvest/PPO work, and do not change frozen market orders.
 
 Hard scheduling is therefore lexicographic:
 
 1. critical WATER / critical FEED
-2. WHEAT PICKUP required for critical FEED
-3. imminent crop-decay HARVEST
+2. WHEAT PICKUP / mature WHEAT HARVEST required for critical FEED
+3. pressured first-decay HARVEST / final ongoing HARVEST and DIG
 4. ordinary productive PPO work
 5. PASS
 
 The same reachability/matching preemption logic is used so unrelated committed routes are preserved whenever the remaining workers can still cover the higher-priority survival work.
 
-A deliberate `DIG` of a fully exhausted crop with no remaining yield and age beyond its useful production window is treated as valid cleanup and is **not** assigned the crop-death penalty. Destroying a still-productive crop remains a heavy failure.
+A deliberate `DIG` of a fully exhausted crop with no remaining yield is valid cleanup, including an ongoing crop's final production day, and receives no crop-death penalty. Destroying a still-productive crop remains a heavy failure.
 
 ## Production-pipeline measurements
 
@@ -284,13 +296,13 @@ rollout_temperature  0.20
 
 KL is checked before every actor minibatch update. If the current per-subdecision approximate KL is already above `--target-kl`, that minibatch and the remaining actor updates are skipped. Training metrics include `approx_kl`, `clip_fraction`, `ratio_mean`, `ratio_std`, `ratio_min`, `ratio_max`, `actor_samples`, `mean_subdecisions_per_turn`, `actor_bonus_mean`, `actor_bonus_abs_mean`, positive/negative actor-bonus fractions, `actor_minibatches_completed`, `ppo_epochs_completed`, and `kl_early_stop`.
 
-Validation has an automatic catastrophic-collapse guard. The reference reward is the best of the initial deterministic baseline and the best held-out reward achieved so far. Separately, `best.pt` is selected **weed-first**: lower `mean_crops_to_weed` always wins, and worker reward is the tie-breaker among policies with the same weed count. This makes zero validation weeds the checkpoint-selection target rather than an incidental metric. If validation falls below:
+Validation has an automatic catastrophic-collapse guard. `best.pt` selects strictly higher finite deterministic validation worker reward. The reference reward is the higher of the initial deterministic baseline and the selected checkpoint's reward. Weed, spoilage and escape metrics remain explicit diagnostics alongside throughput. If validation falls below:
 
 ```text
 --collapse-restore-ratio 0.70
 ```
 
-of that reference **without improving the weed-first objective**, the trainer records `collapse_warning=true`, reloads `best.pt` including optimizer state, and writes the restored policy to `latest.pt`. A lower-reward checkpoint with strictly fewer weeds is accepted and can become `best.pt`; reward collapse alone cannot discard a weed improvement. The raw collapsed post-update checkpoint remains available as `update_NNNN.pt` for diagnosis.
+of that reference, the trainer records `collapse_warning=true`, reloads `best.pt` including optimizer state, and writes the restored policy to `latest.pt`. The raw collapsed post-update checkpoint remains available as `update_NNNN.pt` for diagnosis. Inspect planted/harvested/delivered units alongside losses to ensure progress is not simply reduced activity.
 
 ## Files
 
@@ -314,7 +326,7 @@ python train_v25_worker_ppo.py --preflight-only
 Regression tests:
 
 ```bash
-python -m unittest test_ppo_subdecision_ratio.py test_worker_reward_contract.py test_worker_delivery_reservation.py test_worker_crop_harvest_maturity.py test_worker_route_commitment.py
+python -m unittest discover -p 'test_*.py'
 ```
 
 Train:
@@ -327,9 +339,9 @@ python train_v25_worker_ppo.py \
 ```
 
 
-This animal-pipeline update intentionally keeps checkpoint algorithm `v25_static_worker_ppo_gae_v4_animal_reward` so the trained v4 actor/critic can be resumed. Model architecture and feature dimensions are unchanged. When an older v4 checkpoint is loaded under the new reward contract, the **actor weights are kept**, while the critic is reinitialized and Adam optimizer state plus the old validation-best score are reset. The old critic was trained against the previous reward scale (including falsely rewarded immature HARVEST no-ops), so its value estimates are not reused.
+This update keeps checkpoint algorithm `v25_static_worker_ppo_gae_v4_animal_reward` and compatible model architecture. When an older checkpoint is loaded under the new reward contract, the **actor weights are kept**, while the critic is reinitialized and stale optimizer/validation-best state is not reused. A fresh baseline accounts for the corrected scheduler and gradual spoilage penalty.
 
-To keep metrics from the reward contracts separate, harvest-deadline runs write by default to `runs/worker_ppo_static_v20_v9_animal_survival`.
+To keep reward contracts separate, the corrected first-decay/capacity runs write by default to `runs/worker_ppo_static_v20_v10_lossless_harvest`. Resuming a v9 checkpoint retains the actor, resets the critic and optimizer, and evaluates a fresh baseline under the new scheduler and complete spoilage accounting. Candidate/global feature dimensions remain unchanged.
 
 `--minibatch-size` now batches worker subdecisions for the actor and turn records for the critic. The default remains 128.
 
@@ -337,23 +349,23 @@ Resume:
 
 ```bash
 python train_v25_worker_ppo.py \
-  --resume runs/worker_ppo_static_v20_v4_animal_reward/checkpoints/best.pt \
-  --output-dir runs/worker_ppo_static_v20_v4_animal_pipeline \
-  --updates 500 \
+  --resume runs/worker_ppo_static_v20_v9_animal_survival/checkpoints/latest.pt \
+  --output-dir runs/worker_ppo_static_v20_v10_lossless_harvest \
+  --updates 800 \
   --episodes-per-update 4 \
   --max-training-hours 6
 ```
 
 ## Outputs
 
-Outputs are written under `runs/worker_ppo_static_v20_v9_animal_survival`.
+Outputs are written under `runs/worker_ppo_static_v20_v10_lossless_harvest`.
 
 - `metrics.jsonl` — PPO statistics, mean worker reward, and mean reward-component counts.
 - `episodes.jsonl` — per-training-replay worker metrics.
 - `validation.jsonl` — deterministic held-out aggregate worker metrics.
 - `validation_episodes.jsonl` — deterministic held-out per-replay worker metrics.
 - `checkpoints/latest.pt` — latest checkpoint.
-- `checkpoints/best.pt` — asset-survival checkpoint: minimize held-out `mean_crops_to_weed + mean_animals_escaped`, then prefer fewer escapes, then higher worker reward.
+- `checkpoints/best.pt` — highest finite deterministic held-out worker reward under the current contract. Earlier runs used a survival selection rule; `selected_best_stats()` rejects stale-contract or differently selected best checkpoints.
 
 Primary health metrics are:
 
@@ -373,6 +385,8 @@ Primary health metrics are:
 - `mean_crops_to_weed_decay`
 - `mean_crops_to_weed_other`
 - `mean_crops_died`
+- `mean_lost_harvestable_units`
+- `mean_crop_units_lost_to_decay` and `mean_crop_units_lost_to_decay_by_crop`
 - `mean_worker_reward`
 - `mean_planned_plants_completed`
 - `mean_planned_animals_placed`
@@ -384,9 +398,9 @@ The worker policy should improve these operational metrics independently of whet
 
 ### Reward-semantics correctness
 
-Worker reward metadata includes semantics version `engine-first-yield-eod-care-v2`.
+The current contract is `engine-first-decay-capacity-and-spoilage-v9` and retains the earlier first-yield/CARE corrections.
 
-This version means:
+These corrections mean:
 
 - crop HARVEST legality follows the engine's explicit first-yield day rather than the planner's nominal yield schedule;
 - CARE reward is assigned when a surviving animal completes a day both fed and cared, so CARE and FEED may occur on different turns of the same day;
@@ -430,4 +444,4 @@ PLACE 2 WHEAT into shed
 → 2 units receive delivery credit
 ```
 
-Reward metadata semantics are versioned as `engine-first-yield-eod-care-subdecision-zero-weed-v6`. Loading an older checkpoint therefore keeps compatible actor weights but resets critic, optimizer state, and the historical validation-best threshold.
+Reward metadata semantics are versioned as `engine-first-decay-capacity-and-spoilage-v9`. Loading an older checkpoint keeps compatible actor weights but establishes fresh critic, optimizer and validation-best state.

@@ -27,7 +27,7 @@ from worker_reward import ANIMAL_ESCAPE_PENALTY,ANIMAL_PRODUCT_DELIVERED_REWARD,
 
 DEFAULT_HISTORY_DIR=G5_ROOT/"game_history"/"v20"
 DEFAULT_EXECUTOR=HERE/"v25_rl.py"
-DEFAULT_OUTPUT_DIR=HERE/"runs"/"worker_ppo_static_v20_v9_animal_survival"
+DEFAULT_OUTPUT_DIR=HERE/"runs"/"worker_ppo_static_v20_v10_lossless_harvest"
 CHECKPOINT_ALGORITHM="v25_static_worker_ppo_gae_v4_animal_reward"
 
 def load_executor(path):
@@ -389,6 +389,8 @@ def evaluate(paths,model,device,executor,phase):
                 f"(water={r.reward_breakdown.get('crops_to_weed_unwatered',0)},"
                 f"decay={r.reward_breakdown.get('crops_to_weed_decay',0)},"
                 f"other={r.reward_breakdown.get('crops_to_weed_other',0)}) "
+                f"lost={r.reward_breakdown.get('lost_harvestable_units',0)} "
+                f"decay_units={r.reward_breakdown.get('crop_units_lost_to_decay',0)} "
                 f"{'OK' if r.ok else r.error}",
                 flush=True,
             )
@@ -406,7 +408,7 @@ def device_for(v):
 
 def current_reward_contract():
     return {
-        "semantics":"engine-first-yield-eod-care-subdecision-animal-survival-v8",
+        "semantics":"engine-first-decay-capacity-and-spoilage-v9",
         "crop_product_value":PRODUCT_VALUE,
         "crop_generated":PRODUCT_GENERATED_REWARD,
         "crop_harvested":PRODUCT_HARVESTED_REWARD,
@@ -437,10 +439,18 @@ def current_reward_contract():
         "critical_water_preemption":True,
         "critical_feed_preemption":True,
         "critical_feed_wheat_prerequisite":True,
+        "critical_feed_field_wheat_prerequisite":True,
         "survival_priority_over_decay_harvest":True,
         "critical_harvest_preemption":True,
         "weed_cause_diagnostics":True,
         "late_plant_requires_future_water_turn":True,
+        "harvest_deadline_before_first_loss":True,
+        "exhausted_ongoing_crop_retirement":True,
+        "final_harvest_commits_cleanup":True,
+        "all_live_crops_maintained":True,
+        "cumulative_deadline_capacity":True,
+        "plant_requires_maintenance_capacity":True,
+        "gradual_decay_units_counted":True,
     }
 
 def save_checkpoint(
@@ -539,7 +549,7 @@ def main():
         )
     best,best_weed,best_escape=selected_best_stats(ck/"best.pt")
     (out/"split.json").write_text(json.dumps({"train":[p.name for p in train],"validation":[p.name for p in val],"split_seed":args.split_seed},indent=2)+"\n")
-    (out/"config.json").write_text(json.dumps({**vars(args),"executor":str(ex),"device_resolved":str(device),"algorithm":CHECKPOINT_ALGORITHM,"objective":"worker efficiency only; farmer/hands replaced by RL, recorded v20 market orders replayed unchanged; no final game result reward","policy_semantics":"persistent task routes; subdecision actor shaping; critical-water/feed survival with emergency wheat supply; decay-harvest preemption; late-plant water reserve","crop_product_value":PRODUCT_VALUE,"animal_product_value":ANIMAL_PRODUCT_VALUE,"reward_contract":current_reward_contract()},indent=2,default=str)+"\n")
+    (out/"config.json").write_text(json.dumps({**vars(args),"executor":str(ex),"device_resolved":str(device),"algorithm":CHECKPOINT_ALGORITHM,"objective":"worker efficiency only; farmer/hands replaced by RL, recorded v20 market orders replayed unchanged; no final game result reward","policy_semantics":"persistent task routes; critical-water/feed survival with shed or field wheat; first-loss cumulative harvest capacity; final ongoing harvest and cleanup commitment; planting maintenance admission; gradual spoilage accounting","crop_product_value":PRODUCT_VALUE,"animal_product_value":ANIMAL_PRODUCT_VALUE,"reward_contract":current_reward_contract()},indent=2,default=str)+"\n")
     rows,base=evaluate(val,model,device,ex,"baseline"); write_jsonl(out/"validation.jsonl",{"update":-1,**base})
     for r in rows: write_jsonl(out/"validation_episodes.jsonl",{"update":-1,**r.__dict__})
     baseline_worker_reward=base.get("mean_worker_reward")
@@ -578,6 +588,8 @@ def main():
                 f"feed={r.reward_breakdown.get('normal_feed',0)}/{r.reward_breakdown.get('critical_feed',0)} "
                 f"escape={r.reward_breakdown.get('animals_escaped',0)} "
                 f"weed={r.reward_breakdown.get('crops_to_weed',0)} "
+                f"lost={r.reward_breakdown.get('lost_harvestable_units',0)} "
+                f"decay_units={r.reward_breakdown.get('crop_units_lost_to_decay',0)} "
                 f"{'OK' if r.ok else r.error}",
                 flush=True,
             )

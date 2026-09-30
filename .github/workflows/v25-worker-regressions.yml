@@ -1,0 +1,37 @@
+name: v25 worker regressions
+
+on:
+  pull_request:
+    paths:
+      - 'Co_Kaggle/g5/local_arena/v25_rl/**'
+      - 'Co_Kaggle/g5/local_arena/v20_rl/evaluate_v20_v19_losses.py'
+      - '.github/workflows/v25-worker-regressions.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'Co_Kaggle/g5/local_arena/v25_rl/**'
+      - 'Co_Kaggle/g5/local_arena/v20_rl/evaluate_v20_v19_losses.py'
+      - '.github/workflows/v25-worker-regressions.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  worker-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install CPU test dependencies
+        run: |
+          python -m pip install numpy jsonschema requests
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          # Other Kaggle games have unrelated large dependencies. These tests
+          # need only Kaggriculture and its actual core/JSON-schema dependencies.
+          python -m pip install --no-deps kaggle-environments==1.32.7
+      - name: Run scheduler, reward, engine and PPO regressions
+        working-directory: Co_Kaggle/g5/local_arena/v25_rl
+        run: python -m unittest discover -p 'test_*.py'
