@@ -54,7 +54,10 @@ assert (
     == ANIMAL_PRODUCT_VALUE
 )
 
-ANIMAL_ESCAPE_PENALTY = -100.0
+# Experimental v12 cost: four animal-product lifecycle values per escape.
+# Survival remains enforced by scheduling; this is a learning signal, not a
+# guarantee that a profitable episode can never include an escape.
+ANIMAL_ESCAPE_PENALTY = -512.0
 # Weed is a hard operational failure: scheduler guards should normally prevent
 # it, and the remaining transition penalty is intentionally large enough that
 # any uncovered failure dominates routine worker shaping.
@@ -81,6 +84,71 @@ NORMAL_WATER_REWARD = 1.0
 CRITICAL_FEED_REWARD = 2.0
 HEALTHY_ANIMAL_DAY_REWARD = 4.0
 CRITICAL_WATER_REWARD = 16.0
+
+GAME_LAST_ACTION_STEP = 29 * 24 + 23
+
+
+def plant_can_deliver_before_end(executor, obs, crop, target, travel=0):
+    """Conservative time budget for first legal HARVEST then shed delivery.
+
+    Workers restart at sheds each day. Reserve shed-to-crop travel on the
+    maturity day, HARVEST, return travel and PLACE. This uses the engine's
+    first-yield age, including partial early WHEAT/CARROT yields.
+    Capacity/watering admission is checked separately by WorkerPolicy.
+    """
+    first = getattr(executor, "CROP_FIRST_YIELD_DAY", {}).get(crop)
+    if first is None:
+        spec = getattr(executor, "CROPS", {}).get(crop)
+        if not spec:
+            return False
+        first = min(age for age, _ in spec[2])
+    plant_day = (int(obs["day"]) * 24 + int(obs["hour"]) + int(travel)) // 24
+    sheds = getattr(executor, "SHED", ())
+    distance = min((abs(target[0]-p[0])+abs(target[1]-p[1]) for p in sheds), default=0)
+    delivery_step = (plant_day + int(first)) * 24 + 2 * distance + 1
+    return delivery_step <= GAME_LAST_ACTION_STEP
+
+
+def measure_land_use(executor, obs, crop_plan):
+    """Pre-action tile observations; counts accumulate into tile-turns.
+
+    Productive crops means existing yield or a remaining yield event before
+    game end. It measures potential, not guaranteed future harvests.
+    """
+    farm = obs["farms"][obs["player"]]
+    animal_points = set(getattr(executor, "ANIMAL_POINTS", ()))
+    counts = dict(land_observations=1, owned_tile_turns=0, empty_tile_turns=0,
+                  crop_eligible_tile_turns=0, empty_crop_tile_turns=0,
+                  empty_animal_reserved_tile_turns=0, productive_crop_tile_turns=0,
+                  seed_backed_empty_crop_tile_turns=0, unseeded_empty_crop_tile_turns=0)
+    for y, row in enumerate(farm["tiles"]):
+        for x, tile in enumerate(row):
+            if tile == "LOCKED":
+                continue
+            counts["owned_tile_turns"] += 1
+            eligible = (x,y) not in animal_points
+            counts["crop_eligible_tile_turns"] += int(eligible)
+            if tile is None:
+                counts["empty_tile_turns"] += 1
+                if eligible:
+                    counts["empty_crop_tile_turns"] += 1
+                    planned = (x,y) in crop_plan
+                    counts["seed_backed_empty_crop_tile_turns"] += int(planned)
+                    counts["unseeded_empty_crop_tile_turns"] += int(not planned)
+                else:
+                    counts["empty_animal_reserved_tile_turns"] += 1
+            elif eligible and isinstance(tile, dict) and tile.get("kind") == "PLANT":
+                crop = tile.get("crop", "")
+                spec = getattr(executor, "CROPS", {}).get(crop)
+                planted = int(tile.get("planted_day", obs["day"]))
+                age = int(obs["day"]) - planted
+                future = bool(spec and any(age < a and planted+a <= 29 for a,_ in spec[2]))
+                first = getattr(executor,"CROP_FIRST_YIELD_DAY",{}).get(crop,10**9)
+                held = float(tile.get("yield_units",0) or 0)>0 and planted+int(first)<=29
+                counts["productive_crop_tile_turns"] += int(held or future)
+    for name in ("owned_tile_turns", "empty_tile_turns", "crop_eligible_tile_turns", "empty_crop_tile_turns"):
+        counts["midgame_"+name] = counts[name] if 5 <= int(obs["day"]) <= 24 else 0
+    return counts
 
 
 def _positions(obs) -> list[tuple[int, int]]:
@@ -200,6 +268,21 @@ class RewardBreakdown:
     route_progress_steps: int = 0
     pass_actions: int = 0
     avoidable_passes: int = 0
+    avoidable_plant_delays: int = 0
+    unproductive_plants_created: int = 0
+    land_observations: int = 0
+    owned_tile_turns: int = 0
+    empty_tile_turns: int = 0
+    crop_eligible_tile_turns: int = 0
+    empty_crop_tile_turns: int = 0
+    empty_animal_reserved_tile_turns: int = 0
+    productive_crop_tile_turns: int = 0
+    seed_backed_empty_crop_tile_turns: int = 0
+    unseeded_empty_crop_tile_turns: int = 0
+    midgame_owned_tile_turns: int = 0
+    midgame_empty_tile_turns: int = 0
+    midgame_crop_eligible_tile_turns: int = 0
+    midgame_empty_crop_tile_turns: int = 0
 
     def add(self, other: "RewardBreakdown") -> None:
         for name in self.__dataclass_fields__:
@@ -238,7 +321,7 @@ def compute_worker_reward(executor, before, worker_action, after) -> RewardBreak
     after_farm = after["farms"][player]
     if set(worker_action) - {
         "farmer", "hands", "_delivery_credit", "_plan_credit",
-        "_route_progress", "_avoidable_pass",
+        "_route_progress", "_avoidable_pass", "_avoidable_plant_delay", "_land_use",
     }:
         raise ValueError("worker reward received unsupported action fields")
     actions = _worker_actions(worker_action)
@@ -249,6 +332,15 @@ def compute_worker_reward(executor, before, worker_action, after) -> RewardBreak
     plan_credit = worker_action.get("_plan_credit") or []
     route_progress = worker_action.get("_route_progress") or []
     avoidable_pass = worker_action.get("_avoidable_pass") or []
+    out.avoidable_plant_delays = sum(bool(v) for v in worker_action.get("_avoidable_plant_delay", []))
+    # Generated by the worker planner from the pre-action observation only.
+    land_use = worker_action.get("_land_use") or {}
+    valid_land_names = {name for name in RewardBreakdown.__dataclass_fields__
+                        if name == "land_observations" or name.endswith("_tile_turns")}
+    for name, value in land_use.items():
+        if name not in valid_land_names:
+            raise ValueError(f"unknown land measurement: {name}")
+        setattr(out, name, int(value))
 
     for i, action in enumerate(actions):
         if action and action[0] == "PASS":
@@ -477,13 +569,17 @@ def compute_worker_reward(executor, before, worker_action, after) -> RewardBreak
                 if crop in CROP_PRODUCTS:
                     out.seeds_planted_total += 1
                     out.seeds_planted_by_crop[crop] += 1
-                out.reward += SUCCESSFUL_PLANT_REWARD
+                useful = plant_can_deliver_before_end(executor, before, crop, p)
+                out.unproductive_plants_created += int(not useful)
+                if useful:
+                    out.reward += SUCCESSFUL_PLANT_REWARD
                 for worker_i, _action in action_at.get(p, []):
                     credit = plan_credit[worker_i] if worker_i < len(plan_credit) else {}
                     if (
                         isinstance(credit, dict)
                         and credit.get("op") == "PLANT"
                         and credit.get("item") == crop
+                        and useful
                     ):
                         out.planned_plants_completed += 1
                         out.reward += PLANNED_PLANT_REWARD

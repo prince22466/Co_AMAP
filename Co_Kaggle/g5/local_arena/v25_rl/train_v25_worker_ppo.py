@@ -23,11 +23,12 @@ V20_RL=LOCAL_ARENA/"v20_rl"
 if str(V20_RL) not in sys.path: sys.path.insert(0,str(V20_RL))
 from evaluate_v20_v19_losses import _agent_observation,_environment_from_history,_field,_recorded_step_actions,_saved_final_rewards,_seed_hint,recorded_action_parity
 from worker_policy import AVOIDABLE_PASS_ACTOR_PENALTY,DEFER_PLANNED_PLANT_ACTOR_PENALTY,PLANNED_ANIMAL_PICKUP_ACTOR_BONUS,PLANNED_BUILD_ACTOR_BONUS,PLANNED_PLACE_ANIMAL_ACTOR_BONUS,PLANNED_PLANT_REWARD_EQUIV,ActorCritic,CANDIDATE_FEATURE_NAMES,GLOBAL_FEATURE_NAMES,TurnRecord,WorkerPolicy
+from worker_reward import measure_land_use
 from worker_reward import ANIMAL_ESCAPE_PENALTY,ANIMAL_PRODUCT_DELIVERED_REWARD,ANIMAL_PRODUCT_GENERATED_REWARD,ANIMAL_PRODUCT_HARVESTED_REWARD,ANIMAL_PRODUCT_VALUE,AVOIDABLE_PASS_PENALTY,CRITICAL_FEED_REWARD,CRITICAL_WATER_REWARD,CROP_DEATH_PENALTY,CROP_TO_WEED_PENALTY,EFFECTIVE_CARE_REWARD,HEALTHY_ANIMAL_DAY_REWARD,LOST_HARVESTABLE_UNIT_PENALTY,NORMAL_FEED_REWARD,PLANNED_PLACE_ANIMAL_REWARD,PLANNED_PLANT_REWARD,PRODUCT_DELIVERED_REWARD,PRODUCT_GENERATED_REWARD,PRODUCT_HARVESTED_REWARD,PRODUCT_VALUE,ROUTE_PROGRESS_REWARD,RewardBreakdown,compute_worker_reward
 
 DEFAULT_HISTORY_DIR=G5_ROOT/"game_history"/"v20"
 DEFAULT_EXECUTOR=HERE/"v25_rl.py"
-DEFAULT_OUTPUT_DIR=HERE/"runs"/"worker_ppo_static_v20_v11_animal_placement"
+DEFAULT_OUTPUT_DIR=HERE/"runs"/"worker_ppo_static_v20_v12_productive_planting"
 CHECKPOINT_ALGORITHM="v25_static_worker_ppo_gae_v4_animal_reward"
 
 def load_executor(path):
@@ -87,6 +88,8 @@ def worker_policy_action(e,policy,obs):
         "_plan_credit":copy.deepcopy(policy.turn_plan_credit),
         "_route_progress":list(policy.turn_route_progress),
         "_avoidable_pass":list(policy.turn_avoidable_pass),
+        "_avoidable_plant_delay":list(policy.turn_avoidable_plant_delay),
+        "_land_use":measure_land_use(e,obs,crops),
     }
 
 
@@ -157,8 +160,8 @@ def actor_samples_and_advantages(records):
 
     Fixed actor bonuses are already in normalized-advantage units.  Reward-
     equivalent bonuses (currently planned PLANT) are first divided by the same
-    raw GAE scale used to normalize turn advantages.  This makes +8 planned
-    PLANT directly comparable to about one ordinary crop HARVEST event without
+    raw GAE scale used to normalize turn advantages. Planned PLANT credit is
+    calibrated in crop output reward units without
     leaking that bonus into the critic target or unrelated worker decisions.
     """
     raw_turn_adv=np.asarray([r.advantage for r in records],np.float32)
@@ -368,6 +371,16 @@ def summary(results,phase):
         out["animal_escape_per_placed"]=float(escaped or 0.0)/max(float(placed),1e-8)
     feed_total=float(normal_feed or 0.0)+float(critical_feed or 0.0)
     out["critical_feed_share"]=float(critical_feed or 0.0)/feed_total if feed_total>0 else 0.0
+    # Ratios of total tile-turn counts, weighted by episode farm size/time.
+    def ratio(numerator,denominator):
+        n=sum(float(r.reward_breakdown.get(numerator,0)) for r in valid)
+        d=sum(float(r.reward_breakdown.get(denominator,0)) for r in valid)
+        return n/d if d>0 else None
+    out["owned_empty_tile_fraction"]=ratio("empty_tile_turns","owned_tile_turns")
+    out["crop_empty_tile_fraction"]=ratio("empty_crop_tile_turns","crop_eligible_tile_turns")
+    out["productive_crop_tile_fraction"]=ratio("productive_crop_tile_turns","crop_eligible_tile_turns")
+    out["midgame_owned_empty_tile_fraction"]=ratio("midgame_empty_tile_turns","midgame_owned_tile_turns")
+    out["midgame_crop_empty_tile_fraction"]=ratio("midgame_empty_crop_tile_turns","midgame_crop_eligible_tile_turns")
     return out
 
 def evaluate(paths,model,device,executor,phase):
@@ -394,6 +407,8 @@ def evaluate(paths,model,device,executor,phase):
                 f"decay_units={r.reward_breakdown.get('crop_units_lost_to_decay',0)} "
                 f"pass={r.reward_breakdown.get('pass_actions',0)} "
                 f"avoidable_pass={r.reward_breakdown.get('avoidable_passes',0)} "
+                f"plant_delays={r.reward_breakdown.get('avoidable_plant_delays',0)} "
+                f"empty_crop_avg={r.reward_breakdown.get('empty_crop_tile_turns',0)/max(r.reward_breakdown.get('land_observations',0),1):.1f} "
                 f"{'OK' if r.ok else r.error}",
                 flush=True,
             )
@@ -411,7 +426,10 @@ def device_for(v):
 
 def current_reward_contract():
     return {
-        "semantics":"planned-animal-priority-and-pass-mask-v11",
+        "semantics":"productive-planting-and-escape-cost-v12",
+        "plant_credit_requires_harvest_and_delivery_before_end":True,
+        "unproductive_plant_route_has_no_progress_reward":True,
+        "plant_delay_exempts_maintenance_and_output":True,
         "crop_product_value":PRODUCT_VALUE,
         "crop_generated":PRODUCT_GENERATED_REWARD,
         "crop_harvested":PRODUCT_HARVESTED_REWARD,
@@ -555,7 +573,7 @@ def main():
         )
     best,best_weed,best_escape=selected_best_stats(ck/"best.pt")
     (out/"split.json").write_text(json.dumps({"train":[p.name for p in train],"validation":[p.name for p in val],"split_seed":args.split_seed},indent=2)+"\n")
-    (out/"config.json").write_text(json.dumps({**vars(args),"executor":str(ex),"device_resolved":str(device),"algorithm":CHECKPOINT_ALGORITHM,"objective":"worker efficiency only; farmer/hands replaced by RL, recorded v20 market orders replayed unchanged; no final game result reward","policy_semantics":"persistent task routes; critical-water/feed survival with shed or field wheat; first-loss cumulative harvest capacity; final ongoing harvest and cleanup commitment; shared planting/animal maintenance admission; planned animal setup priority; avoidable PASS masked per worker; gradual spoilage accounting","crop_product_value":PRODUCT_VALUE,"animal_product_value":ANIMAL_PRODUCT_VALUE,"reward_contract":current_reward_contract()},indent=2,default=str)+"\n")
+    (out/"config.json").write_text(json.dumps({**vars(args),"executor":str(ex),"device_resolved":str(device),"algorithm":CHECKPOINT_ALGORITHM,"objective":"worker efficiency only; farmer/hands replaced by RL, recorded v20 market orders replayed unchanged; no final game result reward","policy_semantics":"persistent task routes; critical-water/feed survival with shed or field wheat; first-loss cumulative harvest capacity; final ongoing harvest and cleanup commitment; shared planting/animal maintenance admission; planned animal setup priority; avoidable PASS masked per worker; productive planting credit and maintenance-exempt delay shaping; tile-time occupancy metrics; gradual spoilage accounting","crop_product_value":PRODUCT_VALUE,"animal_product_value":ANIMAL_PRODUCT_VALUE,"reward_contract":current_reward_contract()},indent=2,default=str)+"\n")
     rows,base=evaluate(val,model,device,ex,"baseline"); write_jsonl(out/"validation.jsonl",{"update":-1,**base})
     for r in rows: write_jsonl(out/"validation_episodes.jsonl",{"update":-1,**r.__dict__})
     baseline_worker_reward=base.get("mean_worker_reward")
@@ -596,6 +614,8 @@ def main():
                 f"weed={r.reward_breakdown.get('crops_to_weed',0)} "
                 f"lost={r.reward_breakdown.get('lost_harvestable_units',0)} "
                 f"decay_units={r.reward_breakdown.get('crop_units_lost_to_decay',0)} "
+                f"plant_delays={r.reward_breakdown.get('avoidable_plant_delays',0)} "
+                f"empty_crop_avg={r.reward_breakdown.get('empty_crop_tile_turns',0)/max(r.reward_breakdown.get('land_observations',0),1):.1f} "
                 f"{'OK' if r.ok else r.error}",
                 flush=True,
             )
