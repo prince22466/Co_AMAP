@@ -198,6 +198,7 @@ class RewardBreakdown:
     planned_plants_completed: int = 0
     planned_animals_placed: int = 0
     route_progress_steps: int = 0
+    pass_actions: int = 0
     avoidable_passes: int = 0
 
     def add(self, other: "RewardBreakdown") -> None:
@@ -250,6 +251,8 @@ def compute_worker_reward(executor, before, worker_action, after) -> RewardBreak
     avoidable_pass = worker_action.get("_avoidable_pass") or []
 
     for i, action in enumerate(actions):
+        if action and action[0] == "PASS":
+            out.pass_actions += 1
         if i < len(route_progress) and bool(route_progress[i]):
             out.route_progress_steps += 1
             out.reward += ROUTE_PROGRESS_REWARD
