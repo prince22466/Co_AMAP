@@ -264,6 +264,7 @@ class RewardBreakdown:
     normal_water: int = 0
     critical_water: int = 0
     planned_plants_completed: int = 0
+    planned_plants_completed_by_worker: dict[str, float] = field(default_factory=dict)
     planned_animals_placed: int = 0
     route_progress_steps: int = 0
     pass_actions: int = 0
@@ -582,6 +583,7 @@ def compute_worker_reward(executor, before, worker_action, after) -> RewardBreak
                         and useful
                     ):
                         out.planned_plants_completed += 1
+                        out.planned_plants_completed_by_worker[str(worker_i)] = 1.0
                         out.reward += PLANNED_PLANT_REWARD
                         break
             if bt is None and isinstance(at, dict) and at.get("kind") in ("COOP", "PASTURE"):
