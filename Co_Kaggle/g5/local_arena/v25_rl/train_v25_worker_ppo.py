@@ -446,7 +446,24 @@ def current_reward_contract():
 def save_checkpoint(
     path,model,opt,update,args,best,best_weed=math.inf,best_escape=math.inf
 ):
-    torch.save({"algorithm":CHECKPOINT_ALGORITHM,"update":update,"model_state_dict":model.state_dict(),"optimizer_state_dict":opt.state_dict(),"candidate_feature_names":CANDIDATE_FEATURE_NAMES,"global_feature_names":GLOBAL_FEATURE_NAMES,"best_validation_worker_reward":best,"best_validation_crops_to_weed":best_weed,"best_validation_animals_escaped":best_escape,"reward_contract":current_reward_contract(),"args":vars(args),"note":"PPO controls farmer/hands only; per-subdecision actor shaping; critical WATER/FEED and emergency WHEAT supply outrank imminent decay-HARVEST and noncritical work; best checkpoint minimizes irreversible asset failures (weeds + escapes), then escapes, then reward; recorded market list is an unlearned env input"},path)
+    torch.save({"algorithm":CHECKPOINT_ALGORITHM,"update":update,"model_state_dict":model.state_dict(),"optimizer_state_dict":opt.state_dict(),"candidate_feature_names":CANDIDATE_FEATURE_NAMES,"global_feature_names":GLOBAL_FEATURE_NAMES,"selection_metric":"mean_worker_reward","best_validation_worker_reward":best,"best_validation_crops_to_weed":best_weed,"best_validation_animals_escaped":best_escape,"reward_contract":current_reward_contract(),"args":vars(args),"note":"PPO controls farmer/hands only; per-subdecision actor shaping; critical WATER/FEED and emergency WHEAT supply outrank imminent decay-HARVEST and noncritical work; best checkpoint maximizes deterministic validation worker reward; recorded market list is an unlearned env input"},path)
+
+
+def selected_best_stats(path):
+    """Reuse a best checkpoint only if it was selected by this reward rule."""
+    if not path.is_file():
+        return -math.inf,math.inf,math.inf
+    saved=torch.load(path,map_location="cpu",weights_only=False)
+    if (saved.get("algorithm")!=CHECKPOINT_ALGORITHM
+            or saved.get("reward_contract")!=current_reward_contract()
+            or saved.get("selection_metric")!="mean_worker_reward"):
+        return -math.inf,math.inf,math.inf
+    score=float(saved.get("best_validation_worker_reward",-math.inf))
+    if not math.isfinite(score):
+        return -math.inf,math.inf,math.inf
+    return (score,float(saved.get("best_validation_crops_to_weed",math.inf)),
+            float(saved.get("best_validation_animals_escaped",math.inf)))
+
 
 def load_checkpoint(path,model,opt,device):
     p=torch.load(path,map_location=device,weights_only=False)
@@ -490,40 +507,15 @@ def parser():
     p.add_argument("--device",default="auto"); p.add_argument("--hidden",type=int,default=128); p.add_argument("--learning-rate",type=float,default=1e-4); p.add_argument("--gamma",type=float,default=.99); p.add_argument("--gae-lambda",type=float,default=.95); p.add_argument("--ppo-epochs",type=int,default=4); p.add_argument("--minibatch-size",type=int,default=128); p.add_argument("--clip-ratio",type=float,default=.10); p.add_argument("--target-kl",type=float,default=.01); p.add_argument("--rollout-temperature",type=float,default=.20); p.add_argument("--collapse-restore-ratio",type=float,default=.70); p.add_argument("--value-coef",type=float,default=.5); p.add_argument("--entropy-coef",type=float,default=.001); p.add_argument("--max-grad-norm",type=float,default=.5); p.add_argument("--preflight-only",action="store_true")
     return p
 
-def validation_checkpoint_decision(
-    score,weed,escape,reference,best,best_weed,best_escape,
-    collapse_restore_ratio,
-):
-    """Asset-survival first: minimize weeds+escapes, then escapes, then reward."""
-    survival_improved=False
-    if weed is not None and escape is not None:
-        current_weed=float(weed)
-        current_escape=float(escape)
-        current_failures=current_weed+current_escape
-        best_failures=float(best_weed)+float(best_escape)
-        survival_improved=(
-            current_failures<best_failures-1e-9
-            or (
-                abs(current_failures-best_failures)<=1e-9
-                and (
-                    current_escape<float(best_escape)-1e-9
-                    or (
-                        abs(current_escape-float(best_escape))<=1e-9
-                        and score is not None
-                        and float(score)>best
-                    )
-                )
-            )
-        )
+def validation_checkpoint_decision(score,reference,best,collapse_restore_ratio):
+    """Select strictly higher finite validation worker reward."""
+    valid_score=score is not None and math.isfinite(float(score))
+    reward_improved=valid_score and float(score)>best
     ratio=None
-    reward_collapsed=False
-    if score is not None and math.isfinite(reference) and reference>0:
+    if valid_score and math.isfinite(reference) and reference>0:
         ratio=float(score)/reference
-        reward_collapsed=ratio<collapse_restore_ratio
-    # A policy with fewer irreversible asset failures is never discarded solely
-    # for lower throughput.
-    rollback=bool(reward_collapsed and not survival_improved)
-    return survival_improved,rollback,ratio
+    rollback=ratio is not None and ratio<collapse_restore_ratio
+    return reward_improved,rollback,ratio
 
 def main():
     args=parser().parse_args()
@@ -540,11 +532,12 @@ def main():
     print(f"preflight replay parity OK: {paths[0].stem}",flush=True)
     if args.preflight_only: return 0
     device=device_for(args.device); random.seed(args.training_seed); np.random.seed(args.training_seed); torch.manual_seed(args.training_seed); rng=random.Random(args.training_seed)
-    model=ActorCritic(len(CANDIDATE_FEATURE_NAMES),len(GLOBAL_FEATURE_NAMES),args.hidden).to(device); opt=torch.optim.Adam(model.parameters(),lr=args.learning_rate); start=0; best=-math.inf; best_weed=math.inf; best_escape=math.inf
+    model=ActorCritic(len(CANDIDATE_FEATURE_NAMES),len(GLOBAL_FEATURE_NAMES),args.hidden).to(device); opt=torch.optim.Adam(model.parameters(),lr=args.learning_rate); start=0
     if args.resume:
-        start,best,best_weed,best_escape=load_checkpoint(
+        start,_,_,_=load_checkpoint(
             args.resume.expanduser().resolve(),model,opt,device
         )
+    best,best_weed,best_escape=selected_best_stats(ck/"best.pt")
     (out/"split.json").write_text(json.dumps({"train":[p.name for p in train],"validation":[p.name for p in val],"split_seed":args.split_seed},indent=2)+"\n")
     (out/"config.json").write_text(json.dumps({**vars(args),"executor":str(ex),"device_resolved":str(device),"algorithm":CHECKPOINT_ALGORITHM,"objective":"worker efficiency only; farmer/hands replaced by RL, recorded v20 market orders replayed unchanged; no final game result reward","policy_semantics":"persistent task routes; subdecision actor shaping; critical-water/feed survival with emergency wheat supply; decay-harvest preemption; late-plant water reserve","crop_product_value":PRODUCT_VALUE,"animal_product_value":ANIMAL_PRODUCT_VALUE,"reward_contract":current_reward_contract()},indent=2,default=str)+"\n")
     rows,base=evaluate(val,model,device,ex,"baseline"); write_jsonl(out/"validation.jsonl",{"update":-1,**base})
@@ -552,11 +545,12 @@ def main():
     baseline_worker_reward=base.get("mean_worker_reward")
     baseline_weed=base.get("mean_crops_to_weed")
     baseline_escape=base.get("mean_animals_escaped")
-    if baseline_worker_reward is not None:
-        best=max(best,float(baseline_worker_reward))
-    if baseline_weed is not None and baseline_escape is not None:
-        best_weed=float(baseline_weed)
-        best_escape=float(baseline_escape)
+    if (baseline_worker_reward is not None
+            and math.isfinite(float(baseline_worker_reward))
+            and float(baseline_worker_reward)>best):
+        best=float(baseline_worker_reward)
+        best_weed=float(baseline_weed) if baseline_weed is not None else math.inf
+        best_escape=float(baseline_escape) if baseline_escape is not None else math.inf
         # Preserve the source update when starting from --resume.  Writing -1
         # here would make a later resume from this new best.pt restart at u0
         # even though the weights came from a later checkpoint.
@@ -607,9 +601,8 @@ def main():
                 float(baseline_worker_reward) if baseline_worker_reward is not None else -math.inf,
                 float(best),
             )
-            survival_improved,rollback,ratio=validation_checkpoint_decision(
-                score,weed,escape,reference,best,best_weed,best_escape,
-                args.collapse_restore_ratio,
+            reward_improved,rollback,ratio=validation_checkpoint_decision(
+                score,reference,best,args.collapse_restore_ratio,
             )
             if ratio is not None:
                 s["reward_vs_reference"]=ratio
@@ -621,19 +614,7 @@ def main():
                 print(
                     f"WARNING: validation worker reward collapsed to {ratio:.1%} "
                     f"of reference ({float(score):+.1f} vs {reference:+.1f}) "
-                    "without improving asset survival; restoring best.pt",
-                    flush=True,
-                )
-            elif (
-                ratio is not None
-                and ratio<args.collapse_restore_ratio
-                and survival_improved
-            ):
-                s["reward_collapse_accepted_for_survival_improvement"]=True
-                print(
-                    f"accepting lower reward ({ratio:.1%} of reference) because "
-                    f"validation asset failures improved to "
-                    f"{float(weed)+float(escape):.3f}",
+                    "restoring best.pt",
                     flush=True,
                 )
 
@@ -648,18 +629,17 @@ def main():
                 best=max(best,restored_best)
                 best_weed=restored_weed
                 best_escape=restored_escape
-            elif survival_improved:
-                best_weed=float(weed)
-                best_escape=float(escape)
-                best=float(score) if score is not None else best
+            elif reward_improved:
+                best_weed=float(weed) if weed is not None else math.inf
+                best_escape=float(escape) if escape is not None else math.inf
+                best=float(score)
                 save_checkpoint(
                     ck/"best.pt",model,opt,u,args,
                     best,best_weed,best_escape,
                 )
                 print(
-                    f"new best asset_failures/escape/weed/reward="
-                    f"{best_weed+best_escape:.3f}/"
-                    f"{best_escape:.3f}/{best_weed:.3f}/{best:+.3f}",
+                    f"new best validation worker reward={best:+.3f} "
+                    f"(weeds={best_weed:.3f}, escapes={best_escape:.3f})",
                     flush=True,
                 )
 

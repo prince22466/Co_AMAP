@@ -103,63 +103,50 @@ class SubdecisionPPOTest(unittest.TestCase):
         np.testing.assert_allclose(bonuses, [2.0, 0.0], atol=1e-6)
         np.testing.assert_allclose(actor_adv, [1.0, 1.0], atol=1e-6)
 
-    def test_asset_survival_improvement_overrides_reward_collapse(self):
-        survival_improved, rollback, ratio = validation_checkpoint_decision(
-            score=25000.0,
-            weed=0.0,
-            escape=2.0,
-            reference=40000.0,
-            best=40000.0,
-            best_weed=4.0,
-            best_escape=2.0,
+    def test_higher_validation_reward_selects_checkpoint(self):
+        improved, rollback, ratio = validation_checkpoint_decision(
+            score=40001.0, reference=40000.0, best=40000.0,
             collapse_restore_ratio=0.70,
         )
-        self.assertTrue(survival_improved)
+        self.assertTrue(improved)
         self.assertFalse(rollback)
-        self.assertAlmostEqual(ratio, 0.625)
+        self.assertAlmostEqual(ratio, 40001.0 / 40000.0)
 
-    def test_reward_collapse_rolls_back_when_asset_failures_do_not_improve(self):
-        survival_improved, rollback, ratio = validation_checkpoint_decision(
-            score=25000.0,
-            weed=4.0,
-            escape=2.0,
-            reference=40000.0,
-            best=40000.0,
-            best_weed=4.0,
-            best_escape=2.0,
+    def test_lower_reward_never_replaces_best(self):
+        improved, rollback, ratio = validation_checkpoint_decision(
+            score=39000.0, reference=40000.0, best=40000.0,
             collapse_restore_ratio=0.70,
         )
-        self.assertFalse(survival_improved)
+        self.assertFalse(improved)
+        self.assertFalse(rollback)
+        self.assertAlmostEqual(ratio, 0.975)
+
+    def test_equal_reward_keeps_existing_checkpoint(self):
+        improved, rollback, ratio = validation_checkpoint_decision(
+            score=40000.0, reference=40000.0, best=40000.0,
+            collapse_restore_ratio=0.70,
+        )
+        self.assertFalse(improved)
+        self.assertFalse(rollback)
+        self.assertEqual(ratio, 1.0)
+
+    def test_reward_collapse_restores_best(self):
+        improved, rollback, ratio = validation_checkpoint_decision(
+            score=25000.0, reference=40000.0, best=40000.0,
+            collapse_restore_ratio=0.70,
+        )
+        self.assertFalse(improved)
         self.assertTrue(rollback)
         self.assertAlmostEqual(ratio, 0.625)
 
-    def test_fewer_weeds_do_not_hide_more_total_asset_failures(self):
-        survival_improved, rollback, _ratio = validation_checkpoint_decision(
-            score=25000.0,
-            weed=0.0,
-            escape=7.0,
-            reference=40000.0,
-            best=40000.0,
-            best_weed=4.0,
-            best_escape=2.0,
+    def test_nonfinite_reward_is_not_selected(self):
+        improved, rollback, ratio = validation_checkpoint_decision(
+            score=float("nan"), reference=40000.0, best=40000.0,
             collapse_restore_ratio=0.70,
         )
-        self.assertFalse(survival_improved)
-        self.assertTrue(rollback)
-
-    def test_equal_total_failures_prefers_fewer_escapes(self):
-        survival_improved, rollback, _ratio = validation_checkpoint_decision(
-            score=25000.0,
-            weed=4.0,
-            escape=1.0,
-            reference=40000.0,
-            best=40000.0,
-            best_weed=3.0,
-            best_escape=2.0,
-            collapse_restore_ratio=0.70,
-        )
-        self.assertTrue(survival_improved)
+        self.assertFalse(improved)
         self.assertFalse(rollback)
+        self.assertIsNone(ratio)
 
     def test_ppo_update_consumes_individual_worker_samples(self):
         torch.manual_seed(7)
