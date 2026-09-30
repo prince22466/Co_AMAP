@@ -7,7 +7,7 @@ import numpy as np
 import torch
 from torch import nn
 from torch.distributions import Categorical
-from worker_reward import ANIMAL_PRODUCTS, ITEMS, MOVE_ACTIONS, OPS, PRODUCTS, RewardBreakdown, _positions, _crop_decay_start_step as crop_decay_start_step
+from worker_reward import ANIMAL_PRODUCTS, ITEMS, MOVE_ACTIONS, OPS, PRODUCTS, RewardBreakdown, _positions, plant_can_deliver_before_end, _crop_decay_start_step as crop_decay_start_step
 
 @dataclass(frozen=True)
 class Task:
@@ -31,7 +31,7 @@ CANDIDATE_FEATURE_NAMES=BASE_FEATURE_NAMES+tuple("op_"+x for x in OPS)+tuple("it
 # normalized-advantage units.  Planned PLANT is intentionally different: its
 # completion credit is expressed in raw reward-equivalent units so it can be
 # calibrated against an ordinary crop HARVEST before PPO normalization.
-PLANNED_PLANT_REWARD_EQUIV = 8.0
+PLANNED_PLANT_REWARD_EQUIV = 16.0
 PLANNED_BUILD_ACTOR_BONUS = 1.0
 PLANNED_ANIMAL_PICKUP_ACTOR_BONUS = 1.0
 PLANNED_PLACE_ANIMAL_ACTOR_BONUS = 1.5
@@ -402,13 +402,30 @@ class WorkerPolicy:
             return PLANNED_PLANT_REWARD_EQUIV
         return 0.0
 
+    def avoidable_plant_delay(self,w,t,choices):
+        # Survival, maintenance, harvest/delivery and the forced animal pipeline
+        # are legitimate reasons to defer planting. Alternatives here already
+        # passed seed, travel and shared maintenance admission. Only useful
+        # planting alternatives receive a deferral preference.
+        if t.op in ("PLANT","WATER","FEED","CARE","HARVEST","DELIVER"):
+            return False
+        if _animal_setup_task(t) or (t.op=="DIG" and t.deadline_step is not None):
+            return False
+        if _animal_survival_task(t):
+            return False
+        obs=getattr(self,"_choice_obs",None)
+        return any(cw==w and ct.planned and ct.op=="PLANT" and (
+            obs is None or plant_can_deliver_before_end(
+                self.e,obs,ct.item,ct.target,self.e.dist(_positions(obs)[w],ct.target)
+            )
+        ) for cw,ct,_ in choices)
+
     def actor_bonus_for_choice(self,w,t,choices,completed=False):
         same_worker=[ct for cw,ct,_ in choices if cw==w]
         bonus=0.0
         if t.op=="PASS" and any(ct.op!="PASS" for ct in same_worker):
             bonus+=AVOIDABLE_PASS_ACTOR_PENALTY
-        has_planned_plant=any(ct.planned and ct.op=="PLANT" for ct in same_worker)
-        if has_planned_plant and not (t.planned and t.op=="PLANT"):
+        if self.avoidable_plant_delay(w,t,choices):
             bonus+=DEFER_PLANNED_PLANT_ACTOR_PENALTY
         if completed:
             bonus+=self.planned_completion_bonus(t)
@@ -660,6 +677,7 @@ class WorkerPolicy:
 
     def unit_actions(self,obs,animal_plan,crop_plan):
         self._sync_day(obs)
+        self._choice_obs=obs
         positions=_positions(obs)
         workers=list(range(len(positions)))
         actions=[None]*len(workers)
@@ -705,6 +723,7 @@ class WorkerPolicy:
         self.turn_planned_plant_origins=[]
         self.turn_route_progress=[False for _ in workers]
         self.turn_avoidable_pass=[False for _ in workers]
+        self.turn_avoidable_plant_delay=[False for _ in workers]
 
         state=global_features(self.e,obs,animal_plan,crop_plan,len(workers))
         st=torch.as_tensor(state,dtype=torch.float32,device=self.device)
@@ -732,7 +751,10 @@ class WorkerPolicy:
         def record_reward_provenance(w,t,pos,target,action,avoidable_pass=False):
             if t.planned and pos==target and t.op in ("PLANT","PLACE_ANIMAL"):
                 self.turn_plan_credit[w]={"op":t.op,"item":t.item}
-            if t.op!="PASS" and pos!=target and action and action[0] in MOVE_ACTIONS:
+            useful_route=t.op!="PLANT" or plant_can_deliver_before_end(
+                self.e,obs,t.item,target,self.e.dist(pos,target)
+            )
+            if useful_route and t.op!="PASS" and pos!=target and action and action[0] in MOVE_ACTIONS:
                 self.turn_route_progress[w]=True
             if t.op=="PASS" and avoidable_pass:
                 self.turn_avoidable_pass[w]=True
@@ -958,6 +980,7 @@ class WorkerPolicy:
                 and any(cw==w and ct.op!="PASS" for cw,ct,_ in choices)
             )
             record_reward_provenance(w,t,pos,target,action,avoidable_pass)
+            self.turn_avoidable_plant_delay[w]=self.avoidable_plant_delay(w,t,choices)
             completed_now=(pos==target)
             actor_bonus=self.actor_bonus_for_choice(
                 w,t,choices,completed=completed_now

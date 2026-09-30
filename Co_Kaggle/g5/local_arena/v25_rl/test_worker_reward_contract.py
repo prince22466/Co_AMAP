@@ -622,7 +622,7 @@ class WorkerRewardContractTest(unittest.TestCase):
         )
         self.assertEqual(result.animals_escaped, 1)
         self.assertEqual(result.reward, ANIMAL_ESCAPE_PENALTY)
-        self.assertEqual(ANIMAL_ESCAPE_PENALTY, -100.0)
+        self.assertEqual(ANIMAL_ESCAPE_PENALTY, -4 * ANIMAL_PRODUCT_VALUE)
 
     def test_care_reward_is_strengthened(self):
         self.assertEqual(EFFECTIVE_CARE_REWARD, 3.0)
