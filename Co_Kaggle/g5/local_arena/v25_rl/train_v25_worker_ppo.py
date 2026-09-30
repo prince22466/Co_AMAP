@@ -23,12 +23,13 @@ V20_RL=LOCAL_ARENA/"v20_rl"
 if str(V20_RL) not in sys.path: sys.path.insert(0,str(V20_RL))
 from evaluate_v20_v19_losses import _agent_observation,_environment_from_history,_field,_recorded_step_actions,_saved_final_rewards,_seed_hint,recorded_action_parity
 from worker_policy import AVOIDABLE_PASS_ACTOR_PENALTY,DEFER_PLANNED_PLANT_ACTOR_PENALTY,PLANNED_ANIMAL_PICKUP_ACTOR_BONUS,PLANNED_BUILD_ACTOR_BONUS,PLANNED_PLACE_ANIMAL_ACTOR_BONUS,PLANNED_PLANT_REWARD_EQUIV,ActorCritic,CANDIDATE_FEATURE_NAMES,GLOBAL_FEATURE_NAMES,TurnRecord,WorkerPolicy
+from worker_policy import PLANNED_PLANT_COMPLETION_ACTOR_BONUS
 from worker_reward import measure_land_use
 from worker_reward import ANIMAL_ESCAPE_PENALTY,ANIMAL_PRODUCT_DELIVERED_REWARD,ANIMAL_PRODUCT_GENERATED_REWARD,ANIMAL_PRODUCT_HARVESTED_REWARD,ANIMAL_PRODUCT_VALUE,AVOIDABLE_PASS_PENALTY,CRITICAL_FEED_REWARD,CRITICAL_WATER_REWARD,CROP_DEATH_PENALTY,CROP_TO_WEED_PENALTY,EFFECTIVE_CARE_REWARD,HEALTHY_ANIMAL_DAY_REWARD,LOST_HARVESTABLE_UNIT_PENALTY,NORMAL_FEED_REWARD,PLANNED_PLACE_ANIMAL_REWARD,PLANNED_PLANT_REWARD,PRODUCT_DELIVERED_REWARD,PRODUCT_GENERATED_REWARD,PRODUCT_HARVESTED_REWARD,PRODUCT_VALUE,ROUTE_PROGRESS_REWARD,RewardBreakdown,compute_worker_reward
 
 DEFAULT_HISTORY_DIR=G5_ROOT/"game_history"/"v20"
 DEFAULT_EXECUTOR=HERE/"v25_rl.py"
-DEFAULT_OUTPUT_DIR=HERE/"runs"/"worker_ppo_static_v20_v12_productive_planting"
+DEFAULT_OUTPUT_DIR=HERE/"runs"/"worker_ppo_static_v20_v13_plant_signal"
 CHECKPOINT_ALGORITHM="v25_static_worker_ppo_gae_v4_animal_reward"
 
 def load_executor(path):
@@ -302,6 +303,8 @@ def ppo_update(model,opt,device,records,args):
     ratio_min=float(a[:,6].min())
     ratio_max=float(a[:,7].max())
     value_loss=float(np.mean(value_stats)) if value_stats else 0.0
+    plant_bonuses=np.asarray([sub.plant_completion_actor_bonus for _,sub in actor_samples],float)
+    plant_events=plant_bonuses[plant_bonuses>0]
 
     return {
         "policy_loss":policy_loss,
@@ -321,6 +324,9 @@ def ppo_update(model,opt,device,records,args):
         "actor_bonus_abs_mean":float(np.abs(actor_bonus).mean()),
         "actor_bonus_positive_fraction":float(np.mean(actor_bonus>0)),
         "actor_bonus_negative_fraction":float(np.mean(actor_bonus<0)),
+        "plant_completion_actor_events":int(plant_events.size),
+        "plant_completion_actor_bonus_mean":float(plant_bonuses.mean()),
+        "plant_completion_actor_bonus_per_event":float(plant_events.mean()) if plant_events.size else 0.0,
         "advantage_scale":float(advantage_scale),
         "reward_equiv_bonus_mean":float(reward_equiv_bonus.mean()),
         "reward_equiv_bonus_normalized_mean":float(
@@ -426,7 +432,10 @@ def device_for(v):
 
 def current_reward_contract():
     return {
-        "semantics":"productive-planting-and-escape-cost-v12",
+        "semantics":"scale-independent-useful-plant-credit-v13",
+        "planned_plant_completion_actor_bonus":PLANNED_PLANT_COMPLETION_ACTOR_BONUS,
+        "plant_actor_bonus_engine_confirmed":True,
+        "plant_completion_credit_matches_worker":True,
         "plant_credit_requires_harvest_and_delivery_before_end":True,
         "unproductive_plant_route_has_no_progress_reward":True,
         "plant_delay_exempts_maintenance_and_output":True,

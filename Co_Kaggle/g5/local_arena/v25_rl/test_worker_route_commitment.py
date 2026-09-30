@@ -516,7 +516,7 @@ class WorkerRouteCommitmentTest(unittest.TestCase):
         self.assertEqual(origin.reward_equiv_bonus, 0.0)
 
         policy.finish_turn(
-            RewardBreakdown(planned_plants_completed=1)
+            RewardBreakdown(planned_plants_completed=1,planned_plants_completed_by_worker={"0":1})
         )
         self.assertEqual(
             origin.reward_equiv_bonus,
