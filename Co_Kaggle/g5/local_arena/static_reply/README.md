@@ -23,12 +23,26 @@ are read verbatim. Both players' states and rewards are recomputed by the engine
 the opponent does not adapt.
 
 ```powershell
+# Explicitly replay the full v20 directory
+python local_arena/static_reply/reply_template.py v20_bench.py game_history/v20
+
+# Replay one selected history
+python local_arena/static_reply/reply_template.py v20_bench.py game_history/v20/111583465.json
+
+# Replay selected histories in the order listed
+python local_arena/static_reply/reply_template.py v20_bench.py game_history/v20/111548564.json game_history/v20/111583465.json
+
 # One game with full recorded-action parity checking (the default)
 python local_arena/static_reply/reply_template.py v20_bench.py --limit 1
 
-# Specific games and an explicit new output directory
+# Existing episode-ID selection also works, with an explicit new output directory
 python local_arena/static_reply/reply_template.py v20_bench.py --episodes 111548564 111549675 --output local_arena/static_reply/runs/my_run
 ```
+
+Paths can be relative to the current directory or absolute. `--history-dir` remains
+available for directory selection; use it instead of positional paths. A directory
+source reads its top-level `*.json` files. `--episodes` filters the selected
+directory or file set, and `--limit` takes its first N histories.
 
 Results go to `runs/<agent>/<UTC timestamp>/` by default:
 
