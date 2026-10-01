@@ -46,6 +46,42 @@ flowchart TD
 
 The embedded trees rank worker tasks; animal and crop planning remains rule-based. The v19 animal planner uses `HERD_THRESHOLD=200` when deciding whether to expand the herd.
 
+
+### v22 structure graph
+
+```mermaid
+flowchart TD
+    O[Game observation] --> E[Planner agent]
+    E --> S[Production signals: crop demand versus owned capacity]
+    E --> C[Classify opponent as V16 or normal]
+
+    S --> A[Animal plan: place owned animals on route slots]
+    S --> P[Crop plan: assign owned seeds and maintain existing crops]
+    A --> T[WorkerPolicy: generate jobs from plans and live assets]
+    P --> T
+    O --> T
+
+    T --> F[Filter feasible jobs and reserve workers and resources]
+    F --> X[Build global and candidate features]
+    X --> N[Embedded PPO actor: score candidate jobs]
+    N --> W[Select jobs and emit farmer and hand actions]
+    W --> K[Keep valid remote jobs active across turns]
+
+    S --> M[Rule-based market orders]
+    W --> I[Simulate shed inventory after worker actions]
+    I --> M
+    C -.-> M
+    M --> B[Sell goods and buy wheat, hires, land, animals, seeds, fertilizer]
+    W --> R[Return farmer, hands, and market actions]
+    B --> R
+
+    H[Embedded inference helpers] -.-> T
+    Q[Embedded trained actor weights] -.-> N
+```
+
+The notebook packages the planner, worker policy, inference helpers, and actor weights into one standalone `main.py`. The PPO actor selects worker jobs; the production plans and market purchases remain rule-based. Market orders follow worker actions so they can account for the resulting shed inventory.
+
+
 v22 is new reorganized version, which has clear structure 
 v22 is submitted to kaggle on Sep30th, and loses terribly(as of writing, Oct 1st 2026, gets only 439.1), its rl part(for worker actions) is based on best.pt(commit sha:ceb2acbf3ee14a210c7ee3a01ac2a0c93c6e688f, commited on Sep 30th)
 
