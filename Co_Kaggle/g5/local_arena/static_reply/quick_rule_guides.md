@@ -252,8 +252,10 @@ Town Center demand creates recurring upward price pressure relative to no demand
 - Shops consume goods from the shared market every 4 turns by default = 6 times/day.
 - One random shop opens every 3 days.
 - Maximum 8 shop instances.
-- Unlocks are with replacement, so duplicate shop types are possible.
+- duplicate shop types are possible.
 - Shops never buy directly from players.
+- Wool, milk, egg never appear together in one shop, aka, each time new shop opens, there only increase of demand on one kind of animal.
+
 
 Per consumption tick:
 
