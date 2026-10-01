@@ -4,7 +4,10 @@ before v16, simply use codex to generate next version by using self generated se
 v16-v18, using codex and game history(loss ones) for generating next version
 form v19, start to use rl for training.
 
-system workflow structure for each notebook:
+system workflow structure for notebooks starting from v16:
+
+notebook | structure | comments |
+
 
 
 
