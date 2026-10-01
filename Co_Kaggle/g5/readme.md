@@ -94,4 +94,5 @@ study rl methods ppo, q, deep rl, agentic rl training,
 setup systemic, engineered way to generate in-time feedback on how the training system works(aka, effective observality and reaction to improve training system),
 training platform to faciliate distirbuted rl trainig,
 training platform to faciliate distirbuted rl trainig + distributed ml/dl trainng,
-build AI agents to do automatic research 
+build AI agents to do automatic research,
+make rl training faster by profiling(which components do data movement, which do computing, how quantization help, how can these work with batch size to make training faster, can low level kernel programing speeds up training)
