@@ -1,0 +1,186 @@
+Linux perf in this WSL environment cannot report LLC loads or misses. The C++
+programs therefore print elapsed time, analytically counted FLOPs, cache working
+sets, and estimated traffic. These help compare implementations, but they do
+not directly measure RAM bandwidth or prove a compute/memory bottleneck.
+
+brief structure:
+prefill_sim.cpp
+  - Make up 128 token IDs and a flat 128 x 128 embedding array using seed 42.
+  - Create 10 flat 128 x 128 weight matrices. Each layer computes:
+      [128 x 128] embeddings * [128 x 128] weights = [128 x 128] output.
+  - Use blocked SSE2 multiplication: 4 token rows, 32 output columns, and
+    32 inner dimensions per tile. Each tile's arrays total 5 KiB.
+  - Inside a tile, load four weights once and reuse them across four tokens.
+    Four SIMD accumulators hold a 4-token x 4-column output block in registers.
+    Store those partial sums after finishing the 32 inner dimensions.
+  - Swap two activation buffers between layers. Select the largest value in
+    the last token's final embedding as the toy first output token.
+  - Repeat prefill 500 times with the same input and weights. Recreate input
+    outside timing; the prefill call includes its working-buffer allocation.
+
+decode_sim.cpp
+  - Create a flat embedding table and 10 flat weight matrices, also using
+    seed 42 and embedding dimension 128. Start with token IDs 100, 101, 102.
+  - Each decode call processes only the last token's embedding through the
+    10 layers: [1 x 128] input * [128 x 128] weights = [1 x 128] output.
+  - Accumulate 16 output columns in four SSE2 registers across all 128 inner
+    dimensions. Store them after the inner loop; handle remaining columns
+    with smaller SIMD groups or scalar operations.
+  - Select one output token, append it, and look up its embedding for the next
+    iteration. Generate exactly one token per iteration, 100 tokens per run.
+    Future tokens cannot be processed together because each depends on the
+    preceding result. SIMD parallelizes columns, not generation steps.
+  - Repeat the sequence 500 times, resetting the initial tokens outside timing.
+
+Both programs initialize weights once, keep printing outside the timed work,
+include the first run, and do not flush caches. They report mean/min/max times
+and a checksum consuming every run's result. They use standard C++20 plus x86
+SSE2 intrinsics, with a scalar fallback on other architectures. These are toy
+linear-layer simulators, without attention, a KV cache, or a real vocabulary head.
+
+analysis on print outs:
+  1. Work and timing
+     One multiply plus one add counts as 2 FLOPs:
+       FLOPs per token = 2 * 10 * 128 * 128 = 327,680.
+       Prefill per run = 128 * 327,680 = 41,943,040 FLOPs.
+       Decode per run = 100 * 327,680 = 32,768,000 FLOPs.
+     GFLOP/s = FLOPs per run / mean seconds per run / 1,000,000,000.
+     Over 500 runs, total work is 20.97152 GFLOPs for prefill and 16.384 GFLOPs
+     for decode. Work/traffic printouts are per run; total timed seconds cover
+     all 500 runs. Initialization is excluded from these compute rates.
+
+     Metric                         Prefill          Decode
+     Mean time per run              2.718 ms         2.331 ms
+     Tokens per run                 128              100
+     Average time per token         about 21.23 us   about 23.31 us
+     Achieved compute throughput    15.433 GFLOP/s   14.060 GFLOP/s
+
+     Prefill achieves about 9.8% higher compute throughput. Compare GFLOP/s or
+     per-token time, rather than raw run time, because token counts differ.
+     Run times vary (prefill 2.205-6.728 ms, decode 2.155-4.337 ms), so one
+     benchmark session does not establish a universally repeatable speedup.
+
+  2. Cache capacity
+     One layer's weights occupy 128 * 128 * 4 = 65,536 bytes = 64 KiB.
+     Prefill input + output occupy 128 KiB, giving a 192 KiB active layer.
+     Decode input + output occupy 1 KiB, giving a 65 KiB active layer.
+     Both are below the configured 256 KiB L2 capacity; prefill's tile is 5 KiB.
+     All 10 weight matrices together occupy 640 KiB: larger than L2 but below
+     the reported 4 MiB L3. Capacity permits reuse but does not guarantee cache
+     residency; other arrays, other layers, and cache conflicts also matter.
+
+  3. Logical weight loads versus ideal transfers
+     Blocked prefill loads each weight for each group of four tokens:
+       655,360 weight bytes * (128 / 4) = 20,971,520 bytes per run.
+       Weight-load intensity = 41,943,040 / 20,971,520 = 2 FLOPs/byte.
+     Decode loads each weight for each generated token:
+       655,360 * 100 = 65,536,000 bytes per run.
+       Weight-scan intensity = 32,768,000 / 65,536,000 = 0.5 FLOPs/byte.
+     These source-level counts include cache reads and omit input/output
+     traffic. They are estimates, not hardware-counter measurements.
+
+     The ideal transfer model instead assumes weights/input are read once and
+     output written once per layer, across all tokens processed by that layer:
+       Prefill: 10 * (65,536 + 2 * 65,536) = 1,966,080 bytes per run,
+                giving 21.333 FLOPs/byte.
+       Decode: 100 * 10 * (65,536 + 2 * 512) = 66,560,000 bytes per run,
+               giving about 0.492 FLOPs/byte.
+     Prefill's separate 64 FLOPs/byte ideal weights-only figure excludes
+     activation transfers. All ideal figures omit additional traffic such as
+     write allocation; cache reuse across layers/runs can also change RAM bytes.
+
+     The printed 7.716 GB/s and 28.121 GB/s divide estimated weight loads by
+     runtime. Decode's higher value does not mean it is faster or uses more
+     measured RAM bandwidth: it loads more weights per FLOP in this model.
+
+  4. What this experiment demonstrates
+     Prefill reuses loaded weights across four tokens; both kernels retain
+     partial results in SIMD registers. The output/checksums remain stable:
+     prefill 500 * 52 = 26,000; decode 500 * 47 = 23,500 for the last token.
+     Repeated token 47 is a fixed point of the toy deterministic selection.
+     These measurements demonstrate implementation throughput, not proof that
+     prefill is compute-bound or decode is RAM-bandwidth-bound. Actual memory
+     traffic and independently measured compute/bandwidth limits are needed
+     to identify the limiting hardware resource.
+
+print outs:
+
+prince@JC:/mnt/e/Projects/Co_AMAP/Co_AI_Inference/D8$ cmake --build build-wsl --target prefill_sim decode_sim -j && ./build-wsl/prefill_sim && ./build-wsl/decode_sim
+[100%] Built target prefill_sim
+[100%] Built target decode_sim
+Prefill: 128 tokens, embedding size 128, 10 layers
+Multiplication backend: blocked SSE2 SIMD (4 tokens x 4 output columns)
+Configured L2 capacity: 256 KiB
+One layer's weights: 64 KiB
+Input + output: 128 KiB
+Active layer working set: 192 KiB (75% of L2)
+Tile dimensions (tokens x columns x inner): 4 x 32 x 32
+Tile array footprint: 5 KiB
+First output token ID: 52
+Final embedding (first 8 of 128): -0.0161 -0.3638 -0.5199 0.0071 -0.0050 -0.2784 -0.9369 -0.3719
+
+Prefill performance (MB/GB use decimal units):
+Initialization time: 0.002 s
+Measured runs: 500 (no cache flush)
+Output token checksum (all runs): 26000
+Total timed prefill time: 1.359 s
+Mean prefill time per run: 2.718 ms
+Minimum / maximum run time: 2.205 / 6.728 ms
+Work and traffic estimates below are per run; rates use mean time.
+Average time per input token: 0.021 ms/token
+Input token throughput: 47097.661 tokens/s
+Weight storage: 0.655 MB
+Estimated work per input token: 0.328 MFLOPs
+Estimated work per run: 0.042 GFLOPs
+Estimated logical weight bytes loaded (including cache reads): 0.021 GB
+Estimated weight-load intensity: 2.000 FLOPs/byte
+Ideal weights-only intensity (weights read once per layer): 64.000 FLOPs/byte
+Ideal transfer bytes (weights + input + output, all layers): 1.966 MB
+Ideal transfer arithmetic intensity: 21.333 FLOPs/byte
+Achieved compute rate: 15.433 GFLOP/s
+Effective estimated weight-load rate (not RAM bandwidth): 7.716 GB/s
+Only the active layer is counted; other layers and cache conflicts can affect residency.
+Cache capacity and these estimates alone cannot confirm the bottleneck.
+Decode: 1 input token per step, embedding size 128, 10 layers
+Multiplication backend: SSE2 SIMD (1 token x 16 output columns, register accumulation)
+Configured L2 capacity: 256 KiB
+One layer's weights: 64 KiB
+Input + output: 1 KiB
+Active layer working set: 65 KiB (25.3906% of L2)
+Initial token IDs: 100 101 102
+Generated token IDs (last run):
+30 22 117 67 119 77 31 40 112 126
+47 47 47 47 47 47 47 47 47 47
+47 47 47 47 47 47 47 47 47 47
+47 47 47 47 47 47 47 47 47 47
+47 47 47 47 47 47 47 47 47 47
+47 47 47 47 47 47 47 47 47 47
+47 47 47 47 47 47 47 47 47 47
+47 47 47 47 47 47 47 47 47 47
+47 47 47 47 47 47 47 47 47 47
+47 47 47 47 47 47 47 47 47 47
+Generated 100 tokens through 10 layers per step.
+
+Decode performance (MB/GB use decimal units):
+Initialization time: 0.001 s
+Measured runs: 500 (no cache flush)
+Last token checksum (all runs): 23500
+Total timed decode time: 1.165 s
+Mean decode time per run: 2.331 ms
+Minimum / maximum run time: 2.155 / 4.337 ms
+Work and traffic estimates below are per run; rates use mean time.
+Average decode latency: 0.023 ms/token
+Token throughput: 42908.889 tokens/s
+Weight storage: 0.655 MB
+Estimated work per token: 0.328 MFLOPs
+Estimated work per run: 0.033 GFLOPs
+Logical weight bytes scanned (including cache reads): 0.066 GB
+Logical weight-scan intensity: 0.500 FLOPs/byte
+Ideal transfer bytes (weights + input + output, all steps): 66.560 MB
+Ideal transfer arithmetic intensity: 0.492 FLOPs/byte
+Achieved compute rate: 14.060 GFLOP/s
+Effective logical weight-scan rate (not RAM bandwidth): 28.121 GB/s
+Only the active layer is counted; the embedding table, other layers and cache conflicts can affect residency.
+Cache capacity and these estimates alone cannot confirm the bottleneck.
+
+
