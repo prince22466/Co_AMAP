@@ -221,6 +221,8 @@ class DiagnosticsTests(unittest.TestCase):
         (self.root / "traces" / "trace_unsupported.json").write_text(json.dumps({"steps": [{"mystery": "event"}]}), encoding="utf-8")
         tasks = {task["instance_id"]: task for task in make_report(self.root, self.output)["tasks"]}
         for identifier in tasks:
+            if identifier != "cumulative":
+                self.assertIsNone(tasks[identifier]["reviewer_calls"])
             self.assertIsNone(tasks[identifier]["max_request_input_tokens"])
             self.assertIsNone(tasks[identifier]["input_tokens_sum_observed"])
         self.assertIsNone(tasks["missing"]["model_requests"])
@@ -230,6 +232,22 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertEqual(tasks["cumulative"]["model_requests"], 1)
         markdown = (self.output / "diagnostics.md").read_text(encoding="utf-8")
         self.assertIn("Unrecognized step schema", markdown)
+
+    def test_reviewer_delegation_is_distinct_from_analyzer_and_budgeted_builtins(self):
+        self.write_results([{"instance_id": "review", "resolved": False}])
+        trace = {"steps": [{"source": "agent", "tool_calls": [
+            {"id": "a", "name": "code_analyzer_agent"},
+            {"id": "r", "name": "patch_reviewer_agent"},
+            {"id": "s", "name": "get_status"},
+            {"id": "e", "name": "edit_file"},
+        ]}]}
+        (self.root / "traces" / "trace_review.json").write_text(json.dumps(trace), encoding="utf-8")
+        task = make_report(self.root, self.output)["tasks"][0]
+        self.assertEqual(task["analyzer_calls"], 1)
+        self.assertEqual(task["reviewer_calls"], 1)
+        self.assertEqual(task["known_budgeted_tool_calls"], 1)
+        self.assertFalse(any("Unclassified tool names" in warning for warning in task["trace_warnings"]))
+        self.assertIn("reviewer_calls", (self.output / "diagnostics.csv").read_text(encoding="utf-8").splitlines()[0])
 
     def test_failure_of_edit_not_success_and_missing_time_not_invented(self):
         path = self.root / "traces" / "trace_edit.json"

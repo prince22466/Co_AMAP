@@ -22,6 +22,75 @@ SPEC.loader.exec_module(workflow)
 
 
 class EvaluationWorkflowTests(unittest.TestCase):
+    def reviewer_namespace(self, root):
+        output = root / "reviewer.ipynb"
+        workflow.generate(
+            BASE / "submission_3", BASE / "tools" / "submission_tools.py",
+            BASE.parent / "competition_material" / "getting-started-gemma-4-developer-agent.ipynb",
+            output, reviewer_control=True,
+        )
+        notebook = nbformat.read(output, as_version=4)
+        nbformat.validate(notebook)
+        namespace = {}
+        for cell in notebook.cells:
+            if cell.cell_type == "code" and cell.source.startswith(
+                ("from pathlib import Path", "# Curated text files", "def remove_agent_tools")
+            ):
+                exec(cell.source, namespace)
+        namespace["WORKING_DIR"] = root / "working"
+        return notebook, namespace
+
+    def test_reviewer_controls_preserve_shared_files_and_package_only_reachable_helpers(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            notebook, namespace = self.reviewer_namespace(root)
+            self.assertEqual(notebook.metadata["comparison_mode"], "reviewer_control")
+            self.assertEqual(namespace["BENCHMARK_VARIANTS"], ["coder_only", "optional_analyzer", "optional_reviewer"])
+            self.assertEqual(namespace["RELEASE_VARIANT"], "optional_reviewer")
+            with contextlib.redirect_stdout(io.StringIO()):
+                exec(workflow.PREPARATION, namespace)
+            manifests = namespace["VARIANT_MANIFESTS"]
+            candidate = namespace["VARIANT_DIRS"]["optional_reviewer"]
+            for variant, count, helpers in [
+                ("coder_only", 1, []),
+                ("optional_analyzer", 2, ["code_analyzer_agent"]),
+                ("optional_reviewer", 3, ["code_analyzer_agent", "patch_reviewer_agent"]),
+            ]:
+                manifest = manifests[variant]
+                self.assertEqual(manifest["agents"], count)
+                self.assertEqual(manifest["agent_tool_names"], helpers)
+                self.assertEqual(manifest["evaluation"], manifests["optional_reviewer"]["evaluation"])
+                directory = namespace["VARIANT_DIRS"][variant]
+                for name in set(manifest["package_files"]) - {"agent.yaml"}:
+                    self.assertEqual((directory / name).read_bytes(), (candidate / name).read_bytes())
+                self.assertEqual(any("reviewer" in name for name in manifest["package_files"]), count == 3)
+                self.assertEqual(any("analyzer" in name for name in manifest["package_files"]), count >= 2)
+                for name, content in namespace["EMBEDDED_SUBMISSION"].items():
+                    self.assertEqual(content, (BASE / "submission_3" / name).read_text(encoding="utf-8"))
+            with contextlib.redirect_stdout(io.StringIO()):
+                exec(workflow.PACKAGE, namespace)
+            with zipfile.ZipFile(namespace["WORKING_DIR"] / "submission.zip") as archive:
+                self.assertEqual(set(archive.namelist()), set(manifests["optional_reviewer"]["package_files"]))
+                reviewer = namespace["reviewer_loader"].load_yaml(candidate / "sub_agents/patch_reviewer.yaml")
+                self.assertEqual(reviewer["tools"], ["read_file"])
+                self.assertEqual(reviewer["include_contents"], "none")
+            # Existing model, sampling, analyzer and total budget stay byte-identical.
+            for name in ["eval_config.yaml", "configs/sampling.yaml", "sub_agents/code_analyzer.yaml",
+                         "sub_agents/analyzer_resources/instruction.md", "sub_agents/analyzer_resources/sampling.yaml"]:
+                self.assertEqual((BASE / "submission_3" / name).read_bytes(), (BASE / "submission_2" / name).read_bytes())
+
+    def test_reviewer_preflight_rejects_writable_tools_or_missing_reviewer(self):
+        for filename, before, after in [
+            ("sub_agents/patch_reviewer.yaml", "  - read_file\n", "  - read_file\n  - edit_file\n"),
+            ("agent.yaml", "  - agent_tool:\n      config_path: sub_agents/patch_reviewer.yaml\n      skip_summarization: true\n", ""),
+        ]:
+            with self.subTest(filename=filename), tempfile.TemporaryDirectory() as temporary:
+                _, namespace = self.reviewer_namespace(Path(temporary))
+                self.assertIn(before, namespace["EMBEDDED_SUBMISSION"][filename])
+                namespace["EMBEDDED_SUBMISSION"][filename] = namespace["EMBEDDED_SUBMISSION"][filename].replace(before, after)
+                with contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(ValueError, "Reviewer comparison requires|Patch reviewer must"):
+                    exec(workflow.PREPARATION, namespace)
+
     def comparison_namespace(self, root):
         output = root / "comparison.ipynb"
         workflow.generate(

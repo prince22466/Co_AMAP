@@ -7,7 +7,9 @@ Recorded on 2026-10-09 from the user's report:
 | Version | Changes | Kaggle score observations | Task diagnostics |
 |---|---|---|---|
 | Submission 1 | Original main-coder/optional-analyzer candidate, no adapters | 0.10, 0.06 | Not supplied |
-| Submission 2 | Two instruction files revised; configuration unchanged | Not evaluated | Not evaluated |
+| Submission 2 | Two instruction files revised; configuration unchanged | 0.10, reported in submission_records.md on 2026-10-11 | Not supplied |
+
+Update on 2026-10-11: the current [submission records](../submission_records.md) also report the starter at 0.03. Submission 2 matches Submission 1's best reported score; these runs do not establish an improvement or explain the two Submission 1 outcomes. Its earlier unmeasured status is superseded by the reported public score, while task-level diagnostics remain unavailable.
 
 Submission 1's local original archive SHA256 is `242c31b9c1c87f51ba124bd129ed05a2a7002b0f93808ade92e9a930c28fe4aa`. This identifies the preserved local artifact; the two Kaggle executions have not been independently inspected.
 
@@ -38,7 +40,15 @@ Whitespace-delimited prompt word counts: main 768 to 653; analyzer 267 to 195. T
 
 Prompt targets such as short reports and limited helper calls may be ignored. Only the runtime's enforced budgets are hard constraints. Unknown or unsupported trace fields remain null; do not infer a causal improvement from shorter prompts alone.
 
-The comparison uses the starter-compatible subprocess backend by default. Scoring Docker parity, full task coverage, and total inference allowance checks remain necessary before final promotion. There are no new measured performance claims in this record.
+The comparison uses the starter-compatible subprocess backend by default. Scoring Docker parity, full task coverage, and total inference allowance checks remain necessary before final promotion. There are no new local GPU benchmark results in this record.
+
+## Submission 3: reviewer experiment
+
+Prepared on 2026-10-11. [Submission 3](submission_3/README.md) preserves Submission 2's model, sampling, analyzer and total budget, and adds an optional patch reviewer with only `read_file` access. The coder supplies the issue, acceptance conditions, diff and observed verification results, retains all edits/tests/submission, and skips review unless resources remain for repairs. Review thresholds and response/read limits are prompt targets rather than enforced helper quotas.
+
+`evaluate_submission_3.ipynb` compares coder-only, coder plus analyzer, and coder plus analyzer plus reviewer on the same tasks under the same Submission 3 coder prompt. The two-agent control is derived from Submission 3, not the original Submission 2 prompt. This isolates helper availability; it does not isolate prompt changes between releases. Reports distinguish analyzer and reviewer delegation when supported traces exist; missing reviewer usage remains unknown. Inspect findings and resulting repairs to assess benefit instead of treating invocation as success.
+
+Submission 3 has no GPU benchmark or reported public score. Start with the two-task smoke test, then fixed tasks spanning repositories, repeated runs and a separate validation set. Local configuration, archive and workflow tests do not establish coding-task performance.
 
 ## Design references
 

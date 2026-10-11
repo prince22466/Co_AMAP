@@ -390,13 +390,14 @@ def _structured_result(value: Any) -> dict | None:
     return None
 
 
-def trace_metrics(path: Path | None, analyzer_names: set[str]) -> dict:
+def trace_metrics(path: Path | None, analyzer_names: set[str], reviewer_names: set[str] | None = None) -> dict:
+    reviewer_names = reviewer_names or set()
     result = {
         "trace_present": path is not None, "trace_valid": None,
         "trace_schema_supported": None, "tool_calls_by_name": None,
         "test_command_calls_observed": None,
         "model_requests": None, "traced_tool_calls": None, "known_budgeted_tool_calls": None,
-        "analyzer_calls": None, "tool_errors": None, "first_successful_edit_trace_seconds": None,
+        "analyzer_calls": None, "reviewer_calls": None, "tool_errors": None, "first_successful_edit_trace_seconds": None,
         "input_tokens_sum_observed": None, "output_tokens_sum_observed": None,
         "max_request_input_tokens": None, "requests_with_input_tokens": None,
         "trace_cumulative_token_metrics": None, "trace_warnings": [],
@@ -494,7 +495,7 @@ def trace_metrics(path: Path | None, analyzer_names: set[str]) -> dict:
         return result
     result["trace_schema_supported"] = True
     frequency = dict(sorted(Counter(call["name"] for call in calls).items()))
-    unknown_names = set(frequency) - CORE_TOOLS - SKILL_TOOLS - analyzer_names
+    unknown_names = set(frequency) - CORE_TOOLS - SKILL_TOOLS - analyzer_names - reviewer_names
     if unknown_names:
         result["trace_warnings"].append("Unclassified tool names (may be other AgentTools): " + ", ".join(sorted(unknown_names)))
     if malformed_calls:
@@ -505,6 +506,7 @@ def trace_metrics(path: Path | None, analyzer_names: set[str]) -> dict:
         "test_command_calls_observed": sum(call["name"] == "run_command" and isinstance(call["command"], str) and bool(re.search(r"\b(?:pytest|unittest|nosetests|tox)\b", call["command"])) for call in calls),
         "known_budgeted_tool_calls": sum(c["name"] in ((CORE_TOOLS - FREE_TOOLS) | SKILL_TOOLS) for c in calls),
         "analyzer_calls": sum(c["name"] in analyzer_names for c in calls),
+        "reviewer_calls": sum(c["name"] in reviewer_names for c in calls),
         "requests_with_input_tokens": len(inputs),
         "input_tokens_sum_observed": sum(inputs) if inputs else None,
         "output_tokens_sum_observed": sum(outputs) if outputs else None,
@@ -647,8 +649,10 @@ def make_report(results_dir: str | Path, output_dir: str | Path, submission_dir:
             warnings.append(f"task_results.jsonl line {line_number}: {exc}")
     configuration = validate_submission(submission_dir) if submission_dir else None
     analyzer_names = {"code_analyzer_agent"}
+    reviewer_names = {"patch_reviewer_agent"}
     if configuration:
         analyzer_names |= {name for name in configuration["agent_tool_names"] if "analy" in name.lower()}
+        reviewer_names |= {name for name in configuration["agent_tool_names"] if "review" in name.lower()}
     tasks = []
     for identifier, original in records.items():
         row = dict(original)
@@ -673,7 +677,7 @@ def make_report(results_dir: str | Path, output_dir: str | Path, submission_dir:
         agent_log = "\n".join(path.read_text(encoding="utf-8", errors="replace") for path in agent_paths)
         test_log = test_path.read_text(encoding="utf-8", errors="replace") if test_path else ""
         category, stop, evidence = classify(row, patch_present, agent_log, test_log)
-        observed = trace_metrics(trace_path, analyzer_names)
+        observed = trace_metrics(trace_path, analyzer_names, reviewer_names)
         tasks.append({
             "instance_id": identifier, "repo": row.get("repo"), "resolved": _truth(row.get("resolved")),
             "test_exit_code": _number(_pick(row, "test_exit_code", "verification_exit_code")),
@@ -727,6 +731,7 @@ def make_report(results_dir: str | Path, output_dir: str | Path, submission_dir:
             "first_successful_edit_trace_seconds is relative to the trace clock, not necessarily the agent-session clock.",
             "known_budgeted_tool_calls counts recognized chargeable built-ins/skill tools; get_status and submit_patch are free.",
             "Analyzer calls are identified by known configured analyzer names; delegation does not imply a separate model.",
+            "Reviewer calls are identified by known configured reviewer names; a call count does not establish review benefit or successful repair.",
             "Tool frequencies cover parsed trace calls; test_command_calls_observed recognizes named pytest/unittest/nosetests/tox commands only.",
             "Stop causes require explicit recorded error/exhaustion evidence, not duration or budget comparisons.",
         ],
@@ -737,7 +742,7 @@ def make_report(results_dir: str | Path, output_dir: str | Path, submission_dir:
     fields = [
         "instance_id", "repo", "resolved", "failure_category", "stop_cause", "verification_status", "test_exit_code",
         "patch_present", "patch_chars", "patch_bytes", "duration_seconds", "agent_elapsed_seconds", "observer_wall_seconds",
-        "tool_calls", "model_requests", "traced_tool_calls", "known_budgeted_tool_calls", "analyzer_calls",
+        "tool_calls", "model_requests", "traced_tool_calls", "known_budgeted_tool_calls", "analyzer_calls", "reviewer_calls",
         "first_successful_edit_trace_seconds", "max_request_input_tokens", "input_tokens_sum_observed",
         "output_tokens_sum_observed", "requests_with_input_tokens", "trace_present", "trace_valid",
         "trace_schema_supported", "test_command_calls_observed",

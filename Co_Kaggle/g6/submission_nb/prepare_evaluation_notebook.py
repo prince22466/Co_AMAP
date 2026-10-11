@@ -3,6 +3,8 @@
 Run: python submission_nb/prepare_evaluation_notebook.py
 Prompt comparison: add --submission-dir submission_nb/submission_2
 --baseline-dir submission_nb/submission_1 --output submission_nb/evaluate_submission_2.ipynb
+Reviewer comparison: --submission-dir submission_nb/submission_3 --reviewer-control
+--output submission_nb/evaluate_submission_3.ipynb
 The embedded candidate contains text configuration only. Future trained weights
 should be supplied through the notebook's SUBMISSION_SOURCE_DIR setting.
 """
@@ -26,8 +28,8 @@ import nbformat
 import yaml
 
 
-def remove_agent_tools(text):
-    """Remove delegation from tools while preserving !include YAML nodes."""
+def remove_agent_tools(text, config_paths=None):
+    """Remove all or selected AgentTools while preserving !include YAML nodes."""
     node = yaml.compose(text)
     if not isinstance(node, yaml.MappingNode):
         raise ValueError("agent.yaml must be a mapping")
@@ -41,12 +43,17 @@ def remove_agent_tools(text):
                 is_delegate = isinstance(item, yaml.MappingNode) and any(
                     k.value == "agent_tool" for k, _ in item.value
                 )
-                removed += int(is_delegate)
-                if not is_delegate:
+                should_remove = is_delegate
+                if is_delegate and config_paths is not None:
+                    spec = next(v for k, v in item.value if k.value == "agent_tool")
+                    path = next((v.value for k, v in spec.value if k.value == "config_path"), None)
+                    should_remove = path in config_paths
+                removed += int(should_remove)
+                if not should_remove:
                     keep.append(item)
             value.value = keep
     if not removed:
-        raise ValueError("Candidate has no agent_tool to remove for coder_only")
+        raise ValueError("Candidate has no matching agent_tool to remove")
     return yaml.serialize(node)
 
 
@@ -168,7 +175,9 @@ if SANDBOX not in {'subprocess', 'docker'}:
     raise ValueError('SANDBOX must be subprocess or docker')
 if not BENCHMARK_VARIANTS or len(set(BENCHMARK_VARIANTS)) != len(BENCHMARK_VARIANTS):
     raise ValueError('Choose unique benchmark variants')
-allowed_variants = {'baseline', 'candidate'} if COMPARISON_MODE == 'prompt_comparison' else {'coder_only', 'optional_analyzer'}
+allowed_variants = ({'baseline', 'candidate'} if COMPARISON_MODE == 'prompt_comparison'
+                    else {'coder_only', 'optional_analyzer', 'optional_reviewer'} if COMPARISON_MODE == 'reviewer_control'
+                    else {'coder_only', 'optional_analyzer'})
 if set(BENCHMARK_VARIANTS) - allowed_variants:
     raise ValueError('Unknown benchmark variant')
 if RELEASE_VARIANT not in BENCHMARK_VARIANTS:
@@ -189,7 +198,9 @@ def tool_cli(*args):
         raise RuntimeError(process.stderr or process.stdout)
     return json.loads(process.stdout)
 
-candidate_variant = 'candidate' if COMPARISON_MODE == 'prompt_comparison' else 'optional_analyzer'
+candidate_variant = ('candidate' if COMPARISON_MODE == 'prompt_comparison'
+                     else 'optional_reviewer' if COMPARISON_MODE == 'reviewer_control'
+                     else 'optional_analyzer')
 candidate_dir = RUN_DIR / 'variants' / candidate_variant
 candidate_zip = RUN_DIR / 'candidate_source.zip'
 if SUBMISSION_SOURCE_DIR is not None:
@@ -214,13 +225,28 @@ if COMPARISON_MODE == 'prompt_comparison':
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding='utf-8')
     VARIANT_DIRS['baseline'] = baseline_dir
-elif 'coder_only' in BENCHMARK_VARIANTS:
-    control_source = RUN_DIR / 'control_source'
+controls = {} if COMPARISON_MODE == 'prompt_comparison' else {'coder_only': None}
+if COMPARISON_MODE == 'reviewer_control':
+    controls['optional_analyzer'] = {'sub_agents/patch_reviewer.yaml'}
+    candidate_manifest = tool_cli('validate', '--submission-dir', candidate_dir)
+    if candidate_manifest['agents'] != 3 or set(candidate_manifest['agent_tool_names']) != {'code_analyzer_agent', 'patch_reviewer_agent'}:
+        raise ValueError('Reviewer comparison requires the coder, analyzer and patch reviewer')
+    spec = importlib.util.spec_from_file_location('notebook_reviewer_tools', TOOL_SCRIPT)
+    reviewer_curator = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(reviewer_curator)
+    reviewer_loader = reviewer_curator.SubmissionValidator(candidate_dir)
+    reviewer_config = reviewer_loader.load_yaml(candidate_dir / 'sub_agents/patch_reviewer.yaml')
+    if reviewer_config.get('tools') != ['read_file'] or reviewer_config.get('include_contents') != 'none':
+        raise ValueError('Patch reviewer must have only read_file and no full history')
+for control_variant, removed_paths in controls.items():
+    if control_variant not in BENCHMARK_VARIANTS:
+        continue
+    control_source = RUN_DIR / (control_variant + '_control_source')
     shutil.copytree(candidate_dir, control_source)
     control_yaml = control_source / 'agent.yaml'
-    control_yaml.write_text(remove_agent_tools(control_yaml.read_text(encoding='utf-8')), encoding='utf-8')
+    control_yaml.write_text(remove_agent_tools(control_yaml.read_text(encoding='utf-8'), removed_paths), encoding='utf-8')
     # Resolve the changed config before validation to stage only reachable files.
-    # This retains coder adapters and excludes analyzer-only adapter directories.
+    # This retains coder adapters and excludes detached helper-only assets.
     import importlib.util
     spec = importlib.util.spec_from_file_location('notebook_submission_tools', TOOL_SCRIPT)
     curator = importlib.util.module_from_spec(spec)
@@ -230,17 +256,17 @@ elif 'coder_only' in BENCHMARK_VARIANTS:
     control_eval = control_source / 'eval_config.yaml'
     if control_eval.is_file():
         closure.load_yaml(control_eval)
-    control_stage = RUN_DIR / 'control_curated'
+    control_stage = RUN_DIR / (control_variant + '_control_curated')
     control_stage.mkdir()
     for file in sorted(closure.files):
         target = control_stage / file.relative_to(closure.root)
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(file, target)
-    control_zip = RUN_DIR / 'coder_only_source.zip'
+    control_zip = RUN_DIR / (control_variant + '_source.zip')
     tool_cli('build', '--submission-dir', control_stage, '--output', control_zip)
-    control_dir = RUN_DIR / 'variants' / 'coder_only'
+    control_dir = RUN_DIR / 'variants' / control_variant
     extract_curated(control_zip, control_dir)
-    VARIANT_DIRS['coder_only'] = control_dir
+    VARIANT_DIRS[control_variant] = control_dir
 
 VARIANT_MANIFESTS = {name: tool_cli('validate', '--submission-dir', VARIANT_DIRS[name])
                      for name in BENCHMARK_VARIANTS}
@@ -525,10 +551,12 @@ def embed_submission(submission_dir: Path, tool_path: Path):
 
 
 def generate(submission_dir: Path, tool_path: Path, starter_path: Path, output: Path,
-             baseline_dir: Path | None = None):
-    """Generate a control comparison, or a two-agent prompt comparison with baseline."""
+             baseline_dir: Path | None = None, reviewer_control: bool = False):
+    """Generate coder/helper controls or a two-agent prompt comparison with baseline."""
     submission_dir = Path(submission_dir)
     baseline_dir = Path(baseline_dir) if baseline_dir is not None else None
+    if reviewer_control and baseline_dir is not None:
+        raise ValueError('Choose reviewer controls or a two-agent prompt baseline, not both')
     tool_source = tool_path.read_text(encoding="utf-8")
     embedded = embed_submission(submission_dir, tool_path)
     baseline = embed_submission(baseline_dir, tool_path) if baseline_dir is not None else {}
@@ -536,10 +564,15 @@ def generate(submission_dir: Path, tool_path: Path, starter_path: Path, output: 
     hashes["notebook_tools/submission_tools.py"] = hashlib.sha256(tool_source.encode("utf-8")).hexdigest()
     baseline_hashes = {name: hashlib.sha256(content.encode("utf-8")).hexdigest()
                        for name, content in baseline.items()}
-    comparison_mode = "prompt_comparison" if baseline_dir is not None else "architecture_control"
+    comparison_mode = "prompt_comparison" if baseline_dir is not None else "reviewer_control" if reviewer_control else "architecture_control"
     candidate_label = submission_dir.name
     baseline_label = baseline_dir.name if baseline_dir is not None else None
     config_source = CONFIG
+    if reviewer_control:
+        config_source = config_source.replace(
+            "BENCHMARK_VARIANTS = ['coder_only', 'optional_analyzer']",
+            "BENCHMARK_VARIANTS = ['coder_only', 'optional_analyzer', 'optional_reviewer']",
+        ).replace("RELEASE_VARIANT = 'optional_analyzer'", "RELEASE_VARIANT = 'optional_reviewer'")
     if baseline_dir is not None:
         config_source = config_source.replace(
             "BENCHMARK_VARIANTS = ['coder_only', 'optional_analyzer']",
@@ -578,6 +611,23 @@ def generate(submission_dir: Path, tool_path: Path, starter_path: Path, output: 
             "resolved YAML topology, sampling and budgets. Only instruction text may differ. "
             "Tooling stays outside both submission directories."
         )
+    elif reviewer_control:
+        comparison_description = (
+            f"Compare `{candidate_label}` with coder-only and coder-plus-analyzer controls "
+            "on identical public tasks, coder prompts, shared sampling and total budgets. "
+            "The three-agent candidate adds one optional read-only patch reviewer. "
+            "Controls remove helper connections and their unreachable resources; "
+            "this isolates helper availability under the same coder instructions, "
+            "not the prompt difference between Submission 2 and Submission 3."
+        )
+        preparation_description = (
+            "## 3. Materialize three architecture variants\n\n"
+            "`coder_only` removes both helper tools. `optional_analyzer` removes only "
+            "the reviewer. `optional_reviewer` retains all three agents and is the "
+            "default release. All variants share the coder prompt and total budget; "
+            "helper calls are optional. The reviewer has only `read_file` access. "
+            "Detached helper resources and local tooling stay outside each package."
+        )
     else:
         comparison_description = (
             f"Compare `{candidate_label}` with a coder-only control on identical public tasks "
@@ -604,7 +654,7 @@ def generate(submission_dir: Path, tool_path: Path, starter_path: Path, output: 
         code(PREFLIGHT),
         md("## 5. Start the required Gemma model locally\n\nUses the starter vLLM API, scoring context length 32,768, GPU memory fraction 0.80, and LoRA only when a manifest exists. `EMPTY` is a local routing placeholder. No external API is called."),
         code(SERVER),
-        md("## 6. Generate patches, verify and report\n\nBoth variants get the same tasks and budgets. Subprocess isolation matches the starter; Docker is the closer scoring environment when available. Variants run in the configured order, so repeat/reverse the order when checking timing.\n\nThe notebook writes `notebook_task_results.jsonl` and leaves harness `task_results.jsonl`, traces and logs intact. Each variant receives JSON, CSV and Markdown diagnostics. Absent agent time, request usage or context metrics stay unknown; total task duration is not agent-loop time."),
+        md("## 6. Generate patches, verify and report\n\nAll variants get the same tasks and budgets. Subprocess isolation matches the starter; Docker is the closer scoring environment when available. Variants run in the configured order, so repeat/reverse the order when checking timing.\n\nThe notebook writes `notebook_task_results.jsonl` and leaves harness `task_results.jsonl`, traces and logs intact. Each variant receives JSON, CSV and Markdown diagnostics. Absent agent time, request usage or context metrics stay unknown; total task duration is not agent-loop time."),
         code(EVALUATION),
         md("## 7. Build the chosen release\n\nInspect reports first. `RELEASE_VARIANT` chooses which evaluated directory becomes `/kaggle/working/submission.zip`. The ZIP contains only active agent assets. Packaging is not proof of task success."),
         code(PACKAGE),
@@ -635,11 +685,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--submission-dir", type=Path, default=base / "submission_1")
     parser.add_argument("--baseline-dir", type=Path, help="Embed a second two-agent baseline for prompt comparison")
+    parser.add_argument("--reviewer-control", action="store_true", help="Compare coder-only, analyzer and three-agent reviewer variants")
     parser.add_argument("--output", type=Path, default=base / "evaluate_submission_1.ipynb")
     args = parser.parse_args()
     hashes = generate(args.submission_dir, base / "tools" / "submission_tools.py",
                       base.parent / "competition_material" / "getting-started-gemma-4-developer-agent.ipynb", args.output,
-                      baseline_dir=args.baseline_dir)
+                      baseline_dir=args.baseline_dir, reviewer_control=args.reviewer_control)
     print(json.dumps({"notebook": str(args.output), "embedded_file_sha256": hashes}, indent=2))
 
 

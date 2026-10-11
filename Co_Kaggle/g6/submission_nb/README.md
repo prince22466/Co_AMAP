@@ -1,8 +1,8 @@
 # Agent development workflow
 
-`submission_1/` preserves the first main-coder/optional-analyzer configuration. `submission_2/` revises only its two instruction files, retaining the same two-agent configuration and budgets. Local validation, packaging, and diagnostics are in `tools/`; the companion notebooks run the competition evaluator. Reports and notebooks stay outside the packaged agent.
+`submission_1/` preserves the first main-coder/optional-analyzer configuration. `submission_2/` revises only its two instruction files, retaining the same two-agent configuration and budgets. `submission_3/` adds an optional read-only patch reviewer while retaining the same model, sampling and total budget. Local validation, packaging, and diagnostics are in `tools/`; the companion notebooks run the competition evaluator. Reports and notebooks stay outside the packaged agent.
 
-The user reported Submission 1 scores of 0.10 and 0.06, without task-level logs. Submission 2 is an unmeasured follow-up. See [its changes](submission_2/README.md) and [the experiment record](prompt_experiments.md).
+The user reported Submission 1 scores of 0.10 and 0.06, and Submission 2 at 0.10, without task-level logs. Submission 3 is an unmeasured follow-up. See [the three-agent candidate](submission_3/README.md), [Submission 2's changes](submission_2/README.md), [the submission records](../submission_records.md) and [the experiment record](prompt_experiments.md).
 
 ## Local commands
 
@@ -14,6 +14,8 @@ python submission_nb\tools\submission_tools.py build --submission-dir submission
 python submission_nb\prepare_evaluation_notebook.py
 python submission_nb\tools\submission_tools.py build --submission-dir submission_nb\submission_2 --output submission_nb\artifacts\submission_2.zip
 python submission_nb\prepare_evaluation_notebook.py --submission-dir submission_nb\submission_2 --baseline-dir submission_nb\submission_1 --output submission_nb\evaluate_submission_2.ipynb
+python submission_nb\tools\submission_tools.py build --submission-dir submission_nb\submission_3 --output submission_nb\artifacts\submission_3.zip
+python submission_nb\prepare_evaluation_notebook.py --submission-dir submission_nb\submission_3 --reviewer-control --output submission_nb\evaluate_submission_3.ipynb
 python -m unittest discover -s submission_nb\tools -p "test_*.py"
 python -m unittest discover -s submission_nb -p "test_evaluation_workflow.py"
 ```
@@ -24,7 +26,9 @@ Regenerate the corresponding notebook after changing the submission or local too
 
 ## Run the comparison
 
-Upload/open a companion notebook in a Kaggle environment with the competition data, required Gemma model, wheelhouse, and adequate GPU memory. Inspect the parameter cell before running it. `evaluate_submission_2.ipynb` compares Submission 1 (`baseline`) with Submission 2 (`candidate`); both retain the two-agent configuration and identical runtime settings. This is the prompt comparison to run next.
+Upload/open a companion notebook in a Kaggle environment with the competition data, required Gemma model, wheelhouse, and adequate GPU memory. Inspect the parameter cell before running it. `evaluate_submission_3.ipynb` compares `coder_only`, `optional_analyzer` and `optional_reviewer` under the same Submission 3 coder prompt, model, sampling and total budget. The full three-agent variant is the default release. The two-agent control removes only the reviewer; it differs from the original Submission 2 coder prompt. Review is optional and cannot edit or execute commands.
+
+`evaluate_submission_2.ipynb` remains the prompt comparison between Submission 1 (`baseline`) and Submission 2 (`candidate`); both retain the two-agent configuration and identical runtime settings.
 
 The original `evaluate_submission_1.ipynb` remains available for its architecture comparison:
 
@@ -58,6 +62,7 @@ The report writes Markdown, JSON, and CSV. Preserve the original run manifest an
 | Patch/application/test failure | Read the exact diff and verification output; improve implementation or targeted tests. |
 | Context-length error | Inspect per-request input/output usage and compaction evidence; reduce large reads and outputs. |
 | Many analyzer calls with no improvement | Compare against `coder_only`, restrict delegation, or revise the helper's instructions. |
+| Reviewer overhead or unhelpful findings | Compare `optional_reviewer` against `optional_analyzer`; inspect findings and repairs rather than inferring benefit from call counts. |
 | Missing trace | Preserve logs and result fields; enable the runtime's trace export before claiming detailed stage timings. |
 
 Resolution rate uses the reported verification outcome. Missing outcomes remain unknown. Task duration can include setup and verification, whereas the agent timer excludes setup. Model-request counts do not establish the harness's enforced turn count. Aggregate run tokens do not measure context size; context pressure needs per-request usage. `get_status` and `submit_patch` are exempt from counted tool calls, while helper delegation is shown separately when identifiable.
