@@ -13,7 +13,7 @@ from pathlib import Path
 import yaml
 
 from submission_tools import (
-    CORE_TOOLS, MODEL, ValidationError, build_submission, main, make_report,
+    ALLOWED_MODELS, CORE_TOOLS, MODEL, ValidationError, build_submission, main, make_report,
     trace_metrics, validate_submission,
 )
 
@@ -100,6 +100,36 @@ class SubmissionTests(unittest.TestCase):
     def test_stray_standalone_other_model_is_rejected_before_runtime(self):
         (self.root / "unused_agent.yaml").write_text("name: unused\nmodel: other\n", encoding="utf-8")
         with self.assertRaisesRegex(ValidationError, "Standalone agent"):
+            validate_submission(self.root)
+
+    def test_all_allowed_variants_can_be_shared_by_coder_and_helper(self):
+        (self.root / "sub_agents").mkdir()
+        for model in sorted(ALLOWED_MODELS):
+            with self.subTest(model=model):
+                (self.root / "sub_agents" / "helper.yaml").write_text(
+                    f"name: helper\nmodel: {model}\ninstruction: Inspect code.\ntools: [read_file]\n", encoding="utf-8")
+                self.write_agent(model=model, tools=["read_file", {"agent_tool": {"config_path": "sub_agents/helper.yaml"}}])
+                manifest = validate_submission(self.root)
+                self.assertEqual(manifest["model"], model)
+                self.assertEqual(manifest["agents"], 2)
+
+    def test_mixing_allowed_variants_is_rejected_even_for_unreferenced_agents(self):
+        smallest = "gemma-4-e2b-it-qat-w4a16-ct"
+        (self.root / "sub_agents").mkdir()
+        (self.root / "sub_agents" / "helper.yaml").write_text(
+            f"name: helper\nmodel: {smallest}\ninstruction: Inspect code.\ntools: [read_file]\n", encoding="utf-8")
+        for tools in [["read_file"], ["read_file", {"agent_tool": {"config_path": "sub_agents/helper.yaml"}}]]:
+            with self.subTest(tools=tools):
+                self.write_agent(tools=tools)
+                with self.assertRaisesRegex(ValidationError, "same model variant"):
+                    validate_submission(self.root)
+
+    def test_inline_helper_cannot_mix_an_allowed_variant(self):
+        self.write_agent(tools=[{
+            "name": "inline_helper", "model": "gemma-4-e2b-it-qat-w4a16-ct",
+            "instruction": "Inspect code.", "tools": ["read_file"],
+        }])
+        with self.assertRaisesRegex(ValidationError, "same model variant"):
             validate_submission(self.root)
 
     def test_stale_adapter_assets_rejected_and_referenced_adapter_included(self):
@@ -248,6 +278,31 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertEqual(task["known_budgeted_tool_calls"], 1)
         self.assertFalse(any("Unclassified tool names" in warning for warning in task["trace_warnings"]))
         self.assertIn("reviewer_calls", (self.output / "diagnostics.csv").read_text(encoding="utf-8").splitlines()[0])
+
+    def test_locator_and_verifier_delegation_counts_use_trace_evidence(self):
+        self.write_results([{"instance_id": "helpers", "resolved": False}, {"instance_id": "missing", "resolved": None}])
+        trace = {"steps": [{"source": "agent", "tool_calls": [
+            {"id": "l", "name": "repository_locator_agent"},
+            {"id": "v", "name": "test_verifier_agent"},
+            {"id": "r", "name": "run_command", "arguments": {"command": "pytest -q tests/test_case.py"}},
+        ]}]}
+        (self.root / "traces" / "trace_helpers.json").write_text(json.dumps(trace), encoding="utf-8")
+        candidate = Path(__file__).resolve().parents[1] / "submission_4"
+        report = make_report(self.root, self.output, candidate)
+        tasks = {task["instance_id"]: task for task in report["tasks"]}
+        task = tasks["helpers"]
+        self.assertEqual(task["locator_calls"], 1)
+        self.assertEqual(task["verifier_calls"], 1)
+        self.assertEqual(task["helper_calls_by_name"]["repository_locator_agent"], 1)
+        self.assertEqual(task["helper_calls_by_name"]["test_verifier_agent"], 1)
+        self.assertEqual(task["analyzer_calls"], 0)
+        self.assertEqual(task["reviewer_calls"], 0)
+        self.assertEqual(task["known_budgeted_tool_calls"], 1)
+        self.assertEqual(task["test_command_calls_observed"], 1)
+        self.assertFalse(any("Unclassified tool names" in warning for warning in task["trace_warnings"]))
+        for field in ["locator_calls", "verifier_calls", "helper_calls_by_name"]:
+            self.assertIsNone(tasks["missing"][field])
+        self.assertIn("verifier_calls", (self.output / "diagnostics.csv").read_text(encoding="utf-8").splitlines()[0])
 
     def test_failure_of_edit_not_success_and_missing_time_not_invented(self):
         path = self.root / "traces" / "trace_edit.json"
