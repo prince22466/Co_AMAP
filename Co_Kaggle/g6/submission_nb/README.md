@@ -1,8 +1,8 @@
 # Agent development workflow
 
-`submission_1/` preserves the first main-coder/optional-analyzer configuration. `submission_2/` revises only its two instruction files, retaining the same two-agent configuration and budgets. `submission_3/` adds an optional read-only patch reviewer while retaining the same model, sampling and total budget. Local validation, packaging, and diagnostics are in `tools/`; the companion notebooks run the competition evaluator. Reports and notebooks stay outside the packaged agent.
+`submission_1/` preserves the first main-coder/optional-analyzer configuration. `submission_2/` revises only its two instruction files. `submission_3/` adds an optional read-only patch reviewer. `submission_4/` uses a coder, repository locator and test verifier. `submission_5/` changes Submission 4's timeout and thinking settings. `submission_6/` copies Submission 2 and changes only both agents' model declarations to the newly allowed `gemma-4-e2b-it-qat-w4a16-ct`. Local validation, packaging, and diagnostics are in `tools/`; the companion notebooks run the competition evaluator. Reports and notebooks stay outside the packaged agent.
 
-The user reported Submission 1 scores of 0.10 and 0.06, and Submission 2 at 0.10, without task-level logs. Submission 3 is an unmeasured follow-up. See [the three-agent candidate](submission_3/README.md), [Submission 2's changes](submission_2/README.md), [the submission records](../submission_records.md) and [the experiment record](prompt_experiments.md).
+The submission records report Submission 1 at 0.10 and 0.06, Submission 2 at 0.10, and Submissions 3, 4 and 5 at 0.0. Submission 6 is unmeasured. See [the E2B candidate](submission_6/README.md), [the organizer model update](../competition_material/Update_new_models.md), [the submission records](../submission_records.md) and [the experiment record](prompt_experiments.md). Earlier unmeasured statements in historical candidate notes are superseded by these reported scores.
 
 ## Local commands
 
@@ -16,17 +16,29 @@ python submission_nb\tools\submission_tools.py build --submission-dir submission
 python submission_nb\prepare_evaluation_notebook.py --submission-dir submission_nb\submission_2 --baseline-dir submission_nb\submission_1 --output submission_nb\evaluate_submission_2.ipynb
 python submission_nb\tools\submission_tools.py build --submission-dir submission_nb\submission_3 --output submission_nb\artifacts\submission_3.zip
 python submission_nb\prepare_evaluation_notebook.py --submission-dir submission_nb\submission_3 --reviewer-control --output submission_nb\evaluate_submission_3.ipynb
+python submission_nb\tools\submission_tools.py build --submission-dir submission_nb\submission_4 --output submission_nb\artifacts\submission_4.zip
+python submission_nb\prepare_evaluation_notebook.py --submission-dir submission_nb\submission_4 --verification-control --output submission_nb\evaluate_submission_4.ipynb
+python submission_nb\tools\submission_tools.py build --submission-dir submission_nb\submission_5 --output submission_nb\artifacts\submission_5.zip
+python submission_nb\prepare_evaluation_notebook.py --submission-dir submission_nb\submission_5 --runtime-baseline-dir submission_nb\submission_4 --output submission_nb\evaluate_submission_5.ipynb
+python submission_nb\tools\submission_tools.py build --submission-dir submission_nb\submission_6 --output submission_nb\artifacts\submission_6.zip
+python submission_nb\prepare_evaluation_notebook.py --submission-dir submission_nb\submission_6 --output submission_nb\evaluate_submission_6.ipynb
 python -m unittest discover -s submission_nb\tools -p "test_*.py"
 python -m unittest discover -s submission_nb -p "test_evaluation_workflow.py"
 ```
 
-The tools use Python and PyYAML; notebook generation and workflow tests also need `nbformat`. `build` resolves `agent.yaml`, the optional `eval_config.yaml`, recursive includes, configured helpers, and referenced skills/adapters. Only those dependencies enter the ZIP, with `agent.yaml` at its root. This excludes this documentation, notebooks, diagnostics, and preserved reference weights. Local validation checks the documented supported configuration; the installed competition compiler remains authoritative.
+The tools use Python and PyYAML; notebook generation and workflow tests also need `nbformat`. `build` resolves `agent.yaml`, the optional `eval_config.yaml`, recursive includes, configured helpers, and referenced skills/adapters. Only those dependencies enter the ZIP, with `agent.yaml` at its root. The validator permits the organizer-listed 31B, 12B, E4B and E2B quantized variants, and requires one variant throughout each submission. Local validation checks the documented supported configuration; the installed competition compiler remains authoritative.
 
 Regenerate the corresponding notebook after changing the submission or local tools. Its embedded files are a snapshot at generation time. Architecture mode can also use a mounted candidate directory for future submissions containing binary adapters; prompt-comparison mode fixes the unchanged model and rejects adapter experiments so they do not confound the prompt test.
 
 ## Run the comparison
 
-Upload/open a companion notebook in a Kaggle environment with the competition data, required Gemma model, wheelhouse, and adequate GPU memory. Inspect the parameter cell before running it. `evaluate_submission_3.ipynb` compares `coder_only`, `optional_analyzer` and `optional_reviewer` under the same Submission 3 coder prompt, model, sampling and total budget. The full three-agent variant is the default release. The two-agent control removes only the reviewer; it differs from the original Submission 2 coder prompt. Review is optional and cannot edit or execute commands.
+Upload/open a companion notebook in a Kaggle environment with the competition data, selected Gemma model, wheelhouse, and adequate GPU memory. Inspect the parameter cell before running it. `evaluate_submission_6.ipynb` compares E2B coder-only and E2B coder-plus-analyzer variants; the full two-agent candidate is its default release. It uses the supplied updated starter's installation cell and selects E2B weights. To compare against Submission 2's 31B model, run separate model sessions using the same explicit `TASK_IDS`; each notebook run serves one variant of Gemma.
+
+`evaluate_submission_5.ipynb` compares Submission 4, timeout-only and thinking-off-only controls, and Submission 5. All retain the same three agents, prompts and four-minute allowance; only timeout and thinking differ. Effective behavior needs confirmation in the installed runtime.
+
+`evaluate_submission_4.ipynb` remains the helper comparison between `coder_only`, `optional_locator`, `optional_verifier` and `locator_verifier` under Submission 4's settings. Helpers search or execute focused checks; only the coder has editing and submission tools. Shell restrictions are prompt instructions.
+
+`evaluate_submission_3.ipynb` compares `coder_only`, `optional_analyzer` and `optional_reviewer` under the same Submission 3 coder prompt, model, sampling and total budget. Its two-agent control removes only the reviewer and differs from the original Submission 2 coder prompt.
 
 `evaluate_submission_2.ipynb` remains the prompt comparison between Submission 1 (`baseline`) and Submission 2 (`candidate`); both retain the two-agent configuration and identical runtime settings.
 
@@ -63,6 +75,8 @@ The report writes Markdown, JSON, and CSV. Preserve the original run manifest an
 | Context-length error | Inspect per-request input/output usage and compaction evidence; reduce large reads and outputs. |
 | Many analyzer calls with no improvement | Compare against `coder_only`, restrict delegation, or revise the helper's instructions. |
 | Reviewer overhead or unhelpful findings | Compare `optional_reviewer` against `optional_analyzer`; inspect findings and repairs rather than inferring benefit from call counts. |
+| Locator/verifier overhead or inconclusive checks | Use Submission 4's four helper combinations; inspect actual shell commands, test outcomes and subsequent coder repairs. |
+| Long reasoning or grading timeout | Use Submission 5's isolated runtime controls; inspect effective thinking settings and the shared command/grading timeout. |
 | Missing trace | Preserve logs and result fields; enable the runtime's trace export before claiming detailed stage timings. |
 
 Resolution rate uses the reported verification outcome. Missing outcomes remain unknown. Task duration can include setup and verification, whereas the agent timer excludes setup. Model-request counts do not establish the harness's enforced turn count. Aggregate run tokens do not measure context size; context pressure needs per-request usage. `get_status` and `submit_patch` are exempt from counted tool calls, while helper delegation is shown separately when identifiable.

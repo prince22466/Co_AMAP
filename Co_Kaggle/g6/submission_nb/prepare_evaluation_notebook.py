@@ -5,6 +5,10 @@ Prompt comparison: add --submission-dir submission_nb/submission_2
 --baseline-dir submission_nb/submission_1 --output submission_nb/evaluate_submission_2.ipynb
 Reviewer comparison: --submission-dir submission_nb/submission_3 --reviewer-control
 --output submission_nb/evaluate_submission_3.ipynb
+Locator/verifier comparison: --submission-dir submission_nb/submission_4 --verification-control
+--output submission_nb/evaluate_submission_4.ipynb
+Runtime comparison: --submission-dir submission_nb/submission_5
+--runtime-baseline-dir submission_nb/submission_4 --output submission_nb/evaluate_submission_5.ipynb
 The embedded candidate contains text configuration only. Future trained weights
 should be supplied through the notebook's SUBMISSION_SOURCE_DIR setting.
 """
@@ -175,9 +179,13 @@ if SANDBOX not in {'subprocess', 'docker'}:
     raise ValueError('SANDBOX must be subprocess or docker')
 if not BENCHMARK_VARIANTS or len(set(BENCHMARK_VARIANTS)) != len(BENCHMARK_VARIANTS):
     raise ValueError('Choose unique benchmark variants')
-allowed_variants = ({'baseline', 'candidate'} if COMPARISON_MODE == 'prompt_comparison'
-                    else {'coder_only', 'optional_analyzer', 'optional_reviewer'} if COMPARISON_MODE == 'reviewer_control'
-                    else {'coder_only', 'optional_analyzer'})
+allowed_variants = {
+    'prompt_comparison': {'baseline', 'candidate'},
+    'runtime_comparison': {'baseline', 'timeout_only', 'thinking_off_only', 'candidate'},
+    'reviewer_control': {'coder_only', 'optional_analyzer', 'optional_reviewer'},
+    'verification_control': {'coder_only', 'optional_locator', 'optional_verifier', 'locator_verifier'},
+    'architecture_control': {'coder_only', 'optional_analyzer'},
+}[COMPARISON_MODE]
 if set(BENCHMARK_VARIANTS) - allowed_variants:
     raise ValueError('Unknown benchmark variant')
 if RELEASE_VARIANT not in BENCHMARK_VARIANTS:
@@ -198,9 +206,11 @@ def tool_cli(*args):
         raise RuntimeError(process.stderr or process.stdout)
     return json.loads(process.stdout)
 
-candidate_variant = ('candidate' if COMPARISON_MODE == 'prompt_comparison'
-                     else 'optional_reviewer' if COMPARISON_MODE == 'reviewer_control'
-                     else 'optional_analyzer')
+candidate_variant = {
+    'prompt_comparison': 'candidate', 'reviewer_control': 'optional_reviewer',
+    'runtime_comparison': 'candidate',
+    'verification_control': 'locator_verifier', 'architecture_control': 'optional_analyzer',
+}[COMPARISON_MODE]
 candidate_dir = RUN_DIR / 'variants' / candidate_variant
 candidate_zip = RUN_DIR / 'candidate_source.zip'
 if SUBMISSION_SOURCE_DIR is not None:
@@ -217,7 +227,7 @@ else:
         target.write_text(content, encoding='utf-8')
 
 VARIANT_DIRS = {candidate_variant: candidate_dir}
-if COMPARISON_MODE == 'prompt_comparison':
+if COMPARISON_MODE in {'prompt_comparison', 'runtime_comparison'}:
     baseline_dir = RUN_DIR / 'variants' / 'baseline'
     baseline_dir.mkdir(parents=True, exist_ok=False)
     for name, content in EMBEDDED_BASELINE.items():
@@ -225,7 +235,42 @@ if COMPARISON_MODE == 'prompt_comparison':
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding='utf-8')
     VARIANT_DIRS['baseline'] = baseline_dir
-controls = {} if COMPARISON_MODE == 'prompt_comparison' else {'coder_only': None}
+controls = {} if COMPARISON_MODE in {'prompt_comparison', 'runtime_comparison'} else {'coder_only': None}
+if COMPARISON_MODE == 'runtime_comparison':
+    # Restrict this experiment to two runtime changes, preserving all agent code/text.
+    source_manifests = {name: tool_cli('validate', '--submission-dir', VARIANT_DIRS[name])
+                        for name in ['baseline', 'candidate']}
+    if any(manifest['agents'] != 3 or manifest['adapters'] for manifest in source_manifests.values()):
+        raise ValueError('Runtime comparison requires unchanged-model three-agent submissions')
+    package_files = set(source_manifests['baseline']['package_files'])
+    if package_files != set(source_manifests['candidate']['package_files']):
+        raise ValueError('Runtime comparison requires matching package paths')
+    sampling_files = {name for name in package_files if name.endswith('sampling.yaml')}
+    if len(sampling_files) != 3:
+        raise ValueError('Runtime comparison requires three sampling files')
+    for relative in sorted(package_files):
+        baseline_text = (baseline_dir / relative).read_text(encoding='utf-8')
+        candidate_text = (candidate_dir / relative).read_text(encoding='utf-8')
+        if relative == 'eval_config.yaml':
+            baseline_config, candidate_config = yaml.safe_load(baseline_text), yaml.safe_load(candidate_text)
+            baseline_timeout = baseline_config['evaluation'].pop('timeout_seconds', None)
+            candidate_timeout = candidate_config['evaluation'].pop('timeout_seconds', None)
+            if baseline_timeout != 60 or candidate_timeout != 300 or baseline_config != candidate_config:
+                raise ValueError('Runtime comparison permits only command/grading timeout 60 to 300')
+        elif relative in sampling_files:
+            baseline_config, candidate_config = yaml.safe_load(baseline_text), yaml.safe_load(candidate_text)
+            baseline_thinking = baseline_config.pop('thinking_config', {})
+            candidate_thinking = candidate_config.pop('thinking_config', {})
+            if baseline_thinking.get('include_thoughts') is not True or candidate_thinking != {'include_thoughts': False} or baseline_config != candidate_config:
+                raise ValueError('Runtime comparison permits only disabling thinking with other sampling fixed')
+        elif baseline_text != candidate_text:
+            raise ValueError('Runtime comparison requires identical agent configs, tools and prompts: ' + relative)
+    for name, copied_files in [('timeout_only', {'eval_config.yaml'}), ('thinking_off_only', sampling_files)]:
+        directory = RUN_DIR / 'variants' / name
+        shutil.copytree(baseline_dir, directory)
+        for relative in copied_files:
+            shutil.copy2(candidate_dir / relative, directory / relative)
+        VARIANT_DIRS[name] = directory
 if COMPARISON_MODE == 'reviewer_control':
     controls['optional_analyzer'] = {'sub_agents/patch_reviewer.yaml'}
     candidate_manifest = tool_cli('validate', '--submission-dir', candidate_dir)
@@ -238,6 +283,24 @@ if COMPARISON_MODE == 'reviewer_control':
     reviewer_config = reviewer_loader.load_yaml(candidate_dir / 'sub_agents/patch_reviewer.yaml')
     if reviewer_config.get('tools') != ['read_file'] or reviewer_config.get('include_contents') != 'none':
         raise ValueError('Patch reviewer must have only read_file and no full history')
+if COMPARISON_MODE == 'verification_control':
+    controls['optional_locator'] = {'sub_agents/test_verifier.yaml'}
+    controls['optional_verifier'] = {'sub_agents/repository_locator.yaml'}
+    candidate_manifest = tool_cli('validate', '--submission-dir', candidate_dir)
+    if candidate_manifest['agents'] != 3 or set(candidate_manifest['agent_tool_names']) != {'repository_locator_agent', 'test_verifier_agent'}:
+        raise ValueError('Verification comparison requires the coder, repository locator and test verifier')
+    spec = importlib.util.spec_from_file_location('notebook_verification_tools', TOOL_SCRIPT)
+    verification_curator = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(verification_curator)
+    verification_loader = verification_curator.SubmissionValidator(candidate_dir)
+    coder_config = verification_loader.load_yaml(candidate_dir / 'agent.yaml')
+    expected_coder_tools = {'run_command', 'read_file', 'edit_file', 'write_file', 'get_status', 'submit_patch'}
+    if {tool for tool in coder_config.get('tools', []) if isinstance(tool, str)} != expected_coder_tools:
+        raise ValueError('Verification comparison requires the six direct coder tools')
+    for helper_path in ['sub_agents/repository_locator.yaml', 'sub_agents/test_verifier.yaml']:
+        helper_config = verification_loader.load_yaml(candidate_dir / helper_path)
+        if helper_config.get('tools') != ['run_command', 'read_file'] or helper_config.get('include_contents') != 'none':
+            raise ValueError('Locator/verifier helpers must have only run_command and read_file and no full history')
 for control_variant, removed_paths in controls.items():
     if control_variant not in BENCHMARK_VARIANTS:
         continue
@@ -270,8 +333,12 @@ for control_variant, removed_paths in controls.items():
 
 VARIANT_MANIFESTS = {name: tool_cli('validate', '--submission-dir', VARIANT_DIRS[name])
                      for name in BENCHMARK_VARIANTS}
+if len({manifest['model'] for manifest in VARIANT_MANIFESTS.values()}) != 1:
+    raise ValueError('This notebook serves one model; compare different models in separate runs on the same tasks')
 budgets = [manifest['evaluation'] for manifest in VARIANT_MANIFESTS.values()]
-if any(budget != budgets[0] for budget in budgets):
+comparable_budgets = [{key: value for key, value in budget.items() if key != 'timeout_seconds'}
+                      for budget in budgets] if COMPARISON_MODE == 'runtime_comparison' else budgets
+if any(budget != comparable_budgets[0] for budget in comparable_budgets):
     raise ValueError('Benchmark variants must use identical evaluation budgets')
 if COMPARISON_MODE == 'prompt_comparison':
     # Check both source variants even when BENCHMARK_VARIANTS selects only one.
@@ -308,7 +375,7 @@ if COMPARISON_MODE == 'prompt_comparison':
 print('Run:', RUN_DIR)
 print('Comparison mode:', COMPARISON_MODE)
 print('Variants:', BENCHMARK_VARIANTS)
-print('Budgets:', budgets[0])
+print('Budgets:', {name: manifest['evaluation'] for name, manifest in VARIANT_MANIFESTS.items()})
 print('Sandbox:', SANDBOX, '(Docker scoring parity requires a separate Docker run)' if SANDBOX == 'subprocess' else '')
 '''
 
@@ -340,20 +407,31 @@ SERVER = '''
 import litellm
 import torch
 from adk_submission import VllmConfig, VllmServer, discover_adapters
+from adk_submission.discovery import discover_declared_models
 from swegemma.config import ALLOWED_ADAPTER_EXTENSIONS
-from swegemma.models.discovery import validate_single_declared_model
 
 litellm.drop_params = True
-TARGET_MODEL_NAME = 'gemma-4-31b-it-qat-w4a16-ct'
+TARGET_MODEL_NAME = VARIANT_MANIFESTS[RELEASE_VARIANT]['model']
 INFERENCE_API_KEY = 'EMPTY'  # Local vLLM routing placeholder, no external API.
-declared_model = validate_single_declared_model(candidate_dir)
+declared_models = discover_declared_models(candidate_dir)
+if len(declared_models) != 1:
+    raise ValueError('All agents and subagents must use one model variant')
+declared_model = next(iter(declared_models))
 if declared_model != TARGET_MODEL_NAME:
-    raise ValueError('Use the competition-required Gemma base model')
+    raise ValueError('Declared model must match the validated benchmark model')
 adapters = discover_adapters(str(candidate_dir), adapter_extensions=ALLOWED_ADAPTER_EXTENSIONS)
 gpu_count = torch.cuda.device_count() if torch.cuda.is_available() else 0
 if not gpu_count:
     raise RuntimeError('Enable Kaggle GPU acceleration before starting the model')
 tp_size = 4 if gpu_count >= 4 else (2 if gpu_count >= 2 else 1)
+# New-model startup options follow the supplied updated starter notebook.
+model_server_options = {}
+if TARGET_MODEL_NAME != 'gemma-4-31b-it-qat-w4a16-ct':
+    model_server_options['scheduler_reserve_full_isl'] = False
+if TARGET_MODEL_NAME == 'gemma-4-12b-it-qat-w4a16-ct':
+    model_server_options['extra_args'] = (
+        '--hf-overrides', '{"architectures": ["Gemma4ForCausalLM"], "model_type": "gemma4"}',
+    )
 vllm_cfg = VllmConfig(
     model=str(MODEL_PATH), port=8000, host='127.0.0.1',
     tool_call_parser='gemma4', reasoning_parser='gemma4', max_model_len=32768,
@@ -361,11 +439,12 @@ vllm_cfg = VllmConfig(
     gpu_memory_utilization=0.80, enable_auto_tool_choice=True,
     enable_lora=bool(adapters), max_loras=8, max_lora_rank=128,
     tensor_parallel_size=tp_size, startup_timeout=60 * 20,
+    **model_server_options,
 )
 server_instance = VllmServer(vllm_cfg, adapter_manifest=adapters)
 server_instance.start()
 models = server_instance.create_model_registry(
-    aliases=[declared_model, TARGET_MODEL_NAME], model_prefix='openai/', api_key=INFERENCE_API_KEY,
+    aliases=[declared_model], model_prefix='openai/', api_key=INFERENCE_API_KEY,
 )
 print(f'Local vLLM started: {server_instance.base_url}; tensor parallel size={tp_size}')
 '''
@@ -551,23 +630,41 @@ def embed_submission(submission_dir: Path, tool_path: Path):
 
 
 def generate(submission_dir: Path, tool_path: Path, starter_path: Path, output: Path,
-             baseline_dir: Path | None = None, reviewer_control: bool = False):
+             baseline_dir: Path | None = None, reviewer_control: bool = False,
+             verification_control: bool = False, runtime_baseline_dir: Path | None = None):
     """Generate coder/helper controls or a two-agent prompt comparison with baseline."""
     submission_dir = Path(submission_dir)
     baseline_dir = Path(baseline_dir) if baseline_dir is not None else None
-    if reviewer_control and baseline_dir is not None:
-        raise ValueError('Choose reviewer controls or a two-agent prompt baseline, not both')
+    if sum([baseline_dir is not None, reviewer_control, verification_control, runtime_baseline_dir is not None]) > 1:
+        raise ValueError('Choose one comparison mode: prompt baseline, reviewer, verification or runtime controls')
+    if runtime_baseline_dir is not None:
+        baseline_dir = Path(runtime_baseline_dir)
     tool_source = tool_path.read_text(encoding="utf-8")
     embedded = embed_submission(submission_dir, tool_path)
+    candidate_manifest = json.loads(subprocess.run(
+        [sys.executable, str(tool_path), 'validate', '--submission-dir', str(submission_dir)],
+        check=True, capture_output=True, text=True,
+    ).stdout)
+    target_model = candidate_manifest['model']
     baseline = embed_submission(baseline_dir, tool_path) if baseline_dir is not None else {}
     hashes = {name: hashlib.sha256(content.encode("utf-8")).hexdigest() for name, content in embedded.items()}
     hashes["notebook_tools/submission_tools.py"] = hashlib.sha256(tool_source.encode("utf-8")).hexdigest()
     baseline_hashes = {name: hashlib.sha256(content.encode("utf-8")).hexdigest()
                        for name, content in baseline.items()}
-    comparison_mode = "prompt_comparison" if baseline_dir is not None else "reviewer_control" if reviewer_control else "architecture_control"
+    comparison_mode = ("runtime_comparison" if runtime_baseline_dir is not None else "prompt_comparison" if baseline_dir is not None else "reviewer_control" if reviewer_control
+                       else "verification_control" if verification_control else "architecture_control")
     candidate_label = submission_dir.name
     baseline_label = baseline_dir.name if baseline_dir is not None else None
     config_source = CONFIG
+    config_source = config_source.replace(
+        '/kaggle/input/models/google/gemma-4/other/gemma-4-31b-it-qat-w4a16-ct/2',
+        f'/kaggle/input/models/google/gemma-4/other/{target_model}/2',
+    )
+    if verification_control:
+        config_source = config_source.replace(
+            "BENCHMARK_VARIANTS = ['coder_only', 'optional_analyzer']",
+            "BENCHMARK_VARIANTS = ['coder_only', 'optional_locator', 'optional_verifier', 'locator_verifier']",
+        ).replace("RELEASE_VARIANT = 'optional_analyzer'", "RELEASE_VARIANT = 'locator_verifier'")
     if reviewer_control:
         config_source = config_source.replace(
             "BENCHMARK_VARIANTS = ['coder_only', 'optional_analyzer']",
@@ -576,12 +673,17 @@ def generate(submission_dir: Path, tool_path: Path, starter_path: Path, output: 
     if baseline_dir is not None:
         config_source = config_source.replace(
             "BENCHMARK_VARIANTS = ['coder_only', 'optional_analyzer']",
-            "BENCHMARK_VARIANTS = ['baseline', 'candidate']",
+            "BENCHMARK_VARIANTS = ['baseline', 'timeout_only', 'thinking_off_only', 'candidate']" if runtime_baseline_dir is not None else "BENCHMARK_VARIANTS = ['baseline', 'candidate']",
         ).replace("RELEASE_VARIANT = 'optional_analyzer'", "RELEASE_VARIANT = 'candidate'")
         config_source = config_source.replace(
             "# Set to a mounted copy of YOUR candidate to test later configurations/adapters.",
-            "# Set to a mounted copy of YOUR candidate to test later prompt revisions.",
+            "# A mounted candidate must preserve this comparison's permitted changes.",
         )
+    # The new variants require the updated competition wheelhouse setup.
+    if target_model != 'gemma-4-31b-it-qat-w4a16-ct':
+        updated_starter = starter_path.with_name(starter_path.stem + '_update1' + starter_path.suffix)
+        if updated_starter.is_file():
+            starter_path = updated_starter
     starter = nbformat.read(starter_path, as_version=4)
     install = next(cell.source for cell in starter.cells if cell.cell_type == "code")
     helpers = "\n\n".join(inspect.getsource(fn) for fn in [remove_agent_tools, task_resources, select_tasks, extract_curated, file_sha256])
@@ -596,7 +698,23 @@ def generate(submission_dir: Path, tool_path: Path, starter_path: Path, output: 
         "CANDIDATE_LABEL = " + repr(candidate_label),
         "BASELINE_LABEL = " + repr(baseline_label),
     ])
-    if baseline_dir is not None:
+    if runtime_baseline_dir is not None:
+        comparison_description = (
+            f"Compare `{baseline_label}` with `{candidate_label}` on identical tasks, three-agent "
+            "structure, prompts, model and four-minute agent allowance. The candidate raises the "
+            "command/grading timeout from 60 to 300 seconds and requests thinking disabled on "
+            "all three agents. Controls change each setting separately. Their effective runtime "
+            "behavior and task performance must be verified in Kaggle."
+        )
+        preparation_description = (
+            "## 3. Materialize runtime controls\n\n"
+            "`baseline` retains Submission 4. `timeout_only` changes only its timeout to 300 seconds; "
+            "`thinking_off_only` disables thinking while retaining the 60-second timeout; "
+            "`candidate` applies both changes and is the default release. Preflight rejects changes "
+            "to other budgets, sampling, prompts, tools or agent declarations. "
+            "These controls retain all three agents, with shared task budgets and optional helpers."
+        )
+    elif baseline_dir is not None:
         comparison_description = (
             f"Compare `{baseline_label}` (baseline) with `{candidate_label}` (candidate) as a "
             "two-agent prompt comparison on identical public tasks, model, sampling and budgets. "
@@ -610,6 +728,23 @@ def generate(submission_dir: Path, tool_path: Path, starter_path: Path, output: 
             "a mounted text configuration. Preflight requires the same model, agent count, "
             "resolved YAML topology, sampling and budgets. Only instruction text may differ. "
             "Tooling stays outside both submission directories."
+        )
+    elif verification_control:
+        comparison_description = (
+            f"Evaluate `{candidate_label}`: a coder with an optional shell-based repository locator "
+            "and optional test verifier. Compare coder-only, locator-only, verifier-only and both-helper "
+            "variants on identical tasks, coder prompts, sampling and total budgets. This is an "
+            "experimental comparison; reported zero-score causes remain unknown. "
+            f"These controls isolate helper availability within `{candidate_label}`; comparison with historical "
+            "submissions requires those actual candidates on the same tasks."
+        )
+        preparation_description = (
+            "## 3. Materialize four locator/verifier variants\n\n"
+            "`coder_only` removes both helpers; `optional_locator` removes the verifier; "
+            "`optional_verifier` removes the locator; `locator_verifier` retains all three agents "
+            "and is the default release. All variants share the coder prompt and total budget. "
+            "Helpers have shell/read access, with source preservation governed by their prompts; "
+            "they have no editing or submission tools. Detached resources stay outside control packages."
         )
     elif reviewer_control:
         comparison_description = (
@@ -643,7 +778,7 @@ def generate(submission_dir: Path, tool_path: Path, starter_path: Path, output: 
     md = nbformat.v4.new_markdown_cell
     code = lambda source: nbformat.v4.new_code_cell(textwrap.dedent(source).strip() + "\n")
     cells = [
-        md(f"# Evaluate {candidate_label} with unchanged Gemma weights\n\n" + comparison_description + "\n\nAttach the competition data, Gemma model, and Gemma 4 Developer Agent Wheelhouse. Enable GPU acceleration and run cells in order. The default two tasks provide a smoke test. Increase task coverage for comparisons, keep a held-out set for later tuning, and repeat runs to assess generation variation. This notebook evaluates and packages; it performs no training."),
+        md(f"# Evaluate {candidate_label} with unchanged Gemma weights\n\nModel: `{target_model}`.\n\n" + comparison_description + "\n\nAttach the competition data, selected Gemma model, and Gemma 4 Developer Agent Wheelhouse. Enable GPU acceleration and run cells in order. The default two tasks provide a smoke test. Increase task coverage for comparisons, keep a held-out set for later tuning, and repeat runs to assess generation variation. This notebook evaluates and packages; it performs no training."),
         md("## 1. Choose data, candidate, tasks and variants\n\nSet `SUBMISSION_SOURCE_DIR` only for your mounted candidate. Explicit `TASK_IDS` preserve a fixed validation set across revisions. Runs use unique directories and preserve earlier artifacts."),
         code(config_source),
         md("## 2. Install the provided offline runtime\n\nThis installation cell comes from the starter notebook. The task `wheels/` directory is a separate dependency collection."),
@@ -654,7 +789,7 @@ def generate(submission_dir: Path, tool_path: Path, starter_path: Path, output: 
         code(PREFLIGHT),
         md("## 5. Start the required Gemma model locally\n\nUses the starter vLLM API, scoring context length 32,768, GPU memory fraction 0.80, and LoRA only when a manifest exists. `EMPTY` is a local routing placeholder. No external API is called."),
         code(SERVER),
-        md("## 6. Generate patches, verify and report\n\nAll variants get the same tasks and budgets. Subprocess isolation matches the starter; Docker is the closer scoring environment when available. Variants run in the configured order, so repeat/reverse the order when checking timing.\n\nThe notebook writes `notebook_task_results.jsonl` and leaves harness `task_results.jsonl`, traces and logs intact. Each variant receives JSON, CSV and Markdown diagnostics. Absent agent time, request usage or context metrics stay unknown; total task duration is not agent-loop time."),
+        md("## 6. Generate patches, verify and report\n\nAll variants get the same tasks and agent allowances. Runtime comparisons intentionally vary command/grading timeout and thinking; other comparisons retain identical budgets. Subprocess isolation matches the starter; Docker is the closer scoring environment when available. Variants run in the configured order, so repeat/reverse the order when checking timing.\n\nThe notebook writes `notebook_task_results.jsonl` and leaves harness `task_results.jsonl`, traces and logs intact. Each variant receives JSON, CSV and Markdown diagnostics. Absent agent time, request usage or context metrics stay unknown; total task duration is not agent-loop time."),
         code(EVALUATION),
         md("## 7. Build the chosen release\n\nInspect reports first. `RELEASE_VARIANT` chooses which evaluated directory becomes `/kaggle/working/submission.zip`. The ZIP contains only active agent assets. Packaging is not proof of task success."),
         code(PACKAGE),
@@ -672,6 +807,7 @@ def generate(submission_dir: Path, tool_path: Path, starter_path: Path, output: 
         "candidate_source_sha256": hashes,
         "baseline_source_sha256": baseline_hashes,
         "candidate_label": candidate_label, "baseline_label": baseline_label,
+        "base_model": target_model,
         "comparison_mode": comparison_mode,
     })
     nbformat.validate(notebook)
@@ -686,11 +822,14 @@ def main():
     parser.add_argument("--submission-dir", type=Path, default=base / "submission_1")
     parser.add_argument("--baseline-dir", type=Path, help="Embed a second two-agent baseline for prompt comparison")
     parser.add_argument("--reviewer-control", action="store_true", help="Compare coder-only, analyzer and three-agent reviewer variants")
+    parser.add_argument("--verification-control", action="store_true", help="Compare coder-only, locator, verifier and both-helper variants")
+    parser.add_argument("--runtime-baseline-dir", type=Path, help="Compare timeout and disabled-thinking changes with a three-agent baseline")
     parser.add_argument("--output", type=Path, default=base / "evaluate_submission_1.ipynb")
     args = parser.parse_args()
     hashes = generate(args.submission_dir, base / "tools" / "submission_tools.py",
                       base.parent / "competition_material" / "getting-started-gemma-4-developer-agent.ipynb", args.output,
-                      baseline_dir=args.baseline_dir, reviewer_control=args.reviewer_control)
+                      baseline_dir=args.baseline_dir, reviewer_control=args.reviewer_control,
+                      verification_control=args.verification_control, runtime_baseline_dir=args.runtime_baseline_dir)
     print(json.dumps({"notebook": str(args.output), "embedded_file_sha256": hashes}, indent=2))
 
 

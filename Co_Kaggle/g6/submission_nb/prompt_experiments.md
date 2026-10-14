@@ -48,7 +48,37 @@ Prepared on 2026-10-11. [Submission 3](submission_3/README.md) preserves Submiss
 
 `evaluate_submission_3.ipynb` compares coder-only, coder plus analyzer, and coder plus analyzer plus reviewer on the same tasks under the same Submission 3 coder prompt. The two-agent control is derived from Submission 3, not the original Submission 2 prompt. This isolates helper availability; it does not isolate prompt changes between releases. Reports distinguish analyzer and reviewer delegation when supported traces exist; missing reviewer usage remains unknown. Inspect findings and resulting repairs to assess benefit instead of treating invocation as success.
 
-Submission 3 has no GPU benchmark or reported public score. Start with the two-task smoke test, then fixed tasks spanning repositories, repeated runs and a separate validation set. Local configuration, archive and workflow tests do not establish coding-task performance.
+At preparation time Submission 3 had no GPU benchmark or reported public score. On 2026-10-12 the user reported **0.0** for `artifacts/submission_3.zip`, with no Kaggle error message. No task-level logs were supplied. A local recheck found an intact ZIP matching the normalized source; the cause of the score remains unknown. Earlier unmeasured statements in candidate notes are superseded by this report.
+
+## Submission 4: locator and executable verification
+
+Prepared on 2026-10-12 in response to Submission 3's zero. [Submission 4](submission_4/README.md) replaces the graph-based analyzer with a shell-based repository locator and replaces the read-only patch reviewer with a test verifier that can execute focused checks. The coder retains source edits, repairs and submission, with six direct tools and shorter instructions. Helpers have only shell/read tools, no full conversation history, and source-preservation instructions; shell access is not technically read-only.
+
+The model, coder sampling, helper sampling and four-minute/40-call/80-turn task allowance remain those of Submission 2. Optional helper calls are gated by prompt budget thresholds, limited to one invocation each by instruction, and skipped when direct action is clearer. A helper's failed or inconclusive response does not block patch capture.
+
+`evaluate_submission_4.ipynb` compares coder only, locator only, verifier only and both helpers under one shared coder prompt. It can isolate helper-availability effects within Submission 4. This release changes roles, tools and prompts together, so a score change against historical candidates would not identify a single causal intervention.
+
+Local tests validate configuration, controls, package closure and evidence-based locator/verifier counts. At preparation time no real Gemma inference, official compiler run or public score was available for Submission 4. On 2026-10-13 the user reported **0.0**, without additional log information. The zero-score cause remains unknown. [The investigation](zero_score_investigation.md) records the archive checks, runtime-source findings and logging limits.
+
+## Submission 5: command/grading timeout and thinking
+
+Prepared on 2026-10-13 from Submission 4. Only four packaged files change: `eval_config.yaml` sets timeout 300 instead of 60, and the three sampling files set only `thinking_config.include_thoughts: false`, omitting numeric thinking budgets. The inspected compiler bridge turns thinking off for this setting; actual behavior must be confirmed in the scoring runtime. No `thinking_budget: 0` or unsupported reasoning-level setting is introduced.
+
+The coder, repository locator and test verifier retain their exact declarations, tool access and prompts. The model, output ceilings, temperature, top-p, four-minute agent allowance, 40 counted calls and 80 turns remain unchanged. The inspected harness shares the command timeout with grading, so raising it allows longer grading checks while the agent session retains its original total allowance and short-check prompt instructions.
+
+`evaluate_submission_5.ipynb` embeds Submission 4 and Submission 5. It compares `baseline` (60 seconds/thinking on), `timeout_only` (300/on), `thinking_off_only` (60/off), and `candidate` (300/off). Every variant retains all three agents and receives the same task IDs. Preflight permits only the intended runtime changes, and the candidate is the default release. These controls can separate the two effects; the combined release's public score alone cannot do so.
+
+[Submission 5](submission_5/README.md) was unmeasured at preparation time. The records inspected on 2026-10-14 report **0.0**; no task-level scoring artifacts identify the cause. Local configuration, control-generation and artifact checks do not establish official compilation, effective thinking behavior, coding-task resolution or total inference time.
+
+## Submission 6: model substitution only
+
+Prepared on 2026-10-14 after reading the [organizer's new-model announcement supplied locally](../competition_material/Update_new_models.md). The smallest allowed variant is `gemma-4-e2b-it-qat-w4a16-ct`. [Submission 6](submission_6/README.md) copies Submission 2 and changes only the main coder and analyzer model declarations from 31B to E2B. All other packaged files, including prompts, generation settings, thinking configuration and evaluation budgets, are preserved byte-for-byte. No adapters are included.
+
+The local validator now accepts the four listed variants and rejects mixing them within a submission, including unused standalone and inline agents. The generated notebook selects the candidate's declared model and matching weight path, uses the supplied updated starter's installation cell for new variants, and registers only the served model. The 12B startup override documented in that starter is also supported by the shared generator.
+
+`evaluate_submission_6.ipynb` compares coder-only and optional-analyzer controls, both E2B. Comparing 31B Submission 2 with E2B Submission 6 requires separate model sessions on identical task IDs. The existing prompt/runtime comparison modes reject cross-model variants because one server cannot serve the unmounted second model.
+
+Submission 6 has no score or real-model benchmark. Local tests check allowed-model policy, mixing rejection, exact model-only package scope, E2B weight selection and stubbed server routing. They do not establish updated compiler acceptance, effective generation controls, coding-task quality or inference speed.
 
 ## Design references
 
