@@ -2,6 +2,7 @@
 
 | Submission and Description | public score | comments |
 | --- | ---: | --- |
+| NB For submission - Version 5 | 0.0 | using `submission_nb\artifacts\submission_5.zip`, 3-agent system, but different from Version 3,4 |
 | NB For submission - Version 4 | 0.0 | using `submission_nb\artifacts\submission_4.zip`, 3-agent system, but different from Version 3 |
 | NB For submission - Version 3 | 0.0 | using `submission_nb\artifacts\submission_3.zip`, 3-agent system |
 | NB For submission - Version 2 | 0.10 | using `submission_nb\artifacts\submission_2.zip`, 2-agent system, but different from `NB For submission - Version 1` |
