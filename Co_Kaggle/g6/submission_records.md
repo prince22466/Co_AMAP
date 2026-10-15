@@ -2,6 +2,7 @@
 
 | Submission and Description | public score | comments |
 | --- | ---: | --- |
+| submission.zip · submission_6 | 0.03 | using `submission_nb\artifacts\submission_6.zip`, 2-agent system, same as submiision_2 but with smallest model gemma-4-e2b-it-qat-w4a16-ct |
 | NB For submission - Version 5 | 0.0 | using `submission_nb\artifacts\submission_5.zip`, 3-agent system, but different from Version 3,4. score 0 maybe due to mistakes of doing submission, will redo submission. |
 | NB For submission - Version 4 | 0.0 | using `submission_nb\artifacts\submission_4.zip`, 3-agent system, but different from Version 3.score 0 maybe due to mistakes of doing submission, will redo submission. |
 | NB For submission - Version 3 | 0.0 | using `submission_nb\artifacts\submission_3.zip`, 3-agent system.score 0 maybe due to mistakes of doing submission, will redo submission. |
