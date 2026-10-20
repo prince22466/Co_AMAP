@@ -144,7 +144,7 @@ async def verify(archive):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--archive", type=Path, default=G6 / "submission_nb/artifacts/submission_9.zip")
-    parser.add_argument("--output", type=Path, default=G6 / "tests_on_tasks/diagnostics/submission_9_review/runtime_smoke.json")
+    parser.add_argument("--output", type=Path, default=G6 / "tests_on_tasks/reviews/submission_9/runtime_smoke.json")
     args = parser.parse_args()
     result = asyncio.run(verify(args.archive))
     args.output.parent.mkdir(parents=True, exist_ok=True)

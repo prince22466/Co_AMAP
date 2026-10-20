@@ -1,6 +1,6 @@
 # Submission 9: submission 7 with an ADK repair skill
 
-**Candidate, not yet scored.** Submission 7 remains the confirmed 0.13 public-score baseline; Submission 8 scored 0.12. See the [diagnostic review](../../tests_on_tasks/diagnostics/submission_9_review/review.md) for evidence and limits. No improved resolution rate is claimed.
+**Candidate, not yet scored.** Submission 7 remains the confirmed 0.13 public-score baseline; Submission 8 scored 0.12. See the [design review](../../tests_on_tasks/reviews/submission_9/review.md) for evidence and limits. No improved resolution rate is claimed.
 
 The requested competition package layout is registered on the coder:
 
@@ -51,7 +51,7 @@ From repository root, using Python 3.10+ and PyYAML:
 ```bash
 python -B -m unittest discover -s Co_Kaggle/g6/tests_on_tasks/tools -p test_submission9.py -v
 python -B Co_Kaggle/g6/tests_on_tasks/tools/build_submission9.py
-python -B Co_Kaggle/g6/tests_on_tasks/tools/review_submission9_evidence.py --output Co_Kaggle/g6/tests_on_tasks/diagnostics/submission_9_review/evidence.json
+python -B Co_Kaggle/g6/tests_on_tasks/tools/review_submission9_evidence.py --output Co_Kaggle/g6/tests_on_tasks/reviews/submission_9/evidence.json
 ```
 
 The deterministic [ZIP](../artifacts/submission_9.zip) contains 20 active files with `agent.yaml` at its root: 17 source files plus three generated reference aliases. Its [manifest](../artifacts/submission_9.manifest.json) records the conversion, hashes and baseline preservation. README, tests, diagnostics and build tools stay outside the archive. The builder rejects symlinks, unsafe includes, missing resources, unsupported release extensions and task IDs in the active package.
@@ -62,7 +62,7 @@ Twenty-eight synthetic tests pass, including uncalled/caught/optimized assertion
 
 The built ZIP passes eight CPU smoke checks using official `adk-submission 0.2.13`, `google-adk 1.36.1`, `adk-eval-core 0.1.0` and `google-genai 2.11.0` wheels from the [competition wheelhouse, version 31](https://www.kaggle.com/datasets/metric/gemma-4-developer-agent-wheelhouse/versions/31). The checks compile the candidate, activate the skill, load all three resources, execute every script through ADK's real runpy/subprocess bridge, verify workspace imports and caught failures, and audit both clean and edited repositories. The clean-repository check also exercises a workspace-local TMPDIR.
 
-The [runtime report](../../tests_on_tasks/diagnostics/submission_9_review/runtime_smoke.json) identifies the exact archive hash, installed versions and test scope. Native tools and the model are test doubles; the compiler, skill tools and sandbox executor are real. Other dependencies are locally resolved and recorded, not a full frozen Kaggle image. No Gemma inference, benchmark grading, Docker execution or competition budget accounting has been tested. To reproduce in a Python 3.12 environment with those wheelhouse packages installed:
+The [runtime report](../../tests_on_tasks/reviews/submission_9/runtime_smoke.json) identifies the exact archive hash, installed versions and test scope. Native tools and the model are test doubles; the compiler, skill tools and sandbox executor are real. Other dependencies are locally resolved and recorded, not a full frozen Kaggle image. No Gemma inference, benchmark grading, Docker execution or competition budget accounting has been tested. To reproduce in a Python 3.12 environment with those wheelhouse packages installed:
 
 ```bash
 python -B Co_Kaggle/g6/tests_on_tasks/tools/verify_submission9_runtime.py

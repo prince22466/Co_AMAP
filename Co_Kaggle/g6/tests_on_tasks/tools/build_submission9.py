@@ -149,7 +149,7 @@ def build(output):
         "generated_reference_aliases": aliases,
         "byte_identical_baseline_files": preserved,
         "validation": {"static_structure": "passed", "zip_source_parity": "passed",
-                       "official_compiler_smoke": "separate hash-matched runtime_smoke.json report",
+                       "official_compiler_smoke": "separate hash-matched tests_on_tasks/reviews/submission_9/runtime_smoke.json report",
                        "gemma_evaluation": "not run", "public_score": None},
     }
     output.with_suffix(".manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")

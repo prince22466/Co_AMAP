@@ -1,4 +1,6 @@
-# Evidence for submission 9
+# Design review for submission 9
+
+These are review artifacts: analysis of previous submissions and a summary of synthetic component checks. No submission-9 Gemma benchmark run or task-resolution logs have been produced.
 
 Source snapshot: `cbe742951dcc089b56ba9331f64b3d64647ae595` (2026-10-20). The [public-score record](../../../submission_records.md) is authoritative for reported leaderboard scores. Counts below are recomputed from committed diagnostic ZIPs, not the absent prior reviews linked by older READMEs.
 
@@ -20,7 +22,7 @@ All historical runs disable the task timer and use swegemma 0.2.11, adk-submissi
 
 ## Trace evidence and interventions
 
-Paths are relative to the root inside [the submission-7 diagnostic ZIP](../submission-7-zip_First30Tasks.zip). Task-specific evidence stays outside the candidate archive.
+Paths are relative to the root inside [the submission-7 diagnostic ZIP](../../diagnostics/submission-7-zip_First30Tasks.zip). Task-specific evidence stays outside the candidate archive.
 
 | Observation | Interpretation | Skill response and limit |
 | --- | --- | --- |
@@ -55,7 +57,7 @@ Freeze the ZIP hashes, check loading/execution on one development task, then com
 Recompute metrics from repository root:
 
 ```bash
-python -B Co_Kaggle/g6/tests_on_tasks/tools/review_submission9_evidence.py --output Co_Kaggle/g6/tests_on_tasks/diagnostics/submission_9_review/evidence.json
+python -B Co_Kaggle/g6/tests_on_tasks/tools/review_submission9_evidence.py --output Co_Kaggle/g6/tests_on_tasks/reviews/submission_9/evidence.json
 ```
 
 [evidence.json](evidence.json) records archive hashes, run settings, tool counts, task-level error attribution and environment signals. Nothing in this PR establishes that submission 9 outperforms submission 7.
