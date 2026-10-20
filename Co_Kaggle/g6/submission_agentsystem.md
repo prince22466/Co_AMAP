@@ -10,7 +10,7 @@ The model names below refer to the exact variants configured for every agent in 
 - **E2B:** `gemma-4-e2b-it-qat-w4a16-ct`, the smallest listed variant, used only by Submission 6.
 
 | Submission | Model for all agents | LoRA adapters | Skills.md | Configured agents | Public score |
-| --- | --- | --- | --- | ---: |
+| --- | --- | --- | --- | --- | ---: |
 | [Starter ZIP](competition_material/submission.zip) | 31B | `main_lora` for coder; `tool_lora` for analyzer | None | 2: coder + code analyzer | 0.03 |
 | [Submission 1](submission_nb/submission_1/agent.yaml) | 31B | None | None | 2: coder + code analyzer | 0.10 and 0.06 |
 | [Submission 2](submission_nb/submission_2/agent.yaml) | 31B | None | None | 2: coder + code analyzer | 0.10 |
