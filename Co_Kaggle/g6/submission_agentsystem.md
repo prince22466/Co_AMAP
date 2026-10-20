@@ -9,27 +9,18 @@ The model names below refer to the exact variants configured for every agent in 
 - **31B:** `gemma-4-31b-it-qat-w4a16-ct`, the largest variant in the project's allowed-model list.
 - **E2B:** `gemma-4-e2b-it-qat-w4a16-ct`, the smallest listed variant, used only by Submission 6.
 
-| Submission | Model for all agents | LoRA adapters | Configured agents | Public score |
+| Submission | Model for all agents | LoRA adapters | Skills.md | Configured agents | Public score |
 | --- | --- | --- | --- | ---: |
-| [Starter ZIP](competition_material/submission.zip) | 31B | `main_lora` for coder; `tool_lora` for analyzer | 2: coder + code analyzer | 0.03 |
-| [Submission 1](submission_nb/submission_1/agent.yaml) | 31B | None | 2: coder + code analyzer | 0.10 and 0.06 |
-| [Submission 2](submission_nb/submission_2/agent.yaml) | 31B | None | 2: coder + code analyzer | 0.10 |
-| [Submission 3](submission_nb/submission_3/agent.yaml) | 31B | None | 3: coder + code analyzer + patch reviewer | 0.12 |
-| [Submission 4](submission_nb/submission_4/agent.yaml) | 31B | None | 3: coder + repository locator + test verifier | 0.12 |
-| [Submission 5](submission_nb/submission_5/agent.yaml) | 31B | None | 3: coder + repository locator + test verifier | 0.06 |
-| [Submission 6](submission_nb/submission_6/agent.yaml) | E2B | None | 2: coder + code analyzer | 0.03 |
-| [Submission 7](submission_nb/submission_7/agent.yaml) | 31B | None | 3: coder + contract analyst + counterexample test designer | **0.13** |
-| [Submission 8](submission_nb/submission_8/agent.yaml) | 31B | None | 3: coder + contract analyst + patch reviewer | 0.12 |
+| [Starter ZIP](competition_material/submission.zip) | 31B | `main_lora` for coder; `tool_lora` for analyzer | None | 2: coder + code analyzer | 0.03 |
+| [Submission 1](submission_nb/submission_1/agent.yaml) | 31B | None | None | 2: coder + code analyzer | 0.10 and 0.06 |
+| [Submission 2](submission_nb/submission_2/agent.yaml) | 31B | None | None | 2: coder + code analyzer | 0.10 |
+| [Submission 3](submission_nb/submission_3/agent.yaml) | 31B | None | None | 3: coder + code analyzer + patch reviewer | 0.12 |
+| [Submission 4](submission_nb/submission_4/agent.yaml) | 31B | None | None | 3: coder + repository locator + test verifier | 0.12 |
+| [Submission 5](submission_nb/submission_5/agent.yaml) | 31B | None | None | 3: coder + repository locator + test verifier | 0.06 |
+| [Submission 6](submission_nb/submission_6/agent.yaml) | E2B | None | None | 2: coder + code analyzer | 0.03 |
+| [Submission 7](submission_nb/submission_7/agent.yaml) | 31B | None | None | 3: coder + contract analyst + counterexample test designer | **0.13** |
+| [Submission 8](submission_nb/submission_8/agent.yaml) | 31B | None | None | 3: coder + contract analyst + patch reviewer | 0.12 |
 
-Submission 1 has two recorded results; neither is discarded or treated as an average. Submission 7 currently has the highest recorded public score. These observations alone do not isolate the effect of agent count, role design, prompts or runtime settings.
-
-The starter's two LoRA adapters each declare rank `r=4`, `lora_alpha=8`, target modules `q_proj` and `o_proj`, dropout `0.0`, and task type `CAUSAL_LM`, against `google/gemma-4-31b-it-qat-w4a16-ct`. Their configuration does not establish training quality or a performance benefit.
-
-Submissions 1–8 contain no `adapter:` declarations or adapter weight files in their ZIPs. The original sample assets are preserved under [reference_adapters](submission_nb/reference_adapters/README.md), outside the active submissions. Different agent roles in these versions come from instructions and tool access, using the same model variant within each submission.
-
-**Applied skills**
-
-The starter and Submissions 1–8 have **no configured skill packages**: their agent YAML files contain no `skills:` declarations, and their ZIPs contain no `SKILL.md` files or skill resources. Code navigation, contract analysis, test design and patch review are behaviors specified in the agent instruction files. Submission 8's Python editing recipe is embedded in its coder prompt. These behaviors do not add a separately packaged skill or custom runtime tool.
 
 **How the agents work together**
 
