@@ -2,7 +2,7 @@
 
 | Submission and Description | public score | comments |
 | --- | ---: | --- |
-| submission_8.zip · submission_8 | 0.12 | `submission_nb\artifacts\submission_8.zip`; three 31B agents: coder using shell commands, contract analyst, actual-patch reviewer; derived from submission_7 testing diagnostics |
+| submission.zip · submission_8 | 0.12 | `submission_nb\artifacts\submission_8.zip`; three 31B agents: coder using shell commands, contract analyst, actual-patch reviewer; derived from submission_7 testing diagnostics |
 | submission.zip · submission_7 | 0.13 | using `submission_nb\artifacts\submission_7.zip`, 3-agent system, different from Version 3,4,5 |
 | submission.zip · submission_6 | 0.03 | using `submission_nb\artifacts\submission_6.zip`, 2-agent system, same as submiision_2 but with smallest model gemma-4-e2b-it-qat-w4a16-ct |
 | submission.zip · submission_5 | 0.06 | using `submission_nb\artifacts\submission_5.zip`, 3-agent system, but different from Version 3,4. |
