@@ -24,7 +24,9 @@ skills:
   - skills/repo_navigation
 ```
 
-The manifest name is `repo_navigation`, matching the directory. These are competition ADK skills, not a ChatGPT skill installation or a Python agent entry point. Scripts are Python because the supplied harness extension allowlist includes `.py`, not `.sh`. They execute through sandbox skill tools; no callbacks, custom host imports, extra model, network access or adapters are added.
+**Build and use the ZIP, or extract that ZIP for directory-based evaluation.** The source layout above is retained as requested. The official ADK 1.36.1 loader rejects underscores by default and does not load `resources/`. The builder therefore packages the skill under `skills/repo-navigation`, adjusts the agent binding, and creates byte-identical `references/` aliases from the three canonical `resources/` files. The manifest name is `repo-navigation`, matching the packaged directory. Do not evaluate the raw source directory or ZIP it manually.
+
+These are competition ADK skills, not a ChatGPT skill installation or a Python agent entry point. Scripts are Python because the supplied harness extension allowlist includes `.py`, not `.sh`. They execute through sandbox skill tools; no callbacks, custom host imports, extra model, network access or adapters are added.
 
 ## Changes and preservation
 
@@ -34,8 +36,8 @@ The manifest name is `repo_navigation`, matching the directory. These are compet
 | `prompts/system.md` | Adds one skill-routing paragraph; all submission-7 instructions remain in order. |
 | `SKILL.md` | Contract, localization, recovery, verification and final-audit checkpoints. |
 | `inspect_source.py` | Finds qualified Python definitions without importing code; returns bounded source and the next unread line. |
-| `check.py` | Runs assertions in a fresh process using workspace imports; checks the named module's origin and distinguishes failure, timeout, early exit and print-only checks. |
-| `audit_patch.py` | Reports protected edits, scratch candidates, syntax errors and whitespace problems without staging or modifying files. |
+| `check.py` | Runs assertions in a fresh process using workspace imports; counts executed inline assertions, detects caught failures and disables inherited optimization. Uncalled checks cannot pass. |
+| `audit_patch.py` | Reports protected edits, scratch candidates, syntax errors, conflict markers and whitespace problems (including new files). Excludes only the active ADK wrapper/materialization; never stages or modifies files. |
 | `resources/` | On-demand guidance for API propagation, error conventions, tool recovery and reliable verification. |
 
 All agents keep `gemma-4-31b-it-qat-w4a16-ct`. The other eight active files are byte-identical to submission 7: both helpers' YAML/prompts/sampling, coder sampling, and evaluation configuration. Budgets remain four minutes, 40 counted calls, 80 turns and 60 seconds per command. Helpers retain their roles and no tools. Submission 8's shell-only coder and new reviewer are not adopted.
@@ -52,21 +54,21 @@ python -B Co_Kaggle/g6/tests_on_tasks/tools/build_submission9.py
 python -B Co_Kaggle/g6/tests_on_tasks/tools/review_submission9_evidence.py --output Co_Kaggle/g6/tests_on_tasks/diagnostics/submission_9_review/evidence.json
 ```
 
-The deterministic [ZIP](../artifacts/submission_9.zip) contains 17 active files with `agent.yaml` at its root. Its [manifest](../artifacts/submission_9.manifest.json) records hashes and baseline preservation. README, tests, diagnostics and build tools stay outside the archive. The builder rejects symlinks, unsafe includes, missing resources, unsupported release extensions and task IDs in the active package.
+The deterministic [ZIP](../artifacts/submission_9.zip) contains 20 active files with `agent.yaml` at its root: 17 source files plus three generated reference aliases. Its [manifest](../artifacts/submission_9.manifest.json) records the conversion, hashes and baseline preservation. README, tests, diagnostics and build tools stay outside the archive. The builder rejects symlinks, unsafe includes, missing resources, unsupported release extensions and task IDs in the active package.
 
-Twenty synthetic tests pass: import provenance, assertion failure, print-only checks, early exit, runtime exceptions, timeout, output bounds, temporary working directories, source pagination, path confinement, protected edits, scratch files, read-only audit, unchanged configuration and deterministic packaging. These are script/packaging tests, **not Gemma task-resolution tests**.
+Twenty-eight synthetic tests pass, including uncalled/caught/optimized assertions, source metadata overflow, untracked whitespace, non-Python conflict markers, dangling symlinks, import provenance, timeout, read-only audit, unchanged configuration and deterministic packaging. These are script/packaging tests, **not Gemma task-resolution tests**.
 
-## Official runtime gate
+## Official runtime verification
 
-This machine lacks `adk-submission`, `swegemma`, the competition wheelhouse, weights and snapshots. Full official compilation and Gemma inference have not run here. Static validation is not official harness acceptance.
+The built ZIP passes eight CPU smoke checks using official `adk-submission 0.2.13`, `google-adk 1.36.1`, `adk-eval-core 0.1.0` and `google-genai 2.11.0` wheels from the [competition wheelhouse, version 31](https://www.kaggle.com/datasets/metric/gemma-4-developer-agent-wheelhouse/versions/31). The checks compile the candidate, activate the skill, load all three resources, execute every script through ADK's real runpy/subprocess bridge, verify workspace imports and caught failures, and audit both clean and edited repositories. The clean-repository check also exercises a workspace-local TMPDIR.
 
-Use the existing [v5 testing notebook](../../tests_on_tasks/gemma-4-developer-agent-testing_v5.ipynb) with the mounted submission-9 directory/ZIP and 31B model. Before a long run, check on one development task:
+The [runtime report](../../tests_on_tasks/diagnostics/submission_9_review/runtime_smoke.json) identifies the exact archive hash, installed versions and test scope. Native tools and the model are test doubles; the compiler, skill tools and sandbox executor are real. Other dependencies are locally resolved and recorded, not a full frozen Kaggle image. No Gemma inference, benchmark grading, Docker execution or competition budget accounting has been tested. To reproduce in a Python 3.12 environment with those wheelhouse packages installed:
 
-1. The compiler accepts the `skills` binding and matching snake_case manifest name, and exposes the skill tools. Use their actual schemas; do not add skill tools manually to the closed native-tool registry.
-2. The manifest and one `resources/` file load. The competition guide uses `resources/`, while upstream Google's generic skill loader uses `references/`/`assets/`. Verify the installed competition bridge; correct any mismatch before measuring this intervention.
-3. Obtain `pwd -P` with `run_command` and pass it as `workspace`. Skill scripts can start in a temporary directory, and local subprocess sandboxes may map `/workspace` elsewhere. Scripts never search for another workspace themselves.
-4. An inspection and assertion check see the same repository as native tools; the final audit sees the same diff. Read JSON `outcome`, not merely the outer tool status.
-5. Skill calls/time/budget accounting appear in traces and a nonempty patch reaches grading.
+```bash
+python -B Co_Kaggle/g6/tests_on_tasks/tools/verify_submission9_runtime.py
+```
+
+Use the existing [v5 testing notebook](../../tests_on_tasks/gemma-4-developer-agent-testing_v5.ipynb) with the release ZIP (or its extracted directory) and 31B model. Before a long run, check on one development task that the model activates the skill, passes the workspace observed through `pwd -P`, interprets JSON outcomes, respects counted-call/time limits and captures a nonempty patch. Recheck compatibility if the wheelhouse changes.
 
 The routing paragraph falls back to native tools after one corrected skill failure. A run that always falls back is not evidence for skills. This submission makes no changes to the scorer or harness.
 
@@ -76,4 +78,4 @@ Freeze baseline/candidate ZIP hashes. Compare unchanged submission 7 with 9 on i
 
 Rerun the same 30 development tasks first, including previous passes as regression checks. Then use an unseen split excluding previously inspected task IDs and base-commit groups. Older holdout manifests referenced by baseline READMEs are absent at this source commit, so this PR does not falsely label a new split as historically untouched. Multiple paired runs help assess stochastic variation.
 
-After runtime compatibility is established, a procedure-only skill versus the full scripts variant can isolate the contribution of scripts. This PR ships one candidate. Promote it only when paired results and an official score support doing so.
+After the one-task model gate, a procedure-only skill versus the full scripts variant can isolate the contribution of scripts. This PR ships one candidate. Promote it only when paired results and an official score support doing so.

@@ -10,48 +10,82 @@ import sys
 import tempfile
 
 
+_CHILD_RUNNER = r'''
+import ast
+import importlib
+import json
+from pathlib import Path
+import sys
+import uuid
+
+request = json.loads(Path(sys.argv[1]).read_text())
+status = Path(sys.argv[2])
+result = {"completed": False, "module_origin": None,
+          "assertions_passed": 0, "assertions_failed": 0}
+status.write_text(json.dumps(result))
+
+def record(passed):
+    result["assertions_passed" if passed else "assertions_failed"] += 1
+
+# Count executed assertions, including failures caught by the reproduction.
+# Random globals avoid collisions and single underscores avoid class mangling.
+prefix = "_skill_" + uuid.uuid4().hex
+record_name, error_name = prefix + "_record", prefix + "_error"
+
+class Instrument(ast.NodeTransformer):
+    def visit_Assert(self, node):
+        def mark(passed):
+            return ast.Expr(ast.Call(ast.Name(record_name, ast.Load()),
+                                     [ast.Constant(passed)], []))
+        return ast.copy_location(ast.Try(
+            body=[node],
+            handlers=[ast.ExceptHandler(ast.Name(error_name, ast.Load()), None,
+                                       [mark(False), ast.Raise()])],
+            orelse=[mark(True)], finalbody=[]), node)
+
+try:
+    if request["module"]:
+        module = importlib.import_module(request["module"])
+        origin = getattr(module, "__file__", None)
+        result["module_origin"] = origin
+        if not origin or not Path(origin).resolve().is_relative_to(Path(request["root"])):
+            result["origin_error"] = True
+            raise RuntimeError("requested module did not load from the workspace")
+    tree = ast.fix_missing_locations(Instrument().visit(ast.parse(request["code"])))
+    namespace = {"__name__": "__main__", record_name: record, error_name: AssertionError}
+    exec(compile(tree, "<skill-check>", "exec", optimize=0), namespace)
+    result["completed"] = True
+finally:
+    status.write_text(json.dumps(result))
+'''
+
+
 def check(workspace, code, module=None, timeout=15):
     root = Path(workspace).resolve(strict=True)
-    if not root.is_dir() or not 1 <= timeout <= 20:
-        raise ValueError("workspace must exist; timeout must be between 1 and 20 seconds")
+    if not root.is_dir() or len(str(root)) > 1024 or not 1 <= timeout <= 20:
+        raise ValueError("workspace must exist and fit 1024 characters; timeout must be 1–20 seconds")
     if len(code) > 16000:
         raise ValueError("check exceeds 16000 characters; reduce it to the discriminating case")
     tree = ast.parse(code, filename="<skill-check>")
     assertions = sum(isinstance(node, ast.Assert) for node in ast.walk(tree))
-    if module and (not all(part.isidentifier() for part in module.split("."))):
+    if module and (len(module) > 300 or not all(part.isidentifier() for part in module.split("."))):
         raise ValueError("module must be a dotted Python module name")
     paths = [str(p) for p in (root / "src", root) if p.is_dir()]
-    env = dict(os.environ, PYTHONPATH=os.pathsep.join(paths), PYTHONDONTWRITEBYTECODE="1")
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join(paths),
+               PYTHONDONTWRITEBYTECODE="1", PYTHONOPTIMIZE="0")
     # The child's marker file distinguishes normal completion from sys.exit(0).
     # Runtime results stay in /tmp, outside the captured repository patch.
     with tempfile.TemporaryDirectory(prefix="submission9-check-") as scratch:
         temp = Path(scratch)
         status = temp / "status.json"
-        program = (
-            "import importlib, json, sys\nfrom pathlib import Path\n"
-            f"_root = Path({str(root)!r}).resolve()\n"
-            f"_status = Path({str(status)!r})\n"
-            "_result = {'completed': False, 'module_origin': None}\n"
-            f"_module_name = {module!r}\n"
-            "if _module_name:\n"
-            "    _module = importlib.import_module(_module_name)\n"
-            "    _origin = getattr(_module, '__file__', None)\n"
-            "    _result['module_origin'] = _origin\n"
-            "    if not _origin or not Path(_origin).resolve().is_relative_to(_root):\n"
-            "        _result['origin_error'] = True\n"
-            "        _status.write_text(json.dumps(_result))\n"
-            "        raise RuntimeError('requested module did not load from the workspace')\n"
-            "_status.write_text(json.dumps(_result))\n"
-            f"exec(compile({code!r}, '<skill-check>', 'exec'), {{'__name__': '__main__'}})\n"
-            "_result['completed'] = True\n"
-            "_status.write_text(json.dumps(_result))\n"
-        )
+        request = temp / "request.json"
+        request.write_text(json.dumps({"root": str(root), "module": module, "code": code}))
         script = temp / "check.py"
-        script.write_text(program, encoding="utf-8")
+        script.write_text(_CHILD_RUNNER, encoding="utf-8")
         timed_out = False
         with (temp / "stdout").open("wb") as stdout, (temp / "stderr").open("wb") as stderr:
             process = subprocess.Popen(
-                [sys.executable, "-B", str(script)], cwd=root, env=env,
+                [sys.executable, "-B", str(script), str(request), str(status)], cwd=root, env=env,
                 stdout=stdout, stderr=stderr, start_new_session=(os.name == "posix"),
             )
             try:
@@ -79,21 +113,25 @@ def check(workspace, code, module=None, timeout=15):
         outcome = (
             "timeout" if timed_out else
             "import_origin_error" if state.get("origin_error") else
-            "failed" if process.returncode else
+            "failed" if process.returncode or state.get("assertions_failed") else
             "incomplete" if not state.get("completed") else
-            "passed" if assertions else "exit_zero_without_assertions"
+            "passed" if state.get("assertions_passed") else
+            "no_assertions_executed" if assertions else "exit_zero_without_assertions"
         )
         result = {
             "outcome": outcome, "returncode": process.returncode,
             "assertions_in_source": assertions, "completed": state.get("completed", False),
+            "assertions_passed": state.get("assertions_passed", 0),
+            "assertions_failed": state.get("assertions_failed", 0),
             "module_origin": state.get("module_origin"), "workspace": str(root),
             "stdout_tail": stdout, "stderr_tail": stderr,
             "output_truncated": stdout_cut or stderr_cut,
             "scope": "Only this check; assertion coverage and hidden-test success are not established.",
         }
         while len(json.dumps(result, ensure_ascii=False)) > 4400:
-            key = max(("stdout_tail", "stderr_tail"), key=lambda k: len(result[k]))
-            result[key] = result[key][len(result[key]) // 2:]
+            key = max(("stdout_tail", "stderr_tail", "module_origin", "workspace"),
+                      key=lambda k: len(result[k] or ""))
+            result[key] = result[key][max(1, len(result[key]) // 2):]
             result["output_truncated"] = True
         return result
 

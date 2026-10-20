@@ -7,6 +7,8 @@ from pathlib import Path
 
 def inspect(workspace, path, symbol=None, start=None, lines=60):
     root = Path(workspace).resolve(strict=True)
+    if len(path) > 1024 or (symbol and len(symbol) > 512):
+        raise ValueError("path/symbol exceeds the bounded inspection input limit")
     relative = Path(path)
     if relative.is_absolute() or ".." in relative.parts:
         raise ValueError("path must be relative to the assigned workspace")
@@ -33,7 +35,7 @@ def inspect(workspace, path, symbol=None, start=None, lines=60):
         try:
             visit(ast.parse(source, filename=path))
         except SyntaxError as exc:
-            parse_error = {"line": exc.lineno, "message": exc.msg}
+            parse_error = {"line": exc.lineno, "message": exc.msg[:300]}
     matches = [d for d in definitions if d["name"] == symbol]
     if symbol and not matches:
         matches = [d for d in definitions if d["name"].rsplit(".", 1)[-1] == symbol]
@@ -47,12 +49,22 @@ def inspect(workspace, path, symbol=None, start=None, lines=60):
     result = {
         "path": path, "total_lines": len(text_lines), "parse_error": parse_error,
         "symbol": symbol, "matches": matches[:8], "definition_count": len(definitions),
+        "match_count": len(matches), "matches_truncated": len(matches) > 8,
         "definitions": definitions[:16] if not symbol else [],
         "definitions_truncated": not symbol and len(definitions) > 16,
         "start_line": first, "end_line": first - 1, "next_line": None, "source": "",
     }
     if symbol and len(matches) != 1:
         result["note"] = "symbol missing or ambiguous; choose an exact qualified name or explicit range"
+    # Definition names can themselves consume the entire stdout allowance.
+    # Reserve space for source, retaining full names only while they fit.
+    while len(json.dumps(result, ensure_ascii=False)) > 2400:
+        key = max((k for k in ("definitions", "matches") if result[k]),
+                  key=lambda k: len(json.dumps(result[k])), default=None)
+        if key is None:
+            break
+        result[key].pop()
+        result[key + "_truncated"] = True
     for number in range(first, stop + 1):
         row = f"{number}: {text_lines[number - 1]}\n"
         previous = result["source"]

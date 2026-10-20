@@ -1,6 +1,6 @@
 """Validate and deterministically package submission 9; no model execution.
 
-Requires PyYAML. Official competition compilation is a separate Kaggle gate.
+Requires PyYAML. Run verify_submission9_runtime.py on the built ZIP separately.
 """
 import argparse
 import ast
@@ -17,6 +17,8 @@ G6 = Path(__file__).resolve().parents[2]
 BASE = G6 / "submission_nb/submission_7"
 CANDIDATE = G6 / "submission_nb/submission_9"
 MODEL = "gemma-4-31b-it-qat-w4a16-ct"
+SOURCE_SKILL = "skills/repo_navigation"
+RUNTIME_SKILL = "skills/repo-navigation"
 
 
 def load_yaml(path, root, stack=()):
@@ -88,11 +90,12 @@ def validate(root=CANDIDATE, baseline=BASE):
     if not manifest.startswith("---\n"):
         raise ValueError("missing skill frontmatter")
     metadata = yaml.safe_load(manifest.split("---", 2)[1])
-    if metadata["name"] != skill.name or not metadata.get("description"):
-        raise ValueError("skill metadata does not match directory")
-    if not re.fullmatch(r"[a-z0-9]+(?:_[a-z0-9]+)*", metadata["name"]):
+    if metadata["name"] != Path(RUNTIME_SKILL).name or not metadata.get("description"):
+        raise ValueError("skill metadata does not match packaged directory")
+    if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", metadata["name"]):
         raise ValueError("invalid skill name")
-    for relative in re.findall(r"(?:scripts|resources)/[a-z_]+\.(?:py|md)", manifest):
+    for relative in re.findall(r"(?:scripts|resources|references)/[a-z_]+\.(?:py|md)", manifest):
+        relative = relative.replace("references/", "resources/", 1)
         if not (skill / relative).is_file():
             raise ValueError(f"missing skill resource: {relative}")
     package_text = "\n".join(p.read_text(encoding="utf-8") for p in files)
@@ -101,30 +104,52 @@ def validate(root=CANDIDATE, baseline=BASE):
     return files, preserved
 
 
+def release_entries(files):
+    """Keep the requested source layout; project it to ADK 1.36.1's format."""
+    entries, aliases = {}, {}
+    for path in files:
+        source_name = path.relative_to(CANDIDATE).as_posix()
+        name = source_name.replace(SOURCE_SKILL + "/", RUNTIME_SKILL + "/", 1)
+        data = path.read_bytes()
+        if source_name == "agent.yaml":
+            data = data.replace(SOURCE_SKILL.encode(), RUNTIME_SKILL.encode())
+        entries[name] = data
+        if name.startswith(RUNTIME_SKILL + "/resources/"):
+            alias = name.replace("/resources/", "/references/", 1)
+            if alias in entries:
+                raise ValueError(f"duplicate generated resource: {alias}")
+            entries[alias] = data
+            aliases[alias] = source_name
+    return dict(sorted(entries.items())), aliases
+
+
 def build(output):
     files, preserved = validate()
+    entries, aliases = release_entries(files)
     output.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as z:
-        for path in files:
-            info = zipfile.ZipInfo(path.relative_to(CANDIDATE).as_posix(), (2026, 10, 20, 0, 0, 0))
+        for name, data in entries.items():
+            info = zipfile.ZipInfo(name, (2026, 10, 20, 0, 0, 0))
             info.compress_type = zipfile.ZIP_DEFLATED
             info.external_attr = 0o100644 << 16
-            z.writestr(info, path.read_bytes())
+            z.writestr(info, data)
     with zipfile.ZipFile(output) as z:
         if z.testzip() is not None:
             raise ValueError("corrupt ZIP")
-        for path in files:
-            if z.read(path.relative_to(CANDIDATE).as_posix()) != path.read_bytes():
+        for name, data in entries.items():
+            if z.read(name) != data:
                 raise ValueError("archive/source mismatch")
     manifest = {
         "candidate": "submission_9", "baseline": "submission_7",
         "source_commit": "cbe742951dcc089b56ba9331f64b3d64647ae595",
         "archive_sha256": hashlib.sha256(output.read_bytes()).hexdigest(),
-        "file_count": len(files), "unpacked_bytes": sum(p.stat().st_size for p in files),
-        "files": {p.relative_to(CANDIDATE).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest() for p in files},
+        "file_count": len(entries), "unpacked_bytes": sum(map(len, entries.values())),
+        "files": {name: hashlib.sha256(data).hexdigest() for name, data in entries.items()},
+        "runtime_skill_directory": RUNTIME_SKILL,
+        "generated_reference_aliases": aliases,
         "byte_identical_baseline_files": preserved,
         "validation": {"static_structure": "passed", "zip_source_parity": "passed",
-                       "official_harness_compile": "not run; Kaggle wheelhouse required",
+                       "official_compiler_smoke": "separate hash-matched runtime_smoke.json report",
                        "gemma_evaluation": "not run", "public_score": None},
     }
     output.with_suffix(".manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")

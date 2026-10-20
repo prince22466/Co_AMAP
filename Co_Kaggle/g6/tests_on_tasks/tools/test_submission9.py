@@ -1,11 +1,13 @@
 """CPU-only behavior tests for the packaged skill, using synthetic repositories."""
 import importlib.util
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 import zipfile
 
 from build_submission9 import CANDIDATE, build, validate
@@ -77,6 +79,13 @@ class InspectionTests(Fixture):
         with self.assertRaises(ValueError):
             inspect(self.root, "link.py")
 
+    def test_long_definition_names_fit_output_budget(self):
+        self.write("module.py", "\n".join(f"def f{i}_{'x' * 300}(): pass" for i in range(20)))
+        result = inspect(self.root, "module.py")
+        self.assertLess(len(json.dumps(result, ensure_ascii=False)), 4500)
+        self.assertTrue(result["definitions_truncated"])
+        self.assertTrue(result["source"])
+
     def test_explicit_workspace_with_changed_cwd(self):
         self.write("module.py", "answer = 42\n")
         output = subprocess.check_output([sys.executable, "-B", str(SCRIPTS / "inspect_source.py"),
@@ -105,6 +114,28 @@ class CheckTests(Fixture):
 
     def test_print_only_is_not_behavioral_pass(self):
         self.assertEqual(check(self.root, "print('looks fine')", "example_pkg")["outcome"], "exit_zero_without_assertions")
+
+    def test_uncalled_assertion_is_not_passed(self):
+        result = check(self.root, "def test():\n    assert False", "example_pkg")
+        self.assertEqual(result["outcome"], "no_assertions_executed")
+        self.assertEqual(result["assertions_passed"], 0)
+
+    def test_caught_failure_is_not_passed(self):
+        result = check(self.root, "try:\n    assert False\nexcept AssertionError:\n    pass\nassert True")
+        self.assertEqual(result["outcome"], "failed")
+        self.assertEqual(result["assertions_failed"], 1)
+        self.assertEqual(result["assertions_passed"], 1)
+
+    def test_optimized_environment_keeps_assertions_enabled(self):
+        with patch.dict(os.environ, {"PYTHONOPTIMIZE": "2"}):
+            self.assertEqual(check(self.root, "assert False")["outcome"], "failed")
+
+    def test_executed_nested_assertions_evaluate_once(self):
+        code = ("seen = []\nclass Check:\n    def run(self):\n"
+                "        assert not seen.append(1)\nCheck().run()\nassert seen == [1]")
+        result = check(self.root, code)
+        self.assertEqual(result["outcome"], "passed")
+        self.assertEqual(result["assertions_passed"], 2)
 
     def test_early_exit_is_incomplete(self):
         self.assertEqual(check(self.root, "import sys\nsys.exit(0)\nassert False", "example_pkg")["outcome"], "incomplete")
@@ -152,8 +183,27 @@ class AuditTests(Fixture):
         before = self.git("status", "--porcelain=v1")
         result = audit(self.root)
         self.assertFalse(result["empty_patch"])
+        self.assertEqual(result["diff_check_returncode"], 0)
         self.assertEqual(before, self.git("status", "--porcelain=v1"))
         self.assertEqual(self.git("diff", "--cached"), b"")
+
+    def test_new_file_whitespace_and_non_python_conflict(self):
+        self.write("new_module.py", "value = 2   \n")
+        self.write("notes.md", "<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> branch\n")
+        result = audit(self.root)
+        self.assertNotEqual(result["diff_check_returncode"], 0)
+        self.assertIn("notes.md", result["conflict_markers"])
+        self.assertEqual(self.git("diff", "--cached"), b"")
+
+    def test_dangling_symlink_is_explicitly_skipped(self):
+        (self.root / "missing.py").symlink_to(self.root / "not_present.py")
+        self.assertEqual(audit(self.root)["skipped_paths"][0]["path"], "missing.py")
+
+    def test_unrelated_executor_named_file_is_not_hidden(self):
+        self.write(".adk_exec_12345678.py", "value = 2\n")
+        result = audit(self.root)
+        self.assertIn(".adk_exec_12345678.py", result["changed_paths"])
+        self.assertEqual(result["runtime_artifact_count"], 0)
 
     def test_empty_patch_is_reported(self):
         self.assertTrue(audit(self.root)["empty_patch"])
@@ -179,7 +229,11 @@ class PackageTests(unittest.TestCase):
             self.assertEqual(a.read_bytes(), b.read_bytes())
             with zipfile.ZipFile(a) as z:
                 self.assertIn("agent.yaml", z.namelist())
-                self.assertIn("skills/repo_navigation/SKILL.md", z.namelist())
+                self.assertIn("skills/repo-navigation/SKILL.md", z.namelist())
+                self.assertNotIn("skills/repo_navigation", z.read("agent.yaml").decode())
+                for name in ("contracts", "tool_recovery", "verification"):
+                    self.assertEqual(z.read(f"skills/repo-navigation/references/{name}.md"),
+                                     z.read(f"skills/repo-navigation/resources/{name}.md"))
                 self.assertFalse(any("diagnostics" in p or p.endswith("README.md") for p in z.namelist()))
 
 
