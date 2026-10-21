@@ -8,6 +8,7 @@ import subprocess
 import tempfile
 import unittest
 import zipfile
+from unittest.mock import patch
 
 from build_submission10 import BASE, CANDIDATE, build, validate
 
@@ -119,6 +120,19 @@ class GateTests(RepoFixture):
             gate.identifiers("UPPERCASE")
         with self.assertRaises(ValueError):
             gate.identifiers("a,a")
+
+    def test_state_write_is_atomic_and_outside_patch(self):
+        self.run_gate()
+        self.assertTrue(gate.state_file(self.root).exists())
+        self.assertFalse(gate.state_file(self.root).with_name(
+            "submission10_repair_state.json.tmp").exists())
+        self.assertNotIn("submission10_repair_state.json",
+                         self.git("status", "--porcelain").decode())
+
+    def test_fingerprint_size_is_bounded(self):
+        with patch.object(gate, "MAX_HASH_BYTES", 1):
+            with self.assertRaises(ValueError):
+                gate.fingerprint(self.root)
 
     def test_staged_only_change_changes_fingerprint(self):
         before = gate.fingerprint(self.root)[0]
