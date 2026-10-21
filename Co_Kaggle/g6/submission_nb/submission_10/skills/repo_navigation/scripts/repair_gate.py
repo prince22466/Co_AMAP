@@ -146,6 +146,7 @@ MAX_REPAIRS = 2
 MIN_SECONDS_FOR_CHECK = 45
 MIN_CALLS_FOR_CHECK = 6
 MAX_REQUIREMENTS = 4
+MAX_HASH_BYTES = 32 * 1024 * 1024
 
 
 def identifiers(raw):
@@ -172,6 +173,7 @@ def fingerprint(root):
     records = git(root, "status", "--porcelain=v1", "--untracked-files=all", "-z").split(b"\0")
     h = hashlib.sha256()
     count = 0
+    hashed_bytes = 0
     i = 0
     while i < len(records):
         record = records[i]
@@ -203,10 +205,15 @@ def fingerprint(root):
                     chunk = stream.read(1024 * 1024)
                     if not chunk:
                         break
+                    hashed_bytes += len(chunk)
+                    if hashed_bytes > MAX_HASH_BYTES:
+                        raise ValueError("changed files exceed bounded fingerprint size")
                     h.update(chunk)
         else:
             h.update(b"DELETED")
     staged = git(root, "diff", "--cached", "--binary")
+    if len(staged) > MAX_HASH_BYTES:
+        raise ValueError("staged diff exceeds bounded fingerprint size")
     h.update(hashlib.sha256(staged).digest())
     return h.hexdigest(), count
 
@@ -309,7 +316,9 @@ def decide(workspace, requirements, covers, code, module=None, timeout=12,
     result["pending_repair"] = state.get("pending_repair", False)
     result["covered"] = sorted(state["checked"])
     result["uncovered"] = [r for r in required if r not in state["checked"]]
-    location.write_text(json.dumps(state, sort_keys=True) + "\n")
+    temporary = location.with_name(location.name + ".tmp")
+    temporary.write_text(json.dumps(state, sort_keys=True) + "\n")
+    temporary.replace(location)
     return result
 
 
