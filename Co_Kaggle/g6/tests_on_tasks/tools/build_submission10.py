@@ -85,7 +85,7 @@ def validate(root=CANDIDATE, baseline=BASE):
         raise ValueError("missing repair gate script")
     checker = (root / SOURCE_SKILL / "scripts/check.py").read_text()
     gate = (root / SOURCE_SKILL / "scripts/repair_gate.py").read_text()
-    embedded = checker[checker.index("_CHILD_RUNNER ="):checker.index("\\ndef main():")]
+    embedded = checker[checker.index("_CHILD_RUNNER ="):checker.index("\ndef main():")]
     if embedded not in gate or "importlib.util" in gate:
         raise ValueError("repair gate must embed the unchanged checker for ADK runpy")
 
