@@ -216,6 +216,16 @@ def state_file(root):
     return directory / "submission10_repair_state.json"
 
 
+def references_runtime_behavior(code):
+    """Reject obviously vacuous assertions; not a semantic coverage proof."""
+    tree = ast.parse(code)
+    return any(
+        isinstance(node, ast.Assert) and any(
+            isinstance(child, (ast.Name, ast.Call, ast.Attribute, ast.Subscript))
+            for child in ast.walk(node.test))
+        for node in ast.walk(tree))
+
+
 def decide(workspace, requirements, covers, code, module=None, timeout=12,
            time_left=None, calls_left=None):
     root = Path(workspace).resolve(strict=True)
@@ -257,7 +267,15 @@ def decide(workspace, requirements, covers, code, module=None, timeout=12,
         result["verification"] = check(root, code, module, timeout)
         test = result["verification"]
         outcome = test["outcome"]
-        if outcome == "passed" and test["assertions_passed"] > 0 and test["completed"]:
+        if outcome == "passed" and test["assertions_passed"] > 0 and test["completed"] and not references_runtime_behavior(code):
+            if state["alternative_checks_requested"] == 0:
+                state["alternative_checks_requested"] += 1
+                result.update(next_action="alternative_check",
+                              reason="vacuous assertion: no runtime value was inspected")
+            else:
+                result.update(next_action="audit_then_submit",
+                              reason="vacuous check and alternative-check allowance exhausted")
+        elif outcome == "passed" and test["assertions_passed"] > 0 and test["completed"]:
             state["pending_repair"] = False  # A passing recheck without an edit was not a repair.
             for name in covered_by_check:
                 state["checked"][name] = hashlib.sha256(code.encode()).hexdigest()[:12]
