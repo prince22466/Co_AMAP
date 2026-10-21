@@ -169,7 +169,7 @@ def fingerprint(root):
     Parse porcelain -z as byte records; rename/copy records consume a second
     pathname. The Git index diff also detects staged-only content changes.
     """
-    records = git(root, "status", "--porcelain=v1", "--untracked-files=all", "-z").split(b"\\0")
+    records = git(root, "status", "--porcelain=v1", "--untracked-files=all", "-z").split(b"\0")
     h = hashlib.sha256()
     count = 0
     i = 0
@@ -188,12 +188,12 @@ def fingerprint(root):
             old_name = records[i]
             i += 1
         name = raw_name.decode("utf-8", "surrogateescape")
-        if status == b"??" and re.fullmatch(r"\\.adk_exec_[0-9a-f]{8}\\.py", name):
+        if status == b"??" and re.fullmatch(r"\.adk_exec_[0-9a-f]{8}\.py", name):
             continue
         count += 1
         if count > 256:
             raise ValueError("too many changed files for a bounded gate")
-        h.update(status + b"\\0" + raw_name + b"\\0" + old_name + b"\\0")
+        h.update(status + b"\0" + raw_name + b"\0" + old_name + b"\0")
         path = root / name
         if path.is_symlink():
             h.update(b"SYMLINK:" + os.fsencode(os.readlink(path)))
