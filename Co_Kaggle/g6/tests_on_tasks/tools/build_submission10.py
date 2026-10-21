@@ -8,6 +8,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import subprocess
 import zipfile
 
 import yaml
@@ -48,7 +49,8 @@ def active_files(root):
     # Explicit release closure: documentation, tests, analysis and build code stay out.
     files = [root / "agent.yaml", root / "eval_config.yaml"]
     for name in ("configs", "prompts", "sub_agents", "skills"):
-        files.extend(p for p in (root / name).rglob("*") if p.is_file() or p.is_symlink())
+        files.extend(p for p in (root / name).rglob("*")
+                     if "__pycache__" not in p.parts and (p.is_file() or p.is_symlink()))
     return sorted(files)
 
 
@@ -127,6 +129,8 @@ def release_entries(files):
 def build(output):
     files, preserved = validate()
     entries, aliases = release_entries(files)
+    if len(entries) > 10000 or sum(map(len, entries.values())) >= 3 * 1024**3:
+        raise ValueError("submission exceeds competition archive limits")
     output.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as z:
         for name, data in entries.items():
@@ -137,12 +141,19 @@ def build(output):
     with zipfile.ZipFile(output) as z:
         if z.testzip() is not None:
             raise ValueError("corrupt ZIP")
+        if set(z.namelist()) != set(entries):
+            raise ValueError("archive entries mismatch")
         for name, data in entries.items():
             if z.read(name) != data:
                 raise ValueError("archive/source mismatch")
+    try:
+        source_commit = subprocess.check_output(
+            ["git", "-C", str(G6), "rev-parse", "HEAD"], text=True, timeout=5).strip()
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        source_commit = None
     manifest = {
         "candidate": "submission_10", "baseline": "submission_9",
-        "source_commit": "PR-143-branch",
+        "source_commit": source_commit,
         "archive_sha256": hashlib.sha256(output.read_bytes()).hexdigest(),
         "file_count": len(entries), "unpacked_bytes": sum(map(len, entries.values())),
         "files": {name: hashlib.sha256(data).hexdigest() for name, data in entries.items()},
