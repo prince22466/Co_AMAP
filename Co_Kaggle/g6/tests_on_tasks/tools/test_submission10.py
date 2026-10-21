@@ -1,12 +1,15 @@
 """Offline regression tests for Submission 10. No Gemma inference or Kaggle grading."""
 import importlib.util
+import json
+import shutil
+import sys
 from pathlib import Path
 import subprocess
 import tempfile
 import unittest
 import zipfile
 
-from build_submission10 import CANDIDATE, build, validate
+from build_submission10 import BASE, CANDIDATE, build, validate
 
 SCRIPT = CANDIDATE / "skills/repo_navigation/scripts/repair_gate.py"
 spec = importlib.util.spec_from_file_location("submission10_repair_gate", SCRIPT)
@@ -124,6 +127,22 @@ class GateTests(RepoFixture):
         after = gate.fingerprint(self.root)[0]
         self.assertNotEqual(before, after)
 
+    def test_cli_accepts_adk_underscore_budget_fields(self):
+        done = subprocess.run(
+            [sys.executable, str(SCRIPT), "--workspace", str(self.root),
+             "--requirements", "behavior", "--covers", "behavior",
+             "--code", "assert True", "--time_left", "180", "--calls_left", "30"],
+            capture_output=True, text=True, check=True, timeout=20)
+        result = json.loads(done.stdout)
+        self.assertEqual(result["next_action"], "audit_then_submit")
+        self.assertTrue(result["budget_sufficient"])
+
+    def test_untracked_change_invalidates_previous_checks(self):
+        self.run_gate(requirements="behavior,default", covers="behavior")
+        self.write("new_implementation.py", "x = 1\\n")
+        out = self.run_gate(requirements="behavior,default", covers="default")
+        self.assertEqual(out["uncovered"], ["behavior"])
+
     def test_worktree_git_metadata_can_be_outside_workspace(self):
         self.git("add", ".")
         self.git("-c", "user.name=Gate Test", "-c", "user.email=test@example.invalid",
@@ -156,6 +175,24 @@ class PackagingTests(unittest.TestCase):
                 self.assertNotIn("skills/repo_navigation", z.read("agent.yaml").decode())
                 self.assertFalse(any("__pycache__" in name for name in names))
                 self.assertLess(sum(x.file_size for x in z.infolist()), 3 * 1024**3)
+
+    def test_builder_rejects_extra_active_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "submission_10"
+            shutil.copytree(CANDIDATE, root)
+            extra = root / "skills/repo_navigation/scripts/extra.py"
+            extra.write_text("pass\\n")
+            with self.assertRaises(ValueError):
+                validate(root=root, baseline=BASE)
+
+    def test_builder_rejects_modified_baseline_checker(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "submission_10"
+            shutil.copytree(CANDIDATE, root)
+            checker = root / "skills/repo_navigation/scripts/check.py"
+            checker.write_text(checker.read_text() + "\\n# unexpected edit\\n")
+            with self.assertRaises(ValueError):
+                validate(root=root, baseline=BASE)
 
     def test_self_contained_gate_for_runpy_executor(self):
         text = SCRIPT.read_text()
