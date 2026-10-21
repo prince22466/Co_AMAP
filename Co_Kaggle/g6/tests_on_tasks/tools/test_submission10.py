@@ -40,7 +40,7 @@ class RepoFixture(unittest.TestCase):
         dest.write_text(content)
         return dest
 
-    def run_gate(self, code="assert 1 == 1", requirements="behavior", covers="behavior", **kw):
+    def run_gate(self, code="from example_pkg import answer\nassert isinstance(answer(), int)", requirements="behavior", covers="behavior", **kw):
         return gate.decide(self.root, requirements, covers, code, **kw)
 
 
@@ -88,7 +88,7 @@ class GateTests(RepoFixture):
 
     def test_no_edit_after_failure_then_pass_clears_pending(self):
         self.run_gate(code="assert False")
-        out = self.run_gate(code="assert True")
+        out = self.run_gate()
         self.assertEqual(out["repairs_requested"], 0)
         self.assertFalse(out["pending_repair"])
 
@@ -98,6 +98,12 @@ class GateTests(RepoFixture):
         self.assertIsNone(out["verification"])
         out = self.run_gate(time_left=120, calls_left=5)
         self.assertEqual(out["next_action"], "audit_then_submit")
+
+    def test_vacuous_assertion_does_not_claim_acceptance(self):
+        result = self.run_gate(code="assert True")
+        self.assertEqual(result["next_action"], "alternative_check")
+        self.assertEqual(result["covered"], [])
+        self.assertEqual(result["uncovered"], ["behavior"])
 
     def test_inconclusive_allows_one_alternative(self):
         first = self.run_gate(code="pass")
@@ -131,7 +137,7 @@ class GateTests(RepoFixture):
         done = subprocess.run(
             [sys.executable, str(SCRIPT), "--workspace", str(self.root),
              "--requirements", "behavior", "--covers", "behavior",
-             "--code", "assert True", "--time_left", "180", "--calls_left", "30"],
+             "--code", "from example_pkg import answer\nassert answer() == 43", "--time_left", "180", "--calls_left", "30"],
             capture_output=True, text=True, check=True, timeout=20)
         result = json.loads(done.stdout)
         self.assertEqual(result["next_action"], "audit_then_submit")
@@ -150,7 +156,7 @@ class GateTests(RepoFixture):
         other = Path(self.temp.name) / "other"
         self.git("worktree", "add", "-q", "--detach", str(other))
         self.assertFalse(gate.state_file(other).is_relative_to(other))
-        out = gate.decide(other, "behavior", "behavior", "assert True")
+        out = gate.decide(other, "behavior", "behavior", "from example_pkg import answer\nassert answer() == 43")
         self.assertEqual(out["next_action"], "audit_then_submit")
 
 
