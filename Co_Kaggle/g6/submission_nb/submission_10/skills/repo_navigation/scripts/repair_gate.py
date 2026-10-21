@@ -52,6 +52,7 @@ def fingerprint(root):
             continue
         names.append(name)
     h = hashlib.sha256()
+    h.update(git(root, "diff", "--cached", "--binary"))
     for name in sorted(names):
         path = root / name
         h.update(name.encode("utf-8", "surrogateescape") + b"\0")
@@ -66,8 +67,6 @@ def fingerprint(root):
 
 def state_file(root):
     directory = Path(git(root, "rev-parse", "--absolute-git-dir").decode().strip()).resolve()
-    if not directory.is_relative_to(root):
-        raise ValueError("git metadata must be inside the sandbox repository")
     return directory / "submission10_repair_state.json"
 
 
@@ -87,12 +86,15 @@ def decide(workspace, requirements, covers, code, module=None, timeout=12,
     patch_fingerprint, changed_count = fingerprint(root)
     location = state_file(root)
     state = json.loads(location.read_text()) if location.exists() else {
-        "requirements": required, "repairs_requested": 0,
+        "requirements": required, "repairs_requested": 0, "pending_repair": False,
         "alternative_checks_requested": 0, "checked": {}, "last_failure": None}
     if state["requirements"] != required:
         raise ValueError("requirement IDs cannot change during the task")
     if state.get("patch_fingerprint") != patch_fingerprint:
         state["checked"] = {}  # An edit invalidates earlier successes.
+        if state.get("pending_repair"):
+            state["repairs_requested"] += 1
+            state["pending_repair"] = False
         state["patch_fingerprint"] = patch_fingerprint
         state["last_failure"] = None
     enough_budget = (time_left is None or time_left >= MIN_SECONDS_FOR_CHECK) and (
@@ -127,7 +129,7 @@ def decide(workspace, requirements, covers, code, module=None, timeout=12,
                 result.update(next_action="audit_then_submit",
                               reason="repair attempt limit reached")
             else:
-                state["repairs_requested"] += 1
+                state["pending_repair"] = True
                 result.update(next_action="repair_if_code_defect",
                               reason="check failed; diagnose before editing")
             state["last_failure"] = signature
@@ -139,6 +141,7 @@ def decide(workspace, requirements, covers, code, module=None, timeout=12,
             result.update(next_action="audit_then_submit",
                           reason="alternative-check allowance exhausted")
     result["repairs_requested"] = state["repairs_requested"]
+    result["pending_repair"] = state.get("pending_repair", False)
     result["covered"] = sorted(state["checked"])
     result["uncovered"] = [r for r in required if r not in state["checked"]]
     location.write_text(json.dumps(state, sort_keys=True) + "\n")
