@@ -1,0 +1,61 @@
+name: g6 submission 10 offline validation
+
+on:
+  pull_request:
+    paths:
+      - 'Co_Kaggle/g6/submission_nb/submission_10/**'
+      - 'Co_Kaggle/g6/tests_on_tasks/tools/build_submission10.py'
+      - 'Co_Kaggle/g6/tests_on_tasks/tools/test_submission10.py'
+      - '.github/workflows/g6-submission10.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: g6-submission10-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  offline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          filter: blob:none
+          sparse-checkout: |
+            Co_Kaggle/g6
+          sparse-checkout-cone-mode: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install release-builder dependency
+        run: python -m pip install 'PyYAML>=6,<7'
+      - name: Compile runtime smoke script (no official dependencies)
+        run: python -m py_compile Co_Kaggle/g6/tests_on_tasks/tools/verify_submission10_runtime.py
+      - name: Unit and integration tests (synthetic repositories; no model)
+        run: python -m unittest discover -s Co_Kaggle/g6/tests_on_tasks/tools -p test_submission10.py -v
+      - name: Build deterministic submission archive
+        run: python Co_Kaggle/g6/tests_on_tasks/tools/build_submission10.py --output /tmp/submission_10.zip
+      - name: Verify archive structure
+        run: |
+          python - <<'PY'
+          import json, zipfile
+          from pathlib import Path
+          archive = Path('/tmp/submission_10.zip')
+          manifest = json.loads(Path('/tmp/submission_10.manifest.json').read_text())
+          with zipfile.ZipFile(archive) as z:
+              assert z.testzip() is None
+              assert 'agent.yaml' in z.namelist()
+              assert 'skills/repo-navigation/scripts/repair_gate.py' in z.namelist()
+              assert len(z.namelist()) == manifest['file_count']
+          print('Archive validated; this is not an official ADK compiler or Gemma inference test')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: submission-10-unscored-candidate
+          path: |
+            /tmp/submission_10.zip
+            /tmp/submission_10.manifest.json
+          if-no-files-found: error
