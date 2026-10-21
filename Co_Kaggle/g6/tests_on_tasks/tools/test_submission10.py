@@ -139,7 +139,7 @@ class GateTests(RepoFixture):
 
     def test_untracked_change_invalidates_previous_checks(self):
         self.run_gate(requirements="behavior,default", covers="behavior")
-        self.write("new_implementation.py", "x = 1\\n")
+        self.write("new_implementation.py", "x = 1\n")
         out = self.run_gate(requirements="behavior,default", covers="default")
         self.assertEqual(out["uncovered"], ["behavior"])
 
@@ -181,7 +181,7 @@ class PackagingTests(unittest.TestCase):
             root = Path(directory) / "submission_10"
             shutil.copytree(CANDIDATE, root)
             extra = root / "skills/repo_navigation/scripts/extra.py"
-            extra.write_text("pass\\n")
+            extra.write_text("pass\n")
             with self.assertRaises(ValueError):
                 validate(root=root, baseline=BASE)
 
@@ -190,7 +190,7 @@ class PackagingTests(unittest.TestCase):
             root = Path(directory) / "submission_10"
             shutil.copytree(CANDIDATE, root)
             checker = root / "skills/repo_navigation/scripts/check.py"
-            checker.write_text(checker.read_text() + "\\n# unexpected edit\\n")
+            checker.write_text(checker.read_text() + "\n# unexpected edit\n")
             with self.assertRaises(ValueError):
                 validate(root=root, baseline=BASE)
 
