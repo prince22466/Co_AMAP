@@ -83,6 +83,12 @@ def validate(root=CANDIDATE, baseline=BASE):
         preserved.append(str(relative))
     if not (root / SOURCE_SKILL / "scripts/repair_gate.py").is_file():
         raise ValueError("missing repair gate script")
+    checker = (root / SOURCE_SKILL / "scripts/check.py").read_text()
+    gate = (root / SOURCE_SKILL / "scripts/repair_gate.py").read_text()
+    embedded = checker[checker.index("_CHILD_RUNNER ="):checker.index("\\ndef main():")]
+    if embedded not in gate or "importlib.util" in gate:
+        raise ValueError("repair gate must embed the unchanged checker for ADK runpy")
+
     baseline_paths = {p.relative_to(baseline).as_posix() for p in active_files(baseline)}
     candidate_paths = {p.relative_to(root).as_posix() for p in files}
     expected_new = {"skills/repo_navigation/scripts/repair_gate.py"}
