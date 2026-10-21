@@ -1,22 +1,41 @@
-# Submission 10: budget-aware evidence-driven repair loop
+# Submission 10 (10A): bounded, evidence-driven repair loop
 
-Experimental successor to Submission 9 (**0.10** public score), with Submission 7 (**0.13**) retained as the strongest recorded baseline. **No Kaggle score or Gemma task-resolution improvement is claimed.**
+Experimental successor to Submission 9 (**0.10** public Kaggle score), compared against the strongest recorded Submission 7 baseline (**0.13**). **No task-resolution or Kaggle improvement is claimed.**
 
-The main coder and both helper agents, model, native tools, skill binding, sampling and evaluation budgets are retained from Submission 9. This experiment adds `skills/repo_navigation/scripts/repair_gate.py` and corresponding prompt/skill guidance.
+## What changes
 
-After the first substantive patch, the coder declares 1–4 stable acceptance IDs, supplies an executable assertion check and lists only the requirements the check exercises. The gate invokes the existing `check.py`, records evidence in the workspace Git metadata (not the submitted diff), invalidates passing evidence after any edit, and returns one of four decisions:
+Submission 10 retains Submission 9's competition model, coder, two tool-free helpers, native tools, sampling, skill and evaluation budgets. Its single experimental variable is the repair decision process:
 
-- `verify_uncovered`: a declared requirement lacks passing executable evidence.
-- `repair_if_code_defect`: failed check, with at most two repair requests; inspect cause before editing.
-- `alternative_check`: one smaller check after an inconclusive result.
-- `audit_then_submit`: acceptance checks covered, repeated unchanged failure, exhausted repair/alternative limit, or low budget.
+1. The coder derives at most four stable acceptance IDs from the actual issue and implementation contract.
+2. After a substantive patch, it invokes the repo-navigation skill's **self-contained** `scripts/repair_gate.py` with an executable assertion check, model-reported IDs exercised by that check, and observed remaining budgets.
+3. The gate executes the same isolated assertion runner as Submission 9, records check results under the task workspace's Git metadata (not in the patch), and invalidates previous passes after changes to tracked, staged, renamed or untracked files.
+4. It returns `verify_uncovered`, `repair_if_code_defect`, `alternative_check` or `audit_then_submit`. Two **actual patch-changing repair cycles** are allowed; a failed diagnostic without an edit does not consume a repair. Repeated identical failures and exhausted budgets stop the loop.
+5. The coder must inspect the failure before changing code and audit the final diff before calling `submit_patch` exactly once.
 
-The gate requires 45 seconds and six counted calls remaining to start a check when budget values are available; otherwise it directs final audit and capture. Unknown budget values are not treated as zero. A local check never establishes hidden-test success. This is an advisory, deterministic decision script inside an ADK skill, **not a native ADK LoopAgent or a host-enforced controller**. The model must invoke it and obey its result. The gate does not edit code or call `submit_patch`.
+The gate requires at least 45 seconds and six counted calls remaining **when these budgets are known**. A missing timer is unknown, not zero. It does not enforce the host's budgets or prevent a model from ignoring its recommendation. **Acceptance IDs and `covers` are supplied by the model and do not prove semantic test coverage.** Local checks never prove hidden-test success. This is an advisory ADK skill script, **not** a host-enforced `LoopAgent`.
 
-## Packaging and testing
+## Reproducible candidate archive
 
-Use the Submission 9 deterministic release builder as the starting point. It must be parameterized for Submission 10 (candidate path, preserved baseline, output archive and manifest), and package `skills/repo_navigation` as ADK-compatible `skills/repo-navigation` with `references/` aliases. Do not manually ZIP the source directory: the raw underscore skill path is not accepted by the documented ADK runtime. The ZIP, manifest, compiler smoke, real model evaluation and Kaggle submission are **not yet produced** by this PR.
+From the repository root, with Python 3.11+ and PyYAML 6:
 
-The gate's initial nine synthetic tests covered all-declared passing checks, partial coverage, invalidation after edit, repeated failures, two-repair limit, low budgets, inconclusive checks, invalid IDs and immutable requirement IDs. Those tests used a local checker double and are not competition-resolution results. Before release, run the unchanged real checker integration, ADK runtime smoke and paired development tasks against Submissions 7 and 9. Do not promote this candidate based only on static or synthetic tests.
+```bash
+python -m pip install 'PyYAML>=6,<7'
+python -m unittest discover -s Co_Kaggle/g6/tests_on_tasks/tools -p test_submission10.py -v
+python Co_Kaggle/g6/tests_on_tasks/tools/build_submission10.py --validate-only
+python Co_Kaggle/g6/tests_on_tasks/tools/build_submission10.py
+```
 
-No change to `submission_records.md` is made until an actual Kaggle score exists.
+The builder enforces baseline preservation, syntax, allowed file types, skill resources, archive limits and ZIP/source parity. It projects source `skills/repo_navigation` to ADK-compatible `skills/repo-navigation`, with `references/` aliases. **Do not ZIP the raw source directory.** The output is `Co_Kaggle/g6/submission_nb/artifacts/submission_10.zip` and a SHA-256 manifest. The PR's [g6 Submission 10 GitHub Actions workflow](https://github.com/prince22466/Co_AMAP/actions/workflows/g6-submission10.yml) runs these offline tests and uploads an unscored candidate ZIP as an artifact when successful.
+
+## Official runtime and evaluation gates
+
+The official compiler/sandbox smoke is separate from offline unit tests. In the competition environment, install the exact wheelhouse dependencies noted in `tests_on_tasks/tools/verify_submission10_runtime.py`, then run:
+
+```bash
+python Co_Kaggle/g6/tests_on_tasks/tools/verify_submission10_runtime.py \
+  --archive Co_Kaggle/g6/submission_nb/artifacts/submission_10.zip
+```
+
+The smoke uses the official ADK compiler and skill executor but synthetic source and native-tool/model doubles. It **does not** run Gemma or grade Kaggle tasks. Before treating Submission 10 as a validated candidate, check the smoke's reported SHA-256 matches the built ZIP, then run paired real-model development tasks against Submissions 7 and 9 under identical budgets. Kaggle score is recorded only after an actual submission and evaluation.
+
+**Release checklist:** offline CI green; ZIP manifest and checksum; official compiler and `run_skill_script` smoke green; actual Gemma task-resolution testing; Kaggle submission/scoring. Missing steps must be reported as unverified, never as passed.
