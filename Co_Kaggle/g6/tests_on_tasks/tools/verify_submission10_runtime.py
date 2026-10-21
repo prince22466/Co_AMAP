@@ -124,7 +124,7 @@ async def verify(archive):
         checks.append("caught_failure_stays_failed_through_tool_envelope")
         result = await script("repair_gate", requirements="behavior", covers="behavior",
                               module="example_pkg",
-                              code="import example_pkg\\nassert example_pkg.answer() == 42",
+                              code="import example_pkg\nassert example_pkg.answer() == 42",
                               time_left=180, calls_left=30)
         assert result["next_action"] == "audit_then_submit", result
         assert result["verification"]["outcome"] == "passed", result
@@ -139,7 +139,7 @@ async def verify(archive):
         assert result["outcome"] == "passed", result
         result = await script("repair_gate", requirements="behavior", covers="behavior",
                               module="example_pkg",
-                              code="import example_pkg\\nassert example_pkg.answer() == 43",
+                              code="import example_pkg\nassert example_pkg.answer() == 43",
                               time_left=160, calls_left=24)
         assert result["verification"]["outcome"] == "passed", result
         assert result["next_action"] == "audit_then_submit", result
