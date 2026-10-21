@@ -1,4 +1,5 @@
 """Offline regression tests for Submission 10. No Gemma inference or Kaggle grading."""
+import ast
 import importlib.util
 import json
 import shutil
@@ -213,6 +214,22 @@ class PackagingTests(unittest.TestCase):
             checker.write_text(checker.read_text() + "\n# unexpected edit\n")
             with self.assertRaises(ValueError):
                 validate(root=root, baseline=BASE)
+
+    def test_official_smoke_assertion_snippets_have_real_newlines(self):
+        source = Path(__file__).with_name("verify_submission10_runtime.py").read_text()
+        tree = ast.parse(source)
+        samples = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and node.args and isinstance(node.args[0], ast.Constant):
+                if node.args[0].value != "repair_gate":
+                    continue
+                for kw in node.keywords:
+                    if kw.arg == "code" and isinstance(kw.value, ast.Constant):
+                        samples.append(kw.value.value)
+        self.assertEqual(len(samples), 2)
+        for sample in samples:
+            self.assertIn(chr(10), sample)
+            self.assertNotIn(chr(92) + "n", sample)
 
     def test_self_contained_gate_for_runpy_executor(self):
         text = SCRIPT.read_text()
