@@ -12,7 +12,7 @@ Submission 10 retains Submission 9's competition model, coder, two tool-free hel
 4. It returns `verify_uncovered`, `repair_if_code_defect`, `alternative_check` or `audit_then_submit`. Two **actual patch-changing repair cycles** are allowed; a failed diagnostic without an edit does not consume a repair. Repeated identical failures and exhausted budgets stop the loop.
 5. The coder must inspect the failure before changing code and audit the final diff before calling `submit_patch` exactly once.
 
-The gate requires at least 45 seconds and six counted calls remaining **when these budgets are known**. A missing timer is unknown, not zero. It does not enforce the host's budgets or prevent a model from ignoring its recommendation. **Acceptance IDs and `covers` are supplied by the model and do not prove semantic test coverage.** Local checks never prove hidden-test success. This is an advisory ADK skill script, **not** a host-enforced `LoopAgent`.
+The gate requires at least 45 seconds and six counted calls remaining **when these budgets are known**. A missing timer is unknown, not zero. It does not enforce the host's budgets or prevent a model from ignoring its recommendation. **Acceptance IDs and `covers` are supplied by the model and do not prove semantic test coverage; obviously vacuous assertions are rejected, but this is only a minimal safeguard.** Local checks never prove hidden-test success. This is an advisory ADK skill script, **not** a host-enforced `LoopAgent`.
 
 ## Reproducible candidate archive
 
