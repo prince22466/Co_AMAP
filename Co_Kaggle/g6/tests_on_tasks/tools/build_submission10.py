@@ -83,6 +83,14 @@ def validate(root=CANDIDATE, baseline=BASE):
         preserved.append(str(relative))
     if not (root / SOURCE_SKILL / "scripts/repair_gate.py").is_file():
         raise ValueError("missing repair gate script")
+    baseline_paths = {p.relative_to(baseline).as_posix() for p in active_files(baseline)}
+    candidate_paths = {p.relative_to(root).as_posix() for p in files}
+    expected_new = {"skills/repo_navigation/scripts/repair_gate.py"}
+    if candidate_paths - baseline_paths != expected_new:
+        raise ValueError(f"unexpected added active files: {sorted(candidate_paths - baseline_paths)}")
+    if baseline_paths - candidate_paths:
+        raise ValueError(f"missing baseline active files: {sorted(baseline_paths - candidate_paths)}")
+
     for helper in agent["tools"]:
         if isinstance(helper, dict):
             config = load_yaml(root / helper["agent_tool"]["config_path"], root)
