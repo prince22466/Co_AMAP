@@ -303,8 +303,8 @@ def main():
     parser.add_argument("--code", required=True)
     parser.add_argument("--module")
     parser.add_argument("--timeout", type=int, default=12)
-    parser.add_argument("--time-left", type=float)
-    parser.add_argument("--calls-left", type=int)
+    parser.add_argument("--time-left", "--time_left", dest="time_left", type=float)
+    parser.add_argument("--calls-left", "--calls_left", dest="calls_left", type=int)
     args = parser.parse_args()
     try:
         out = decide(args.workspace, args.requirements, args.covers, args.code,
