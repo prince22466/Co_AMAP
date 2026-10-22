@@ -12,7 +12,7 @@ import re
 MAX_FILES = 6
 MAX_BYTES_PER_FILE = 120_000
 MAX_FUNCTIONS = 18
-MAX_FORWARDERS = 24
+MAX_FORWARDERS_PER_FUNCTION = 6
 MAX_OUTPUT = 4200
 
 
@@ -93,7 +93,7 @@ class _Definitions(ast.NodeVisitor):
         visitor = _LocalCalls(self.parameter, variadic)
         for statement in node.body:
             visitor.visit(statement)
-        forward = visitor.forwarding[:6]
+        forward = visitor.forwarding[:MAX_FORWARDERS_PER_FUNCTION]
         wanted = (accepts != "not_declared" or bool(forward)
                   or (self.symbol is not None
                       and (qualified == self.symbol
@@ -101,7 +101,9 @@ class _Definitions(ast.NodeVisitor):
         if wanted:
             self.items.append({"symbol": qualified, "path": self.path,
                                "line": node.lineno, "accepts": accepts,
-                               "forwards": forward})
+                               "forwards": forward,
+                               "forwarding_candidates": len(visitor.forwarding),
+                               "forwarding_truncated": len(visitor.forwarding) > len(forward)})
         self.stack.append(node.name)
         for statement in node.body:
             if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
@@ -159,7 +161,7 @@ def trace(workspace, paths, parameter, symbol=None):
     ordered = sorted(found, key=lambda row:
                      (not requested(row), row["accepts"] in
                       ("not_declared", "positional_only"), row["path"], row["line"]))
-    seen = sum(len(row["forwards"]) for row in ordered)
+    seen = sum(row["forwarding_candidates"] for row in ordered)
     trimmed = ordered[:MAX_FUNCTIONS]
     result = {
         "outcome": "structural_candidates_only",
