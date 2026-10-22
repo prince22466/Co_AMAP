@@ -310,10 +310,10 @@ class GraphLoopTests(Fixture):
     def test_coverage_graph_links_api_requirement_and_executed_check(self):
         self.build_graph(requirements="behavior")
         self.write("src/example_pkg/__init__.py",
-                   "def private(option=False): return option\\n"
-                   "def public(option=False): return private(option=option)\\n")
+                   "def private(option=False): return option\n"
+                   "def public(option=False): return private(option=option)\n")
         result = self.decide(
-            "from example_pkg import public\\nassert public(True) is True",
+            "from example_pkg import public\nassert public(True) is True",
             requirements="behavior")
         edges = result["graph"]["coverage_edges"]
         self.assertTrue(any(e["kind"] == "requires_public_api" for e in edges))
@@ -328,7 +328,7 @@ class GraphLoopTests(Fixture):
         payload["public_nodes"] = []
         graph_path.write_text(json.dumps(payload))
         out = self.decide(
-            "from example_pkg import private\\nassert private(True) is True",
+            "from example_pkg import private\nassert private(True) is True",
             requirements="behavior")
         self.assertEqual(out["controller"], "submission10_fallback")
 
