@@ -70,6 +70,9 @@ def validate(root=CANDIDATE, baseline=BASE):
             raise ValueError(f"baseline architecture changed: {key}")
     if agent["model"] != MODEL or agent.get("skills") != ["skills/repo_navigation"]:
         raise ValueError("unexpected model or skill registration")
+    if (root / "agent.yaml").read_bytes() != (baseline / "agent.yaml").read_bytes():
+        raise ValueError("Submission 10 agent topology/config must remain byte-identical")
+
     prompt = (root / "prompts/system.md").read_text()
     if "repair_gate.py" not in prompt or "contract_trace.py" not in prompt:
         raise ValueError("missing repair gate or selective trace instructions")
