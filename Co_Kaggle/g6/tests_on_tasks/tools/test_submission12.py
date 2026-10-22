@@ -259,6 +259,28 @@ class GraphLoopTests(Fixture):
         self.assertEqual(result["covered"], ["behavior"])
         self.assertEqual(result["next_action"], "audit_then_submit")
 
+    def test_unrelated_assertion_after_real_public_call_is_not_coverage(self):
+        self.build_graph(requirements="behavior")
+        result = self.decide(
+            "from example_pkg import private, public\n"
+            "public(True)\n"
+            "assert private(False) is False",
+            requirements="behavior")
+        self.assertEqual(result["verification"]["outcome"], "passed", result)
+        self.assertEqual(result["graph"]["public_calls_executed"], 1)
+        self.assertEqual(result["graph"]["public_linked_assertions"], 0)
+        self.assertEqual(result["covered"], [], result)
+        self.assertEqual(result["next_action"], "verify_public_api", result)
+
+    def test_uninitialized_annotation_is_valid_public_check_source(self):
+        self.build_graph(requirements="behavior")
+        result = self.decide(
+            "from example_pkg import public\n"
+            "result: bool\n"
+            "assert public() is False", requirements="behavior")
+        self.assertEqual(result["next_action"], "audit_then_submit", result)
+        self.assertEqual(result["graph"]["public_linked_assertions"], 1)
+
     def test_graph_failure_then_edit_then_public_pass(self):
         self.build_graph()
         failed = self.decide("from example_pkg import public\nassert public(True) is True")
