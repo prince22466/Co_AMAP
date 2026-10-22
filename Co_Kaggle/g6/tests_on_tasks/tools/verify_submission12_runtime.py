@@ -141,7 +141,7 @@ async def verify(archive):
         checks.append("dependency_graph_persists_outside_task_patch_in_real_ADK_executor")
         result = await script(
             "graph_repair_gate", requirements="behavior", covers="behavior",
-            module="example_pkg", code="import example_pkg\\nassert callable(example_pkg.answer)",
+            module="example_pkg", code="import example_pkg\nassert callable(example_pkg.answer)",
             time_left=180, calls_left=28)
         assert result["next_action"] == "verify_public_api", result
         assert result["controller"] == "graph_guided_repair", result
@@ -149,7 +149,7 @@ async def verify(archive):
         checks.append("graph_gate_rejects_previous_internal_only_acceptance")
         result = await script(
             "graph_repair_gate", requirements="behavior", covers="behavior",
-            module="example_pkg", code="import example_pkg\\nassert example_pkg.answer() == 42",
+            module="example_pkg", code="import example_pkg\nassert example_pkg.answer() == 42",
             time_left=160, calls_left=24)
         assert result["verification"]["outcome"] == "passed", result
         assert result["next_action"] == "audit_then_submit", result
