@@ -419,6 +419,18 @@ def graph_decide(workspace, requirements, covers, code, module=None, timeout=12,
         return result
 
     symbol = graph.get("public_symbol")
+    # A passing Submission 10 internal-only check must not remain accepted
+    # after graph guidance is activated for this task.
+    evidence_path = state_file(root)
+    if evidence_path.exists():
+        previous = json.loads(evidence_path.read_text())
+        marker = hashlib.sha256(json.dumps(graph, sort_keys=True).encode()).hexdigest()[:16]
+        if previous.get("graph_marker") != marker:
+            previous["checked"] = {}
+            previous["graph_marker"] = marker
+            scratch = evidence_path.with_name(evidence_path.name + ".tmp")
+            scratch.write_text(json.dumps(previous, sort_keys=True) + "\n")
+            scratch.replace(evidence_path)
     matched = _public_invoked(code, symbol)
     # Multiple claimed coverage IDs require independent assertions, not one
     # generic low-level check. The assertion runner still cannot prove semantics.
