@@ -117,7 +117,7 @@ def validate(root=CANDIDATE, baseline=BASE):
     if ("def graph_decide(" not in graph_gate or "def _load_graph(" not in graph_gate
             or "importlib.util" in graph_gate):
         raise ValueError("missing standalone graph-guided repair gate")
-    baseline_gate_prefix = gate[gate.index("def check("):gate.index("\\ndef main():")]
+    baseline_gate_prefix = gate[gate.index("def check("):gate.index("\ndef main():")]
     if baseline_gate_prefix not in graph_gate:
         raise ValueError("graph gate changed baseline checker or repair behavior")
 
