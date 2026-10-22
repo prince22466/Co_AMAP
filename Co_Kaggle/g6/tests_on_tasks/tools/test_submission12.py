@@ -307,6 +307,31 @@ class GraphLoopTests(Fixture):
             requirements="behavior,default")
         self.assertEqual(result["controller"], "submission10_fallback")
 
+    def test_coverage_graph_links_api_requirement_and_executed_check(self):
+        self.build_graph(requirements="behavior")
+        self.write("src/example_pkg/__init__.py",
+                   "def private(option=False): return option\\n"
+                   "def public(option=False): return private(option=option)\\n")
+        result = self.decide(
+            "from example_pkg import public\\nassert public(True) is True",
+            requirements="behavior")
+        edges = result["graph"]["coverage_edges"]
+        self.assertTrue(any(e["kind"] == "requires_public_api" for e in edges))
+        self.assertTrue(any(e["kind"] == "passed_public_assertion" for e in edges))
+        self.assertEqual(result["graph"]["test_node"]["outcome"], "passed")
+
+    def test_missing_public_node_does_not_activate_graph_mode(self):
+        self.build_graph(requirements="behavior")
+        graph_path = graph_gate.state_file(self.workspace).with_name(
+            "submission12_contract_graph.json")
+        payload = json.loads(graph_path.read_text())
+        payload["public_nodes"] = []
+        graph_path.write_text(json.dumps(payload))
+        out = self.decide(
+            "from example_pkg import private\\nassert private(True) is True",
+            requirements="behavior")
+        self.assertEqual(out["controller"], "submission10_fallback")
+
     def test_graph_controller_cli_invocation(self):
         self.build_graph(requirements="behavior")
         cmd = [sys.executable, str(GRAPH_GATE), "--workspace", str(self.workspace),
