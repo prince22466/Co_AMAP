@@ -444,7 +444,7 @@ def graph_decide(workspace, requirements, covers, code, module=None, timeout=12,
         "limitations": "Static edges and model-supplied requirement IDs are not proof of semantic coverage.",
     }
     if (result["next_action"] == "verify_uncovered"
-            and result.get("verification", {}).get("outcome") == "passed"
+            and (result.get("verification") or {}).get("outcome") == "passed"
             and declared and not public_claims):
         result["next_action"] = "verify_public_api"
         result["reason"] = "low-level pass cannot discharge public contract; execute public entry"
