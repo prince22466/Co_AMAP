@@ -323,6 +323,88 @@ def decide(workspace, requirements, covers, code, module=None, timeout=12,
 
 
 
+
+# Keep the original Submission 10 check/repair implementation byte-identical
+# above. Instrument the child *only when graph mode is selected*, observing
+# calls that actually execute rather than names merely occurring in test source.
+import uuid
+
+_GRAPH_CHILD_RUNNER = _CHILD_RUNNER.replace(
+    "import uuid\\n", "import uuid\\nimport os\\n", 1
+).replace(
+    "status.write_text(json.dumps(result))\\n\\ndef record(passed):",
+    "status.write_text(json.dumps(result))\\n"
+    "result['public_calls_executed'] = 0\\n\\ndef record(passed):", 1
+).replace(
+    "class Instrument(ast.NodeTransformer):",
+    """tap_name = prefix + "_tap"
+def public_tap(value):
+    result["public_calls_executed"] += 1
+    return value
+
+class TracePublicCalls(ast.NodeTransformer):
+    def visit_Call(self, node):
+        self.generic_visit(node)
+        name = os.environ.get("S12_PUBLIC_NAME", "")
+        func = node.func
+        matched = ((isinstance(func, ast.Name) and func.id == name) or
+                   (isinstance(func, ast.Attribute) and func.attr == name))
+        if matched:
+            wrapper = ast.Call(ast.Name(tap_name, ast.Load()), [node], [])
+            return ast.copy_location(wrapper, node)
+        return node
+
+class Instrument(ast.NodeTransformer):""", 1
+).replace(
+    'tree = ast.fix_missing_locations(Instrument().visit(ast.parse(request["code"])))',
+    'tree = ast.fix_missing_locations(Instrument().visit(TracePublicCalls().visit(ast.parse(request["code"]))))', 1
+).replace(
+    'namespace = {"__name__": "__main__", record_name: record, error_name: AssertionError}',
+    'namespace = {"__name__": "__main__", record_name: record, error_name: AssertionError, tap_name: public_tap}', 1
+).replace(
+    'finally:\\n    status.write_text(json.dumps(result))',
+    """finally:
+    counter_path = os.environ.get("S12_EXECUTION_COUNTER")
+    if counter_path:
+        Path(counter_path).write_text(json.dumps({
+            "token": os.environ.get("S12_EXECUTION_TOKEN"),
+            "count": result.get("public_calls_executed", 0)}))
+    status.write_text(json.dumps(result))""", 1
+)
+
+
+def _checked_public_execution(root, symbol, run_check):
+    """Execute once with in-child call instrumentation; preserve base checker."""
+    if not isinstance(symbol, str) or not all(p.isidentifier() for p in symbol.split(".")):
+        return run_check(), 0
+    counter = state_file(root).with_name("submission12_public_calls.json")
+    token = uuid.uuid4().hex
+    old_runner = globals()["_CHILD_RUNNER"]
+    keys = ["S12_PUBLIC_NAME", "S12_EXECUTION_COUNTER", "S12_EXECUTION_TOKEN"]
+    previous = {key: os.environ.get(key) for key in keys}
+    counter.unlink(missing_ok=True)
+    try:
+        globals()["_CHILD_RUNNER"] = _GRAPH_CHILD_RUNNER
+        os.environ["S12_PUBLIC_NAME"] = symbol.split(".")[-1]
+        os.environ["S12_EXECUTION_COUNTER"] = str(counter)
+        os.environ["S12_EXECUTION_TOKEN"] = token
+        outcome = run_check()
+        count = 0
+        if counter.is_file() and counter.stat().st_size < 512:
+            record = json.loads(counter.read_text())
+            if record.get("token") == token and isinstance(record.get("count"), int):
+                count = max(0, record["count"])
+        return outcome, count
+    finally:
+        globals()["_CHILD_RUNNER"] = old_runner
+        counter.unlink(missing_ok=True)
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
 def _load_graph(root):
     """Read task-local structural evidence; no imports from sibling skill scripts."""
     target = state_file(root).with_name("submission12_contract_graph.json")
@@ -419,9 +501,8 @@ def graph_decide(workspace, requirements, covers, code, module=None, timeout=12,
         result["graph"] = {"available": False, "reason": "no_matching_graph"}
         return result
 
-    symbol = graph.get("public_symbol")
-    # A passing Submission 10 internal-only check must not remain accepted
-    # after graph guidance is activated for this task.
+    symbol = graph["public_symbol"]
+    # Invalidate any prior internal-only checks when graph mode activates.
     evidence_path = state_file(root)
     if evidence_path.exists():
         previous = json.loads(evidence_path.read_text())
@@ -432,50 +513,73 @@ def graph_decide(workspace, requirements, covers, code, module=None, timeout=12,
             scratch = evidence_path.with_name(evidence_path.name + ".tmp")
             scratch.write_text(json.dumps(previous, sort_keys=True) + "\n")
             scratch.replace(evidence_path)
-    matched = _public_invoked(code, symbol)
-    # Multiple claimed coverage IDs require independent assertions, not one
-    # generic low-level check. The assertion runner still cannot prove semantics.
+
     assertions = sum(isinstance(node, ast.Assert)
                      for node in ast.walk(ast.parse(code)))
-    public_claims = declared if matched and assertions >= len(declared) else []
-    result = decide(workspace, requirements, ",".join(public_claims),
-                    code, module, timeout, time_left, calls_left)
+    syntactic_public_call = _public_invoked(code, symbol)
+    result, executed = _checked_public_execution(
+        root, symbol,
+        lambda: decide(workspace, requirements, "", code, module,
+                       timeout, time_left, calls_left))
+
+    verified = result.get("verification") or {}
+    current_accepted = []
+    if (verified.get("outcome") == "passed" and syntactic_public_call
+            and executed > 0 and assertions >= len(declared) and declared):
+        # Base gate executed the check but did not credit requirement IDs.
+        # Credit only IDs exercised by this one passing public-API check.
+        state_path = state_file(root)
+        state = json.loads(state_path.read_text())
+        digest = hashlib.sha256(code.encode()).hexdigest()[:12]
+        for name in declared:
+            state["checked"][name] = digest
+        scratch = state_path.with_name(state_path.name + ".tmp")
+        scratch.write_text(json.dumps(state, sort_keys=True) + "\n")
+        scratch.replace(state_path)
+        current_accepted = list(declared)
+        result["covered"] = sorted(state["checked"])
+        result["uncovered"] = [name for name in desired if name not in state["checked"]]
+        result["next_action"] = ("verify_uncovered" if result["uncovered"]
+                                 else "audit_then_submit")
+        result["reason"] = ("public API executed in passing assertions; "
+                            "semantic requirement coverage remains model-declared")
+
+    # A syntactically mentioned but unexecuted call never establishes coverage.
+    # Preserve a previously passed public check when a later check is weaker.
+    if (verified.get("outcome") == "passed" and declared
+            and not current_accepted and result["uncovered"]
+            and result.get("budget_sufficient", False)):
+        result["next_action"] = "verify_public_api"
+        result["reason"] = ("passing check did not execute a matching public API "
+                            "call with enough independent assertions")
+
     fresh = _source_freshness(root, graph)
     focus = _focus(graph, fresh)
-    result["controller"] = "graph_guided_repair"
-    passed_requirements = set(result["covered"])
     evidence_id = hashlib.sha256(code.encode()).hexdigest()[:12]
-    coverage_edges = [
-        {"from": "requirement:" + name, "to": "api:" + symbol,
-         "kind": "requires_public_api"} for name in desired]
-    coverage_edges.extend(
-        {"from": "test:" + evidence_id, "to": "requirement:" + name,
-         "kind": "passed_public_assertion"}
-        for name in desired if name in passed_requirements)
+    edges = [{"from": "requirement:" + name, "to": "api:" + symbol,
+              "kind": "requires_public_api"} for name in desired]
+    edges.extend({"from": "test:" + evidence_id, "to": "requirement:" + name,
+                  "kind": "passed_public_assertion"} for name in current_accepted)
+    result["controller"] = "graph_guided_repair"
     result["graph"] = {
-        "coverage_edges": coverage_edges,
-        "test_node": {"id": "test:" + evidence_id, "outcome":
-                      (result.get("verification") or {}).get("outcome") or "not_run"},
         "available": True, "fresh": fresh, "public_symbol": symbol,
-        "public_call_present": matched, "test_nodes_verified": public_claims
-        if (result.get("verification") or {}).get("outcome") == "passed" else [],
-        "nodes": len(graph.get("nodes", [])),
-        "candidate_edges": len(graph.get("edges", [])),
-        "requirements": [{"id": name, "status":
-                          "public_checked" if name in result["covered"]
-                          else "unverified"}
-                         for name in desired],
+        "public_call_syntactically_present": syntactic_public_call,
+        "public_calls_executed": executed,
+        "coverage_edges": edges,
+        "test_node": {"id": "test:" + evidence_id,
+                      "outcome": verified.get("outcome") or "not_run"},
+        "test_nodes_verified": current_accepted,
+        "nodes": len(graph["nodes"]), "candidate_edges": len(graph.get("edges", [])),
+        "requirements": [
+            {"id": name, "status": ("public_checked" if name in result["covered"]
+                                   else "unverified")} for name in desired],
         "focus": focus,
-        "limitations": "Static edges and model-supplied requirement IDs are not proof of semantic coverage.",
+        "limitations": ("Executing a matching method name does not prove exact object "
+                        "identity or semantic requirement coverage; static graph edges "
+                        "remain hypotheses."),
     }
-    if (result["next_action"] == "verify_uncovered"
-            and (result.get("verification") or {}).get("outcome") == "passed"
-            and declared and not public_claims):
-        result["next_action"] = "verify_public_api"
-        result["reason"] = "low-level pass cannot discharge public contract; execute public entry"
-    elif result["next_action"] == "repair_if_code_defect":
-        result["graph"]["focus"] = focus
-        result["reason"] += "; graph focus is a hypothesis, not proof of a defect"
+    if result["next_action"] == "repair_if_code_defect":
+        result["reason"] += "; structural graph focus is a hypothesis, not a proven defect"
     return result
 
 
