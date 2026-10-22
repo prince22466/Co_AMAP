@@ -438,6 +438,42 @@ def _public_invoked(code, symbol):
     return False
 
 
+
+def _linked_public_assertions(code, symbol):
+    """Count assertions syntactically linked to a public call or its result.
+
+    This is intentionally conservative: it supports direct assertions and
+    simple named assignments, but does not claim general data-flow analysis.
+    Runtime instrumentation separately verifies that at least one call ran.
+    """
+    if not isinstance(symbol, str) or not symbol.split(".")[-1].isidentifier():
+        return 0
+    target = symbol.split(".")[-1]
+    tree = ast.parse(code)
+
+    def has_call(node):
+        return any(
+            isinstance(x, ast.Call) and (
+                (isinstance(x.func, ast.Name) and x.func.id == target)
+                or (isinstance(x.func, ast.Attribute) and x.func.attr == target))
+            for x in ast.walk(node))
+
+    bound = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Assign, ast.AnnAssign)) and has_call(node.value):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            bound.update(t.id for t in targets if isinstance(t, ast.Name))
+    count = 0
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assert) and (
+                has_call(node.test) or any(
+                    isinstance(part, ast.Name) and part.id in bound
+                    for part in ast.walk(node.test))):
+            count += 1
+    return count
+
+
+
 def _source_freshness(root, graph):
     hashes = graph.get("source_hashes", {})
     if not isinstance(hashes, dict) or len(hashes) > 6:
@@ -514,8 +550,7 @@ def graph_decide(workspace, requirements, covers, code, module=None, timeout=12,
             scratch.write_text(json.dumps(previous, sort_keys=True) + "\n")
             scratch.replace(evidence_path)
 
-    assertions = sum(isinstance(node, ast.Assert)
-                     for node in ast.walk(ast.parse(code)))
+    linked_assertions = _linked_public_assertions(code, symbol)
     syntactic_public_call = _public_invoked(code, symbol)
     result, executed = _checked_public_execution(
         root, symbol,
@@ -535,7 +570,7 @@ def graph_decide(workspace, requirements, covers, code, module=None, timeout=12,
     verified = result.get("verification") or {}
     current_accepted = []
     if (verified.get("outcome") == "passed" and syntactic_public_call
-            and executed > 0 and assertions >= len(declared) and declared):
+            and executed > 0 and linked_assertions >= len(declared) and declared):
         # Base gate executed the check but did not credit requirement IDs.
         # Credit only IDs exercised by this one passing public-API check.
         state_path = state_file(root)
@@ -561,7 +596,7 @@ def graph_decide(workspace, requirements, covers, code, module=None, timeout=12,
             and result.get("budget_sufficient", False)):
         result["next_action"] = "verify_public_api"
         result["reason"] = ("passing check did not execute a matching public API "
-                            "call with enough independent assertions")
+                            "call linked to enough independent assertions")
 
     fresh = _source_freshness(root, graph)
     focus = _focus(graph, fresh)
@@ -575,6 +610,7 @@ def graph_decide(workspace, requirements, covers, code, module=None, timeout=12,
         "available": True, "fresh": fresh, "public_symbol": symbol,
         "public_call_syntactically_present": syntactic_public_call,
         "public_calls_executed": executed,
+        "public_linked_assertions": linked_assertions,
         "coverage_edges": edges,
         "test_node": {"id": "test:" + evidence_id,
                       "outcome": verified.get("outcome") or "not_run"},
