@@ -2,7 +2,7 @@
 
 | Submission and Description | public score | comments |
 | --- | ---: | --- |
-| submission.zip · submission_11 | — | `submission_nb\artifacts\submission_11.zip`; same as submission_10 but with smallest listed model, `gemma-4-e2b-it-qat-w4a16-ct` |
+| submission.zip · submission_11 | 0.03 | `submission_nb\artifacts\submission_11.zip`; same as submission_10 but with smallest listed model, `gemma-4-e2b-it-qat-w4a16-ct` |
 | submission.zip · submission_10 | 0.15 | `submission_nb\artifacts\submission_10.zip`; same three 31B agents as submission_9; adds an advisory assertion-based repair gate with a two-repair limit; preserves tools and budgets |
 | submission.zip · submission_9 | 0.10 | `submission_nb\artifacts\submission_9.zip`; three 31B agents based on submission_7; adds an ADK repo-navigation skill for source inspection, workspace assertion checks and patch auditing; preserves tools and budgets |
 | submission.zip · submission_8 | 0.12 | `submission_nb\artifacts\submission_8.zip`; three 31B agents: coder using shell commands, contract analyst, actual-patch reviewer; derived from submission_7 testing diagnostics |
