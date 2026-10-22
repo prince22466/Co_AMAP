@@ -17,6 +17,11 @@ spec = importlib.util.spec_from_file_location("submission12_contract_trace", SOU
 tracer = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(tracer)
 
+GRAPH_GATE = CANDIDATE / "skills/repo_navigation/scripts/graph_repair_gate.py"
+graph_spec = importlib.util.spec_from_file_location("submission12_graph_gate", GRAPH_GATE)
+graph_gate = importlib.util.module_from_spec(graph_spec)
+graph_spec.loader.exec_module(graph_gate)
+
 
 class Fixture(unittest.TestCase):
     def setUp(self):
@@ -177,6 +182,132 @@ def entry(option=None):
         self.assertLess(len(result.stdout), 5000)
 
 
+class GraphLoopTests(Fixture):
+    def setUp(self):
+        super().setUp()
+        self.write("src/example_pkg/__init__.py",
+                   "def private(option=False): return option\n"
+                   "def public(option=False): return private()\n")
+        self.git("init", "-q")
+        self.git("add", ".")
+        self.git("-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                 "commit", "-qm", "baseline")
+
+    def git(self, *args):
+        return subprocess.check_output(["git", "-C", str(self.workspace), *args])
+
+    def build_graph(self, requirements="behavior,default"):
+        return tracer.trace(self.workspace, "src/example_pkg/__init__.py",
+                            "option", symbol="public",
+                            requirements=requirements, store=True)
+
+    def decide(self, code, covers="behavior", requirements="behavior,default",
+               time_left=180, calls_left=30):
+        return graph_gate.graph_decide(
+            self.workspace, requirements, covers, code,
+            module="example_pkg", time_left=time_left, calls_left=calls_left)
+
+    def test_graph_persists_outside_patch_and_detects_missing_forward(self):
+        traced = self.build_graph()
+        self.assertTrue(traced["graph"]["stored"], traced)
+        path = graph_gate.state_file(self.workspace).with_name(
+            "submission12_contract_graph.json")
+        self.assertTrue(path.exists())
+        self.assertNotIn("submission12_contract_graph.json",
+                         self.git("status", "--porcelain").decode())
+        graph = json.loads(path.read_text())
+        self.assertEqual(graph["requirements"], ["behavior", "default"])
+        self.assertEqual(len(graph["public_nodes"]), 1)
+        public_edges = [e for e in graph["edges"]
+                        if e["from"] in graph["public_nodes"]]
+        self.assertTrue(any(e["callee"] == "private"
+                            and e["mode"] == "other_call" for e in public_edges))
+
+    def test_internal_pass_does_not_discharge_public_requirement(self):
+        self.build_graph()
+        first = self.decide("from example_pkg import private\nassert private(True) is True")
+        self.assertEqual(first["next_action"], "verify_public_api", first)
+        self.assertEqual(first["covered"], [])
+        self.assertEqual(first["controller"], "graph_guided_repair")
+        self.assertEqual(first["graph"]["focus"]["reason"],
+                         "public_call_may_not_forward_named_option")
+
+    def test_graph_failure_then_edit_then_public_pass(self):
+        self.build_graph()
+        failed = self.decide("from example_pkg import public\nassert public(True) is True")
+        self.assertEqual(failed["next_action"], "repair_if_code_defect", failed)
+        self.assertEqual(failed["repairs_requested"], 0)
+        self.write("src/example_pkg/__init__.py",
+                   "def private(option=False): return option\n"
+                   "def public(option=False): return private(option=option)\n")
+        passed = self.decide(
+            "from example_pkg import public\nassert public(True) is True",
+            covers="behavior")
+        self.assertEqual(passed["verification"]["outcome"], "passed", passed)
+        self.assertEqual(passed["next_action"], "verify_uncovered", passed)
+        self.assertEqual(passed["repairs_requested"], 1)
+        self.assertFalse(passed["graph"]["fresh"])
+        self.assertEqual(passed["graph"]["focus"]["reason"], "graph_stale_after_edit")
+        self.assertEqual(passed["covered"], ["behavior"])
+
+    def test_public_checks_accept_only_claimed_requirements(self):
+        self.build_graph()
+        self.write("src/example_pkg/__init__.py",
+                   "def private(option=False): return option\n"
+                   "def public(option=False): return private(option=option)\n")
+        result = self.decide(
+            "from example_pkg import public\n"
+            "assert public(True) is True\n"
+            "assert public() is False",
+            covers="behavior,default")
+        self.assertEqual(result["next_action"], "audit_then_submit", result)
+        self.assertEqual(result["covered"], ["behavior", "default"])
+
+    def test_one_assertion_cannot_claim_two_requirements(self):
+        self.build_graph()
+        self.write("src/example_pkg/__init__.py",
+                   "def private(option=False): return option\n"
+                   "def public(option=False): return private(option=option)\n")
+        result = self.decide(
+            "from example_pkg import public\nassert public(True) is True",
+            covers="behavior,default")
+        self.assertEqual(result["covered"], [], result)
+        self.assertEqual(result["next_action"], "verify_public_api", result)
+
+    def test_low_budget_never_dereferences_missing_verification(self):
+        self.build_graph()
+        result = self.decide("assert True", time_left=20, calls_left=2)
+        self.assertEqual(result["next_action"], "audit_then_submit", result)
+        self.assertIsNone(result["verification"])
+
+    def test_missing_graph_uses_exact_submission10_fallback(self):
+        result = self.decide(
+            "from example_pkg import private\nassert private(True) is True",
+            requirements="behavior", covers="behavior")
+        self.assertEqual(result["controller"], "submission10_fallback")
+        self.assertEqual(result["next_action"], "audit_then_submit")
+
+    def test_mismatched_requirement_graph_uses_fallback(self):
+        self.build_graph(requirements="behavior")
+        result = self.decide(
+            "from example_pkg import private\nassert private(True) is True",
+            requirements="behavior,default")
+        self.assertEqual(result["controller"], "submission10_fallback")
+
+    def test_graph_controller_cli_invocation(self):
+        self.build_graph(requirements="behavior")
+        cmd = [sys.executable, str(GRAPH_GATE), "--workspace", str(self.workspace),
+               "--requirements", "behavior", "--covers", "behavior",
+               "--module", "example_pkg",
+               "--code", "from example_pkg import private\nassert private(True) is True",
+               "--time_left", "170", "--calls_left", "32"]
+        done = subprocess.run(cmd, capture_output=True, text=True,
+                              check=True, timeout=20)
+        result = json.loads(done.stdout)
+        self.assertEqual(result["next_action"], "verify_public_api", result)
+        self.assertEqual(result["controller"], "graph_guided_repair")
+
+
 class PackageTests(unittest.TestCase):
     def test_single_variable_release_closure(self):
         files, preserved = validate()
@@ -195,6 +326,7 @@ class PackageTests(unittest.TestCase):
                 self.assertIn("agent.yaml", items)
                 self.assertIn("skills/repo-navigation/scripts/contract_trace.py", items)
                 self.assertIn("skills/repo-navigation/scripts/repair_gate.py", items)
+                self.assertIn("skills/repo-navigation/scripts/graph_repair_gate.py", items)
                 self.assertIn("skills/repo-navigation/references/contracts.md", items)
                 self.assertNotIn("README.md", items)
                 self.assertNotIn("skills/repo_navigation", z.read("agent.yaml").decode())
