@@ -330,11 +330,11 @@ def decide(workspace, requirements, covers, code, module=None, timeout=12,
 import uuid
 
 _GRAPH_CHILD_RUNNER = _CHILD_RUNNER.replace(
-    "import uuid\\n", "import uuid\\nimport os\\n", 1
+    "import uuid\n", "import uuid\nimport os\n", 1
 ).replace(
-    "status.write_text(json.dumps(result))\\n\\ndef record(passed):",
-    "status.write_text(json.dumps(result))\\n"
-    "result['public_calls_executed'] = 0\\n\\ndef record(passed):", 1
+    "status.write_text(json.dumps(result))\n\ndef record(passed):",
+    "status.write_text(json.dumps(result))\n"
+    "result['public_calls_executed'] = 0\n\ndef record(passed):", 1
 ).replace(
     "class Instrument(ast.NodeTransformer):",
     """tap_name = prefix + "_tap"
@@ -362,7 +362,7 @@ class Instrument(ast.NodeTransformer):""", 1
     'namespace = {"__name__": "__main__", record_name: record, error_name: AssertionError}',
     'namespace = {"__name__": "__main__", record_name: record, error_name: AssertionError, tap_name: public_tap}', 1
 ).replace(
-    'finally:\\n    status.write_text(json.dumps(result))',
+    'finally:\n    status.write_text(json.dumps(result))',
     """finally:
     counter_path = os.environ.get("S12_EXECUTION_COUNTER")
     if counter_path:
