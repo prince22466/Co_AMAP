@@ -1,0 +1,66 @@
+name: g6 submission 12 offline validation
+
+on:
+  pull_request:
+    paths:
+      - 'Co_Kaggle/g6/submission_nb/submission_12/**'
+      - 'Co_Kaggle/g6/tests_on_tasks/tools/build_submission12.py'
+      - 'Co_Kaggle/g6/tests_on_tasks/tools/test_submission12.py'
+      - 'Co_Kaggle/g6/tests_on_tasks/tools/verify_submission12_runtime.py'
+      - '.github/workflows/g6-submission12.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: g6-submission12-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  offline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          filter: blob:none
+          sparse-checkout: |
+            Co_Kaggle/g6
+          sparse-checkout-cone-mode: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install release-builder dependency
+        run: python -m pip install 'PyYAML>=6,<7'
+      - name: Syntax-check optional official ADK smoke
+        run: python -m py_compile Co_Kaggle/g6/tests_on_tasks/tools/verify_submission12_runtime.py
+      - name: CPU-only unit, security and packaging tests
+        run: python -m unittest discover -s Co_Kaggle/g6/tests_on_tasks/tools -p test_submission12.py -v
+      - name: Validate source against Submission 10 baseline
+        run: python Co_Kaggle/g6/tests_on_tasks/tools/build_submission12.py --validate-only
+      - name: Build candidate archive and manifest
+        run: python Co_Kaggle/g6/tests_on_tasks/tools/build_submission12.py --output /tmp/submission_12.zip
+      - name: Verify archive against manifest
+        run: |
+          python - <<'PY'
+          import hashlib, json, zipfile
+          from pathlib import Path
+          archive = Path('/tmp/submission_12.zip')
+          manifest = json.loads(Path('/tmp/submission_12.manifest.json').read_text())
+          assert manifest['archive_sha256'] == hashlib.sha256(archive.read_bytes()).hexdigest()
+          assert manifest['validation']['gemma_evaluation'] == 'not run'
+          with zipfile.ZipFile(archive) as z:
+              assert z.testzip() is None
+              assert set(z.namelist()) == set(manifest['files'])
+              for name, digest in manifest['files'].items():
+                  assert hashlib.sha256(z.read(name)).hexdigest() == digest
+          print('Verified deterministic archive; no official ADK/Gemma inference performed')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: submission-12-unscored-candidate
+          path: |
+            /tmp/submission_12.zip
+            /tmp/submission_12.manifest.json
+          if-no-files-found: error
