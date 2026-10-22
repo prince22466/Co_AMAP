@@ -411,7 +411,8 @@ def graph_decide(workspace, requirements, covers, code, module=None, timeout=12,
     except (ValueError, OSError, json.JSONDecodeError, KeyError, TypeError):
         graph = None
 
-    if graph is None or set(graph.get("requirements", [])) != set(desired):
+    if (graph is None or set(graph.get("requirements", [])) != set(desired)
+            or not graph.get("public_nodes")):
         result = decide(workspace, requirements, covers, code, module,
                         timeout, time_left, calls_left)
         result["controller"] = "submission10_fallback"
@@ -442,7 +443,19 @@ def graph_decide(workspace, requirements, covers, code, module=None, timeout=12,
     fresh = _source_freshness(root, graph)
     focus = _focus(graph, fresh)
     result["controller"] = "graph_guided_repair"
+    passed_requirements = set(result["covered"])
+    evidence_id = hashlib.sha256(code.encode()).hexdigest()[:12]
+    coverage_edges = [
+        {"from": "requirement:" + name, "to": "api:" + symbol,
+         "kind": "requires_public_api"} for name in desired]
+    coverage_edges.extend(
+        {"from": "test:" + evidence_id, "to": "requirement:" + name,
+         "kind": "passed_public_assertion"}
+        for name in desired if name in passed_requirements)
     result["graph"] = {
+        "coverage_edges": coverage_edges,
+        "test_node": {"id": "test:" + evidence_id, "outcome":
+                      (result.get("verification") or {}).get("outcome") or "not_run"},
         "available": True, "fresh": fresh, "public_symbol": symbol,
         "public_call_present": matched, "test_nodes_verified": public_claims
         if (result.get("verification") or {}).get("outcome") == "passed" else [],
