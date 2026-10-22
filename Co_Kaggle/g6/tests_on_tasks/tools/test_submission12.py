@@ -281,6 +281,15 @@ class GraphLoopTests(Fixture):
         self.assertEqual(result["next_action"], "audit_then_submit", result)
         self.assertEqual(result["graph"]["public_linked_assertions"], 1)
 
+    def test_repeated_internal_only_pass_stops_the_graph_loop(self):
+        self.build_graph(requirements="behavior")
+        snippet = "from example_pkg import private\nassert private(True) is True"
+        first = self.decide(snippet, requirements="behavior")
+        second = self.decide(snippet, requirements="behavior")
+        self.assertEqual(first["next_action"], "verify_public_api", first)
+        self.assertEqual(second["next_action"], "audit_then_submit", second)
+        self.assertEqual(second["covered"], [])
+
     def test_graph_failure_then_edit_then_public_pass(self):
         self.build_graph()
         failed = self.decide("from example_pkg import public\nassert public(True) is True")
@@ -297,6 +306,8 @@ class GraphLoopTests(Fixture):
         self.assertEqual(passed["repairs_requested"], 1)
         self.assertFalse(passed["graph"]["fresh"])
         self.assertEqual(passed["graph"]["focus"]["reason"], "graph_stale_after_edit")
+        self.assertEqual(passed["graph"]["focus"]["candidate"], "private")
+        self.assertEqual(passed["graph"]["focus"]["confidence"], "historical_candidate")
         self.assertEqual(passed["covered"], ["behavior"])
 
     def test_public_checks_accept_only_claimed_requirements(self):
