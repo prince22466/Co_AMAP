@@ -460,7 +460,8 @@ def _linked_public_assertions(code, symbol):
 
     bound = set()
     for node in ast.walk(tree):
-        if isinstance(node, (ast.Assign, ast.AnnAssign)) and has_call(node.value):
+        if (isinstance(node, (ast.Assign, ast.AnnAssign))
+                and node.value is not None and has_call(node.value)):
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
             bound.update(t.id for t in targets if isinstance(t, ast.Name))
     count = 0
