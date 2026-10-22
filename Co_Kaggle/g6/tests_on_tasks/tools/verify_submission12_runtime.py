@@ -132,11 +132,28 @@ async def verify(archive):
         checks.append("repair_gate_runs_self_contained_through_adk_skill_executor")
         result = await script("contract_trace",
                               paths="src/example_pkg/__init__.py",
-                              parameter="option", symbol="answer")
+                              parameter="option", symbol="answer",
+                              requirements="behavior", store="true")
         assert result["outcome"] == "structural_candidates_only", result
         assert result["functions"][0]["symbol"] == "answer", result
         assert result["functions"][0]["accepts"] == "not_declared", result
-        checks.append("selective_contract_trace_executes_through_official_ADK_skill_tool")
+        assert result["graph"]["stored"], result
+        checks.append("dependency_graph_persists_outside_task_patch_in_real_ADK_executor")
+        result = await script(
+            "graph_repair_gate", requirements="behavior", covers="behavior",
+            module="example_pkg", code="import example_pkg\\nassert callable(example_pkg.answer)",
+            time_left=180, calls_left=28)
+        assert result["next_action"] == "verify_public_api", result
+        assert result["controller"] == "graph_guided_repair", result
+        assert result["covered"] == [], result
+        checks.append("graph_gate_rejects_previous_internal_only_acceptance")
+        result = await script(
+            "graph_repair_gate", requirements="behavior", covers="behavior",
+            module="example_pkg", code="import example_pkg\\nassert example_pkg.answer() == 42",
+            time_left=160, calls_left=24)
+        assert result["verification"]["outcome"] == "passed", result
+        assert result["next_action"] == "audit_then_submit", result
+        checks.append("graph_controller_accepts_real_public_api_execution")
         result = await script("audit_patch")
         assert result["empty_patch"], result
         assert result["diff_check_returncode"] == 0, result
@@ -144,13 +161,14 @@ async def verify(archive):
         sandbox.write_file("src/example_pkg/__init__.py", "def answer():\n    return 43\n")
         result = await script("check", module="example_pkg", code="import example_pkg\nassert example_pkg.answer() == 43")
         assert result["outcome"] == "passed", result
-        result = await script("repair_gate", requirements="behavior", covers="behavior",
+        result = await script("graph_repair_gate", requirements="behavior", covers="behavior",
                               module="example_pkg",
                               code="import example_pkg\nassert example_pkg.answer() == 43",
                               time_left=160, calls_left=24)
         assert result["verification"]["outcome"] == "passed", result
         assert result["next_action"] == "audit_then_submit", result
-        checks.append("repair_gate_invalidates_old_evidence_after_edit")
+        assert result["graph"]["fresh"] is False, result
+        checks.append("graph_gate_keeps_public_runtime_evidence_after_graph_stales")
 
         before = git("status", "--porcelain=v1")
         result = await script("audit_patch")
