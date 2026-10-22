@@ -575,7 +575,9 @@ def graph_decide(workspace, requirements, covers, code, module=None, timeout=12,
     verified = result.get("verification") or {}
     current_accepted = []
     if (verified.get("outcome") == "passed" and syntactic_public_call
-            and executed > 0 and linked_assertions >= len(declared) and declared):
+            and executed > 0 and linked_assertions >= len(declared)
+            and verified.get("assertions_passed", 0) >= len(declared)
+            and declared):
         # Base gate executed the check but did not credit requirement IDs.
         # Credit only IDs exercised by this one passing public-API check.
         state_path = state_file(root)
