@@ -334,6 +334,21 @@ class GraphLoopTests(Fixture):
         self.assertEqual(result["covered"], [], result)
         self.assertEqual(result["next_action"], "verify_public_api", result)
 
+    def test_unreached_assertion_cannot_fulfill_second_requirement(self):
+        self.build_graph()
+        self.write("src/example_pkg/__init__.py",
+                   "def private(option=False): return option\n"
+                   "def public(option=False): return private(option=option)\n")
+        out = self.decide(
+            "from example_pkg import public\n"
+            "assert public(True) is True\n"
+            "if False:\n    assert public(False) is False",
+            covers="behavior,default")
+        self.assertEqual(out["verification"]["outcome"], "passed", out)
+        self.assertEqual(out["verification"]["assertions_passed"], 1, out)
+        self.assertEqual(out["covered"], [], out)
+        self.assertEqual(out["next_action"], "verify_public_api", out)
+
     def test_low_budget_never_dereferences_missing_verification(self):
         self.build_graph()
         result = self.decide("assert True", time_left=20, calls_left=2)
