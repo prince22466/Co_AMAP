@@ -8,6 +8,7 @@ import sys
 import tempfile
 import unittest
 import zipfile
+from unittest.mock import patch
 
 from build_submission12 import BASE, CANDIDATE, build, validate
 
@@ -58,6 +59,35 @@ def private(option=False):
         public = next(row for row in result["functions"] if row["symbol"] == "public")
         self.assertEqual(public["forwards"], [])
         self.assertIn("do not prove runtime", result["limitations"])
+
+    def test_positional_only_does_not_claim_keyword_compatibility(self):
+        self.write("api.py", """def public(option, /):
+    return option
+def private(option=None):
+    return option
+""")
+        result = tracer.trace(self.workspace, "api.py", "option")
+        rows = {row["symbol"]: row for row in result["functions"]}
+        self.assertEqual(rows["public"]["accepts"], "positional_only")
+        self.assertEqual(rows["private"]["accepts"], "explicit")
+
+    def test_requested_public_entry_survives_large_result_truncation(self):
+        source = "\\n".join("def f%d(option=None): return option" % i
+                            for i in range(50))
+        self.write("api.py", source + "\\ndef public_api(): return 1\\n")
+        result = tracer.trace(self.workspace, "api.py", "option",
+                              symbol="public_api")
+        self.assertEqual(result["functions_found"], 51)
+        self.assertTrue(result["truncated"])
+        self.assertEqual(result["functions"][0]["symbol"], "public_api")
+        self.assertEqual(result["functions"][0]["accepts"], "not_declared")
+
+    def test_deep_ast_traversal_reports_inconclusive_instead_of_crashing(self):
+        self.write("api.py", "def f(option): return option\\n")
+        with patch.object(tracer._Definitions, "visit", side_effect=RecursionError):
+            result = tracer.trace(self.workspace, "api.py", "option")
+        self.assertEqual(result["functions"], [])
+        self.assertEqual(result["warnings"][0]["issue"], "traversal_too_deep")
 
     def test_kwargs_forwarding_is_reported_as_opaque(self):
         self.write("api.py", """class Router:
