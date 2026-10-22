@@ -72,9 +72,9 @@ def private(option=None):
         self.assertEqual(rows["private"]["accepts"], "explicit")
 
     def test_requested_public_entry_survives_large_result_truncation(self):
-        source = "\\n".join("def f%d(option=None): return option" % i
+        source = "\n".join("def f%d(option=None): return option" % i
                             for i in range(50))
-        self.write("api.py", source + "\\ndef public_api(): return 1\\n")
+        self.write("api.py", source + "\ndef public_api(): return 1\n")
         result = tracer.trace(self.workspace, "api.py", "option",
                               symbol="public_api")
         self.assertEqual(result["functions_found"], 51)
@@ -83,7 +83,7 @@ def private(option=None):
         self.assertEqual(result["functions"][0]["accepts"], "not_declared")
 
     def test_deep_ast_traversal_reports_inconclusive_instead_of_crashing(self):
-        self.write("api.py", "def f(option): return option\\n")
+        self.write("api.py", "def f(option): return option\n")
         with patch.object(tracer._Definitions, "visit", side_effect=RecursionError):
             result = tracer.trace(self.workspace, "api.py", "option")
         self.assertEqual(result["functions"], [])
