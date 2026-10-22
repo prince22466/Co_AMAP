@@ -433,7 +433,7 @@ def graph_decide(workspace, requirements, covers, code, module=None, timeout=12,
     result["graph"] = {
         "available": True, "fresh": fresh, "public_symbol": symbol,
         "public_call_present": matched, "test_nodes_verified": public_claims
-        if result.get("verification", {}).get("outcome") == "passed" else [],
+        if (result.get("verification") or {}).get("outcome") == "passed" else [],
         "nodes": len(graph.get("nodes", [])),
         "candidate_edges": len(graph.get("edges", [])),
         "requirements": [{"id": name, "status":
