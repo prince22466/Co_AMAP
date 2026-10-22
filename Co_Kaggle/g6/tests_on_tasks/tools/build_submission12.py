@@ -74,8 +74,9 @@ def validate(root=CANDIDATE, baseline=BASE):
         raise ValueError("Submission 10 agent topology/config must remain byte-identical")
 
     prompt = (root / "prompts/system.md").read_text()
-    if "repair_gate.py" not in prompt or "contract_trace.py" not in prompt:
-        raise ValueError("missing repair gate or selective trace instructions")
+    if ("repair_gate.py" not in prompt or "contract_trace.py" not in prompt
+            or "graph_repair_gate.py" not in prompt):
+        raise ValueError("missing graph-guided repair instructions")
     base_prompt = (baseline / "prompts/system.md").read_text()
     if not prompt.startswith(base_prompt):
         raise ValueError("Submission 10 prompt is not an unchanged prefix")
@@ -102,7 +103,8 @@ def validate(root=CANDIDATE, baseline=BASE):
 
     baseline_paths = {p.relative_to(baseline).as_posix() for p in active_files(baseline)}
     candidate_paths = {p.relative_to(root).as_posix() for p in files}
-    expected_new = {"skills/repo_navigation/scripts/contract_trace.py"}
+    expected_new = {"skills/repo_navigation/scripts/contract_trace.py",
+                    "skills/repo_navigation/scripts/graph_repair_gate.py"}
     if candidate_paths - baseline_paths != expected_new:
         raise ValueError(f"unexpected added active files: {sorted(candidate_paths - baseline_paths)}")
     if baseline_paths - candidate_paths:
@@ -111,6 +113,14 @@ def validate(root=CANDIDATE, baseline=BASE):
     script = (root / SOURCE_SKILL / "scripts/contract_trace.py").read_text()
     if "def trace(" not in script or "def main(" not in script:
         raise ValueError("missing contract_trace runtime entrypoint")
+    graph_gate = (root / SOURCE_SKILL / "scripts/graph_repair_gate.py").read_text()
+    if ("def graph_decide(" not in graph_gate or "def _load_graph(" not in graph_gate
+            or "importlib.util" in graph_gate):
+        raise ValueError("missing standalone graph-guided repair gate")
+    baseline_gate_prefix = gate[gate.index("def check("):gate.index("\\ndef main():")]
+    if baseline_gate_prefix not in graph_gate:
+        raise ValueError("graph gate changed baseline checker or repair behavior")
+
     for helper in agent["tools"]:
         if isinstance(helper, dict):
             config = load_yaml(root / helper["agent_tool"]["config_path"], root)
