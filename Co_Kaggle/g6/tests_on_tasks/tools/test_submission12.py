@@ -232,6 +232,33 @@ class GraphLoopTests(Fixture):
         self.assertEqual(first["graph"]["focus"]["reason"],
                          "public_call_may_not_forward_named_option")
 
+    def test_unreachable_public_call_does_not_establish_acceptance(self):
+        self.build_graph(requirements="behavior")
+        result = self.decide(
+            "from example_pkg import private, public\n"
+            "if False:\n    public(True)\n"
+            "assert private(False) is False",
+            requirements="behavior")
+        self.assertEqual(result["verification"]["outcome"], "passed", result)
+        self.assertTrue(result["graph"]["public_call_syntactically_present"])
+        self.assertEqual(result["graph"]["public_calls_executed"], 0)
+        self.assertEqual(result["covered"], [])
+        self.assertEqual(result["next_action"], "verify_public_api")
+
+    def test_public_call_execution_counted_for_assigned_value(self):
+        self.build_graph(requirements="behavior")
+        self.write("src/example_pkg/__init__.py",
+                   "def private(option=False): return option\n"
+                   "def public(option=False): return private(option=option)\n")
+        result = self.decide(
+            "from example_pkg import public\n"
+            "outcome = public(True)\n"
+            "assert outcome is True", requirements="behavior")
+        self.assertEqual(result["verification"]["outcome"], "passed", result)
+        self.assertGreater(result["graph"]["public_calls_executed"], 0)
+        self.assertEqual(result["covered"], ["behavior"])
+        self.assertEqual(result["next_action"], "audit_then_submit")
+
     def test_graph_failure_then_edit_then_public_pass(self):
         self.build_graph()
         failed = self.decide("from example_pkg import public\nassert public(True) is True")
@@ -306,6 +333,22 @@ class GraphLoopTests(Fixture):
             "from example_pkg import private\nassert private(True) is True",
             requirements="behavior,default")
         self.assertEqual(result["controller"], "submission10_fallback")
+
+    def test_failed_check_does_not_reassign_old_pass_to_current_test(self):
+        self.build_graph()
+        self.write("src/example_pkg/__init__.py",
+                   "def private(option=False): return option\n"
+                   "def public(option=False): return private(option=option)\n")
+        first = self.decide(
+            "from example_pkg import public\nassert public(True) is True")
+        self.assertEqual(first["covered"], ["behavior"], first)
+        second = self.decide(
+            "from example_pkg import public\nassert public(False) is True",
+            covers="default")
+        self.assertEqual(second["verification"]["outcome"], "failed", second)
+        self.assertEqual(second["covered"], ["behavior"], second)
+        self.assertFalse(any(e["kind"] == "passed_public_assertion"
+                             for e in second["graph"]["coverage_edges"]))
 
     def test_coverage_graph_links_api_requirement_and_executed_check(self):
         self.build_graph(requirements="behavior")
