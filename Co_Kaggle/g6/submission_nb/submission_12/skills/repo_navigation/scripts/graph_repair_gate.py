@@ -496,8 +496,12 @@ def _source_freshness(root, graph):
 def _focus(graph, fresh):
     """Choose a bounded structural investigation target; never label as a defect."""
     if not fresh:
-        return {"reason": "graph_stale_after_edit", "candidate": None,
-                "confidence": "unknown"}
+        historical = _focus(graph, True)
+        return {"reason": "graph_stale_after_edit",
+                "candidate": historical.get("candidate"),
+                "prior_hint": historical.get("reason"),
+                "confidence": "historical_candidate",
+                "limitations": "Pre-edit graph only; reread current code before repairing"}
     publics = graph.get("public_nodes", [])[:4]
     nodes = {n["id"]: n for n in graph.get("nodes", [])
              if isinstance(n, dict) and isinstance(n.get("id"), str)}
@@ -598,6 +602,23 @@ def graph_decide(workspace, requirements, covers, code, module=None, timeout=12,
         result["next_action"] = "verify_public_api"
         result["reason"] = ("passing check did not execute a matching public API "
                             "call linked to enough independent assertions")
+
+    if (result["next_action"] == "verify_public_api"
+            and verified.get("outcome") == "passed"):
+        # Bound repeated low-level passes that add no new public evidence.
+        state_path = state_file(root)
+        progress = json.loads(state_path.read_text())
+        patch_hash, _ = fingerprint(root)
+        signature = hashlib.sha256(
+            (patch_hash + code + str(module)).encode()).hexdigest()
+        if progress.get("last_noncover_check") == signature:
+            result["next_action"] = "audit_then_submit"
+            result["reason"] = "identical public-unrelated pass on unchanged patch"
+        else:
+            progress["last_noncover_check"] = signature
+            scratch = state_path.with_name(state_path.name + ".tmp")
+            scratch.write_text(json.dumps(progress, sort_keys=True) + "\n")
+            scratch.replace(state_path)
 
     fresh = _source_freshness(root, graph)
     focus = _focus(graph, fresh)
