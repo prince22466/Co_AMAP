@@ -101,6 +101,16 @@ def private(option=None):
         self.assertEqual(wrapper["accepts"], "variadic_kwargs")
         self.assertEqual(wrapper["forwards"][0]["mode"], "opaque_kwargs")
 
+    def test_forwarding_truncation_is_explicit_and_counts_all_candidates(self):
+        source = "def router(option=None):\n" + "    sink(option=option)\n" * 9
+        self.write("api.py", source)
+        result = tracer.trace(self.workspace, "api.py", "option")
+        router = next(row for row in result["functions"] if row["symbol"] == "router")
+        self.assertEqual(len(router["forwards"]), tracer.MAX_FORWARDERS_PER_FUNCTION)
+        self.assertTrue(router["forwarding_truncated"])
+        self.assertEqual(router["forwarding_candidates"], 9)
+        self.assertEqual(result["forwarding_candidates"], 9)
+
     def test_async_function_and_symbol_can_surface_missing_parameter(self):
         self.write("api.py", """async def serve():
     return 1
