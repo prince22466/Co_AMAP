@@ -176,7 +176,7 @@ def _store_graph(root, graph):
         raise ValueError("bounded graph exceeds size cap")
     target = directory / "submission12_contract_graph.json"
     scratch = directory / "submission12_contract_graph.json.tmp"
-    scratch.write_text(encoded + "\\n")
+    scratch.write_text(encoded + "\n")
     scratch.replace(target)
     return True
 
@@ -260,7 +260,7 @@ def trace(workspace, paths, parameter, symbol=None, requirements='public_behavio
         "truncated": len(ordered) > len(trimmed),
         "limitations": ("Only static syntax in the named files. Keyword forwarding and "
                         "**kwargs do not prove runtime propagation; dynamic dispatch, "
-                        "aliases, positional forwarding, decorators and consumers may 
+                        "aliases, positional forwarding, decorators and consumers may "
                         "not be visible. Verify public behavior with executable tests."),
     }
     while len(json.dumps(result, ensure_ascii=False)) > MAX_OUTPUT and result["functions"]:
