@@ -287,6 +287,19 @@ class GraphLoopTests(Fixture):
         self.assertEqual(result["controller"], "submission10_fallback")
         self.assertEqual(result["next_action"], "audit_then_submit")
 
+    def test_activating_graph_revokes_previous_internal_only_pass(self):
+        old = graph_gate.decide(
+            self.workspace, "behavior", "behavior",
+            "from example_pkg import private\nassert private(True) is True",
+            module="example_pkg")
+        self.assertEqual(old["covered"], ["behavior"])
+        self.build_graph(requirements="behavior")
+        current = self.decide(
+            "from example_pkg import private\nassert private(True) is True",
+            requirements="behavior")
+        self.assertEqual(current["covered"], [], current)
+        self.assertEqual(current["next_action"], "verify_public_api", current)
+
     def test_mismatched_requirement_graph_uses_fallback(self):
         self.build_graph(requirements="behavior")
         result = self.decide(
