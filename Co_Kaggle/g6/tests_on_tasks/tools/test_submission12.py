@@ -151,6 +151,13 @@ def entry(option=None):
         self.assertEqual([w["issue"] for w in r["warnings"]],
                          ["missing_file", "parse_error", "file_too_large"])
 
+    def test_deep_parser_failure_is_reported_without_crashing(self):
+        self.write("api.py", "def f(option=None): pass\n")
+        with patch.object(tracer.ast, "parse", side_effect=RecursionError):
+            result = tracer.trace(self.workspace, "api.py", "option")
+        self.assertEqual(result["functions"], [])
+        self.assertEqual(result["warnings"][0]["issue"], "parse_error")
+
     def test_bounded_output_for_many_functions(self):
         self.write("api.py", "\n".join("def f%d(option=None): return option" % i
                                           for i in range(80)))
@@ -193,6 +200,15 @@ class PackageTests(unittest.TestCase):
                 self.assertNotIn("skills/repo_navigation", z.read("agent.yaml").decode())
                 self.assertIn("gemma-4-31b-it-qat-w4a16-ct", z.read("agent.yaml").decode())
                 self.assertLess(sum(z.getinfo(n).file_size for n in items), 3 * 1024**3)
+
+    def test_builder_rejects_extra_agent_config_fields(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            candidate = Path(tmp) / "candidate"
+            shutil.copytree(CANDIDATE, candidate)
+            agent = candidate / "agent.yaml"
+            agent.write_text(agent.read_text() + "\noutput_key: injected\n")
+            with self.assertRaises(ValueError):
+                validate(root=candidate, baseline=BASE)
 
     def test_builder_rejects_unexpected_active_change(self):
         with tempfile.TemporaryDirectory() as tmp:
