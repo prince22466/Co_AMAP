@@ -141,7 +141,7 @@ def trace(workspace, paths, parameter, symbol=None):
         try:
             text = candidate.read_text(encoding="utf-8")
             parsed = ast.parse(text, filename=name)
-        except (SyntaxError, UnicodeError, OSError) as exc:
+        except (SyntaxError, UnicodeError, OSError, RecursionError) as exc:
             warnings.append({"path": name, "issue": "parse_error",
                              "detail": str(exc)[:140]})
             continue
