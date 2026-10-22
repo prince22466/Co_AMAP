@@ -504,9 +504,9 @@ def graph_decide(workspace, requirements, covers, code, module=None, timeout=12,
     symbol = graph["public_symbol"]
     # Invalidate any prior internal-only checks when graph mode activates.
     evidence_path = state_file(root)
+    marker = hashlib.sha256(json.dumps(graph, sort_keys=True).encode()).hexdigest()[:16]
     if evidence_path.exists():
         previous = json.loads(evidence_path.read_text())
-        marker = hashlib.sha256(json.dumps(graph, sort_keys=True).encode()).hexdigest()[:16]
         if previous.get("graph_marker") != marker:
             previous["checked"] = {}
             previous["graph_marker"] = marker
@@ -521,6 +521,16 @@ def graph_decide(workspace, requirements, covers, code, module=None, timeout=12,
         root, symbol,
         lambda: decide(workspace, requirements, "", code, module,
                        timeout, time_left, calls_left))
+
+    # The base gate may have just created its state on this first graph run.
+    # Persist the graph identity *now*, otherwise the second call would falsely
+    # clear a legitimate public check as though graph mode had just activated.
+    saved = json.loads(evidence_path.read_text())
+    if saved.get("graph_marker") != marker:
+        saved["graph_marker"] = marker
+        scratch = evidence_path.with_name(evidence_path.name + ".tmp")
+        scratch.write_text(json.dumps(saved, sort_keys=True) + "\n")
+        scratch.replace(evidence_path)
 
     verified = result.get("verification") or {}
     current_accepted = []
