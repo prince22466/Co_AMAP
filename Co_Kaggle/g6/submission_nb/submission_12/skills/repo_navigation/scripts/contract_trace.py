@@ -83,10 +83,12 @@ class _Definitions(ast.NodeVisitor):
 
     def _function(self, node):
         qualified = ".".join(self.stack + [node.name])
-        parameters = [arg.arg for arg in
-                      (node.args.posonlyargs + node.args.args + node.args.kwonlyargs)]
+        positional_only = {arg.arg for arg in node.args.posonlyargs}
+        keyword_capable = {arg.arg for arg in
+                           (node.args.args + node.args.kwonlyargs)}
         variadic = node.args.kwarg.arg if node.args.kwarg else None
-        accepts = ("explicit" if self.parameter in parameters else
+        accepts = ("explicit" if self.parameter in keyword_capable else
+                   "positional_only" if self.parameter in positional_only else
                    "variadic_kwargs" if variadic else "not_declared")
         visitor = _LocalCalls(self.parameter, variadic)
         for statement in node.body:
@@ -142,10 +144,21 @@ def trace(workspace, paths, parameter, symbol=None):
                              "detail": str(exc)[:140]})
             continue
         v = _Definitions(name, parameter, symbol)
-        v.visit(parsed)
+        try:
+            v.visit(parsed)
+        except RecursionError:
+            warnings.append({"path": name, "issue": "traversal_too_deep"})
+            continue
         found.extend(v.items)
+
+    def requested(row):
+        # A named public entry point must remain visible even in a large module.
+        return (symbol is not None and
+                (row["symbol"] == symbol or row["symbol"].endswith("." + symbol)))
+
     ordered = sorted(found, key=lambda row:
-                     (row["accepts"] == "not_declared", row["path"], row["line"]))
+                     (not requested(row), row["accepts"] in
+                      ("not_declared", "positional_only"), row["path"], row["line"]))
     seen = sum(len(row["forwards"]) for row in ordered)
     trimmed = ordered[:MAX_FUNCTIONS]
     result = {
@@ -160,7 +173,7 @@ def trace(workspace, paths, parameter, symbol=None):
         "truncated": len(ordered) > len(trimmed),
         "limitations": ("Only static syntax in the named files. Keyword forwarding and "
                         "**kwargs do not prove runtime propagation; dynamic dispatch, "
-                        "aliases, positional forwarding, decorators and consumers may "
+                        "aliases, positional forwarding, decorators and consumers may 
                         "not be visible. Verify public behavior with executable tests."),
     }
     while len(json.dumps(result, ensure_ascii=False)) > MAX_OUTPUT and result["functions"]:
