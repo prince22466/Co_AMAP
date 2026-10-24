@@ -2,6 +2,8 @@
 
 | Submission and Description | public score | comments |
 | --- | ---: | --- |
+| submission.zip · submission_14 | pending | `submission_nb\artifacts\submission_14.zip`; same as fixed submission_13 with `gemma-4-e4b-it-qat-w4a16-ct` for all three agents |
+| submission.zip · submission_13 | pending | `submission_nb\artifacts\submission_13.zip`; submission_12 with `gemma-4-12b-it-qat-w4a16-ct` for all three agents; fixes public-API coverage checks, repeated-check stopping and graph evidence tracking |
 | submission.zip · submission_12 | 0.13 | `submission_nb\artifacts\submission_12.zip`; same three 31B agents as submission_10; adds graph-guided contract tracing and repair checks for Python API changes across multiple layers; preserves tools and budgets |
 | submission.zip · submission_11 | 0.03 | `submission_nb\artifacts\submission_11.zip`; same as submission_10 but with smallest listed model, `gemma-4-e2b-it-qat-w4a16-ct` |
 | submission.zip · submission_10 | 0.15 | `submission_nb\artifacts\submission_10.zip`; same three 31B agents as submission_9; adds an advisory assertion-based repair gate with a two-repair limit; preserves tools and budgets |
