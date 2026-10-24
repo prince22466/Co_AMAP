@@ -1,0 +1,91 @@
+root@bbbf7f053580:~# ixsmi
+ixsmi -L
+ixsmi -q > logs/gpu_info.txt
+Timestamp    Sun Oct 25 02:49:42 2026
++--------------------------------------------------------------------------------+
+|  IX-ML: 4.4.0            Driver Version: 4.5.0          CUDA Version: 10.2     |
+|----------------------------------+----------------------+----------------------|
+| GPU  Name                        | Bus-Id               | Clock-SM  Clock-Mem  |
+| Fan  Temp  Perf    Pwr:Usage/Cap |      Memory-Usage    | GPU-Util  Compute M. |
+|==================================+======================+======================|
+| 0    Iluvatar BI-V150            | 00000000:13:00.0     | 1500MHz   1600MHz    |
+| N/A  34C   P0       N/A / N/A    | 68MiB / 32768MiB     | 0%        Default    |
++----------------------------------+----------------------+----------------------+
+
++--------------------------------------------------------------------------------+
+| Processes:                                                          GPU Memory |
+|  GPU        PID      Process name                                   Usage(MiB) |
+|================================================================================|
+|  No running processes found                                                    |
++--------------------------------------------------------------------------------+
+GPU  0: Iluvatar BI-V150 (UUID: GPU-e31a31b1-23b9-55fd-8fca-3f22e36db2f7)
+bash: logs/gpu_info.txt: No such file or directory
+root@bbbf7f053580:~# # Operating system and available memory
+uname -a
+cat /etc/os-release
+free -h
+df -h
+Linux bbbf7f053580 5.4.0-148-generic #165-Ubuntu SMP Tue Apr 18 08:53:12 UTC 2023 x86_64 x86_64 x86_64 GNU/Linux
+PRETTY_NAME="Ubuntu 24.04.2 LTS"
+NAME="Ubuntu"
+VERSION_ID="24.04"
+VERSION="24.04.2 LTS (Noble Numbat)"
+VERSION_CODENAME=noble
+ID=ubuntu
+ID_LIKE=debian
+HOME_URL="https://www.ubuntu.com/"
+SUPPORT_URL="https://help.ubuntu.com/"
+BUG_REPORT_URL="https://bugs.launchpad.net/ubuntu/"
+PRIVACY_POLICY_URL="https://www.ubuntu.com/legal/terms-and-policies/privacy-policy"
+UBUNTU_CODENAME=noble
+LOGO=ubuntu-logo
+               total        used        free      shared  buff/cache   available
+Mem:           503Gi        11Gi       293Gi        41Mi       201Gi       491Gi
+Swap:          8.0Gi        14Mi       8.0Gi
+Filesystem                                                     Size  Used Avail Use% Mounted on
+overlay                                                         50G  1.4M   50G   1% /
+tmpfs                                                           64M     0   64M   0% /dev
+tmpfs                                                          252G     0  252G   0% /sys/fs/cgroup
+tmpfs                                                          252G   38M  252G   1% /dev/shm
+/dev/loop5                                                     3.0T  406G  2.7T  14% /etc/hosts
+10.31.30.3:6789,10.31.30.5:6789,10.31.30.6:6789:/home/zhiyuan   67T   63T  4.3T  94% /etc/cim/sshd_config
+tmpfs                                                          252G     0  252G   0% /proc/acpi
+tmpfs                                                          252G     0  252G   0% /proc/scsi
+tmpfs                                                          252G     0  252G   0% /sys/firmware
+tmpfs                                                          252G     0  252G   0% /sys/devices/virtual/powercap
+root@bbbf7f053580:~# which python
+python --version
+python -m pip list | grep -Ei \
+  'torch|vllm|triton|flag|transformers'
+/usr/local/bin/python
+Python 3.12.11
+flag_gems                                5.3.5
+flagtree                                 0.6.2a3+iluvatar3.6
+torch                                    2.10.0+corex.4.5.0
+torch_cluster                            1.6.0+corex.4.5.0
+torch_quiver                             0.1.0+corex.4.5.0
+torch_scatter                            2.1.0+corex.4.5.0
+torch_sparse                             0.6.16+corex.4.5.0
+torchaudio                               2.10.0+corex.4.5.0
+torchdebug                               4.4.0+corex.4.5.0
+torchvision                              0.25.0+corex.4.5.0
+transformers                             5.14.1
+vllm                                     0.24.0+empty
+vllm-plugin-fl                           0.3.0rc0+g13eb9be69
+root@bbbf7f053580:~# # Check GPU access through PyTorch
+python - <<'PY'
+import torch
+print("PyTorch:", torch.__version__)
+print("CUDA API available:", torch.cuda.is_available())
+if torch.cuda.is_available():
+    print("GPU:", torch.cuda.get_device_name(0))
+    print("VRAM (GiB):",
+          round(torch.cuda.get_device_properties(0).total_memory / 2**30, 2))
+    x = torch.randn(1024, 1024, device="cuda")
+    print("GPU computation:", (x @ x).shape)
+PY
+PyTorch: 2.10.0
+CUDA API available: True
+GPU: Iluvatar BI-V150
+VRAM (GiB): 32.0
+GPU computation: torch.Size([1024, 1024])
