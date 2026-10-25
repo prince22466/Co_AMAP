@@ -2,7 +2,7 @@
 
 The current [Submission 16 candidate](../submission_nb/submission_16/README.md) addresses the
 missing-action, repeated-failure accounting and absent verification seen in Submission 15's
-first-ten diagnostic run. Use [testing v9](gemma-4-developer-agent-testing_v9.ipynb): CPU preflight
+first-ten diagnostic run. Use [the Submission 16 notebook](submission_16_testing.ipynb): CPU preflight
 first, then a real-Gemma repair smoke gate before the unchanged ten-task evaluation. Its 19 CPU
 regressions and scripted official-runtime smoke pass locally; real-model success remains unmeasured.
 See [the validation record](reviews/submission_16/validation.md) for scope and remaining limits.

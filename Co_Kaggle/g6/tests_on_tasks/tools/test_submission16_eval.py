@@ -6,7 +6,7 @@ from pathlib import Path
 import tempfile
 import unittest
 from build_submission16 import G6, SOURCE, entries
-from build_testing_v9 import build
+from build_submission16_notebook import build
 from smoke_submission16 import summarize_events
 from submission14_eval import acceptance_report, submission_metadata
 

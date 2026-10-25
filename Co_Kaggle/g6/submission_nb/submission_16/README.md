@@ -52,7 +52,7 @@ From `Co_Kaggle/g6/tests_on_tasks/tools`:
 ```bash
 python -m unittest test_submission16 test_submission16_eval -v
 python build_submission16.py
-python build_testing_v9.py
+python build_submission16_notebook.py
 python verify_submission16_runtime.py
 ```
 
@@ -67,7 +67,7 @@ Build **`../artifacts/submission_16.zip`** with the command above, or download i
 PR's `submission-16-12b-unscored` Actions artifact. The ZIP is generated rather than checked in;
 its SHA-256 and every packaged file hash are recorded in the committed manifest.
 Upload that ZIP and use
-**`../../tests_on_tasks/gemma-4-developer-agent-testing_v9.ipynb`**:
+**`../../tests_on_tasks/submission_16_testing.ipynb`**:
 
 1. Attach the ZIP as the `submission-16-zip` Kaggle dataset, competition data/runtime wheels and the
    same 12B weights. The notebook verifies every packaged file hash before model startup.

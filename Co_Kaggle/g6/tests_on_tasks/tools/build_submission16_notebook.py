@@ -83,7 +83,7 @@ if actual != set(EXPECTED_RELEASE_FILES):
     for cell in cells:
         if cell['cell_type']=='code':
             compile(''.join(cell['source']),'<notebook>','exec',ast.PyCF_ALLOW_TOP_LEVEL_AWAIT)
-    path=ROOT/'gemma-4-developer-agent-testing_v9.ipynb'
+    path=ROOT/'submission_16_testing.ipynb'
     path.write_text(json.dumps(notebook,indent=1,ensure_ascii=False)+'\n')
     return path
 

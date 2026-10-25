@@ -23,13 +23,13 @@ Run from the repository root:
 ```bash
 python -m unittest discover -s Co_Kaggle/g6/tests_on_tasks/tools -p 'test_submission16*.py' -v
 python Co_Kaggle/g6/tests_on_tasks/tools/build_submission16.py
-python Co_Kaggle/g6/tests_on_tasks/tools/build_testing_v9.py
+python Co_Kaggle/g6/tests_on_tasks/tools/build_submission16_notebook.py
 # Install the pinned competition wheels and their CPU dependencies before this command:
 python Co_Kaggle/g6/tests_on_tasks/tools/verify_submission16_runtime.py --output-dir /tmp/submission16-runtime
 ```
 
 The smoke command writes events.json, smoke.json and synthetic.patch. These are mechanics evidence,
-not task results. Testing v9 embeds the same helper and supplies the real Gemma model registry;
+not task results. The Submission 16 notebook embeds the same helper and supplies the real Gemma model registry;
 `evaluate` refuses to start the competition tasks unless that real-model smoke passes.
 
 The official loop enforces stage ordering and at most two rounds. It does **not** force an LLM stage
