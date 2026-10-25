@@ -1,5 +1,12 @@
 # Agent development workflow
 
+The current [Submission 16 candidate](../submission_nb/submission_16/README.md) addresses the
+missing-action, repeated-failure accounting and absent verification seen in Submission 15's
+first-ten diagnostic run. Use [testing v9](gemma-4-developer-agent-testing_v9.ipynb): CPU preflight
+first, then a real-Gemma repair smoke gate before the unchanged ten-task evaluation. Its 19 CPU
+regressions and scripted official-runtime smoke pass locally; real-model success remains unmeasured.
+See [the validation record](reviews/submission_16/validation.md) for scope and remaining limits.
+
 `submission_1/` preserves the first main-coder/optional-analyzer configuration. `submission_2/` revises only its two instruction files. `submission_3/` adds an optional read-only patch reviewer. `submission_4/` uses a coder, repository locator and test verifier. `submission_5/` changes Submission 4's timeout and thinking settings. `submission_6/` copies Submission 2 and changes only both agents' model declarations to the newly allowed `gemma-4-e2b-it-qat-w4a16-ct`. Local validation, packaging, and diagnostics are in `tools/`; the companion notebooks run the competition evaluator. Reports and notebooks stay outside the packaged agent.
 
 The submission records report Submission 1 at 0.10 and 0.06, Submission 2 at 0.10, and Submissions 3, 4 and 5 at 0.0. Submission 6 is unmeasured. See [the E2B candidate](submission_6/README.md), [the organizer model update](../competition_material/Update_new_models.md), [the submission records](../submission_records.md) and [the experiment record](prompt_experiments.md). Earlier unmeasured statements in historical candidate notes are superseded by these reported scores.
