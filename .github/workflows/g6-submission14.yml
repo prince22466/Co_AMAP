@@ -1,0 +1,42 @@
+name: g6 submission 14 CPU validation
+on:
+  pull_request:
+    paths:
+      - 'Co_Kaggle/g6/submission_nb/submission_14/**'
+      - 'Co_Kaggle/g6/submission_nb/artifacts/submission_14*'
+      - 'Co_Kaggle/g6/tests_on_tasks/tools/*14*.py'
+      - 'Co_Kaggle/g6/tests_on_tasks/tools/build_testing_v8.py'
+      - 'Co_Kaggle/g6/tests_on_tasks/gemma-4-developer-agent-testing_v8.ipynb'
+      - '.github/workflows/g6-submission14.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  cpu:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          filter: blob:none
+          sparse-checkout: Co_Kaggle/g6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install 'PyYAML>=6,<7'
+      - name: Workbench regressions (no model)
+        run: python -m unittest discover -s Co_Kaggle/g6/tests_on_tasks/tools -p test_submission14.py -v
+      - name: Rebuild release ZIP and notebook
+        run: |
+          python Co_Kaggle/g6/tests_on_tasks/tools/build_submission14.py
+          python Co_Kaggle/g6/tests_on_tasks/tools/build_testing_v8.py
+          git diff --exit-code -- Co_Kaggle/g6/submission_nb/artifacts/submission_14.zip Co_Kaggle/g6/submission_nb/artifacts/submission_14.manifest.json Co_Kaggle/g6/tests_on_tasks/gemma-4-developer-agent-testing_v8.ipynb
+      - name: Compile notebook and validate workflow metadata
+        run: |
+          PYTHONPATH=Co_Kaggle/g6/tests_on_tasks/tools python -m unittest test_submission14_eval.EvaluationTests.test_notebook_and_workflow_metadata test_submission14_eval.EvaluationTests.test_acceptance_keeps_denominator_and_excludes_empty_or_baseline_pass test_submission14_eval.EvaluationTests.test_environment_errors_do_not_hide_missing_feature_failures -v
+      - uses: actions/upload-artifact@v4
+        with:
+          name: submission-14-12b-unscored
+          path: |
+            Co_Kaggle/g6/submission_nb/artifacts/submission_14.zip
+            Co_Kaggle/g6/submission_nb/artifacts/submission_14.manifest.json
