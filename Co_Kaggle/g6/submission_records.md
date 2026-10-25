@@ -2,8 +2,8 @@
 
 | Submission and Description | public score | comments |
 | --- | ---: | --- |
-| submission.zip · submission_14 (revised 12B) | not tested | `submission_nb/artifacts/submission_14.zip`; same 12B model as submission_13; enforced two-round coder/verifier workflow, guarded edits and fresh assertion evidence; CPU checks passed; 2/10 target unmeasured |
-| submission.zip · submission_14 (E4B baseline) | running (historical) | Exact previous ZIP retained as `submission_nb/artifacts/submission_14_e4b_baseline.zip`; existing first-30 diagnostics belong to this E4B version |
+| submission.zip · submission_15 (revised 12B) | not submitted | `submission_nb/artifacts/submission_15.zip`; same 12B model as submission_13; enforced two-round coder/verifier workflow, guarded edits and fresh assertion evidence; CPU checks passed; 2/10 target unmeasured |
+| submission.zip · submission_14 | running (historical) | `submission_nb/artifacts/submission_14.zip`; same as submission_13, but with 4B model |
 | submission.zip · submission_13 | not submitted | `submission_nb\artifacts\submission_13.zip`; submission_12 with `gemma-4-12b-it-qat-w4a16-ct` for all three agents; fixes public-API coverage checks, repeated-check stopping and graph evidence tracking |
 | submission.zip · submission_12 | 0.13 | `submission_nb\artifacts\submission_12.zip`; same three 31B agents as submission_10; adds graph-guided contract tracing and repair checks for Python API changes across multiple layers; preserves tools and budgets |
 | submission.zip · submission_11 | 0.03 | `submission_nb\artifacts\submission_11.zip`; same as submission_10 but with smallest listed model, `gemma-4-e2b-it-qat-w4a16-ct` |
