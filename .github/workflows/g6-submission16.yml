@@ -1,0 +1,40 @@
+name: g6 submission 16 CPU validation
+on:
+  pull_request:
+    paths:
+      - 'Co_Kaggle/g6/submission_nb/submission_16/**'
+      - 'Co_Kaggle/g6/submission_nb/artifacts/submission_16*'
+      - 'Co_Kaggle/g6/tests_on_tasks/tools/*16*.py'
+      - 'Co_Kaggle/g6/tests_on_tasks/tools/build_submission16_notebook.py'
+      - 'Co_Kaggle/g6/tests_on_tasks/tools/templates/submission16_testing_base.json'
+      - 'Co_Kaggle/g6/tests_on_tasks/submission_16_testing.ipynb'
+      - '.github/workflows/g6-submission16.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  cpu:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          filter: blob:none
+          sparse-checkout: Co_Kaggle/g6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install 'PyYAML>=6,<7'
+      - name: Workbench and evaluation regressions (no inference)
+        run: python -m unittest discover -s Co_Kaggle/g6/tests_on_tasks/tools -p 'test_submission16*.py' -v
+      - name: Rebuild release ZIP and notebook
+        run: |
+          python Co_Kaggle/g6/tests_on_tasks/tools/build_submission16.py
+          python Co_Kaggle/g6/tests_on_tasks/tools/build_submission16_notebook.py
+          git diff --exit-code -- Co_Kaggle/g6/submission_nb/artifacts/submission_16.zip Co_Kaggle/g6/submission_nb/artifacts/submission_16.manifest.json Co_Kaggle/g6/tests_on_tasks/submission_16_testing.ipynb
+      - uses: actions/upload-artifact@v4
+        with:
+          name: submission-16-12b-unscored
+          path: |
+            Co_Kaggle/g6/submission_nb/artifacts/submission_16.zip
+            Co_Kaggle/g6/submission_nb/artifacts/submission_16.manifest.json
