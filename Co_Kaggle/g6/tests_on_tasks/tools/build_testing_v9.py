@@ -15,7 +15,8 @@ def code(source):
 
 
 def build():
-    notebook=json.loads((ROOT/'gemma-4-developer-agent-testing_v8.ipynb').read_text())
+    # Pin the grading template: historical top-level notebooks can be removed independently.
+    notebook=json.loads((HERE/'templates/submission16_testing_base.json').read_text())
     cells=notebook['cells']
     for cell in cells:
         text=''.join(cell['source'])
