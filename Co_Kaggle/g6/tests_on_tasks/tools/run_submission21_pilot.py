@@ -184,27 +184,41 @@ async def pilot(args):
                         'stage':'baseline_blocked','blocked_tasks':blocked,
                         'note':'No real E4B calls started; repair environment and keep all IDs.'}
             else:
+                # Before consuming GPU calls, execute the packaged audit + tool
+                # flow with the pinned official ADK runtime and a scripted model.
                 try:
-                    smoke=await run_smoke(args.output/'real_smoke',models=models,
-                                          submission_dir=package,native_only=True)
+                    scripted=await run_smoke(args.output/'scripted_runtime',
+                                             submission_dir=package)
                 except Exception as exc:
-                    smoke={'passed':False,'error':repr(exc)}
-                    (args.output/'smoke_error.json').write_text(json.dumps(smoke,indent=2)+'\n')
-                if not smoke.get('passed') or smoke.get('scope')!='real-model synthetic smoke; not benchmark':
+                    scripted={'passed':False,'error':repr(exc)}
+                    (args.output/'scripted_runtime_error.json').write_text(
+                        json.dumps(scripted,indent=2)+'\n')
+                if not scripted.get('passed') or scripted.get('scope')!='scripted mechanics; no inference':
                     report={'ready_for_15_tasks':False,'candidate_for_review':False,
-                            'stage':'real_smoke_failed','smoke':smoke,
-                            'note':'Five task-level E4B inferences were not started.'}
+                            'stage':'scripted_runtime_failed','scripted_runtime':scripted,
+                            'note':'No real E4B calls started; fix official runtime/tool setup.'}
                 else:
-                    agent=evaluator('candidate')
-                    for id in PILOT_IDS:
-                        results.append(save('candidate_'+id+'.json',
-                            await agent.evaluate_task(tasks[id])))
-                    report={'ready_for_15_tasks':False,
-                            'candidate_for_review':promotion_candidate(results,smoke),
-                            'manual_review_complete':False,'stage':'pilot_complete',
-                            **pilot_metrics(results),
-                            'note':'Machine evidence only. Inspect EACH diff and test manually; '
-                                   'use --review-existing for a separate review decision.'}
+                    try:
+                        smoke=await run_smoke(args.output/'real_smoke',models=models,
+                                              submission_dir=package,native_only=True)
+                    except Exception as exc:
+                        smoke={'passed':False,'error':repr(exc)}
+                        (args.output/'smoke_error.json').write_text(json.dumps(smoke,indent=2)+'\n')
+                    if not smoke.get('passed') or smoke.get('scope')!='real-model synthetic smoke; not benchmark':
+                        report={'ready_for_15_tasks':False,'candidate_for_review':False,
+                                'stage':'real_smoke_failed','smoke':smoke,
+                                'note':'Five task-level E4B inferences were not started.'}
+                    else:
+                        agent=evaluator('candidate')
+                        for id in PILOT_IDS:
+                            results.append(save('candidate_'+id+'.json',
+                                await agent.evaluate_task(tasks[id])))
+                        report={'ready_for_15_tasks':False,
+                                'candidate_for_review':promotion_candidate(results,smoke),
+                                'manual_review_complete':False,'stage':'pilot_complete',
+                                **pilot_metrics(results),
+                                'note':'Machine evidence only. Inspect EACH diff and test manually; '
+                                       'use --review-existing for a separate review decision.'}
         finally:
             for e in evaluators:e.sandbox.close()
     report.update(model=MODEL,package_sha256=manifest['archive_sha256'],
