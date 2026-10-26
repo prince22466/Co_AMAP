@@ -882,6 +882,10 @@ def unified_attention(
         launch_num_warps = 8
         launch_num_stages = 2
 
+    # Compute the sliding-window mode before the v1 specialization gate.
+    # This value was previously initialized after the gate (UnboundLocalError).
+    sliding_window_val = 1 + window_size[0] if window_size[0] >= 0 else 0
+
     # BI-V150 v1 experiment: increase query/KV tile reuse in BF16 GQA prefill.
     # All unsupported shapes/features, including single-token decode, retain
     # the exact vLLM 0.24.0 launch geometry.
@@ -918,7 +922,6 @@ def unified_attention(
     #    = floor(q.shape[0] / BLOCK_Q) + num_seqs
     total_num_q_blocks = q.shape[0] // BLOCK_Q + num_seqs
 
-    sliding_window_val = 1 + window_size[0] if window_size[0] >= 0 else 0
 
     # Compute chunked block size from sliding window if needed.
     chunk_size = -1
