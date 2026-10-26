@@ -1,9 +1,7 @@
 diff --git a/fastapi/applications.py b/fastapi/applications.py
 --- a/fastapi/applications.py
 +++ b/fastapi/applications.py
-@@ -839,8 +839,9 @@
-                 ```
-                 """
+@@ -841,4 +841,5 @@
              ),
 -        ] = None,
 -        **extra: Annotated[
@@ -11,11 +9,7 @@ diff --git a/fastapi/applications.py b/fastapi/applications.py
 +        strict_content_type: bool = True,
 +        **extra: Annotated[
              Any,
-             Doc(
-                 """
-@@ -868,8 +869,9 @@
-         self.swagger_ui_parameters = swagger_ui_parameters
-         self.servers = servers or []
+@@ -870,4 +871,5 @@
          self.separate_input_output_schemas = separate_input_output_schemas
 -        self.openapi_external_docs = openapi_external_docs
 -        self.extra = extra
@@ -23,21 +17,132 @@ diff --git a/fastapi/applications.py b/fastapi/applications.py
 +        self.strict_content_type = strict_content_type
 +        self.extra = extra
          self.openapi_version: Annotated[
-             str,
-             Doc(
+@@ -962,4 +964,5 @@
+         ] = {}
+-        self.router: routing.APIRouter = routing.APIRouter(
+-            routes=routes,
++        self.router: routing.APIRouter = routing.APIRouter(
++            strict_content_type=strict_content_type,
++            routes=routes,
+             redirect_slashes=redirect_slashes,
 diff --git a/fastapi/routing.py b/fastapi/routing.py
 --- a/fastapi/routing.py
 +++ b/fastapi/routing.py
-@@ -369,8 +369,10 @@
-                     if body_bytes:
-                         json_body: Any = Undefined
+@@ -329,5 +329,6 @@
+     response_model_exclude_none: bool = False,
+-    dependency_overrides_provider: Any | None = None,
+-    embed_body_fields: bool = False,
+-) -> Callable[[Request], Coroutine[Any, Any, Response]]:
++    dependency_overrides_provider: Any | None = None,
++    embed_body_fields: bool = False,
++    strict_content_type: bool | DefaultPlaceholder = Default(True),
++) -> Callable[[Request], Coroutine[Any, Any, Response]]:
+     assert dependant.call is not None, "dependant.call must be a function"
+@@ -337,6 +338,11 @@
+         actual_response_class: type[Response] = response_class.value
+-    else:
+-        actual_response_class = response_class
+-
+-    async def app(request: Request) -> Response:
++    else:
++        actual_response_class = response_class
++    actual_strict_content_type = (
++        strict_content_type.value
++        if isinstance(strict_content_type, DefaultPlaceholder)
++        else strict_content_type
++    )
++
++    async def app(request: Request) -> Response:
+         response: Response | None = None
+@@ -371,4 +377,5 @@
                          content_type_value = request.headers.get("content-type")
 -                        if not content_type_value:
 -                            json_body = await request.json()
 +                        if not content_type_value:
-+                            # Strict mode avoids interpreting typeless requests as JSON.
-+                            if not getattr(request.app, "strict_content_type", True):
++                            if not actual_strict_content_type:
 +                                json_body = await request.json()
                          else:
-                             message = email.message.Message()
-                             message["content-type"] = content_type_value
+@@ -600,5 +607,6 @@
+         generate_unique_id_function: Callable[["APIRoute"], str]
+-        | DefaultPlaceholder = Default(generate_unique_id),
+-    ) -> None:
+-        self.path = path
++        | DefaultPlaceholder = Default(generate_unique_id),
++        strict_content_type: bool | DefaultPlaceholder = Default(True),
++    ) -> None:
++        self.path = path
+         self.endpoint = endpoint
+@@ -621,4 +629,5 @@
+         self.response_model_exclude_none = response_model_exclude_none
+-        self.include_in_schema = include_in_schema
+-        self.response_class = response_class
++        self.include_in_schema = include_in_schema
++        self.strict_content_type = strict_content_type
++        self.response_class = response_class
+         self.dependency_overrides_provider = dependency_overrides_provider
+@@ -714,6 +723,7 @@
+             dependency_overrides_provider=self.dependency_overrides_provider,
+-            embed_body_fields=self._embed_body_fields,
+-        )
+-
+-    def matches(self, scope: Scope) -> tuple[Match, Scope]:
++            embed_body_fields=self._embed_body_fields,
++            strict_content_type=self.strict_content_type,
++        )
++
++    def matches(self, scope: Scope) -> tuple[Match, Scope]:
+         match, child_scope = super().matches(scope)
+@@ -964,5 +974,6 @@
+             ),
+-        ] = Default(generate_unique_id),
+-    ) -> None:
+-        # Determine the lifespan context to use
++        ] = Default(generate_unique_id),
++        strict_content_type: bool | DefaultPlaceholder = Default(True),
++    ) -> None:
++        # Determine the lifespan context to use
+         if lifespan is None:
+@@ -1003,5 +1014,6 @@
+         self.dependencies = list(dependencies or [])
+-        self.deprecated = deprecated
+-        self.include_in_schema = include_in_schema
+-        self.responses = responses or {}
++        self.deprecated = deprecated
++        self.include_in_schema = include_in_schema
++        self.strict_content_type = strict_content_type
++        self.responses = responses or {}
+         self.callbacks = callbacks or []
+@@ -1060,5 +1072,8 @@
+         generate_unique_id_function: Callable[[APIRoute], str]
+-        | DefaultPlaceholder = Default(generate_unique_id),
+-    ) -> None:
+-        route_class = route_class_override or self.route_class
++        | DefaultPlaceholder = Default(generate_unique_id),
++        strict_content_type: bool | DefaultPlaceholder = Default(True),
++    ) -> None:
++        route_class = route_class_override or self.route_class
++        if isinstance(strict_content_type, DefaultPlaceholder):
++            strict_content_type = self.strict_content_type
+         responses = responses or {}
+@@ -1106,5 +1121,6 @@
+             openapi_extra=openapi_extra,
+-            generate_unique_id_function=current_generate_unique_id,
+-        )
+-        self.routes.append(route)
++            generate_unique_id_function=current_generate_unique_id,
++            strict_content_type=strict_content_type,
++        )
++        self.routes.append(route)
+ 
+@@ -1478,4 +1494,9 @@
+                     name=route.name,
+-                    route_class_override=type(route),
+-                    callbacks=current_callbacks,
++                    route_class_override=type(route),
++                    strict_content_type=(
++                        route.strict_content_type
++                        if not isinstance(route.strict_content_type, DefaultPlaceholder)
++                        else router.strict_content_type
++                    ),
++                    callbacks=current_callbacks,
+                     openapi_extra=route.openapi_extra,
