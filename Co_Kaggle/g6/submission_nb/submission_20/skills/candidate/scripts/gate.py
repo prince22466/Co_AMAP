@@ -43,11 +43,12 @@ def workspace():
 
 def protected(path):
     p = Path(path)
-    return (any(x in {'.git', 'tests', 'test', 'testing', '__pycache__'} for x in p.parts)
+    return (any(x.lower() in {'.git', 'tests', 'test', 'testing', '__pycache__'} for x in p.parts)
             or p.name.startswith(('test_', 'requirements', 'conftest', '.adk_exec_'))
             or p.name.endswith(('_test.py', '.lock', '.pth'))
             or p.name in {'pytest.ini', 'pyproject.toml', 'setup.cfg', 'setup.py', 'tox.ini',
-                          'test.sh', 'coverage.sh', 'sitecustomize.py', 'usercustomize.py'})
+                          'test.sh', 'coverage.sh', 'sitecustomize.py', 'usercustomize.py',
+                          '.pytest.ini', '_swegemma_stubs.py'})
 
 
 def safe(root, name):
@@ -121,7 +122,7 @@ def audit(root):
 
 # Runs in a disposable checkout. Setup errors are distinguished from task assertions.
 DRIVER = r'''
-import contextlib, importlib, io, json, os, pathlib, sys, traceback
+import contextlib, importlib, io, json, os, pathlib, re, sys, traceback
 root=pathlib.Path.cwd().resolve()
 sys.path[:0]=[str(root/'src'),str(root)]
 config=json.loads(pathlib.Path(sys.argv[1]).read_text())
@@ -149,7 +150,9 @@ try:
             sys.settrace(None)
 except BaseException:
     detail=traceback.format_exc(limit=5)
-print(json.dumps(dict(status=status,detail=detail[-1500:],output=output.getvalue()[-1500:],origin=origin,executed=sorted(seen))))
+captured=output.getvalue()
+failure_marker=bool(re.search(r'\b(FAILED|FAILURE|Traceback)\b',captured,re.I))
+print(json.dumps(dict(status=status,detail=detail[-1500:],output=captured[-1500:],failure_marker=failure_marker,origin=origin,executed=sorted(seen))))
 '''
 
 
@@ -268,7 +271,7 @@ class Gate:
                     report = dict(status='setup_error',detail=(result.stderr+result.stdout)[-1500:])
                 if result.returncode or digest(dest) != before:
                     report.update(status='setup_error', detail='Probe exited abnormally or changed checkout files')
-                if re.search(r'\b(FAILED|FAILURE|Traceback)\b', report.get('output',''), re.I):
+                if report.get('failure_marker') or re.search(r'\b(FAILED|FAILURE|Traceback)\b', report.get('output',''), re.I):
                     report.update(status='reported_failure')
                 if test:
                     t = run([sys.executable,'-m','pytest',test,'-q','--maxfail=1','-p','no:cacheprovider'],dest,env=env)
@@ -318,6 +321,9 @@ class Gate:
                 else:
                     target.parent.mkdir(parents=True,exist_ok=True)
                     target.write_bytes(data)
+            visible=changes(self.root, include_ignored=False)
+            if visible != names or digest(self.root, include_ignored=False) != result['candidate_hash']:
+                raise ValueError('Published files differ from the verified candidate or are Git-ignored; choose a submittable path')
             self.state['live_hash'] = digest(self.root, include_ignored=False)
             self.state['published_paths'] = names
             self.save()

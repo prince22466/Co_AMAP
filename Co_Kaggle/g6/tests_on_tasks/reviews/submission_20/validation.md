@@ -36,10 +36,20 @@ five-task GPU flow is supplied for the user's official environment, not reported
 
 ## Completed validation (2026-10-26)
 
-- 24 CPU gate/package/provenance regressions: passed.
+- 26 CPU gate/package/provenance regressions: passed.
 - 6 baseline/pilot promotion policy tests: passed.
-- 2 pinned official ADK runtime tests: passed, including packaged skill execution,
-  malformed-wrapper recovery, early empty submission, rollback, rejected tautology,
+- 3 pinned official ADK runtime tests: passed, including packaged skill execution,
+  malformed-wrapper recovery, official protected-path coverage, early empty submission, rollback, rejected tautology,
   successful checked publication, and an independent final behavior oracle.
 - These are development tests with synthetic fixtures/scripted model responses.
   Real-model smoke, the five-task pilot, and Kaggle score remain unmeasured.
+
+## Follow-up review fixes
+
+- Detect printed failure markers before output truncation, so noisy output cannot hide
+  a previous FAILED message. A regression reproduces the original false verification.
+- Compare the published live paths and content hash with the verified candidate;
+  Git-ignored new targets now trigger rollback instead of a false published result.
+- Cover the official runtime's static protected paths, including `.pytest.ini`,
+  `_swegemma_stubs.py`, and uppercase test directories. Runtime tests compare the
+  policies. Additional task-specific protected paths remain owned by the harness.

@@ -14,6 +14,16 @@ class RuntimeTests(unittest.TestCase):
             with zipfile.ZipFile(ARCHIVE) as z:z.extractall(Path(d)/'package')
             result=asyncio.run(run_smoke(Path(d)/'output',submission_dir=Path(d)/'package'))
             self.assertTrue(result['passed'],result)
+    def test_gate_covers_official_static_protected_paths(self):
+        from swegemma.harness.verification import _is_protected_test_or_config_path
+        from test_submission20 import gate
+        names=['conftest.py','pytest.ini','pyproject.toml','tox.ini','setup.cfg',
+               '.pytest.ini','sitecustomize.py','usercustomize.py','_swegemma_stubs.py',
+               'x.pth','test_api.py','api_test.py','Tests/helper.py','TEST/helper.py','testing/helper.py']
+        for name in names:
+            self.assertTrue(_is_protected_test_or_config_path(name),name)
+            self.assertTrue(gate.protected(name),name)
+
     def test_compiler_has_no_mutation_bypass_or_finalizer(self):
         from adk_submission import ModelRegistry,ToolRegistry,compile_submission
         from google.adk.models.lite_llm import LiteLlm

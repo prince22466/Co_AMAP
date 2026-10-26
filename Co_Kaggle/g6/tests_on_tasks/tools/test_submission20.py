@@ -56,7 +56,7 @@ class Regressions(unittest.TestCase):
             self.assertEqual(self.g.edit('pkg.py',content=text)['status'],'edit_rejected')
             self.assertEqual((self.g.stage/'pkg.py').read_text(),BASE)
     def test_protected_paths_and_symlink_escape(self):
-        for name in ['tests/test_pkg.py','pytest.ini','scripts/test.sh','pyproject.toml','../outside.py']:
+        for name in ['tests/test_pkg.py','pytest.ini','scripts/test.sh','pyproject.toml','.pytest.ini','_swegemma_stubs.py','Tests/helper.py','../outside.py']:
             with self.assertRaises(ValueError):self.g.edit(name,content='x=1\n')
         (self.g.stage/'link.py').symlink_to(self.root/'pkg.py')
         with self.assertRaises(ValueError):self.g.edit('link.py',content='x=1\n')
@@ -85,6 +85,21 @@ class Regressions(unittest.TestCase):
     def test_printed_failure_with_zero_exit_is_blocked(self):
         self.stage();r=self.g.check(dict(module='pkg',probe=CHECK['probe']+"\nprint('ORJSON test FAILED')"))
         self.assertEqual(r['status'],'blocked');self.assertEqual(r['reports']['candidate']['status'],'reported_failure')
+    def test_printed_failure_before_truncated_tail_is_still_blocked(self):
+        self.stage()
+        probe=CHECK['probe']+"\nprint('FAILED')\nprint('x'*2000)"
+        r=self.g.check(dict(module='pkg',probe=probe))
+        self.assertEqual(r['status'],'blocked')
+        self.assertEqual(r['reports']['candidate']['status'],'reported_failure')
+        self.assertNotIn('FAILED',r['reports']['candidate']['output'])
+    def test_git_ignored_publication_rolls_back_instead_of_claiming_success(self):
+        (self.root/'.git/info/exclude').write_text('notes.tmp\n')
+        self.g.edit('notes.tmp',content='required docs')
+        probe="from pathlib import Path\nassert Path('notes.tmp').exists()\nassert Path('notes.tmp').read_text() == 'required docs'"
+        with self.assertRaisesRegex(ValueError,'Git-ignored'):
+            self.g.check(dict(module='',probe=probe),publish=True)
+        self.assertFalse((self.root/'notes.tmp').exists())
+        self.assertEqual(self.git('diff','HEAD').stdout,b'')
     def test_missing_dependencies_and_installed_import_are_not_passes(self):
         self.stage()
         for module in ['json','dependency_that_does_not_exist_s20']:

@@ -22,7 +22,9 @@ There are no native editing, writing, or shell tools that can bypass the normal 
    setup errors do not qualify. An optional discovered regression test must pass on both.
 4. `publish` reruns those checks against the current bytes. Only then does it copy the
    candidate into the live workspace. A failed new candidate leaves the last published
-   patch intact. Unexpected live edits block publication instead of being overwritten.
+   patch intact. Unexpected live edits block publication instead of being overwritten. After copying,
+   the gate compares live paths and bytes with the checked candidate and rolls back if
+   Git would omit an ignored new file.
 5. The same agent calls native `submit_patch`. Early submission sees the last published
    snapshot (initially empty), not an unverified staged edit.
 
