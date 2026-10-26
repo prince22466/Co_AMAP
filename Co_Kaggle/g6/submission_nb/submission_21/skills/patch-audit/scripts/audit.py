@@ -33,7 +33,7 @@ def protected(name):
     basename=p.name.lower()
     return (
         bool(parts & {'.git','tests','test','testing','__pycache__'})
-        or basename.startswith(('test_','conftest','requirements','.adk_exec_'))
+        or basename.startswith(('test_','conftest','requirements'))
         or basename.endswith(('_test.py','.lock','.pth'))
         or basename in {
             'pytest.ini','.pytest.ini','pyproject.toml','setup.cfg','setup.py',
@@ -53,8 +53,11 @@ def audit(root):
     root=Path(root).resolve()
     base='_swegemma_baseline' if git(root,'rev-parse','--verify','_swegemma_baseline',allow_failure=True).returncode==0 else 'HEAD'
     names=git(root,'diff','--name-only','-z',base).stdout+git(root,'ls-files','--others','--exclude-standard','-z').stdout
-    names=sorted({os.fsdecode(n) for n in names.split(b'\0') if n
-        and '__pycache__' not in Path(os.fsdecode(n)).parts and not os.fsdecode(n).startswith('.adk_exec_')})
+    all_names={os.fsdecode(n) for n in names.split(b'\0') if n}
+    # Harness-generated .adk_exec_* scripts are scratch files, not submittable patch.
+    ignored_runtime_scratch=sorted(n for n in all_names if n.startswith('.adk_exec_'))
+    names=sorted(n for n in all_names if '__pycache__' not in Path(n).parts
+                 and not n.startswith('.adk_exec_'))
     blockers=[];removed=[];h=hashlib.sha256()
     if not names:blockers.append('empty patch')
     if len(names)>MAX_FILES:blockers.append('audit limit exceeded: more than 40 changed files')
@@ -81,7 +84,10 @@ def audit(root):
     whitespace=git(root,'diff','--check',base,allow_failure=True)
     if whitespace.returncode:blockers.append('diff whitespace errors: '+whitespace.stdout.decode(errors='replace')[:400])
     return {'status':'blocked' if blockers else ('review_required' if removed else 'structurally_clean'),
-        'changed_paths':names[:MAX_FILES], 'blockers':blockers[:12], 'removed_definitions':removed[:12],
+        'changed_paths':names[:MAX_FILES],
+        'ignored_runtime_scratch':ignored_runtime_scratch[:8],
+        'ignored_runtime_scratch_count':len(ignored_runtime_scratch),
+        'blockers':blockers[:12], 'removed_definitions':removed[:12],
         'patch_sha256':h.hexdigest() if len(names)<=MAX_FILES and not blockers else None,
         'behavior_verified':False,
         'next':'Repair blockers; review removed definitions; run a discovered targeted test or actual-output assertion. Re-audit after edits.',
