@@ -46,6 +46,7 @@ The [successful GitHub Actions run #40417437659](https://github.com/prince22466/
 - **5/5 Requests** tasks: baseline focused test failed and candidate focused test passed.
 - **10/10 FastAPI** tasks: baseline focused test failed and candidate focused test passed.
 - The latest CI workflow syntax-checks the three replay/evaluator Python scripts.
+- Exact 15-task exit codes and evidence provenance are preserved in [public_test_evidence.json](public_test_evidence.json). Task `fastapi_15661` has baseline exit **2** (expected absent module/collection) rather than 1; every candidate exits **0**.
 
 Every public focused test was evaluated in a separate pristine clone. The reference solution `patch` was not copied or applied to generate the candidate code. **The published `test_patch` was used for iterative debugging**, so this is a test-guided solution exercise and **not** a blind matched-tool GPT-6 benchmark.
 
