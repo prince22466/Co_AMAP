@@ -29,20 +29,18 @@ def test_opt_in_selects_v1_on_biv150(monkeypatch):
     from vllm_fl.dispatch.backends.flaggems.flaggems import FlagGemsBackend
 
     monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
-    monkeypatch.setattr(torch.cuda, "get_device_name", lambda *_: "Iluvatar BI-V150")
     monkeypatch.delenv("VLLM_FL_USE_FLAGGEMS_ATTN", raising=False)
     monkeypatch.setenv("VLLM_FL_BIV150_ATTN_V1", "1")
     assert FlagGemsBackend().attention_backend() == V1
 
 
-def test_opt_in_rejects_unsupported_gpu(monkeypatch):
+def test_opt_in_rejects_conflicting_attention_flags(monkeypatch):
     from vllm_fl.dispatch.backends.flaggems.flaggems import FlagGemsBackend
 
     monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
-    monkeypatch.setattr(torch.cuda, "get_device_name", lambda *_: "Other accelerator")
-    monkeypatch.delenv("VLLM_FL_USE_FLAGGEMS_ATTN", raising=False)
+    monkeypatch.setenv("VLLM_FL_USE_FLAGGEMS_ATTN", "1")
     monkeypatch.setenv("VLLM_FL_BIV150_ATTN_V1", "1")
-    with pytest.raises(RuntimeError, match="BI-V150"):
+    with pytest.raises(RuntimeError, match="cannot both be enabled"):
         FlagGemsBackend().attention_backend()
 
 
