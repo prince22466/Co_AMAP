@@ -15,7 +15,7 @@ This makes patch production the immediate gating problem.
   separate finalizer, or additional model.
 - S19's **optional read-only** patch-audit skill is retained, with stronger
   protected-path coverage from S20 (case-insensitive test directories,
-  .pytest.ini, _swegemma_stubs.py, .adk_exec_ artifacts). The audit detects syntax,
+  .pytest.ini and _swegemma_stubs.py). Generated root-level .adk_exec_*\n  scripts are intentionally excluded as harness scratch files, not protected;\n  the audit returns an explicit ignored_runtime_scratch count. It detects syntax,
   removed top-level public definitions, changed protected paths and empty diffs.
 - S20's baseline-fail / candidate-pass insight is translated into a model-guided
   **same-check before/after** behavioral workflow using native run_command.
@@ -56,9 +56,7 @@ swegemma 0.2.11, google-adk 1.36.1, google-genai 2.11.0.
 
 ## Five-task real-model pilot (instead of another 15-task run)
 
-Use the official task snapshots, wheels and a running E4B OpenAI-compatible
-endpoint. Baseline checks run before model calls and stop if missing dependencies,
-fixture recursion or collection errors make results uninterpretable.
+Use the official task snapshots, wheels and a running E4B OpenAI-compatible\nendpoint. Baseline checks stop if dependencies or fixtures are broken. Before\nany of the five tasks are run, a **real E4B synthetic native-tool smoke** must\nread, edit, verify the same observed behavior, and submit a patch without a\nskill dispatcher. Failed smoke stops the pilot; scripted smoke is not sufficient.
 
 ```bash
 python Co_Kaggle/g6/tests_on_tasks/tools/run_submission21_pilot.py \
@@ -68,7 +66,27 @@ python Co_Kaggle/g6/tests_on_tasks/tools/run_submission21_pilot.py \
 ```
 
 The fixed IDs are fastapi_15588, fastapi_14986, requests_7427,
-requests_7433 and fastapi_15023. Requiring all five to return nonempty patches
-and at least one task to resolve is an experimental promotion criterion,
-not a benchmark score. Review the saved trace for missing-tool attempts,
-targeted tests, and behavioral evidence before any 15-task evaluation.
+requests_7433 and fastapi_15023. The automated pilot only marks
+`candidate_for_review` if all five return nonempty patches, report
+successful *post-edit focused checks followed by submission* in their
+traces, have no recorded tool-dispatch failures, and at least one
+task resolves. These heuristics do **not** establish semantic relevance.
+Unknown trace layouts fail closed instead of inventing check results.
+
+The first pilot always sets `ready_for_15_tasks: false`.
+After independently reviewing all five diffs and behavioral checks,
+create a JSON file with `tasks` containing all five `instance_id`
+values and boolean `patch_relevant`, `behavior_check_relevant`,
+and `final_diff_reviewed` for each. Mark true ONLY after direct
+review. Re-evaluate the saved results without any GPU access:
+
+```bash
+python Co_Kaggle/g6/tests_on_tasks/tools/run_submission21_pilot.py \
+  --review-existing --output /path/to/submission21-pilot \
+  --review-file /path/to/manual_review.json
+```
+
+This produces `manual_review_result.json`. Until independent
+verification succeeds the promotion flag stays false. The criterion
+is an experimental pilot decision, not a Kaggle score or an
+unbypassable in-agent guard.
