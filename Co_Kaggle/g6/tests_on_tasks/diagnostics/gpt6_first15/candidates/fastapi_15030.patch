@@ -17,7 +17,7 @@ diff --git a/fastapi/routing.py b/fastapi/routing.py
  # Copy of starlette.routing.request_response modified to include the
  # dependencies' AsyncExitStack
  def request_response(
-@@ -509,7 +512,60 @@
+@@ -509,7 +512,62 @@
                  )
                  response.headers.raw.extend(solved_result.response.headers.raw)
 -            elif dependant.is_async_gen_callable or dependant.is_gen_callable:
@@ -41,16 +41,18 @@ diff --git a/fastapi/routing.py b/fastapi/routing.py
 +                            )
 +                        return format_sse_event(data_str=json.dumps(jsonable_encoder(item)))
 +
-+async def async_sse_stream() -> AsyncIterator[bytes]:
++                    original_gen = gen
++
++                    async def async_sse_stream() -> AsyncIterator[bytes]:
 +                        send, receive = anyio.create_memory_object_stream[bytes](0)
 +
 +                        async def produce() -> None:
 +                            async with send:
 +                                if dependant.is_async_gen_callable:
-+                                    async for event in gen:
++                                    async for event in original_gen:
 +                                        await send.send(serialize_sse_item(event))
 +                                else:
-+                                    iterator = iter(gen)
++                                    iterator = iter(original_gen)
 +                                    sentinel = object()
 +                                    while True:
 +                                        event = await anyio.to_thread.run_sync(
