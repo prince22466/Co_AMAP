@@ -27,7 +27,7 @@ async def run(args: argparse.Namespace) -> dict:
     from swegemma.deduplication import resolve_task_snapshot_paths
     from swegemma.harness.verification import verify_task
     from swegemma.models import load_tasks
-    from swegemma.sandbox import ContainerConfig, ContainerManager
+    from swegemma.evaluate import Evaluator
 
     root = Path(__file__).resolve().parent
     manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
@@ -43,14 +43,13 @@ async def run(args: argparse.Namespace) -> dict:
         submission_dir=args.submission_dir,
         results_dir=args.output,
         models=ModelRegistry(),  # No model calls are performed.
+        sandbox=args.sandbox,
         timeout_seconds=args.timeout_seconds,
     )
     if args.wheels is not None:
         config_kwargs["wheels_dir"] = args.wheels
     cfg = EvalConfig(**config_kwargs)
-    container = ContainerManager(ContainerConfig(
-        image=cfg.image, timeout_seconds=cfg.harness.command_timeout_seconds
-    ))
+    container = Evaluator(cfg).sandbox
     records = []
     try:
         for task_id, spec in manifest.items():
@@ -128,6 +127,7 @@ if __name__ == "__main__":
     parser.add_argument("--submission-dir", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--timeout-seconds", type=int, default=300)
+    parser.add_argument("--sandbox", choices=("docker", "subprocess"), default="docker")
     parser.add_argument("--gold-control", action="store_true", help="Evaluator-only reference-patch environment check (never expose to solver)")
     arguments = parser.parse_args()
     verdict = asyncio.run(run(arguments))
