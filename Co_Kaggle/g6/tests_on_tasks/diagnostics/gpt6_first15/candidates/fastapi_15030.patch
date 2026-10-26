@@ -83,6 +83,18 @@ diff --git a/fastapi/routing.py b/fastapi/routing.py
 +                    gen = async_sse_stream()
                  if dependant.is_async_gen_callable:
  
+@@ -713,5 +771,8 @@
+                     # explicit response_class (e.g. StreamingResponse) was set
+-                    if isinstance(response_class, DefaultPlaceholder):
+-                        self.stream_item_type = stream_item
+-                    response_model = None
++                    if isinstance(response_class, DefaultPlaceholder) or (
++                        isinstance(response_class, type)
++                        and issubclass(response_class, EventSourceResponse)
++                    ):
++                        self.stream_item_type = stream_item
++                    response_model = None
+                 else:
 diff --git a/fastapi/responses.py b/fastapi/responses.py
 --- a/fastapi/responses.py
 +++ b/fastapi/responses.py
@@ -324,3 +336,42 @@ new file mode 100644
 +    for token in message.text.split():
 +        yield ServerSentEvent(data=token, event="token")
 +    yield ServerSentEvent(raw_data="[DONE]", event="done")
+diff --git a/fastapi/openapi/utils.py b/fastapi/openapi/utils.py
+--- a/fastapi/openapi/utils.py
++++ b/fastapi/openapi/utils.py
+@@ -358,4 +358,33 @@
+             if is_body_allowed_for_status_code(route.status_code):
+-                # Check for JSONL streaming (generator endpoints)
+-                if route.is_json_stream:
++                # Describe SSE events using the OpenAPI 3.2 stream item schema.
++                if route_response_media_type == "text/event-stream":
++                    event_item: dict[str, Any] = {
++                        "type": "object",
++                        "properties": {
++                            "data": {"type": "string"},
++                            "event": {"type": "string"},
++                            "id": {"type": "string"},
++                            "retry": {"type": "integer", "minimum": 0},
++                        },
++                    }
++                    if route.stream_item_field:
++                        data_schema = get_schema_from_model_field(
++                            field=route.stream_item_field,
++                            model_name_map=model_name_map,
++                            field_mapping=field_mapping,
++                            separate_input_output_schemas=separate_input_output_schemas,
++                        )
++                        event_item["properties"]["data"] = {
++                            "type": "string",
++                            "contentMediaType": "application/json",
++                            "contentSchema": data_schema,
++                        }
++                        event_item["required"] = ["data"]
++                    operation.setdefault("responses", {}).setdefault(
++                        status_code, {}
++                    ).setdefault("content", {})["text/event-stream"] = {
++                        "itemSchema": event_item
++                    }
++                # Check for JSONL streaming (generator endpoints)
++                elif route.is_json_stream:
+                     jsonl_content: dict[str, Any] = {}
