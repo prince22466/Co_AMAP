@@ -1,0 +1,48 @@
+name: g6 submission 21 CPU and packaging
+on:
+  pull_request:
+    paths:
+      - 'Co_Kaggle/g6/submission_nb/submission_21/**'
+      - 'Co_Kaggle/g6/tests_on_tasks/tools/*submission21*.py'
+      - 'Co_Kaggle/g6/tests_on_tasks/reviews/submission_21/**'
+      - '.github/workflows/g6-submission21.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  cpu:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          filter: blob:none
+          sparse-checkout: Co_Kaggle/g6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install 'PyYAML>=6,<7'
+      - name: Native tools and S20 failure regressions
+        run: |
+          python -m unittest discover -s Co_Kaggle/g6/tests_on_tasks/tools -p test_submission21.py -v
+          python -m unittest discover -s Co_Kaggle/g6/tests_on_tasks/tools -p test_submission21_pilot.py -v
+      - name: Build and inspect exact ZIP
+        run: |
+          python Co_Kaggle/g6/tests_on_tasks/tools/build_submission21.py
+          python - <<'PY'
+          import json, pathlib, zipfile, hashlib
+          a=pathlib.Path('Co_Kaggle/g6/submission_nb/artifacts/submission_21.zip')
+          m=json.loads(a.with_suffix('.manifest.json').read_text())
+          assert m['archive_sha256']==hashlib.sha256(a.read_bytes()).hexdigest()
+          with zipfile.ZipFile(a) as z:
+              assert set(z.namelist())==set(m['files'])
+              for path,sha in m['files'].items():
+                  assert hashlib.sha256(z.read(path)).hexdigest()==sha
+          print('Submission 21 ZIP/manifest validated')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: submission-21-e4b-unscored
+          path: |
+            Co_Kaggle/g6/submission_nb/artifacts/submission_21.zip
+            Co_Kaggle/g6/submission_nb/artifacts/submission_21.manifest.json
