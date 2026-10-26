@@ -68,9 +68,12 @@ async def run(args: argparse.Namespace) -> dict:
                 raise FileNotFoundError(snapshot)
             row = {"id": task_id, "repo": task.repo, "base_commit": task.base_commit,
                    "patch_sha256": hashlib.sha256(patch.encode()).hexdigest()}
-            for stage, agent_patch in (
-                ("baseline", ""), ("candidate", patch),
-            ):
+            stages = [("baseline", ""), ("candidate", patch)]
+            # Gold patch is an isolated evaluator-only environment control.
+            # Never pass it to a solving agent or competition submission.
+            if args.gold_control:
+                stages.append(("gold_control", task.patch))
+            for stage, agent_patch in stages:
                 try:
                     result = await verify_task(
                         container, cfg, task, snapshot,
@@ -125,6 +128,7 @@ if __name__ == "__main__":
     parser.add_argument("--submission-dir", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--timeout-seconds", type=int, default=300)
+    parser.add_argument("--gold-control", action="store_true", help="Evaluator-only reference-patch environment check (never expose to solver)")
     arguments = parser.parse_args()
     verdict = asyncio.run(run(arguments))
     print(json.dumps(verdict, indent=2))
