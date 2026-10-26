@@ -1,0 +1,68 @@
+name: G6 GPT-6 first15 candidate validation
+on:
+  pull_request:
+    paths:
+      - 'Co_Kaggle/g6/tests_on_tasks/diagnostics/gpt6_first15/**'
+      - '.github/workflows/g6-gpt6-first15.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  structural:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Syntax-check evaluator scripts
+        run: |
+          python -m py_compile Co_Kaggle/g6/tests_on_tasks/diagnostics/gpt6_first15/verify_official_phase2.py
+          python -m py_compile Co_Kaggle/g6/tests_on_tasks/diagnostics/gpt6_first15/verify_public_focus.py
+          python -m py_compile Co_Kaggle/g6/tests_on_tasks/diagnostics/gpt6_first15/verify_public_fastapi.py
+      - name: Check source patches apply against pinned public commits
+        run: python Co_Kaggle/g6/tests_on_tasks/diagnostics/gpt6_first15/verify_patch_structure.py
+  public-requests-focus:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install public Requests test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install 'pytest>=7' 'pytest-httpbin==2.1.0' 'httpbin~=0.10.0' 'pytest-cov' 'pytest-mock' 'trustme' 'PySocks>=1.5.6' 'charset_normalizer>=2,<4' 'idna>=2.5,<4' 'urllib3>=1.26,<3' 'certifi>=2023.5.7'
+      - name: Compare baseline and patched focused public tests (not official grader)
+        run: python Co_Kaggle/g6/tests_on_tasks/diagnostics/gpt6_first15/verify_public_focus.py
+        env:
+          G6_RESULTS_DIR: ${{ runner.temp }}/g6-first15-results
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: g6-first15-public-focus-results
+          path: ${{ runner.temp }}/g6-first15-results/public_focus_results.json
+
+  public-fastapi-focus:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install FastAPI public-test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install 'fastapi[standard]' 'pytest>=7' 'pytest-timeout' 'pytest-mock' 'inline-snapshot' 'dirty-equals' 'pytest-xdist' 'orjson' 'ujson' 'typer' 'pydantic-settings' 'pydantic-extra-types' 'python-multipart' 'email-validator' 'sqlalchemy>=2,<3'
+      - name: Run the published first-10 FastAPI test patches separately on base and candidate
+        run: python Co_Kaggle/g6/tests_on_tasks/diagnostics/gpt6_first15/verify_public_fastapi.py
+        env:
+          G6_RESULTS_DIR: ${{ runner.temp }}/g6-first15-fastapi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: g6-first15-fastapi-public-test-results
+          path: ${{ runner.temp }}/g6-first15-fastapi/public_fastapi_results.json

@@ -1,0 +1,26 @@
+diff --git a/src/requests/utils.py b/src/requests/utils.py
+--- a/src/requests/utils.py
++++ b/src/requests/utils.py
+@@ -850,11 +850,17 @@
+             if parsed.port:
+                 host_with_port += f":{parsed.port}"
+ 
+-            for host in no_proxy_hosts:
+-                if hostname.endswith(host) or host_with_port.endswith(host):
+-                    # The URL does match something in no_proxy, so we don't want
+-                    # to apply the proxies on this URL.
+-                    return True
++            for host in no_proxy_hosts:
++                host = host.lstrip(".").lower()
++                if (
++                    hostname == host
++                    or host_with_port == host
++                    or hostname.endswith("." + host)
++                    or host_with_port.endswith("." + host)
++                ):
++                    # Match the domain itself or a dot-delimited subdomain,
++                    # never an unrelated hostname that merely shares a suffix.
++                    return True
+ 
+     with set_environ("no_proxy", no_proxy_arg):
+         try:

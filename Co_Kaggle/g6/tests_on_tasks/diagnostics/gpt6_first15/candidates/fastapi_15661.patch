@@ -1,0 +1,132 @@
+diff --git a/scripts/prepare_release.py b/scripts/prepare_release.py
+new file mode 100644
+--- /dev/null
++++ b/scripts/prepare_release.py
+@@ -0,0 +1,127 @@
++"""CLI to prepare FastAPI releases and inspect release notes.
++
++The functions operate on passed strings, making the transformations testable
++without changing the working tree.
++"""
++from __future__ import annotations
++
++import re
++from datetime import date
++from pathlib import Path
++from typing import Literal
++
++import typer
++
++BumpType = Literal["major", "minor", "patch"]
++RELEASE_NOTES_HEADER = "---\nhide:\n  - navigation\n---\n\n# Release Notes\n\n"
++ROOT = Path(__file__).resolve().parents[1]
++DEFAULT_VERSION = ROOT / "fastapi/__init__.py"
++DEFAULT_NOTES = ROOT / "docs/en/docs/release-notes.md"
++VERSION_LINE = re.compile(r'^__version__ = "(\d+\.\d+\.\d+)"$', re.M)
++RELEASE_HEADING = re.compile(r"^## (\d+\.\d+\.\d+)(?: \([^\n)]*\))?\s*$", re.M)
++app = typer.Typer(no_args_is_help=True)
++
++
++def read_current_version(source: str, path: Path) -> str:
++    match = VERSION_LINE.search(source)
++    if match is None:
++        raise RuntimeError(f"Could not read FastAPI version from {path}")
++    return match.group(1)
++
++
++def bump_version(current_version: str, bump: BumpType) -> str:
++    major, minor, patch = (int(part) for part in current_version.split("."))
++    if bump == "major":
++        return f"{major + 1}.0.0"
++    if bump == "minor":
++        return f"{major}.{minor + 1}.0"
++    if bump == "patch":
++        return f"{major}.{minor}.{patch + 1}"
++    raise ValueError(f"Invalid bump: {bump!r}")
++
++
++def update_version_file(content: str, version: str, path: Path) -> str:
++    current = read_current_version(content, path)
++    try:
++        old_tuple = tuple(map(int, current.split(".")))
++        new_tuple = tuple(map(int, version.split(".")))
++    except ValueError as exc:
++        raise RuntimeError("Invalid semantic version") from exc
++    if len(new_tuple) != 3 or new_tuple <= old_tuple:
++        raise RuntimeError("New version must be greater than current version")
++    return VERSION_LINE.sub(f'__version__ = "{version}"', content, count=1)
++
++
++def update_release_notes(content: str, version: str, on_date: date, path: Path) -> str:
++    if RELEASE_HEADING.search(content) and any(
++        match.group(1) == version for match in RELEASE_HEADING.finditer(content)
++    ):
++        raise RuntimeError(f"Release notes already contain version {version}: {path}")
++    header = "## Latest Changes\n"
++    position = content.find(header)
++    if position < 0:
++        raise RuntimeError(f"Could not find 'Latest Changes' in {path}")
++    insert_at = position + len(header)
++    suffix = content[insert_at:]
++    # Insert the new release section after the Latest Changes heading.
++    return content[:insert_at] + f"\n## {version} ({on_date.isoformat()})\n\n" + suffix.lstrip("\n")
++
++
++def get_release_notes_body(content: str, version: str, path: Path) -> str:
++    matches = list(RELEASE_HEADING.finditer(content))
++    for i, match in enumerate(matches):
++        if match.group(1) == version:
++            end = matches[i + 1].start() if i + 1 < len(matches) else len(content)
++            result = content[match.end():end].strip("\n")
++            if not result.strip():
++                raise RuntimeError(f"Release notes section for {version} is empty: {path}")
++            return result + "\n"
++    raise RuntimeError(f"Could not find release notes for {version}: {path}")
++
++
++@app.command("current-version")
++def current_version(
++    version_file: Path = typer.Option(DEFAULT_VERSION, "--version-file",
++                                     envvar="PREPARE_RELEASE_VERSION_FILE"),
++) -> None:
++    typer.echo(read_current_version(version_file.read_text(encoding="utf-8"), version_file))
++
++
++@app.command("release-notes")
++def release_notes(
++    version_file: Path = typer.Option(DEFAULT_VERSION, "--version-file",
++                                     envvar="PREPARE_RELEASE_VERSION_FILE"),
++    release_notes_file: Path = typer.Option(DEFAULT_NOTES, "--release-notes-file",
++                                          envvar="PREPARE_RELEASE_RELEASE_NOTES_FILE"),
++) -> None:
++    version = read_current_version(version_file.read_text(encoding="utf-8"), version_file)
++    typer.echo(get_release_notes_body(release_notes_file.read_text(encoding="utf-8"),
++                                      version, release_notes_file), nl=False)
++
++
++@app.command()
++def prepare(
++    bump: str = typer.Argument(None, envvar="PREPARE_RELEASE_BUMP"),
++    version_file: Path = typer.Option(DEFAULT_VERSION, "--version-file",
++                                     envvar="PREPARE_RELEASE_VERSION_FILE"),
++    release_notes_file: Path = typer.Option(DEFAULT_NOTES, "--release-notes-file",
++                                          envvar="PREPARE_RELEASE_RELEASE_NOTES_FILE"),
++    release_date: str = typer.Option(None, "--date", envvar="PREPARE_RELEASE_DATE"),
++) -> None:
++    chosen = bump or "patch"
++    if chosen not in ("major", "minor", "patch"):
++        raise typer.BadParameter("bump must be major, minor, or patch")
++    current = read_current_version(version_file.read_text(encoding="utf-8"), version_file)
++    version = bump_version(current, chosen)
++    on_date = date.fromisoformat(release_date) if release_date else date.today()
++    original_version = version_file.read_text(encoding="utf-8")
++    original_notes = release_notes_file.read_text(encoding="utf-8")
++    updated_version = update_version_file(original_version, version, version_file)
++    updated_notes = update_release_notes(original_notes, version, on_date, release_notes_file)
++    version_file.write_text(updated_version, encoding="utf-8")
++    release_notes_file.write_text(updated_notes, encoding="utf-8")
++    typer.echo(f"Prepared release {version} ({on_date.isoformat()})")
++
++
++if __name__ == "__main__":
++    app()

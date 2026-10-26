@@ -1,0 +1,63 @@
+diff --git a/docs/en/docs/advanced/custom-response.md b/docs/en/docs/advanced/custom-response.md
+--- a/docs/en/docs/advanced/custom-response.md
++++ b/docs/en/docs/advanced/custom-response.md
+@@ -163,9 +163,27 @@
+ 
+ {* ../../docs_src/custom_response/tutorial006c_py310.py hl[2,7,9] *}
+ 
+-### `StreamingResponse` { #streamingresponse }
+-
+-Takes an async generator or a normal generator/iterator and streams the response body.
++### `StreamingResponse` { #streamingresponse }
++
++Takes an async generator or a normal generator/iterator and streams the response body.
++
++In recent FastAPI versions you can also **yield chunks directly from a path operation** when using `response_class=StreamingResponse`. FastAPI streams each chunk without JSON conversion:
++
++```python
++from collections.abc import Iterator
++
++from fastapi import FastAPI
++from fastapi.responses import StreamingResponse
++
++app = FastAPI()
++
++@app.get("/stream", response_class=StreamingResponse)
++def stream() -> Iterator[bytes]:
++    yield b"first\n"
++    yield b"second\n"
++```
++
++Use a synchronous generator when reading blocking file objects, or an async generator when yielding data obtained asynchronously. For details, see [Stream Data](stream-data.md){.internal-link}.
+ 
+ {* ../../docs_src/custom_response/tutorial007_py310.py hl[3,16] *}
+ 
+diff --git a/docs/en/docs/advanced/stream-data.md b/docs/en/docs/advanced/stream-data.md
+--- a/docs/en/docs/advanced/stream-data.md
++++ b/docs/en/docs/advanced/stream-data.md
+@@ -18,7 +18,9 @@
+ 
+ {* ../../docs_src/stream_data/tutorial001_py310.py ln[1:23] hl[20,23] *}
+ 
+-FastAPI will give each chunk of data to the `StreamingResponse` as is, it won't try to convert it to JSON or anything similar.
++FastAPI will give each chunk of data to the `StreamingResponse` as is, it won't try to convert it to JSON or anything similar.
++
++The declared `response_class=StreamingResponse` is important: without it, a generator return value is not a raw binary response. You can instead return an already-created `StreamingResponse` object directly from an ordinary endpoint. If you need to stream JSON objects, use [JSON Lines](../tutorial/stream-json-lines.md){.internal-link} rather than sending undecorated objects as binary chunks.
+ 
+ ### Non-async *path operation functions* { #non-async-path-operation-functions }
+ 
+diff --git a/docs_src/stream_data/tutorial002_py310.py b/docs_src/stream_data/tutorial002_py310.py
+--- a/docs_src/stream_data/tutorial002_py310.py
++++ b/docs_src/stream_data/tutorial002_py310.py
+@@ -33,6 +33,11 @@
+ 
+ 
++@app.get("/image/stream-no-async-yield-from", response_class=PNGStreamingResponse)
++def stream_image_no_async_yield_from() -> Iterable[bytes]:
++    yield from read_image()
++
++
+ @app.get("/image/stream-no-annotation", response_class=PNGStreamingResponse)
+ async def stream_image_no_annotation():
+     for chunk in read_image():
+         yield chunk

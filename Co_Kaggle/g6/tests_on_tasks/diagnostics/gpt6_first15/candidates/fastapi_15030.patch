@@ -1,0 +1,379 @@
+diff --git a/fastapi/routing.py b/fastapi/routing.py
+--- a/fastapi/routing.py
++++ b/fastapi/routing.py
+@@ -49,5 +49,6 @@
+     solve_dependencies,
+ )
+-from fastapi.encoders import jsonable_encoder
++from fastapi.encoders import jsonable_encoder
++from fastapi.sse import EventSourceResponse, ServerSentEvent, format_sse_event
+ from fastapi.exceptions import (
+     EndpointContext,
+@@ -83,5 +84,7 @@
+ 
+ 
++_PING_INTERVAL: float = 15.0
++
+ # Copy of starlette.routing.request_response modified to include the
+ # dependencies' AsyncExitStack
+ def request_response(
+@@ -509,7 +512,62 @@
+                 )
+                 response.headers.raw.extend(solved_result.response.headers.raw)
+-            elif dependant.is_async_gen_callable or dependant.is_gen_callable:
+-                # Raw streaming with explicit response_class (e.g. StreamingResponse)
+-                gen = dependant.call(**solved_result.values)
++            elif dependant.is_async_gen_callable or dependant.is_gen_callable:
++                # Raw streaming with explicit response_class (e.g. StreamingResponse)
++                gen = dependant.call(**solved_result.values)
++                if issubclass(actual_response_class, EventSourceResponse):
++                    def serialize_sse_item(item: Any) -> bytes:
++                        if isinstance(item, ServerSentEvent):
++                            if item.raw_data is not None:
++                                data_str = item.raw_data
++                            elif item.data is not None:
++                                data_str = json.dumps(jsonable_encoder(item.data))
++                            else:
++                                data_str = None
++                            return format_sse_event(
++                                data_str=data_str, event=item.event, id=item.id,
++                                retry=item.retry, comment=item.comment,
++                            )
++                        return format_sse_event(data_str=json.dumps(jsonable_encoder(item)))
++
++                    original_gen = gen
++
++                    async def async_sse_stream() -> AsyncIterator[bytes]:
++                        send, receive = anyio.create_memory_object_stream[bytes](0)
++
++                        async def produce() -> None:
++                            async with send:
++                                if dependant.is_async_gen_callable:
++                                    async for event in original_gen:
++                                        await send.send(serialize_sse_item(event))
++                                else:
++                                    iterator = iter(original_gen)
++                                    sentinel = object()
++                                    while True:
++                                        event = await anyio.to_thread.run_sync(
++                                            lambda: next(iterator, sentinel)
++                                        )
++                                        if event is sentinel:
++                                            break
++                                        await send.send(serialize_sse_item(event))
++
++                        async with anyio.create_task_group() as group:
++                            group.start_soon(produce)
++                            async with receive:
++                                while True:
++                                    timed_out = False
++                                    with anyio.move_on_after(_PING_INTERVAL) as scope:
++                                        try:
++                                            payload = await receive.receive()
++                                        except anyio.EndOfStream:
++                                            break
++                                    if scope.cancel_called:
++                                        timed_out = True
++                                    if timed_out:
++                                        yield b": ping\n\n"
++                                    else:
++                                        yield payload
++                            group.cancel_scope.cancel()
++
++                    gen = async_sse_stream()
+                 if dependant.is_async_gen_callable:
+ 
+@@ -713,5 +771,10 @@
+                     # explicit response_class (e.g. StreamingResponse) was set
+-                    if isinstance(response_class, DefaultPlaceholder):
+-                        self.stream_item_type = stream_item
+-                    response_model = None
++                    if isinstance(response_class, DefaultPlaceholder) or (
++                        isinstance(response_class, type)
++                        and issubclass(response_class, EventSourceResponse)
++                    ):
++                        self.stream_item_type = (
++                            stream_item if stream_item is not ServerSentEvent else None
++                        )
++                    response_model = None
+                 else:
+diff --git a/fastapi/responses.py b/fastapi/responses.py
+--- a/fastapi/responses.py
++++ b/fastapi/responses.py
+@@ -1,5 +1,6 @@
+ from typing import Any
+ 
+-from fastapi.exceptions import FastAPIDeprecationWarning
++from fastapi.exceptions import FastAPIDeprecationWarning
++from fastapi.sse import EventSourceResponse as EventSourceResponse
+ from starlette.responses import FileResponse as FileResponse  # noqa
+ from starlette.responses import HTMLResponse as HTMLResponse  # noqa
+diff --git a/fastapi/__init__.py b/fastapi/__init__.py
+--- a/fastapi/__init__.py
++++ b/fastapi/__init__.py
+@@ -20,5 +20,7 @@
+ from .param_functions import Security as Security
+ from .requests import Request as Request
+-from .responses import Response as Response
++from .responses import Response as Response
++from .sse import ServerSentEvent as ServerSentEvent
++from .sse import EventSourceResponse as EventSourceResponse
+ from .routing import APIRouter as APIRouter
+ from .websockets import WebSocket as WebSocket
+diff --git a/fastapi/sse.py b/fastapi/sse.py
+new file mode 100644
+--- /dev/null
++++ b/fastapi/sse.py
+@@ -0,0 +1,75 @@
++"""Server-Sent Events response and event representation."""
++from __future__ import annotations
++
++from typing import Any
++
++from pydantic import BaseModel, Field, model_validator
++from starlette.responses import StreamingResponse
++
++
++class EventSourceResponse(StreamingResponse):
++    """Streaming HTTP response carrying text/event-stream events."""
++
++    media_type = "text/event-stream"
++
++    def __init__(self, content: Any, status_code: int = 200, **kwargs: Any) -> None:
++        kwargs.setdefault("media_type", self.media_type)
++        headers = dict(kwargs.pop("headers", None) or {})
++        headers.setdefault("cache-control", "no-cache")
++        headers.setdefault("x-accel-buffering", "no")
++        super().__init__(content, headers=headers, status_code=status_code, **kwargs)
++
++
++class ServerSentEvent(BaseModel):
++    """One SSE event, with JSON or explicitly raw data."""
++
++    data: Any = None
++    raw_data: str | None = None
++    event: str | None = None
++    id: str | None = None
++    retry: int | None = Field(default=None, ge=0)
++    comment: str | None = None
++
++    @model_validator(mode="after")
++    def validate_fields(self) -> "ServerSentEvent":
++        if self.data is not None and self.raw_data is not None:
++            raise ValueError("Cannot set both 'data' and 'raw_data' on the same ServerSentEvent")
++        for name in ("event", "id"):
++            value = getattr(self, name)
++            if value is not None and ("\r" in value or "\n" in value):
++                raise ValueError(f"SSE {name!r} must be a single line")
++        if self.id is not None and "\0" in self.id:
++            raise ValueError("SSE event id must not contain null characters")
++        return self
++
++
++def format_sse_event(
++    *,
++    data_str: str | None = None,
++    event: str | None = None,
++    id: str | None = None,
++    retry: int | None = None,
++    comment: str | None = None,
++) -> bytes:
++    """Encode one event according to the SSE line-oriented wire format."""
++    for label, value in (("event", event), ("id", id)):
++        if value is not None and ("\r" in value or "\n" in value):
++            raise ValueError(f"SSE {label} must not contain newlines")
++    if id is not None and "\0" in id:
++        raise ValueError("SSE id must not contain null characters")
++    if retry is not None and retry < 0:
++        raise ValueError("SSE retry must be non-negative")
++    lines: list[str] = []
++    if comment is not None:
++        lines.extend(f": {line}" for line in comment.splitlines())
++    if event is not None:
++        lines.append(f"event: {event}")
++    if data_str is not None:
++        lines.extend(f"data: {line}" for line in data_str.splitlines())
++        if not data_str:
++            lines.append("data: ")
++    if id is not None:
++        lines.append(f"id: {id}")
++    if retry is not None:
++        lines.append(f"retry: {retry}")
++    return ("\n".join(lines) + "\n\n").encode("utf-8")
+diff --git a/docs_src/server_sent_events/tutorial001_py310.py b/docs_src/server_sent_events/tutorial001_py310.py
+new file mode 100644
+--- /dev/null
++++ b/docs_src/server_sent_events/tutorial001_py310.py
+@@ -0,0 +1,40 @@
++from collections.abc import AsyncIterable, Iterable
++
++from fastapi import FastAPI
++from fastapi.responses import EventSourceResponse
++from pydantic import BaseModel
++
++
++class Item(BaseModel):
++    name: str
++    description: str | None
++
++
++items = [
++    Item(name="Plumbus", description="A multi-purpose household device."),
++    Item(name="Portal Gun", description="A portal opening device."),
++    Item(name="Meeseeks Box", description="A box that summons a Meeseeks."),
++]
++app = FastAPI()
++
++
++@app.get("/items/stream", response_class=EventSourceResponse)
++async def sse_items() -> AsyncIterable[Item]:
++    for item in items:
++        yield item
++
++
++@app.get("/items/stream-no-async", response_class=EventSourceResponse)
++def sse_items_no_async() -> Iterable[Item]:
++    yield from items
++
++
++@app.get("/items/stream-no-annotation", response_class=EventSourceResponse)
++async def sse_items_no_annotation():
++    for item in items:
++        yield item
++
++
++@app.get("/items/stream-no-async-no-annotation", response_class=EventSourceResponse)
++def sse_items_no_async_no_annotation():
++    yield from items
+diff --git a/docs_src/server_sent_events/tutorial002_py310.py b/docs_src/server_sent_events/tutorial002_py310.py
+new file mode 100644
+--- /dev/null
++++ b/docs_src/server_sent_events/tutorial002_py310.py
+@@ -0,0 +1,16 @@
++from collections.abc import AsyncIterable
++
++from fastapi import FastAPI
++from fastapi.responses import EventSourceResponse
++from fastapi.sse import ServerSentEvent
++
++app = FastAPI()
++
++
++@app.get("/items/stream", response_class=EventSourceResponse)
++async def stream_items() -> AsyncIterable[ServerSentEvent]:
++    yield ServerSentEvent(comment="stream of item updates")
++    for i, item in enumerate(("Plumbus", "Portal Gun", "Meeseeks Box"), start=1):
++        yield ServerSentEvent(
++            data={"name": item}, event="item_update", id=str(i), retry=5000
++        )
+diff --git a/docs_src/server_sent_events/tutorial003_py310.py b/docs_src/server_sent_events/tutorial003_py310.py
+new file mode 100644
+--- /dev/null
++++ b/docs_src/server_sent_events/tutorial003_py310.py
+@@ -0,0 +1,17 @@
++from collections.abc import Iterable
++
++from fastapi import FastAPI
++from fastapi.responses import EventSourceResponse
++from fastapi.sse import ServerSentEvent
++
++app = FastAPI()
++
++
++@app.get("/logs/stream", response_class=EventSourceResponse)
++def stream_logs() -> Iterable[ServerSentEvent]:
++    for line in (
++        "2025-01-01 INFO  Application started",
++        "2025-01-01 DEBUG Connected to database",
++        "2025-01-01 WARN  High memory usage detected",
++    ):
++        yield ServerSentEvent(raw_data=line)
+diff --git a/docs_src/server_sent_events/tutorial004_py310.py b/docs_src/server_sent_events/tutorial004_py310.py
+new file mode 100644
+--- /dev/null
++++ b/docs_src/server_sent_events/tutorial004_py310.py
+@@ -0,0 +1,21 @@
++from collections.abc import Iterable
++
++from fastapi import FastAPI, Header
++from fastapi.responses import EventSourceResponse
++from fastapi.sse import ServerSentEvent
++
++app = FastAPI()
++items = [{"name": "Plumbus"}, {"name": "Portal Gun"}, {"name": "Meeseeks Box"}]
++
++
++@app.get("/items/stream", response_class=EventSourceResponse)
++def stream_items(last_event_id: int | None = Header(default=None)) -> Iterable[ServerSentEvent]:
++    start = 0
++    if last_event_id is not None:
++        try:
++            start = int(last_event_id) + 1
++        except ValueError:
++            start = 0
++    for index, item in enumerate(items):
++        if index >= start:
++            yield ServerSentEvent(data=item, id=str(index))
+diff --git a/docs_src/server_sent_events/tutorial005_py310.py b/docs_src/server_sent_events/tutorial005_py310.py
+new file mode 100644
+--- /dev/null
++++ b/docs_src/server_sent_events/tutorial005_py310.py
+@@ -0,0 +1,19 @@
++from collections.abc import Iterable
++
++from fastapi import FastAPI
++from fastapi.responses import EventSourceResponse
++from fastapi.sse import ServerSentEvent
++from pydantic import BaseModel
++
++app = FastAPI()
++
++
++class Prompt(BaseModel):
++    text: str
++
++
++@app.post("/chat/stream", response_class=EventSourceResponse)
++def stream_chat(message: Prompt) -> Iterable[ServerSentEvent]:
++    for token in message.text.split():
++        yield ServerSentEvent(data=token, event="token")
++    yield ServerSentEvent(raw_data="[DONE]", event="done")
+diff --git a/fastapi/openapi/utils.py b/fastapi/openapi/utils.py
+--- a/fastapi/openapi/utils.py
++++ b/fastapi/openapi/utils.py
+@@ -358,4 +358,33 @@
+             if is_body_allowed_for_status_code(route.status_code):
+-                # Check for JSONL streaming (generator endpoints)
+-                if route.is_json_stream:
++                # Describe SSE events using the OpenAPI 3.2 stream item schema.
++                if route_response_media_type == "text/event-stream":
++                    event_item: dict[str, Any] = {
++                        "type": "object",
++                        "properties": {
++                            "data": {"type": "string"},
++                            "event": {"type": "string"},
++                            "id": {"type": "string"},
++                            "retry": {"type": "integer", "minimum": 0},
++                        },
++                    }
++                    if route.stream_item_field:
++                        data_schema = get_schema_from_model_field(
++                            field=route.stream_item_field,
++                            model_name_map=model_name_map,
++                            field_mapping=field_mapping,
++                            separate_input_output_schemas=separate_input_output_schemas,
++                        )
++                        event_item["properties"]["data"] = {
++                            "type": "string",
++                            "contentMediaType": "application/json",
++                            "contentSchema": data_schema,
++                        }
++                        event_item["required"] = ["data"]
++                    operation.setdefault("responses", {}).setdefault(
++                        status_code, {}
++                    ).setdefault("content", {})["text/event-stream"] = {
++                        "itemSchema": event_item
++                    }
++                # Check for JSONL streaming (generator endpoints)
++                elif route.is_json_stream:
+                     jsonl_content: dict[str, Any] = {}

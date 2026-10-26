@@ -1,0 +1,22 @@
+diff --git a/fastapi/dependencies/utils.py b/fastapi/dependencies/utils.py
+--- a/fastapi/dependencies/utils.py
++++ b/fastapi/dependencies/utils.py
+@@ -827,8 +827,16 @@
+             params_to_process[get_validation_alias(field)] = value
+         processed_keys.add(alias or get_validation_alias(field))
+ 
+-    for key in received_params.keys():
+-        if key not in processed_keys:
++    for key in received_params.keys():
++        # Headers are case-insensitive; an underscore-bearing name must not
++        # serve as a fallback for a field whose alias uses hyphens.
++        if (
++            isinstance(received_params, Headers)
++            and "_" in key
++            and key.replace("_", "-") in processed_keys
++        ):
++            continue
++        if key not in processed_keys:
+             if isinstance(received_params, (ImmutableMultiDict, Headers)):
+                 value = received_params.getlist(key)
+                 if isinstance(value, list) and (len(value) == 1):

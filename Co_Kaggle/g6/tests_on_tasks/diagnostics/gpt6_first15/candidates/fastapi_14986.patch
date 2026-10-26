@@ -1,0 +1,99 @@
+diff --git a/fastapi/applications.py b/fastapi/applications.py
+--- a/fastapi/applications.py
++++ b/fastapi/applications.py
+@@ -1102,13 +1102,13 @@
+     def setup(self) -> None:
+-        if self.openapi_url:
+-            urls = (server_data.get("url") for server_data in self.servers)
+-            server_urls = {url for url in urls if url}
+-
+-            async def openapi(req: Request) -> JSONResponse:
+-                root_path = req.scope.get("root_path", "").rstrip("/")
+-                if root_path not in server_urls:
+-                    if root_path and self.root_path_in_servers:
+-                        self.servers.insert(0, {"url": root_path})
+-                        server_urls.add(root_path)
+-                return JSONResponse(self.openapi())
++        if self.openapi_url:
++
++            async def openapi(req: Request) -> JSONResponse:
++                root_path = req.scope.get("root_path", "").rstrip("/")
++                schema = self.openapi()
++                if root_path and self.root_path_in_servers:
++                    server_urls = {s.get("url") for s in schema.get("servers", [])}
++                    if root_path not in server_urls:
++                        schema = dict(schema)
++                        schema["servers"] = [{"url": root_path}] + schema.get("servers", [])
++                return JSONResponse(schema)
+ 
+diff --git a/fastapi/openapi/docs.py b/fastapi/openapi/docs.py
+--- a/fastapi/openapi/docs.py
++++ b/fastapi/openapi/docs.py
+@@ -1,3 +1,4 @@
+-import json
+-from typing import Annotated, Any
++import json
++from html import escape as html_escape
++from typing import Annotated, Any
+ 
+@@ -23,5 +24,15 @@
+ }
+-
+-
+-def get_swagger_ui_html(
++
++
++def _json_for_html(value: Any) -> str:
++    """Keep JSON embedded in a script from closing the HTML script element."""
++    return (
++        json.dumps(jsonable_encoder(value))
++        .replace("<", "\\u003c")
++        .replace(">", "\\u003e")
++        .replace("&", "\\u0026")
++    )
++
++
++def get_swagger_ui_html(
+     *,
+@@ -142,5 +153,5 @@
+     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+-    <link type="text/css" rel="stylesheet" href="{swagger_css_url}">
+-    <link rel="shortcut icon" href="{swagger_favicon_url}">
+-    <title>{title}</title>
++    <link type="text/css" rel="stylesheet" href="{html_escape(swagger_css_url, quote=True)}">
++    <link rel="shortcut icon" href="{html_escape(swagger_favicon_url, quote=True)}">
++    <title>{html_escape(title)}</title>
+     </head>
+@@ -149,3 +160,3 @@
+     </div>
+-    <script src="{swagger_js_url}"></script>
++    <script src="{html_escape(swagger_js_url, quote=True)}"></script>
+     <!-- `SwaggerUIBundle` is now available on the page -->
+@@ -153,10 +164,10 @@
+     const ui = SwaggerUIBundle({{
+-        url: '{openapi_url}',
+-    """
+-
+-    for key, value in current_swagger_ui_parameters.items():
+-        html += f"{json.dumps(key)}: {json.dumps(jsonable_encoder(value))},\n"
+-
+-    if oauth2_redirect_url:
+-        html += f"oauth2RedirectUrl: window.location.origin + '{oauth2_redirect_url}',"
++        url: {_json_for_html(openapi_url)},
++    """
++
++    for key, value in current_swagger_ui_parameters.items():
++        html += f"{_json_for_html(key)}: {_json_for_html(value)},\n"
++
++    if oauth2_redirect_url:
++        html += f"oauth2RedirectUrl: window.location.origin + {_json_for_html(oauth2_redirect_url)},"
+ 
+@@ -170,5 +181,5 @@
+     if init_oauth:
+-        html += f"""
+-        ui.initOAuth({json.dumps(jsonable_encoder(init_oauth))})
+-        """
++        html += f"""
++        ui.initOAuth({_json_for_html(init_oauth)})
++        """
+ 
