@@ -55,7 +55,7 @@ def main():
                 execute(["git", "checkout", "-q", "--detach", "FETCH_HEAD"],
                         cwd=repo, check=True)
                 tests = Path(temp) / "public_test.patch"
-                tests.write_text(record["test_patch"], encoding="utf-8")
+                tests.write_text(record["test_patch"].rstrip("\n") + "\n", encoding="utf-8")
                 execute(["git", "apply", "--check", str(tests)], cwd=repo, check=True)
                 execute(["git", "apply", str(tests)], cwd=repo, check=True)
 
