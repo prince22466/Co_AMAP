@@ -42,7 +42,7 @@ def evaluate_events(events, final_hash, oracle_passed, patch):
     return {'passed':all(conditions.values()),'conditions':conditions}
 
 
-async def run_smoke(output_dir, models=None, submission_dir=SOURCE):
+async def run_smoke(output_dir, models=None, submission_dir=SOURCE, native_only=False):
     from adk_submission import compile_submission, ModelRegistry, ToolRegistry
     from google.adk.models.base_llm import BaseLlm
     from google.adk.models.llm_response import LlmResponse
@@ -69,6 +69,13 @@ async def run_smoke(output_dir, models=None, submission_dir=SOURCE):
           call('run_command',command=PROBE),call('run_command',command='git diff --check'),
           call('run_skill_script',skill_name='patch-audit',file_path='scripts/audit.py'),
           call('submit_patch'),'Submitted the checked repair.']
+    if native_only:
+        plan=[call('get_status'),call('read_file',filepath='formatter.py'),
+              call('run_command',command=PROBE),
+              call('edit_file',filepath='formatter.py',old_string=FIXTURE,new_string=FIXED),
+              call('run_command',command=PROBE),call('submit_patch'),
+              'Submitted checked formatting change.']
+
     class ScriptedModel(BaseLlm):
         async def generate_content_async(self,llm_request,stream=False):
             nonlocal index
@@ -111,6 +118,14 @@ async def run_smoke(output_dir, models=None, submission_dir=SOURCE):
                 '. For fault injection, first replace def render(): with def render(: (an intentional syntax error), rerun the same command '
                 'and run patch-audit scripts/audit.py without args to observe a blocker. Then fix the syntax and output, rerun the exact command, run the audit again, inspect the diff and submit once. '
                 'Do not change the expected output or create another verification command.')
+            if native_only:
+                problem=('Synthetic E4B native tools check: formatter.render() must print '
+                    'exactly first, newline, second, newline. First read formatter.py. '
+                    'Run the EXACT failing baseline command: '+PROBE+
+                    '. Edit formatter.py using native edit_file; do not call '
+                    'run_skill_script or invent tools. Rerun the EXACT SAME '
+                    'command after the edit and then submit_patch ONCE. '
+                    'Do not change the verification command.')
             session=await sessions.create_session(app_name='smoke21',user_id='test',state={
                 'problem_description':problem,'hints_text':''})
             runner=Runner(agent=agent,app_name='smoke21',session_service=sessions)
@@ -127,7 +142,28 @@ async def run_smoke(output_dir, models=None, submission_dir=SOURCE):
             try:await asyncio.wait_for(consume(),timeout=240)
             except Exception as exc:error=repr(exc)
             oracle=sandbox.run_command(PROBE)
-            report=evaluate_events(events,digest(),oracle.exit_code==0,ctx.submitted_patch or '')
+            if native_only:
+                checks=[(i,e) for i,e in enumerate(events)
+                        if e['tool']=='run_command' and e['args'].get('command')==PROBE]
+                baseline=bool(checks) and checks[0][1]['result'].get('exit_code')!=0
+                edits=[i for i,e in enumerate(events)
+                       if e['tool'] in ('edit_file','write_file') and e['result'].get('status')=='ok']
+                success=[i for i,e in checks
+                         if e['result'].get('exit_code')==0 and e['result'].get('status')=='ok']
+                submits=[i for i,e in enumerate(events)
+                         if e['tool']=='submit_patch' and e['result'].get('status')=='ok']
+                conditions={
+                    'baseline_failed_before_edit':baseline and bool(edits) and checks[0][0]<edits[0],
+                    'native_edit_used':bool(edits),
+                    'same_proof_after_edit':bool(success) and bool(edits) and success[-1]>edits[-1],
+                    'independent_final_oracle':oracle.exit_code==0,
+                    'nonempty_submitted_patch':bool((ctx.submitted_patch or '').strip()),
+                    'submit_once_after_check':len(submits)==1 and bool(success) and success[-1]<submits[0],
+                    'no_skill_dispatch':all(e['tool']!='run_skill_script' for e in events),
+                }
+                report={'passed':all(conditions.values()),'conditions':conditions}
+            else:
+                report=evaluate_events(events,digest(),oracle.exit_code==0,ctx.submitted_patch or '')
             if error:report.update(passed=False,error=error)
             report.update(scope='scripted mechanics; no inference' if scripted else 'real-model synthetic smoke; not benchmark',
                           versions=versions, tool_calls_used=ctx.tool_calls_used,model_calls=index if scripted else None,
