@@ -37,7 +37,7 @@ def trace_calls(trace):
             for item in node:scan(item)
         elif isinstance(node,dict):
             name=node.get('tool') or node.get('tool_name') or node.get('name')
-            if name in NATIVE and any(k in node for k in ('args','arguments','result','response')):
+            if isinstance(name,str) and name in NATIVE and any(k in node for k in ('args','arguments','result','response')):
                 args=node.get('arguments') or node.get('args') or {}
                 if isinstance(args,str):
                     try:args=json.loads(args)
