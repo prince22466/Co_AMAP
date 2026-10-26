@@ -1,0 +1,43 @@
+diff --git a/fastapi/applications.py b/fastapi/applications.py
+--- a/fastapi/applications.py
++++ b/fastapi/applications.py
+@@ -839,8 +839,9 @@
+                 ```
+                 """
+             ),
+-        ] = None,
+-        **extra: Annotated[
++        ] = None,
++        strict_content_type: bool = True,
++        **extra: Annotated[
+             Any,
+             Doc(
+                 """
+@@ -868,8 +869,9 @@
+         self.swagger_ui_parameters = swagger_ui_parameters
+         self.servers = servers or []
+         self.separate_input_output_schemas = separate_input_output_schemas
+-        self.openapi_external_docs = openapi_external_docs
+-        self.extra = extra
++        self.openapi_external_docs = openapi_external_docs
++        self.strict_content_type = strict_content_type
++        self.extra = extra
+         self.openapi_version: Annotated[
+             str,
+             Doc(
+diff --git a/fastapi/routing.py b/fastapi/routing.py
+--- a/fastapi/routing.py
++++ b/fastapi/routing.py
+@@ -369,8 +369,10 @@
+                     if body_bytes:
+                         json_body: Any = Undefined
+                         content_type_value = request.headers.get("content-type")
+-                        if not content_type_value:
+-                            json_body = await request.json()
++                        if not content_type_value:
++                            # Strict mode avoids interpreting typeless requests as JSON.
++                            if not getattr(request.app, "strict_content_type", True):
++                                json_body = await request.json()
+                         else:
+                             message = email.message.Message()
+                             message["content-type"] = content_type_value
