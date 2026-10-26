@@ -1,0 +1,132 @@
+diff --git a/scripts/prepare_release.py b/scripts/prepare_release.py
+new file mode 100644
+--- /dev/null
++++ b/scripts/prepare_release.py
+@@ -0,0 +1,127 @@
++"""Prepare a FastAPI release in a deterministic, reviewable way.
++
++The script changes only version metadata and release notes by default. The
++existing online contributor/docs helpers remain explicit opt-ins so that a
++normal offline release preparation does not unexpectedly push git branches.
++"""
++from __future__ import annotations
++
++import argparse
++import re
++import subprocess
++import sys
++from datetime import date
++from pathlib import Path
++
++REPO_ROOT = Path(__file__).resolve().parents[1]
++VERSION_FILE = Path("fastapi/__init__.py")
++NOTES_FILE = Path("docs/en/docs/release-notes.md")
++VERSION_RE = re.compile(r'^__version__\s*=\s*["\'](\d+\.\d+\.\d+)["\']\s*$', re.M)
++NOTES_RELEASE_RE = re.compile(r"^## (\d+\.\d+\.\d+)(?: \([^\n]*\))?\s*$", re.M)
++VERSION_FORMAT = re.compile(r"^\d+\.\d+\.\d+$")
++
++
++def current_version(root: Path = REPO_ROOT) -> str:
++    source = (root / VERSION_FILE).read_text(encoding="utf-8")
++    match = VERSION_RE.search(source)
++    if match is None:
++        raise ValueError("Could not find FastAPI's __version__ declaration")
++    return match.group(1)
++
++
++def next_patch_version(version: str) -> str:
++    major, minor, patch = (int(part) for part in version.split("."))
++    return f"{major}.{minor}.{patch + 1}"
++
++
++def prepare_release(
++    *, root: Path = REPO_ROOT, version: str | None = None,
++    today: date | None = None, dry_run: bool = False,
++) -> list[Path]:
++    """Update the package version and the top of the release notes atomically.
++
++    Refuse malformed files before writing either, to prevent partial preparation.
++    """
++    root = root.resolve()
++    version_file = root / VERSION_FILE
++    notes_file = root / NOTES_FILE
++    package_source = version_file.read_text(encoding="utf-8")
++    notes_source = notes_file.read_text(encoding="utf-8")
++    old_version = current_version(root)
++    version = version or next_patch_version(old_version)
++    if not VERSION_FORMAT.fullmatch(version):
++        raise ValueError(f"Invalid release version: {version!r}")
++    if tuple(map(int, version.split("."))) < tuple(map(int, old_version.split("."))):
++        raise ValueError("Refusing to decrease the package version")
++    today = today or date.today()
++    old_header = NOTES_RELEASE_RE.search(notes_source)
++    if old_header is None:
++        raise ValueError("No release notes heading found")
++    existing_new_release = re.search(
++        rf"^## {re.escape(version)}(?: \([^\n]*\))?\s*$", notes_source, re.M
++    )
++    new_source = VERSION_RE.sub(f'__version__ = "{version}"', package_source, count=1)
++    if existing_new_release:
++        if existing_new_release.group().find("(") < 0:
++            new_notes = (
++                notes_source[:existing_new_release.start()]
++                + f"## {version} ({today.isoformat()})"
++                + notes_source[existing_new_release.end():]
++            )
++        else:
++            new_notes = notes_source
++    else:
++        # Insert directly before the latest version, keeping unreleased notes.
++        pos = old_header.start()
++        new_notes = (
++            notes_source[:pos]
++            + f"## {version} ({today.isoformat()})\n\n"
++            + "### Release preparation\n\n"
++            + "* Prepare release notes and verify the updated package version.\n\n"
++            + notes_source[pos:]
++        )
++    writes = [(version_file, new_source), (notes_file, new_notes)]
++    changed = [path for path, body in writes if path.read_text(encoding="utf-8") != body]
++    if not dry_run:
++        for path, body in writes:
++            if path in changed:
++                path.write_text(body, encoding="utf-8")
++    return changed
++
++
++def run_helper(root: Path, filename: str) -> None:
++    subprocess.run([sys.executable, str(root / "scripts" / filename)], cwd=root, check=True)
++
++
++def main(argv: list[str] | None = None) -> int:
++    parser = argparse.ArgumentParser(description="Prepare a FastAPI release")
++    parser.add_argument("--version", help="Release version, default next patch version")
++    parser.add_argument("--date", help="Release date (YYYY-MM-DD), default today")
++    parser.add_argument("--dry-run", action="store_true", help="Preview changed files")
++    parser.add_argument("--contributors", action="store_true", help="Run online contributor helper")
++    parser.add_argument("--docs-status", action="store_true", help="Run docs status helper")
++    args = parser.parse_args(argv)
++    try:
++        release_date = date.fromisoformat(args.date) if args.date else date.today()
++        changed = prepare_release(
++            version=args.version, today=release_date, dry_run=args.dry_run
++        )
++        for file in changed:
++            print(f'{"Would change" if args.dry_run else "Changed"}: {file.relative_to(REPO_ROOT)}')
++        if args.dry_run and (args.contributors or args.docs_status):
++            print("Dry run: skipping online helpers")
++        elif args.contributors or args.docs_status:
++            if args.contributors:
++                run_helper(REPO_ROOT, "contributors.py")
++            if args.docs_status:
++                run_helper(REPO_ROOT, "deploy_docs_status.py")
++        if not changed:
++            print("Already prepared")
++        return 0
++    except (ValueError, OSError, subprocess.CalledProcessError) as exc:
++        print(f"Release preparation failed: {exc}", file=sys.stderr)
++        return 1
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
