@@ -180,13 +180,15 @@ class FlagGemsBackend(Backend):
             "VLLM_FL_USE_FLAGGEMS_ATTN", "0"
         ).lower() in ("1", "true", "yes")
 
-        # Explicit A/B toggle for the experimental BI-V150 v1 operator.
-        # Without this opt-in the original FlagOS dispatch is unchanged.
+        # Iluvatar dispatch prioritizes flagos over vendor:iluvatar, so a
+        # change only to the vendor backend would not be selected by default.
+        # Opt in here for controlled v0/v1 testing without changing that order.
         use_biv150_v1 = os.environ.get(
             "VLLM_FL_BIV150_ATTN_V1", "0"
         ).lower() in ("1", "true", "yes")
 
         if use_flaggems_attn:
+            # Avoid ambiguous behavior when two attention overrides are set.
             if use_biv150_v1:
                 raise RuntimeError(
                     "VLLM_FL_BIV150_ATTN_V1 and VLLM_FL_USE_FLAGGEMS_ATTN "
@@ -196,12 +198,8 @@ class FlagGemsBackend(Backend):
             return "vllm_fl.dispatch.backends.flaggems.impl.attention.AttentionFLBackend"
 
         if use_biv150_v1:
-            device_name = torch.cuda.get_device_name(0).lower()
-            if "iluvatar" not in device_name and "bi-v150" not in device_name:
-                raise RuntimeError(
-                    "VLLM_FL_BIV150_ATTN_V1 is intended for BI-V150 only; "
-                    f"detected GPU: {device_name}"
-                )
+            # FlagOS already restricts this backend to the Iluvatar platform.
+            # GPU display-name checks are brittle and unnecessary here.
             return (
                 "vllm_fl.dispatch.backends.vendor.iluvatar.impl."
                 "attention_biv150.BIV150TritonAttentionBackend"
