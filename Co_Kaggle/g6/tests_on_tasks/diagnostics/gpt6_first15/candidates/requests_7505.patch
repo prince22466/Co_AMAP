@@ -1,0 +1,95 @@
+diff --git a/src/requests/_types.py b/src/requests/_types.py
+--- a/src/requests/_types.py
++++ b/src/requests/_types.py
+@@ -30,8 +30,18 @@
+ 
+ 
+ @runtime_checkable
+-class SupportsItems(Protocol[_KT_co, _VT_co]):
+-    def items(self) -> Iterable[tuple[_KT_co, _VT_co]]: ...
++class SupportsItems(Protocol[_KT_co, _VT_co]):
++    def items(self) -> Iterable[tuple[_KT_co, _VT_co]]: ...
++
++
++def supports_read(value: object) -> bool:
++    """Check for a read method, including wrappers using __getattr__."""
++    return isinstance(value, SupportsRead) or hasattr(value, "read")
++
++
++def supports_items(value: object) -> bool:
++    """Check for an items method, including dynamic proxy wrappers."""
++    return isinstance(value, SupportsItems) or hasattr(value, "items")
+ 
+ 
+ # These are needed at runtime for default_hooks() return type
+diff --git a/src/requests/models.py b/src/requests/models.py
+--- a/src/requests/models.py
++++ b/src/requests/models.py
+@@ -36,7 +36,8 @@
+ from urllib3.util import parse_url
+ 
+ from ._internal_utils import to_native_string, unicode_is_ascii
+-from ._types import SupportsRead as _SupportsRead
++from ._types import SupportsRead as _SupportsRead
++from ._types import supports_read as _supports_read
+ from .auth import HTTPBasicAuth
+ from .compat import (
+     JSONDecodeError,
+@@ -161,7 +162,7 @@
+ 
+         if isinstance(data, (str, bytes)):
+             return data
+-        elif isinstance(data, _SupportsRead):
++        elif _supports_read(data):
+             return data
+         elif hasattr(data, "__iter__"):
+             result: list[tuple[bytes, bytes]] = []
+@@ -238,7 +239,7 @@
+                 fdata = fp
+             # data that proxies attributes to underlying objects needs hasattr
+             # defensive check for untyped callers
+-            elif isinstance(fp, _SupportsRead) or hasattr(fp, "read"):
++            elif _supports_read(fp):
+                 fdata = fp.read()
+             elif fp is None:  # defensive check for untyped callers
+                 continue
+@@ -641,7 +642,7 @@
+             else:
+                 if raw_data:
+                     body = self._encode_params(raw_data)
+-                    if isinstance(data, basestring) or isinstance(data, _SupportsRead):
++                    if isinstance(data, basestring) or _supports_read(data):
+                         content_type = None
+                     else:
+                         content_type = "application/x-www-form-urlencoded"
+diff --git a/src/requests/utils.py b/src/requests/utils.py
+--- a/src/requests/utils.py
++++ b/src/requests/utils.py
+@@ -42,7 +42,8 @@
+     HEADER_VALIDATORS,
+     to_native_string,
+ )
+-from ._types import SupportsItems as _SupportsItems
++from ._types import SupportsItems as _SupportsItems
++from ._types import supports_items as _supports_items
+ from .compat import (
+     Mapping,
+     bytes,
+@@ -151,7 +152,7 @@
+ ) -> Iterable[tuple[Any, Any]]:
+     """Returns an internal sequence dictionary update."""
+ 
+-    if isinstance(d, _SupportsItems):
++    if _supports_items(d):
+         return d.items()
+ 
+     return d
+@@ -398,7 +399,7 @@
+     if isinstance(value, (str, bytes, bool, int)):
+         raise ValueError("cannot encode objects that are not 2-tuples")
+ 
+-    if isinstance(value, _SupportsItems):
++    if _supports_items(value):
+         return list(value.items())
+ 
+     return list(value)
