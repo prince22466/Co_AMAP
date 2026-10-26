@@ -59,8 +59,10 @@ swegemma 0.2.11, google-adk 1.36.1, google-genai 2.11.0.
 ## Five-task real-model pilot (instead of another 15-task run)
 
 Use the official task snapshots, wheels and a running E4B OpenAI-compatible
-endpoint. Baseline checks stop if dependencies or fixtures are broken. Before
-any of the five tasks are run, a **real E4B synthetic native-tool smoke** must
+endpoint. Baseline checks stop if dependencies or fixtures are broken. Next,
+the pinned official ADK runtime must pass the packaged scripted audit/repair
+smoke **without using E4B**. Before any of the five tasks are run, a
+**real E4B synthetic native-tool smoke** must
 read, edit, verify the same observed behavior, and submit a patch without a
 skill dispatcher. Failed smoke stops the pilot; scripted smoke is not sufficient.
 
