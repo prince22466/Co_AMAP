@@ -3,130 +3,130 @@ new file mode 100644
 --- /dev/null
 +++ b/scripts/prepare_release.py
 @@ -0,0 +1,127 @@
-+"""Prepare a FastAPI release in a deterministic, reviewable way.
++"""CLI to prepare FastAPI releases and inspect release notes.
 +
-+The script changes only version metadata and release notes by default. The
-+existing online contributor/docs helpers remain explicit opt-ins so that a
-+normal offline release preparation does not unexpectedly push git branches.
++The functions operate on passed strings, making the transformations testable
++without changing the working tree.
 +"""
 +from __future__ import annotations
 +
-+import argparse
 +import re
-+import subprocess
-+import sys
 +from datetime import date
 +from pathlib import Path
++from typing import Literal
 +
-+REPO_ROOT = Path(__file__).resolve().parents[1]
-+VERSION_FILE = Path("fastapi/__init__.py")
-+NOTES_FILE = Path("docs/en/docs/release-notes.md")
-+VERSION_RE = re.compile(r'^__version__\s*=\s*["\'](\d+\.\d+\.\d+)["\']\s*$', re.M)
-+NOTES_RELEASE_RE = re.compile(r"^## (\d+\.\d+\.\d+)(?: \([^\n]*\))?\s*$", re.M)
-+VERSION_FORMAT = re.compile(r"^\d+\.\d+\.\d+$")
++import typer
++
++BumpType = Literal["major", "minor", "patch"]
++RELEASE_NOTES_HEADER = "---\nhide:\n  - navigation\n---\n\n# Release Notes\n\n"
++ROOT = Path(__file__).resolve().parents[1]
++DEFAULT_VERSION = ROOT / "fastapi/__init__.py"
++DEFAULT_NOTES = ROOT / "docs/en/docs/release-notes.md"
++VERSION_LINE = re.compile(r'^__version__ = "(\d+\.\d+\.\d+)"$', re.M)
++RELEASE_HEADING = re.compile(r"^## (\d+\.\d+\.\d+)(?: \([^\n)]*\))?\s*$", re.M)
++app = typer.Typer(no_args_is_help=True)
 +
 +
-+def current_version(root: Path = REPO_ROOT) -> str:
-+    source = (root / VERSION_FILE).read_text(encoding="utf-8")
-+    match = VERSION_RE.search(source)
++def read_current_version(source: str, path: Path) -> str:
++    match = VERSION_LINE.search(source)
 +    if match is None:
-+        raise ValueError("Could not find FastAPI's __version__ declaration")
++        raise RuntimeError(f"Could not read FastAPI version from {path}")
 +    return match.group(1)
 +
 +
-+def next_patch_version(version: str) -> str:
-+    major, minor, patch = (int(part) for part in version.split("."))
-+    return f"{major}.{minor}.{patch + 1}"
++def bump_version(current_version: str, bump: BumpType) -> str:
++    major, minor, patch = (int(part) for part in current_version.split("."))
++    if bump == "major":
++        return f"{major + 1}.0.0"
++    if bump == "minor":
++        return f"{major}.{minor + 1}.0"
++    if bump == "patch":
++        return f"{major}.{minor}.{patch + 1}"
++    raise ValueError(f"Invalid bump: {bump!r}")
 +
 +
-+def prepare_release(
-+    *, root: Path = REPO_ROOT, version: str | None = None,
-+    today: date | None = None, dry_run: bool = False,
-+) -> list[Path]:
-+    """Update the package version and the top of the release notes atomically.
-+
-+    Refuse malformed files before writing either, to prevent partial preparation.
-+    """
-+    root = root.resolve()
-+    version_file = root / VERSION_FILE
-+    notes_file = root / NOTES_FILE
-+    package_source = version_file.read_text(encoding="utf-8")
-+    notes_source = notes_file.read_text(encoding="utf-8")
-+    old_version = current_version(root)
-+    version = version or next_patch_version(old_version)
-+    if not VERSION_FORMAT.fullmatch(version):
-+        raise ValueError(f"Invalid release version: {version!r}")
-+    if tuple(map(int, version.split("."))) < tuple(map(int, old_version.split("."))):
-+        raise ValueError("Refusing to decrease the package version")
-+    today = today or date.today()
-+    old_header = NOTES_RELEASE_RE.search(notes_source)
-+    if old_header is None:
-+        raise ValueError("No release notes heading found")
-+    existing_new_release = re.search(
-+        rf"^## {re.escape(version)}(?: \([^\n]*\))?\s*$", notes_source, re.M
-+    )
-+    new_source = VERSION_RE.sub(f'__version__ = "{version}"', package_source, count=1)
-+    if existing_new_release:
-+        if existing_new_release.group().find("(") < 0:
-+            new_notes = (
-+                notes_source[:existing_new_release.start()]
-+                + f"## {version} ({today.isoformat()})"
-+                + notes_source[existing_new_release.end():]
-+            )
-+        else:
-+            new_notes = notes_source
-+    else:
-+        # Insert directly before the latest version, keeping unreleased notes.
-+        pos = old_header.start()
-+        new_notes = (
-+            notes_source[:pos]
-+            + f"## {version} ({today.isoformat()})\n\n"
-+            + "### Release preparation\n\n"
-+            + "* Prepare release notes and verify the updated package version.\n\n"
-+            + notes_source[pos:]
-+        )
-+    writes = [(version_file, new_source), (notes_file, new_notes)]
-+    changed = [path for path, body in writes if path.read_text(encoding="utf-8") != body]
-+    if not dry_run:
-+        for path, body in writes:
-+            if path in changed:
-+                path.write_text(body, encoding="utf-8")
-+    return changed
-+
-+
-+def run_helper(root: Path, filename: str) -> None:
-+    subprocess.run([sys.executable, str(root / "scripts" / filename)], cwd=root, check=True)
-+
-+
-+def main(argv: list[str] | None = None) -> int:
-+    parser = argparse.ArgumentParser(description="Prepare a FastAPI release")
-+    parser.add_argument("--version", help="Release version, default next patch version")
-+    parser.add_argument("--date", help="Release date (YYYY-MM-DD), default today")
-+    parser.add_argument("--dry-run", action="store_true", help="Preview changed files")
-+    parser.add_argument("--contributors", action="store_true", help="Run online contributor helper")
-+    parser.add_argument("--docs-status", action="store_true", help="Run docs status helper")
-+    args = parser.parse_args(argv)
++def update_version_file(content: str, version: str, path: Path) -> str:
++    current = read_current_version(content, path)
 +    try:
-+        release_date = date.fromisoformat(args.date) if args.date else date.today()
-+        changed = prepare_release(
-+            version=args.version, today=release_date, dry_run=args.dry_run
-+        )
-+        for file in changed:
-+            print(f'{"Would change" if args.dry_run else "Changed"}: {file.relative_to(REPO_ROOT)}')
-+        if args.dry_run and (args.contributors or args.docs_status):
-+            print("Dry run: skipping online helpers")
-+        elif args.contributors or args.docs_status:
-+            if args.contributors:
-+                run_helper(REPO_ROOT, "contributors.py")
-+            if args.docs_status:
-+                run_helper(REPO_ROOT, "deploy_docs_status.py")
-+        if not changed:
-+            print("Already prepared")
-+        return 0
-+    except (ValueError, OSError, subprocess.CalledProcessError) as exc:
-+        print(f"Release preparation failed: {exc}", file=sys.stderr)
-+        return 1
++        old_tuple = tuple(map(int, current.split(".")))
++        new_tuple = tuple(map(int, version.split(".")))
++    except ValueError as exc:
++        raise RuntimeError("Invalid semantic version") from exc
++    if len(new_tuple) != 3 or new_tuple <= old_tuple:
++        raise RuntimeError("New version must be greater than current version")
++    return VERSION_LINE.sub(f'__version__ = "{version}"', content, count=1)
++
++
++def update_release_notes(content: str, version: str, on_date: date, path: Path) -> str:
++    if RELEASE_HEADING.search(content) and any(
++        match.group(1) == version for match in RELEASE_HEADING.finditer(content)
++    ):
++        raise RuntimeError(f"Release notes already contain version {version}: {path}")
++    header = "## Latest Changes\n"
++    position = content.find(header)
++    if position < 0:
++        raise RuntimeError(f"Could not find 'Latest Changes' in {path}")
++    insert_at = position + len(header)
++    suffix = content[insert_at:]
++    # Insert the new release section after the Latest Changes heading.
++    return content[:insert_at] + f"\n## {version} ({on_date.isoformat()})\n" + suffix
++
++
++def get_release_notes_body(content: str, version: str, path: Path) -> str:
++    matches = list(RELEASE_HEADING.finditer(content))
++    for i, match in enumerate(matches):
++        if match.group(1) == version:
++            end = matches[i + 1].start() if i + 1 < len(matches) else len(content)
++            result = content[match.end():end].strip("\n")
++            if not result.strip():
++                raise RuntimeError(f"Release notes section for {version} is empty: {path}")
++            return result + "\n"
++    raise RuntimeError(f"Could not find release notes for {version}: {path}")
++
++
++@app.command("current-version")
++def current_version(
++    version_file: Path = typer.Option(DEFAULT_VERSION, "--version-file",
++                                     envvar="PREPARE_RELEASE_VERSION_FILE"),
++) -> None:
++    typer.echo(read_current_version(version_file.read_text(encoding="utf-8"), version_file))
++
++
++@app.command("release-notes")
++def release_notes(
++    version_file: Path = typer.Option(DEFAULT_VERSION, "--version-file",
++                                     envvar="PREPARE_RELEASE_VERSION_FILE"),
++    release_notes_file: Path = typer.Option(DEFAULT_NOTES, "--release-notes-file",
++                                          envvar="PREPARE_RELEASE_RELEASE_NOTES_FILE"),
++) -> None:
++    version = read_current_version(version_file.read_text(encoding="utf-8"), version_file)
++    typer.echo(get_release_notes_body(release_notes_file.read_text(encoding="utf-8"),
++                                      version, release_notes_file), nl=False)
++
++
++@app.command()
++def prepare(
++    bump: str = typer.Argument(None, envvar="PREPARE_RELEASE_BUMP"),
++    version_file: Path = typer.Option(DEFAULT_VERSION, "--version-file",
++                                     envvar="PREPARE_RELEASE_VERSION_FILE"),
++    release_notes_file: Path = typer.Option(DEFAULT_NOTES, "--release-notes-file",
++                                          envvar="PREPARE_RELEASE_RELEASE_NOTES_FILE"),
++    release_date: str = typer.Option(None, "--date", envvar="PREPARE_RELEASE_DATE"),
++) -> None:
++    chosen = bump or "patch"
++    if chosen not in ("major", "minor", "patch"):
++        raise typer.BadParameter("bump must be major, minor, or patch")
++    current = read_current_version(version_file.read_text(encoding="utf-8"), version_file)
++    version = bump_version(current, chosen)
++    on_date = date.fromisoformat(release_date) if release_date else date.today()
++    original_version = version_file.read_text(encoding="utf-8")
++    original_notes = release_notes_file.read_text(encoding="utf-8")
++    updated_version = update_version_file(original_version, version, version_file)
++    updated_notes = update_release_notes(original_notes, version, on_date, release_notes_file)
++    version_file.write_text(updated_version, encoding="utf-8")
++    release_notes_file.write_text(updated_notes, encoding="utf-8")
++    typer.echo(f"Prepared release {version} ({on_date.isoformat()})")
 +
 +
 +if __name__ == "__main__":
-+    raise SystemExit(main())
++    app()
