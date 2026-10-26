@@ -38,3 +38,18 @@ The task set is the first 15 entries in the public Gemma 4 Developer Agent Compe
 2. Obtain official `resolved`, patch and tool-call outcomes for GPT-6 tool-equivalent runs and Gemma S21, using identical task IDs and evaluator limits.
 3. Compare first divergence and classify: understanding, navigation, tool calls, editing, semantic implementation, verification, submission and environment.
 4. Do not promote patches to a competition agent or claim any leaderboard improvement without real-model evidence.
+
+## Preliminary focused public-test replay
+
+The [first completed replay](https://github.com/prince22466/Co_AMAP/actions/runs/40411339643) normalized missing final newlines in published test diffs, applied the public verification test *only in the evaluator*, and ran identical focused tests on the base commit and patched checkout (Python 3.11/GitHub Actions, not the official Kaggle Docker image).
+
+| Task | Base | Candidate | Interpretation |
+|---|---:|---:|---|
+| requests_7427 | exit 1 | exit 0 | **Focused public test passes** after independent patch |
+| requests_7315 | exit 1 | exit 0 | **Focused public test passes** after independent patch |
+| requests_7505 | exit 0 | exit 0 | Inconclusive: reproducer passes before patch |
+| requests_7502 | exit 0 | exit 0 | Inconclusive: reproducer passes before patch |
+| requests_7433 | timeout | not run | Blocked: 120-second baseline fixture/test timeout |
+
+These are **not official resolved outcomes**; no full regression suite was run, and the task-specific public test may be insufficient. Do not count the 2 focused test passes as an official 2/15 score. A follow-up workflow adds 45-second per-test timeouts to keep fixture problems bounded.
+
