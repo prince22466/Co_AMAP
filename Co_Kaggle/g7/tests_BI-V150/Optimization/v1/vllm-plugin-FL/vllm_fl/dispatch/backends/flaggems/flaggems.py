@@ -198,8 +198,8 @@ class FlagGemsBackend(Backend):
             return "vllm_fl.dispatch.backends.flaggems.impl.attention.AttentionFLBackend"
 
         if use_biv150_v1:
-            # FlagOS already restricts this backend to the Iluvatar platform.
-            # GPU display-name checks are brittle and unnecessary here.
+            # Enabled explicitly in the BI-V150 test environment.
+            # Avoid brittle platform detection based on the GPU display name.
             return (
                 "vllm_fl.dispatch.backends.vendor.iluvatar.impl."
                 "attention_biv150.BIV150TritonAttentionBackend"
