@@ -15,7 +15,9 @@ This makes patch production the immediate gating problem.
   separate finalizer, or additional model.
 - S19's **optional read-only** patch-audit skill is retained, with stronger
   protected-path coverage from S20 (case-insensitive test directories,
-  .pytest.ini and _swegemma_stubs.py). Generated root-level .adk_exec_*\n  scripts are intentionally excluded as harness scratch files, not protected;\n  the audit returns an explicit ignored_runtime_scratch count. It detects syntax,
+  .pytest.ini and _swegemma_stubs.py). Generated root-level .adk_exec_*
+  scripts are intentionally excluded as harness scratch files, not protected;
+  the audit returns an explicit ignored_runtime_scratch count. It detects syntax,
   removed top-level public definitions, changed protected paths and empty diffs.
 - S20's baseline-fail / candidate-pass insight is translated into a model-guided
   **same-check before/after** behavioral workflow using native run_command.
@@ -56,7 +58,11 @@ swegemma 0.2.11, google-adk 1.36.1, google-genai 2.11.0.
 
 ## Five-task real-model pilot (instead of another 15-task run)
 
-Use the official task snapshots, wheels and a running E4B OpenAI-compatible\nendpoint. Baseline checks stop if dependencies or fixtures are broken. Before\nany of the five tasks are run, a **real E4B synthetic native-tool smoke** must\nread, edit, verify the same observed behavior, and submit a patch without a\nskill dispatcher. Failed smoke stops the pilot; scripted smoke is not sufficient.
+Use the official task snapshots, wheels and a running E4B OpenAI-compatible
+endpoint. Baseline checks stop if dependencies or fixtures are broken. Before
+any of the five tasks are run, a **real E4B synthetic native-tool smoke** must
+read, edit, verify the same observed behavior, and submit a patch without a
+skill dispatcher. Failed smoke stops the pilot; scripted smoke is not sufficient.
 
 ```bash
 python Co_Kaggle/g6/tests_on_tasks/tools/run_submission21_pilot.py \
