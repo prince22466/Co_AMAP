@@ -33,8 +33,9 @@ No claim of an unbypassable edit gate or solved-task improvement is made.
    using a scripted model where the competition dependencies are available.
    No official-runtime execution is claimed merely from generic CI.
 3. CI builds and uploads exact ZIP and manifest; it does not run E4B.
-4. The real E4B pilot requires dependency-healthy baselines and then a
-   real-model native-edit/behavior/submit synthetic smoke BEFORE five task inferences.
+4. The pilot requires dependency-healthy baselines, then the pinned official
+   runtime scripted smoke (no E4B inference), then real E4B synthetic
+   native-edit/behavior/submit smoke BEFORE five task inferences.
 5. Five nonempty patches, five post-edit focused checks followed by native
    submission, at least one resolved task, no recorded dispatch error, and traces
    are necessary but NOT sufficient for promotion.
