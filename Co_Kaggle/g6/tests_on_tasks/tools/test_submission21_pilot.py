@@ -99,6 +99,13 @@ class PilotPolicy(unittest.TestCase):
             (out/'real_smoke'/'smoke.json').write_text(json.dumps(smoke()))
             rf=out/'review.json';rf.write_text(json.dumps(review()))
             self.assertTrue(review_existing(out,rf)['ready_for_15_tasks'])
+    def test_unexpected_nested_tool_shape_fails_closed(self):
+        calls=trace_calls({'events':[{'tool':{'name':'run_command'},
+                                      'arguments':{'command':CHECK}},
+                                     *trace()]})
+        self.assertEqual([name for name,_,_ in calls],
+                         ['edit_file','run_command','submit_patch'])
+
     def test_nested_evaluator_trace(self):
         self.assertEqual([name for name,_,_ in trace_calls({'events':trace()})],
                          ['edit_file','run_command','submit_patch'])
