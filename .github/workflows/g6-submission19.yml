@@ -1,0 +1,37 @@
+name: g6 submission 19 CPU validation
+on:
+  pull_request:
+    paths:
+      - 'Co_Kaggle/g6/submission_nb/submission_19/**'
+      - 'Co_Kaggle/g6/submission_nb/artifacts/submission_19*'
+      - 'Co_Kaggle/g6/tests_on_tasks/tools/*submission19*.py'
+      - 'Co_Kaggle/g6/tests_on_tasks/reviews/submission_19/**'
+      - '.github/workflows/g6-submission19.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  cpu:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          filter: blob:none
+          sparse-checkout: Co_Kaggle/g6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install 'PyYAML>=6,<7' 'pytest>=8,<9'
+      - name: Archived-failure and evidence-gate regressions (no inference)
+        run: python -m unittest discover -s Co_Kaggle/g6/tests_on_tasks/tools -p test_submission19.py -v
+      - name: Rebuild release and verify manifest
+        run: |
+          python Co_Kaggle/g6/tests_on_tasks/tools/build_submission19.py
+          git diff --exit-code -- Co_Kaggle/g6/submission_nb/artifacts/submission_19.manifest.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: submission-19-e4b-unscored
+          path: |
+            Co_Kaggle/g6/submission_nb/artifacts/submission_19.zip
+            Co_Kaggle/g6/submission_nb/artifacts/submission_19.manifest.json
