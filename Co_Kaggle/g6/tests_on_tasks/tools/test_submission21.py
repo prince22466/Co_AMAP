@@ -79,6 +79,16 @@ class NativeRegressions(unittest.TestCase):
         self.assertNotEqual(result['patch_sha256'],audit.audit(self.root)['patch_sha256'])
     def test_empty_patch_rejected(self):
         self.assertEqual(audit.audit(self.root)['status'],'blocked')
+    def test_adk_scratch_exclusion_is_visible_in_audit_report(self):
+        # Harness-created executors are not submitted source code.
+        self.write('.adk_exec_scratch.py','def broken(:\n')
+        self.write('pkg.py',BASE.replace('return 1','return 2'))
+        report=audit.audit(self.root)
+        self.assertEqual(report['status'],'structurally_clean')
+        self.assertEqual(report['ignored_runtime_scratch_count'],1)
+        self.assertEqual(report['ignored_runtime_scratch'],['.adk_exec_scratch.py'])
+        self.assertFalse(audit.protected('.adk_exec_scratch.py'))
+
     def test_archive_package_fields(self):
         manifest=build()
         with zipfile.ZipFile(ARCHIVE) as z:
