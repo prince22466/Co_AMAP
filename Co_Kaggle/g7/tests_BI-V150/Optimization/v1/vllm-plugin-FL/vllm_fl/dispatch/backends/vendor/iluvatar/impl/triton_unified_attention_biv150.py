@@ -895,6 +895,9 @@ def unified_attention(
         and num_kv_heads == 2
         and head_size == 128
         and q.dtype == torch.bfloat16
+        and k.dtype == torch.bfloat16
+        and v.dtype == torch.bfloat16
+        and not use_td
         and kv_quant_mode == KVQuantMode.NONE
         and use_causal
         and not use_per_seq_causal
