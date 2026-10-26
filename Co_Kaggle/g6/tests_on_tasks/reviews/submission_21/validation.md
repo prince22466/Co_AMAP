@@ -20,13 +20,25 @@ S20's gate was implemented but not reached by E4B.
 | S19 unrelated tests and zero-exit FAILED | Same focused baseline/final command, check output | **No**, prompt-only |
 | S20 premature empty submission | Budget reserve and submit-last instruction | **No**, prompt-only |
 | Missing inline_snapshot/httpbin | Preflight baseline collection gate before real E4B evaluation | Yes, in standalone pilot, not agent |
-| Scripted tests mistaken for real progress | Real-E4B synthetic native-tool smoke before fixed five-task pilot | Yes, in standalone pilot only |\n| Plain-text missing tool errors | Replay S20 error strings in pilot policy tests | Yes, in standalone pilot only |\n| Four unchecked patches promoted after one resolved task | Require successful post-edit targeted command and submission evidence per task plus manual review | Yes, in pilot promotion only; semantic relevance needs review |
+| Scripted tests mistaken for real progress | Real-E4B synthetic native-tool smoke before fixed five-task pilot | Yes, in standalone pilot only |
+| Plain-text missing tool errors | Replay S20 error strings in pilot policy tests | Yes, in standalone pilot only |
+| Four unchecked patches promoted after one resolved task | Require successful post-edit targeted command and submission evidence per task plus manual review | Yes, in pilot promotion only; semantic relevance needs review |
 
 No claim of an unbypassable edit gate or solved-task improvement is made.
 
 ## Acceptance
 
 1. CPU tests exercise native tool selection and fault-injected audit behavior.
-2. The pinned official-runtime test can compile and run the packaged skill\n   using a scripted model where the competition dependencies are available.\n   No official-runtime execution is claimed merely from generic CI.
+2. The pinned official-runtime test can compile and run the packaged skill
+   using a scripted model where the competition dependencies are available.
+   No official-runtime execution is claimed merely from generic CI.
 3. CI builds and uploads exact ZIP and manifest; it does not run E4B.
-4. The real E4B pilot requires dependency-healthy baselines and then a\n   real-model native-edit/behavior/submit synthetic smoke BEFORE five task inferences.\n5. Five nonempty patches, five post-edit focused checks followed by native\n   submission, at least one resolved task, no recorded dispatch error, and traces\n   are necessary but NOT sufficient for promotion.\n6. A separate all-five manual-review JSON is required; the initial pilot\n   always reports `ready_for_15_tasks: false`.\n7. ADK-generated root-level `.adk_exec_*` files are deliberately excluded\n   from audit and reported as ignored scratch; the audit does NOT protect them.
+4. The real E4B pilot requires dependency-healthy baselines and then a
+   real-model native-edit/behavior/submit synthetic smoke BEFORE five task inferences.
+5. Five nonempty patches, five post-edit focused checks followed by native
+   submission, at least one resolved task, no recorded dispatch error, and traces
+   are necessary but NOT sufficient for promotion.
+6. A separate all-five manual-review JSON is required; the initial pilot
+   always reports `ready_for_15_tasks: false`.
+7. ADK-generated root-level `.adk_exec_*` files are deliberately excluded
+   from audit and reported as ignored scratch; the audit does NOT protect them.
