@@ -1,0 +1,154 @@
+diff --git a/fastapi/routing.py b/fastapi/routing.py
+--- a/fastapi/routing.py
++++ b/fastapi/routing.py
+@@ -49,5 +49,6 @@
+     solve_dependencies,
+ )
+-from fastapi.encoders import jsonable_encoder
++from fastapi.encoders import jsonable_encoder
++from fastapi.sse import EventSourceResponse, ServerSentEvent, format_sse_event
+ from fastapi.exceptions import (
+     EndpointContext,
+@@ -509,7 +510,39 @@
+                 )
+                 response.headers.raw.extend(solved_result.response.headers.raw)
+-            elif dependant.is_async_gen_callable or dependant.is_gen_callable:
+-                # Raw streaming with explicit response_class (e.g. StreamingResponse)
+-                gen = dependant.call(**solved_result.values)
++            elif dependant.is_async_gen_callable or dependant.is_gen_callable:
++                # Raw streaming with explicit response_class (e.g. StreamingResponse)
++                gen = dependant.call(**solved_result.values)
++                if issubclass(actual_response_class, EventSourceResponse):
++                    def serialize_sse_item(item: Any) -> bytes:
++                        if isinstance(item, ServerSentEvent):
++                            if item.raw_data is not None:
++                                data_str = item.raw_data
++                            elif item.data is not None:
++                                data_str = json.dumps(jsonable_encoder(item.data))
++                            else:
++                                data_str = None
++                            return format_sse_event(
++                                data_str=data_str, event=item.event, id=item.id,
++                                retry=item.retry, comment=item.comment,
++                            )
++                        return format_sse_event(data_str=json.dumps(jsonable_encoder(item)))
++
++                    if dependant.is_async_gen_callable:
++                        original_async_gen = gen
++
++                        async def async_sse_stream() -> AsyncIterator[bytes]:
++                            async for event in original_async_gen:
++                                yield serialize_sse_item(event)
++                                await anyio.sleep(0)
++
++                        gen = async_sse_stream()
++                    else:
++                        original_gen = gen
++
++                        def sync_sse_stream() -> Iterator[bytes]:
++                            for event in original_gen:
++                                yield serialize_sse_item(event)
++
++                        gen = sync_sse_stream()
+                 if dependant.is_async_gen_callable:
+ 
+diff --git a/fastapi/responses.py b/fastapi/responses.py
+--- a/fastapi/responses.py
++++ b/fastapi/responses.py
+@@ -1,5 +1,6 @@
+ from typing import Any
+ 
+-from fastapi.exceptions import FastAPIDeprecationWarning
++from fastapi.exceptions import FastAPIDeprecationWarning
++from fastapi.sse import EventSourceResponse as EventSourceResponse
+ from starlette.responses import FileResponse as FileResponse  # noqa
+ from starlette.responses import HTMLResponse as HTMLResponse  # noqa
+diff --git a/fastapi/__init__.py b/fastapi/__init__.py
+--- a/fastapi/__init__.py
++++ b/fastapi/__init__.py
+@@ -20,5 +20,7 @@
+ from .param_functions import Security as Security
+ from .requests import Request as Request
+-from .responses import Response as Response
++from .responses import Response as Response
++from .sse import ServerSentEvent as ServerSentEvent
++from .sse import EventSourceResponse as EventSourceResponse
+ from .routing import APIRouter as APIRouter
+ from .websockets import WebSocket as WebSocket
+diff --git a/fastapi/sse.py b/fastapi/sse.py
+new file mode 100644
+--- /dev/null
++++ b/fastapi/sse.py
+@@ -0,0 +1,72 @@
++"""Server-Sent Events response and event representation."""
++from __future__ import annotations
++
++from typing import Any
++
++from pydantic import BaseModel, Field, model_validator
++from starlette.responses import StreamingResponse
++
++
++class EventSourceResponse(StreamingResponse):
++    """Streaming HTTP response carrying text/event-stream events."""
++
++    media_type = "text/event-stream"
++
++    def __init__(self, content: Any, **kwargs: Any) -> None:
++        kwargs.setdefault("media_type", self.media_type)
++        super().__init__(content, **kwargs)
++
++
++class ServerSentEvent(BaseModel):
++    """One SSE event, with JSON or explicitly raw data."""
++
++    data: Any = None
++    raw_data: str | None = None
++    event: str | None = None
++    id: str | None = None
++    retry: int | None = Field(default=None, ge=0)
++    comment: str | None = None
++
++    @model_validator(mode="after")
++    def validate_fields(self) -> "ServerSentEvent":
++        if self.data is not None and self.raw_data is not None:
++            raise ValueError("SSE data and raw_data are mutually exclusive")
++        for name in ("event", "id"):
++            value = getattr(self, name)
++            if value is not None and ("\r" in value or "\n" in value):
++                raise ValueError(f"SSE {name!r} must be a single line")
++        if self.id is not None and "\0" in self.id:
++            raise ValueError("SSE event id must not contain null characters")
++        return self
++
++
++def format_sse_event(
++    *,
++    data_str: str | None = None,
++    event: str | None = None,
++    id: str | None = None,
++    retry: int | None = None,
++    comment: str | None = None,
++) -> bytes:
++    """Encode one event according to the SSE line-oriented wire format."""
++    for label, value in (("event", event), ("id", id)):
++        if value is not None and ("\r" in value or "\n" in value):
++            raise ValueError(f"SSE {label} must not contain newlines")
++    if id is not None and "\0" in id:
++        raise ValueError("SSE id must not contain null characters")
++    if retry is not None and retry < 0:
++        raise ValueError("SSE retry must be non-negative")
++    lines: list[str] = []
++    if comment is not None:
++        lines.extend(f": {line}" for line in comment.splitlines())
++    if event is not None:
++        lines.append(f"event: {event}")
++    if data_str is not None:
++        lines.extend(f"data: {line}" for line in data_str.splitlines())
++        if not data_str:
++            lines.append("data: ")
++    if id is not None:
++        lines.append(f"id: {id}")
++    if retry is not None:
++        lines.append(f"retry: {retry}")
++    return ("\n".join(lines) + "\n\n").encode("utf-8")
