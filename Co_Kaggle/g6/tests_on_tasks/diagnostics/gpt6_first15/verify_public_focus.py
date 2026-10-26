@@ -67,6 +67,9 @@ def main():
                 selector = " or ".join(names)
                 env = os.environ.copy()
                 env["PYTHONPATH"] = str(repo / "src")
+                for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+                    env.pop(key, None)
+                env["NO_PROXY"] = "127.0.0.1,localhost,::1"
                 env.pop("PYTHONWARNINGS", None)
                 command = [sys.executable, "-m", "pytest", "-q", "-o", "addopts=",
                            target, "-k", selector, "--disable-warnings", "--maxfail=1"]
