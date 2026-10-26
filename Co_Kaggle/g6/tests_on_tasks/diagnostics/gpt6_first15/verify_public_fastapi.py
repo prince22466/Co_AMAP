@@ -80,7 +80,7 @@ def main():
                 execute(["git", "apply", str(patch)], cwd=repo, check=True)
                 candidate = execute(command, cwd=repo, env=env, timeout=45)
                 result["candidate_exit"] = candidate.returncode
-                result["candidate_tail"] = candidate.stdout[-2400:]
+                result["candidate_tail"] = candidate.stdout[-16000:]
                 result["status"] = (
                     "focused_pass" if baseline.returncode != 0 and candidate.returncode == 0
                     else "focused_inconclusive_or_fail"
@@ -92,7 +92,7 @@ def main():
               f"(baseline={result.get('baseline_exit')}, candidate={result.get('candidate_exit')})",
               flush=True)
         if result["status"] != "focused_pass":
-            print(json.dumps(result, indent=2)[-3000:], flush=True)
+            print(json.dumps(result, indent=2)[-18500:], flush=True)
     out = Path(os.environ.get("G6_RESULTS_DIR", str(ROOT)))
     out.mkdir(parents=True, exist_ok=True)
     (out / "public_fastapi_results.json").write_text(json.dumps(results, indent=2)+"\n")
