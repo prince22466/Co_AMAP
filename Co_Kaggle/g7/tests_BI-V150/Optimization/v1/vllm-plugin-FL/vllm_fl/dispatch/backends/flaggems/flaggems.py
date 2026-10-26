@@ -180,9 +180,32 @@ class FlagGemsBackend(Backend):
             "VLLM_FL_USE_FLAGGEMS_ATTN", "0"
         ).lower() in ("1", "true", "yes")
 
+        # Explicit A/B toggle for the experimental BI-V150 v1 operator.
+        # Without this opt-in the original FlagOS dispatch is unchanged.
+        use_biv150_v1 = os.environ.get(
+            "VLLM_FL_BIV150_ATTN_V1", "0"
+        ).lower() in ("1", "true", "yes")
+
         if use_flaggems_attn:
+            if use_biv150_v1:
+                raise RuntimeError(
+                    "VLLM_FL_BIV150_ATTN_V1 and VLLM_FL_USE_FLAGGEMS_ATTN "
+                    "cannot both be enabled."
+                )
             print("Using FlagGems attention backend.")
             return "vllm_fl.dispatch.backends.flaggems.impl.attention.AttentionFLBackend"
+
+        if use_biv150_v1:
+            device_name = torch.cuda.get_device_name(0).lower()
+            if "iluvatar" not in device_name and "bi-v150" not in device_name:
+                raise RuntimeError(
+                    "VLLM_FL_BIV150_ATTN_V1 is intended for BI-V150 only; "
+                    f"detected GPU: {device_name}"
+                )
+            return (
+                "vllm_fl.dispatch.backends.vendor.iluvatar.impl."
+                "attention_biv150.BIV150TritonAttentionBackend"
+            )
 
         return AttentionBackendEnum.TRITON_ATTN.get_path()
 
