@@ -9,7 +9,15 @@ diff --git a/fastapi/routing.py b/fastapi/routing.py
 +from fastapi.sse import EventSourceResponse, ServerSentEvent, format_sse_event
  from fastapi.exceptions import (
      EndpointContext,
-@@ -509,7 +510,39 @@
+@@ -83,5 +84,7 @@
+ 
+ 
++_PING_INTERVAL: float = 15.0
++
+ # Copy of starlette.routing.request_response modified to include the
+ # dependencies' AsyncExitStack
+ def request_response(
+@@ -509,7 +512,60 @@
                  )
                  response.headers.raw.extend(solved_result.response.headers.raw)
 -            elif dependant.is_async_gen_callable or dependant.is_gen_callable:
@@ -33,23 +41,44 @@ diff --git a/fastapi/routing.py b/fastapi/routing.py
 +                            )
 +                        return format_sse_event(data_str=json.dumps(jsonable_encoder(item)))
 +
-+                    if dependant.is_async_gen_callable:
-+                        original_async_gen = gen
++async def async_sse_stream() -> AsyncIterator[bytes]:
++                        send, receive = anyio.create_memory_object_stream[bytes](0)
 +
-+                        async def async_sse_stream() -> AsyncIterator[bytes]:
-+                            async for event in original_async_gen:
-+                                yield serialize_sse_item(event)
-+                                await anyio.sleep(0)
++                        async def produce() -> None:
++                            async with send:
++                                if dependant.is_async_gen_callable:
++                                    async for event in gen:
++                                        await send.send(serialize_sse_item(event))
++                                else:
++                                    iterator = iter(gen)
++                                    sentinel = object()
++                                    while True:
++                                        event = await anyio.to_thread.run_sync(
++                                            lambda: next(iterator, sentinel)
++                                        )
++                                        if event is sentinel:
++                                            break
++                                        await send.send(serialize_sse_item(event))
 +
-+                        gen = async_sse_stream()
-+                    else:
-+                        original_gen = gen
++                        async with anyio.create_task_group() as group:
++                            group.start_soon(produce)
++                            async with receive:
++                                while True:
++                                    timed_out = False
++                                    with anyio.move_on_after(_PING_INTERVAL) as scope:
++                                        try:
++                                            payload = await receive.receive()
++                                        except anyio.EndOfStream:
++                                            break
++                                    if scope.cancel_called:
++                                        timed_out = True
++                                    if timed_out:
++                                        yield b": ping\n\n"
++                                    else:
++                                        yield payload
++                            group.cancel_scope.cancel()
 +
-+                        def sync_sse_stream() -> Iterator[bytes]:
-+                            for event in original_gen:
-+                                yield serialize_sse_item(event)
-+
-+                        gen = sync_sse_stream()
++                    gen = async_sse_stream()
                  if dependant.is_async_gen_callable:
  
 diff --git a/fastapi/responses.py b/fastapi/responses.py
