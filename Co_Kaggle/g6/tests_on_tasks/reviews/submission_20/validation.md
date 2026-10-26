@@ -36,7 +36,7 @@ five-task GPU flow is supplied for the user's official environment, not reported
 
 ## Completed validation (2026-10-26)
 
-- 23 CPU gate/package/provenance regressions: passed.
+- 24 CPU gate/package/provenance regressions: passed.
 - 6 baseline/pilot promotion policy tests: passed.
 - 2 pinned official ADK runtime tests: passed, including packaged skill execution,
   malformed-wrapper recovery, early empty submission, rollback, rejected tautology,

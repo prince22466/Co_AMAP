@@ -67,16 +67,17 @@ def clone(root, dest, baseline):
     git(dest, '-c', 'core.hooksPath=/dev/null', 'checkout', '--quiet', '--detach', baseline)
 
 
-def changes(root):
+def changes(root, include_ignored=True):
     # Include ignored new files too, rather than silently losing a candidate.
     names = set(git(root, 'diff', '--name-only', 'HEAD').splitlines())
-    names.update(git(root, 'ls-files', '--others').splitlines())
+    options=[] if include_ignored else ['--exclude-standard']
+    names.update(git(root, 'ls-files', '--others', *options).splitlines())
     return sorted(n for n in names if '__pycache__' not in Path(n).parts and not Path(n).name.startswith('.adk_exec_'))
 
 
-def digest(root):
+def digest(root, include_ignored=True):
     h = hashlib.sha256()
-    for n in changes(root):
+    for n in changes(root, include_ignored):
         p = safe(root, n)
         h.update(n.encode() + b'\0' + (p.read_bytes() if p.is_file() else b'<deleted>') + b'\0')
     return h.hexdigest()
@@ -160,14 +161,14 @@ class Gate:
         self.statefile = self.home / 'state.json'
         self.stage = self.home / 'candidate'
         if not self.statefile.exists():
-            if changes(self.root):
+            if changes(self.root, include_ignored=False):
                 raise ValueError('Initial live workspace is dirty; refuse to overwrite it')
             self.home.mkdir(exist_ok=True, mode=0o700)
             baseline = git(self.root, 'rev-parse', 'HEAD').strip()
             if self.stage.exists():
                 shutil.rmtree(self.stage)
             clone(self.root, self.stage, baseline)
-            self.state = dict(baseline=baseline, edits=0, failures={}, live_hash=digest(self.root),
+            self.state = dict(baseline=baseline, edits=0, failures={}, live_hash=digest(self.root, include_ignored=False),
                               published_paths=[], check=None)
             self.save()
         self.state = json.loads(self.statefile.read_text())
@@ -293,7 +294,7 @@ class Gate:
         spec = self.state.get('check')
         if not spec:
             return dict(status='blocked', reason='No behavioral check configured; call check(module,probe)')
-        if digest(self.root) != self.state['live_hash']:
+        if digest(self.root, include_ignored=False) != self.state['live_hash']:
             return dict(status='blocked', reason='Live workspace changed outside the gate')
         result = self.verify(spec)
         if result['status'] != 'verified' or not publish:
@@ -317,7 +318,7 @@ class Gate:
                 else:
                     target.parent.mkdir(parents=True,exist_ok=True)
                     target.write_bytes(data)
-            self.state['live_hash'] = digest(self.root)
+            self.state['live_hash'] = digest(self.root, include_ignored=False)
             self.state['published_paths'] = names
             self.save()
         except Exception:

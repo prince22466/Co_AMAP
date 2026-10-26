@@ -116,6 +116,15 @@ class Regressions(unittest.TestCase):
         self.assertEqual(self.g.edit('source.py',content=baseline)['status'],'staged')
         r=self.g.edit('source.py',old=case['old_string'],new=case['new_string'])
         self.assertEqual(r['status'],'edit_rejected');self.assertEqual((self.g.stage/'source.py').read_text(),baseline)
+    def test_preinstalled_ignored_build_artifacts_do_not_block_initialization(self):
+        shutil.rmtree(self.g.home)
+        (self.root/'.git/info/exclude').write_text('*.egg-info/\n')
+        (self.root/'pkg.egg-info').mkdir()
+        (self.root/'pkg.egg-info/PKG-INFO').write_text('installed baseline metadata\n')
+        self.g=gate.Gate(self.root)
+        self.stage();self.g.check(CHECK)
+        self.assertEqual(self.g.check(publish=True)['status'],'published')
+        self.assertEqual((self.root/'pkg.egg-info/PKG-INFO').read_text(),'installed baseline metadata\n')
     def test_focused_edit_supports_large_existing_files(self):
         text=BASE+'# padding\n'*12000
         (self.g.stage/'large.py').write_text(text)
