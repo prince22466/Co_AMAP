@@ -70,13 +70,13 @@ def main():
                 env.pop("PYTHONWARNINGS", None)
                 command = [sys.executable, "-m", "pytest", "-q", "-o", "addopts=",
                            target, "-k", selector, "--disable-warnings", "--maxfail=1"]
-                baseline = execute(command, cwd=repo, env=env)
+                baseline = execute(command, cwd=repo, env=env, timeout=45)
                 result["baseline_exit"] = baseline.returncode
                 result["baseline_tail"] = baseline.stdout[-2400:]
                 patch = ROOT / spec["candidate_patch"]
                 execute(["git", "apply", "--check", str(patch)], cwd=repo, check=True)
                 execute(["git", "apply", str(patch)], cwd=repo, check=True)
-                candidate = execute(command, cwd=repo, env=env)
+                candidate = execute(command, cwd=repo, env=env, timeout=45)
                 result["candidate_exit"] = candidate.returncode
                 result["candidate_tail"] = candidate.stdout[-2400:]
                 result["status"] = (
