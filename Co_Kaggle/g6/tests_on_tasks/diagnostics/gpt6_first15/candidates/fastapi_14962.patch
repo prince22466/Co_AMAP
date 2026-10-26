@@ -1,0 +1,113 @@
+diff --git a/fastapi/_compat/v2.py b/fastapi/_compat/v2.py
+--- a/fastapi/_compat/v2.py
++++ b/fastapi/_compat/v2.py
+@@ -196,10 +196,32 @@
+             by_alias=by_alias,
+             exclude_unset=exclude_unset,
+             exclude_defaults=exclude_defaults,
+-            exclude_none=exclude_none,
+-        )
+-
+-    def __hash__(self) -> int:
++            exclude_none=exclude_none,
++        )
++
++    def serialize_json(
++        self,
++        value: Any,
++        *,
++        include: IncEx | None = None,
++        exclude: IncEx | None = None,
++        by_alias: bool = True,
++        exclude_unset: bool = False,
++        exclude_defaults: bool = False,
++        exclude_none: bool = False,
++    ) -> bytes:
++        """Serialize an already validated response directly with Pydantic core."""
++        return self._type_adapter.dump_json(
++            value,
++            include=include,
++            exclude=exclude,
++            by_alias=by_alias,
++            exclude_unset=exclude_unset,
++            exclude_defaults=exclude_defaults,
++            exclude_none=exclude_none,
++        )
++
++    def __hash__(self) -> int:
+         # Each ModelField is unique for our purposes, to allow making a dict from
+         # ModelField to its JSON Schema.
+         return id(self)
+diff --git a/fastapi/routing.py b/fastapi/routing.py
+--- a/fastapi/routing.py
++++ b/fastapi/routing.py
+@@ -269,9 +269,10 @@
+     exclude_unset: bool = False,
+     exclude_defaults: bool = False,
+     exclude_none: bool = False,
+-    is_coroutine: bool = True,
+-    endpoint_ctx: EndpointContext | None = None,
+-) -> Any:
++    is_coroutine: bool = True,
++    endpoint_ctx: EndpointContext | None = None,
++    dump_json: bool = False,
++) -> Any:
+     if field:
+         if is_coroutine:
+             value, errors = field.validate(response_content, {}, loc=("response",))
+@@ -287,8 +288,19 @@
+                 endpoint_ctx=ctx,
+             )
+ 
+-        return field.serialize(
+-            value,
++        if dump_json:
++            return field.serialize_json(
++                value,
++                include=include,
++                exclude=exclude,
++                by_alias=by_alias,
++                exclude_unset=exclude_unset,
++                exclude_defaults=exclude_defaults,
++                exclude_none=exclude_none,
++            )
++
++        return field.serialize(
++            value,
+             include=include,
+             exclude=exclude,
+             by_alias=by_alias,
+@@ -334,10 +346,12 @@
+     is_body_form = body_field and isinstance(body_field.field_info, params.Form)
+     if isinstance(response_class, DefaultPlaceholder):
+         actual_response_class: type[Response] = response_class.value
+-    else:
+-        actual_response_class = response_class
+-
+-    async def app(request: Request) -> Response:
++    else:
++        actual_response_class = response_class
++    # Preserve custom response-class rendering; only optimize plain JSONResponse.
++    use_dump_json = response_field is not None and actual_response_class is JSONResponse
++
++    async def app(request: Request) -> Response:
+         response: Response | None = None
+         file_stack = request.scope.get("fastapi_middleware_astack")
+         assert isinstance(file_stack, AsyncExitStack), (
+@@ -453,9 +467,13 @@
+                     exclude_defaults=response_model_exclude_defaults,
+                     exclude_none=response_model_exclude_none,
+                     is_coroutine=is_coroutine,
+-                    endpoint_ctx=endpoint_ctx,
+-                )
+-                response = actual_response_class(content, **response_args)
++                    endpoint_ctx=endpoint_ctx,
++                    dump_json=use_dump_json,
++                )
++                if use_dump_json:
++                    response = Response(content=content, media_type="application/json", **response_args)
++                else:
++                    response = actual_response_class(content, **response_args)
+                 if not is_body_allowed_for_status_code(response.status_code):
+                     response.body = b""
+                 response.headers.raw.extend(solved_result.response.headers.raw)
