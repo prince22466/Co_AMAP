@@ -144,6 +144,14 @@ class TestNativeRecovery(unittest.TestCase):
         wrong = verify.verify(self.root, 'pkg', 'import pkg\nassert pkg.render() == 3')
         self.assertEqual(wrong['status'], 'environment_or_probe_failure')
 
+    def test_unrelated_green_check_does_not_execute_changed_code(self):
+        self.write('pkg.py', BASE.replace('return 1', 'return 2'))
+        result = verify.verify(self.root, 'pkg',
+                               'import pkg\nassert pkg.__name__ == "pkg"')
+        self.assertEqual(result['status'], 'insufficient_evidence')
+        self.assertFalse(result['candidate_passed'])
+        self.assertFalse(result['changed_code_executed'])
+
     def test_import_provenance_and_no_patch(self):
         self.assertEqual(verify.verify(self.root, 'pkg', 'import pkg\nassert pkg.render() == 1')['status'],
                          'unverified')
