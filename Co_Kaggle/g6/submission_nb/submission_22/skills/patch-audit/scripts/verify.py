@@ -17,8 +17,17 @@ DRIVER = r"""
 import importlib, json, os, pathlib, sys, traceback
 root = pathlib.Path.cwd().resolve()
 sys.path[:0] = [str(root / 'src'), str(root)]
-module, probe = json.loads(sys.argv[1])
+module, probe, changed = json.loads(sys.argv[1])
 origin = None
+touched = set()
+def trace(frame, event, arg):
+    if event == 'line':
+        path = pathlib.Path(frame.f_code.co_filename)
+        if path.is_absolute() and path.is_relative_to(root):
+            name = path.relative_to(root).as_posix()
+            if frame.f_lineno in changed.get(name, []):
+                touched.add((name, frame.f_lineno))
+    return trace
 status = 'failed'
 details = ''
 try:
@@ -27,11 +36,15 @@ try:
         origin = getattr(obj, '__file__', None)
         if not origin or not pathlib.Path(origin).resolve().is_relative_to(root):
             raise RuntimeError('Import does not come from checkout: ' + str(origin))
-    exec(compile(probe, '<focused-task-probe>', 'exec'), {'__name__': '__main__'})
-    status = 'candidate_passed'
+    sys.settrace(trace)
+    try:
+        exec(compile(probe, '<focused-task-probe>', 'exec'), {'__name__': '__main__'})
+        status = 'candidate_passed'
+    finally:
+        sys.settrace(None)
 except BaseException:
     details = traceback.format_exc(limit=4)[-1000:]
-print('S22_VERIFICATION:' + json.dumps({'status': status, 'origin': origin, 'details': details}))
+print('S22_VERIFICATION:' + json.dumps({'status': status, 'origin': origin, 'details': details, 'touched': sorted(touched)[:25]}))
 """
 
 def git(root, *args):
@@ -56,6 +69,34 @@ def nontrivial(probe):
                 for n in [a.test.left, *a.test.comparators]))
     ) for a in assertions)
 
+def changed_python_lines(root):
+    """Line ranges added/modified in the checkout; not semantic test coverage."""
+    out = git(root, 'diff', '--unified=0', 'HEAD')
+    if out.returncode:
+        raise ValueError('Unable to inspect changed lines')
+    current = None
+    result = {}
+    for line in out.stdout.splitlines():
+        if line.startswith('+++ b/'):
+            candidate = line[6:]
+            current = candidate if candidate.endswith('.py') else None
+        elif line.startswith('+++ /dev/null'):
+            current = None
+        elif current and line.startswith('@@ '):
+            match = re.search(r'\+(\d+)(?:,(\d+))?\s+@@', line)
+            if match:
+                start = int(match.group(1))
+                count = int(match.group(2) if match.group(2) is not None else '1')
+                result.setdefault(current, set()).update(range(start, start + count))
+    others = git(root, 'ls-files', '--others', '--exclude-standard')
+    if others.returncode:
+        raise ValueError('Unable to inspect untracked Python files')
+    for name in others.stdout.splitlines():
+        if name.endswith('.py') and (root / name).is_file():
+            result[name] = set(range(1, len((root / name).read_text().splitlines()) + 1))
+    return {name: sorted(lines) for name, lines in result.items() if lines}
+
+
 def diff_fingerprint(root):
     diff = git(root, 'diff', '--binary', 'HEAD')
     if diff.returncode:
@@ -76,13 +117,16 @@ def verify(root, module, probe, timeout=9):
     if not nontrivial(probe):
         return {'status': 'unverified', 'reason': 'Need a nontrivial task-specific Python assertion'}
     before, has_patch = diff_fingerprint(root)
+    changed = changed_python_lines(root)
     if not has_patch:
         return {'status': 'unverified', 'reason': 'No candidate patch is visible'}
+    if not changed:
+        return {'status': 'unverified', 'reason': 'No changed Python lines; inspect non-Python changes separately'}
     env = os.environ.copy()
     env['PYTHONPATH'] = os.pathsep.join([str(root / 'src'), str(root)])
     env['PYTHONDONTWRITEBYTECODE'] = '1'
     try:
-        done = subprocess.run([sys.executable, '-c', DRIVER, json.dumps([module, probe])],
+        done = subprocess.run([sys.executable, '-c', DRIVER, json.dumps([module, probe, changed])],
                               cwd=root, env=env, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
         return {'status': 'environment_or_probe_failure', 'reason': 'Probe timed out'}
@@ -98,9 +142,12 @@ def verify(root, module, probe, timeout=9):
     output = done.stdout + '\n' + done.stderr
     passed = (done.returncode == 0 and result.get('status') == 'candidate_passed'
               and not re.search(r'\b(FAILED|ERROR collecting|ERROR at setup)\b', output, re.I))
-    return {'status': 'candidate_passed' if passed else 'environment_or_probe_failure',
+    touched = result.get('touched') or []
+    return {'status': ('candidate_passed' if touched else 'insufficient_evidence')
+            if passed else 'environment_or_probe_failure',
+            'changed_code_executed': bool(touched), 'executed_changed_lines': touched[:10],
             'origin': result.get('origin'), 'details': result.get('details', '')[-700:],
-            'stdout_tail': output[-500:], 'patch_sha256': before, 'candidate_passed': passed,
+            'stdout_tail': output[-500:], 'patch_sha256': before, 'candidate_passed': passed and bool(touched),
             'baseline_verified': False, 'behavior_verified': False,
             'next': 'Compare with a baseline failure and inspect the task contract; a passing candidate probe is insufficient.'}
 
