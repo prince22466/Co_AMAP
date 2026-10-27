@@ -76,9 +76,9 @@ def fused_rms_norm(
     assert is_eligible(x, residual, weight)
     hidden = x.shape[-1]
     out = x if inplace and residual is not None else torch.empty_like(x)
-    residual_out = (
-        residual if inplace else torch.empty_like(x)
-    ) if residual is not None else None
+    residual_out = None
+    if residual is not None:
+        residual_out = residual if inplace else torch.empty_like(x)
     block = triton.next_power_of_2(hidden)
     warps = 4 if block <= 4096 else 8
     _fused_rms_kernel[(x.numel() // hidden,)](

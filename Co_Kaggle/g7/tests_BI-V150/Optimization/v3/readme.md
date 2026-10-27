@@ -25,7 +25,7 @@ The v3 kernel retains the FlagGems arithmetic order:
 - Accumulate variance in FP32; use a single Triton program per dense row.
 
 The specialized path is opt-in through `VLLM_FL_BIV150_RMS_V3=1`, with
-conservative fallback for noncontiguous/misaligned/aliased inputs, unsupported
+conservative fallback for noncontiguous/shared-storage inputs, unsupported
 dtype/shape, 128–4096 hidden-size range, non-CUDA tensors, and autograd.
 A real `nn.Parameter` can now pass in `torch.inference_mode()` and
 `torch.no_grad()`, while still falling back when gradients are recorded.

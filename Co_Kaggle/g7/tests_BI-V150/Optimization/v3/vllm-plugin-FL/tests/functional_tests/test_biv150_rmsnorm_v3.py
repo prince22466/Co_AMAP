@@ -42,6 +42,9 @@ def test_inference_parameter_guard_and_autograd_fallback(monkeypatch):
         residual = torch.randn_like(x)
         assert is_eligible(x, residual, weight)
         assert not is_eligible(x, x, weight)  # in-place aliasing unsupported
+        storage = torch.randn(4, 2048, device="cuda")
+        # Contiguous, distinct subviews still alias the same GPU storage.
+        assert not is_eligible(storage[:2], storage[2:], weight)
         assert not is_eligible(x, residual[:, :1024], weight)
         assert not is_eligible(x.t(), None, weight)
         assert not is_eligible(x, None, weight.to(torch.float16))
