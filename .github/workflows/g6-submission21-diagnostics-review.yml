@@ -5,6 +5,7 @@ on:
     paths:
       - 'Co_Kaggle/g6/tests_on_tasks/tools/inspect_submission21_archive.py'
       - 'Co_Kaggle/g6/tests_on_tasks/diagnostics/submission-21-zip_First15Tasks.zip'
+      - 'Co_Kaggle/g6/tests_on_tasks/diagnostics/submission_21_validation_rootcause_review.md'
       - '.github/workflows/g6-submission21-diagnostics-review.yml'
   workflow_dispatch:
 permissions:
@@ -22,6 +23,7 @@ jobs:
             Co_Kaggle/g6/tests_on_tasks/diagnostics/submission-21-zip_First15Tasks.zip
             Co_Kaggle/g6/tests_on_tasks/diagnostics/submission-19-zip_First15Tasks.zip
             Co_Kaggle/g6/tests_on_tasks/diagnostics/submission-20-zip_First15Tasks.zip
+            Co_Kaggle/g6/tests_on_tasks/diagnostics/submission_21_validation_rootcause_review.md
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -38,3 +40,16 @@ jobs:
             Co_Kaggle/g6/tests_on_tasks/diagnostics/submission-20-zip_First15Tasks.zip \
             --task-evidence \
             --compare Co_Kaggle/g6/tests_on_tasks/diagnostics/submission-21-zip_First15Tasks.zip
+      - name: Verify all fifteen task diagnoses appear in reviewed Markdown
+        run: |
+          python - <<'PY'
+          import json, pathlib, re, zipfile
+          root=pathlib.Path('Co_Kaggle/g6/tests_on_tasks/diagnostics')
+          review=(root/'submission_21_validation_rootcause_review.md').read_text()
+          with zipfile.ZipFile(root/'submission-21-zip_First15Tasks.zip') as z:
+              selected=json.loads(z.read(next(n for n in z.namelist() if n.endswith('/selected_tasks.json'))))
+          ids={row['instance_id'] for row in selected}
+          covered=set(re.findall(r'^\\| \\x60((?:fastapi|requests)_\\d+)\\x60 \\|',review,re.M))
+          assert len(ids)==15 and covered==ids,(sorted(ids-covered),sorted(covered-ids))
+          print('S21 report covers all 15 exact evaluation task IDs')
+          PY
