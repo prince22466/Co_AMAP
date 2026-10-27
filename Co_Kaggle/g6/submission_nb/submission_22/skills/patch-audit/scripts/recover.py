@@ -67,7 +67,14 @@ def evidence(path, old, text):
     return {'path': str(path), 'context': [f'{n + 1}: {lines[n]}' for n in range(lo, hi)]}
 
 def failure_state(root):
-    key = hashlib.sha256(str(root).encode()).hexdigest()[:20]
+    # Keep retry state scoped to this Git checkout, not a global /tmp workspace
+    # path that could be reused by a later unrelated evaluation task.
+    gitdir = git(root, 'rev-parse', '--absolute-git-dir')
+    if gitdir.returncode == 0:
+        directory = Path(gitdir.stdout.strip())
+        if directory.is_dir():
+            return directory / 's22_native_edit_attempts.json'
+    key = hashlib.sha256(str(root.resolve()).encode()).hexdigest()[:20]
     return Path(tempfile.gettempdir()) / ('s22-native-edit-' + key + '.json')
 
 def attempt(root, path, old, new):
