@@ -910,7 +910,8 @@ def unified_attention(
     # Resolve sliding-window mode before evaluating the specialization gate.
     sliding_window_val = 1 + window_size[0] if window_size[0] >= 0 else 0
 
-    # BI-V150 v2: retain the v1 query/KV reuse improvement; increase query/KV tile reuse in BF16 GQA prefill.
+    # BI-V150 v2: retain v1 query-group reuse for BF16 GQA prefill.
+    # Tune the KV tile separately for long-context workloads.
     # All unsupported shapes/features, including single-token decode, retain
     # the exact vLLM 0.24.0 launch geometry.
     biv150_prefill_gqa = (
