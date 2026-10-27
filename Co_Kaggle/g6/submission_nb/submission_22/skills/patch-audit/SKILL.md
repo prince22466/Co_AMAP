@@ -11,7 +11,8 @@ Only when helpful:
 * scripts/audit.py (NO arguments) inspects the current repository diff, protected
   paths, syntax, changed definitions and patch digest. Never proves behavior.
 * scripts/verify.py --module <module> --probe <Python assertion> checks the final
-  candidate and local import provenance, not the unmodified baseline. A candidate
+  candidate, local import provenance and changed-line execution, not the
+  unmodified baseline. A candidate
   pass alone never establishes regression correctness.
 
 Use run_skill_script(skill_name="patch-audit",file_path="scripts/NAME.py",
