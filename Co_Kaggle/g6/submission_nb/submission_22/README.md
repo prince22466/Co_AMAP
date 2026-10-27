@@ -53,8 +53,9 @@ must still be verified from actual trace and returned patch.
 The prompt requests a meaningful baseline check before editing where feasible
 and a re-run of **the same** check after the final edit. The optional
 `scripts/verify.py` runs a nontrivial Python assertion in the local checkout,
-checks the requested module's import provenance, rejects empty patches and
-trivial always-true assertions, and reports checkout mutation. It explicitly
+checks the requested module's import provenance, requires the probe to execute
+at least one changed Python line, rejects empty patches and trivial always-true
+assertions, and reports checkout mutation. It explicitly
 returns `baseline_verified=false` and `behavior_verified=false`: a passing
 candidate assertion alone cannot prove the issue was fixed or the probe was
 relevant. A human must examine the actual behavior and evaluator results.
@@ -92,7 +93,7 @@ Output: `Co_Kaggle/g6/submission_nb/artifacts/submission_22.zip` and
 
 CPU tests exercise real temporary Git checkouts for exact/ambiguous anchors,
 repeated failed edits, rollback, test-protection, patch emptiness/digests,
-legitimate config changes, local imports, nontrivial assertions, unverified
+legitimate config changes, local imports, nontrivial assertions, changed-line execution evidence, unverified
 candidate checks, and mutation detection. They do **not** establish that E4B
 will use the helpers, improve tool-call behavior or solve more tasks.
 
