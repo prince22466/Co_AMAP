@@ -59,7 +59,7 @@ class TestNativeRecovery(unittest.TestCase):
         self.assertEqual(agent['skills'], ['skills/patch-audit'])
         self.assertNotIn('sub_agents', agent)
         text = (SOURCE / 'instruction.md').read_text()
-        self.assertIn('on a SECOND failed edit', text)
+        self.assertIn('On a SECOND failed edit', text)
         self.assertIn('git diff HEAD --stat', text)
         self.assertIn('Rerun the SAME', text)
         self.assertNotIn('file_path="scripts/gate.py"', text)
