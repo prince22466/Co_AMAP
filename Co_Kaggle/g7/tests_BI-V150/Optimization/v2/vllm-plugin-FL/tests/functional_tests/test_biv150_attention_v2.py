@@ -166,7 +166,6 @@ def test_bf16_gqa_prefill_matches_baseline(
         torch.testing.assert_close(actual, expected, atol=0, rtol=0)
 
 
-
 def test_v2_backend_path_imports():
     import importlib
 
