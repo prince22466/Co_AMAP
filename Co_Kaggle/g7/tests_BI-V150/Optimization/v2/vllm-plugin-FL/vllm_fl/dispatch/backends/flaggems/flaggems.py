@@ -180,9 +180,34 @@ class FlagGemsBackend(Backend):
             "VLLM_FL_USE_FLAGGEMS_ATTN", "0"
         ).lower() in ("1", "true", "yes")
 
+        # Independent opt-in for the BI-V150 v2 optimized paged-attention
+        # kernel. Keep the default operator selection completely unchanged.
+        use_biv150_v2 = os.environ.get(
+            "VLLM_FL_BIV150_ATTN_V2", "0"
+        ).lower() in ("1", "true", "yes")
+
+        if use_biv150_v2 and os.environ.get(
+            "VLLM_FL_BIV150_ATTN_V1", "0"
+        ).lower() in ("1", "true", "yes"):
+            raise RuntimeError(
+                "VLLM_FL_BIV150_ATTN_V1 and VLLM_FL_BIV150_ATTN_V2 "
+                "cannot both be enabled."
+            )
+
         if use_flaggems_attn:
+            if use_biv150_v2:
+                raise RuntimeError(
+                    "VLLM_FL_BIV150_ATTN_V2 and VLLM_FL_USE_FLAGGEMS_ATTN "
+                    "cannot both be enabled."
+                )
             print("Using FlagGems attention backend.")
             return "vllm_fl.dispatch.backends.flaggems.impl.attention.AttentionFLBackend"
+
+        if use_biv150_v2:
+            return (
+                "vllm_fl.dispatch.backends.vendor.iluvatar.impl."
+                "attention_biv150_v2.BIV150TritonAttentionV2Backend"
+            )
 
         return AttentionBackendEnum.TRITON_ATTN.get_path()
 
