@@ -166,6 +166,99 @@ def test_bf16_gqa_prefill_matches_baseline(
         torch.testing.assert_close(actual, expected, atol=0, rtol=0)
 
 
+
+def test_v2_backend_path_imports():
+    import importlib
+
+    from vllm.v1.attention.backends.triton_attn import TritonAttentionBackend
+
+    module_path, _, class_name = V2.rpartition(".")
+    backend = getattr(importlib.import_module(module_path), class_name)
+    assert issubclass(backend, TritonAttentionBackend)
+
+
+def test_mixed_batch_non_aligned_paged_kv_matches_baseline():
+    """Different Q/K lengths, shuffled KV pages, and a short final KV block."""
+    if not torch.cuda.is_available():
+        pytest.skip("Requires a CUDA-compatible GPU (run on BI-V150)")
+
+    from vllm.v1.attention.ops.triton_unified_attention import (
+        unified_attention as baseline_unified_attention,
+    )
+    from vllm_fl.dispatch.backends.vendor.iluvatar.impl.triton_unified_attention_biv150_v2 import (
+        unified_attention as optimized_unified_attention,
+    )
+
+    device = "cuda"
+    torch.manual_seed(2027)
+    head_size = 128
+    kv_block_size = 16
+    q_lens = (128, 256)
+    kv_lens = (2177, 4353)
+    num_blocks_per_seq = [
+        (kv_len + kv_block_size - 1) // kv_block_size
+        for kv_len in kv_lens
+    ]
+    total_blocks = sum(num_blocks_per_seq)
+    physical_ids = torch.randperm(total_blocks, device=device).to(torch.int32)
+
+    # Optimized kernel gets no extra columns beyond the largest sequence.
+    block_table = torch.zeros(
+        (2, max(num_blocks_per_seq)), dtype=torch.int32, device=device
+    )
+    offset = 0
+    for row, count in enumerate(num_blocks_per_seq):
+        block_table[row, :count] = physical_ids[offset : offset + count]
+        offset += count
+
+    # The pinned upstream reference has an unmasked table load. Provide
+    # extra tail columns only for that reference to avoid its OOB access.
+    padded_width = ((max(kv_lens) + 63) // 64) * (64 // kv_block_size)
+    baseline_block_table = torch.zeros(
+        (2, padded_width), dtype=torch.int32, device=device
+    )
+    baseline_block_table[:, : block_table.shape[1]] = block_table
+
+    query = torch.randn(
+        (sum(q_lens), 16, head_size), device=device, dtype=torch.bfloat16
+    )
+    key_cache = torch.randn(
+        (total_blocks, kv_block_size, 2, head_size),
+        device=device,
+        dtype=torch.bfloat16,
+    )
+    value_cache = torch.randn_like(key_cache)
+    arguments = dict(
+        q=query,
+        k=key_cache,
+        v=value_cache,
+        cu_seqlens_q=torch.tensor(
+            [0, q_lens[0], sum(q_lens)], device=device, dtype=torch.int32
+        ),
+        max_seqlen_q=max(q_lens),
+        seqused_k=torch.tensor(kv_lens, device=device, dtype=torch.int32),
+        max_seqlen_k=max(kv_lens),
+        softmax_scale=head_size ** -0.5,
+        causal=True,
+        window_size=(-1, -1),
+        block_table=block_table,
+        softcap=0.0,
+        q_descale=None,
+        k_descale=None,
+        v_descale=None,
+    )
+    expected = torch.empty_like(query)
+    actual = torch.empty_like(query)
+    with torch.inference_mode():
+        baseline_unified_attention(
+            **{**arguments, "block_table": baseline_block_table}, out=expected
+        )
+        optimized_unified_attention(**arguments, out=actual)
+        torch.cuda.synchronize()
+
+    torch.testing.assert_close(actual, expected, atol=3e-2, rtol=3e-2)
+
+
 @pytest.mark.parametrize(
     ("max_seqlen_q", "max_seqlen_k", "eligible", "expected"),
     [
