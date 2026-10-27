@@ -91,9 +91,11 @@ def main():
     p=argparse.ArgumentParser()
     p.add_argument("tasks")
     p.add_argument("--output",default="task-gold-smoke.json")
+    p.add_argument("--repos",nargs="*",help="Optional repository filter")
     args=p.parse_args()
     all_tasks=[json.loads(l) for l in Path(args.tasks).read_text().splitlines() if l.strip()]
-    tasks=[t for t in all_tasks if candidate(t)]
+    tasks=[t for t in all_tasks if candidate(t) and
+           (not args.repos or t["repo"] in args.repos)]
     print("CANDIDATES",len(tasks),dict(Counter(t["repo"] for t in tasks)),flush=True)
     with tempfile.TemporaryDirectory() as tmp:
         clones={}
@@ -112,7 +114,8 @@ def main():
             if repo is None:
                 result=dict(id=t["instance_id"],status="CLONE_FAIL")
             else:
-                env={**os.environ,"PYTHONPATH":str(repo),"PYTHONDONTWRITEBYTECODE":"1",
+                env={**os.environ,"PYTHONPATH":str(repo / "src" if group == "psf/requests" else repo),
+                     "PYTHONDONTWRITEBYTECODE":"1",
                      "PYTEST_DISABLE_PLUGIN_AUTOLOAD":"1","PIP_DISABLE_PIP_VERSION_CHECK":"1"}
                 result=check_task(t,repo,env)
             results.append(result)
