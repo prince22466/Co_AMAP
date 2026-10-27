@@ -86,6 +86,8 @@ From repository root:
 python -m pip install 'PyYAML>=6,<7'
 python -m unittest discover -s Co_Kaggle/g6/tests_on_tasks/tools -p test_submission22.py -v
 python Co_Kaggle/g6/tests_on_tasks/tools/build_submission22.py
+# Optional, only when pinned official evaluator packages are installed:
+python -m unittest discover -s Co_Kaggle/g6/tests_on_tasks/tools -p test_submission22_runtime.py -v
 ```
 
 Output: `Co_Kaggle/g6/submission_nb/artifacts/submission_22.zip` and
@@ -94,8 +96,10 @@ Output: `Co_Kaggle/g6/submission_nb/artifacts/submission_22.zip` and
 CPU tests exercise real temporary Git checkouts for exact/ambiguous anchors,
 repeated failed edits, rollback, test-protection, patch emptiness/digests,
 legitimate config changes, local imports, nontrivial assertions, changed-line execution evidence, unverified
-candidate checks, and mutation detection. They do **not** establish that E4B
-will use the helpers, improve tool-call behavior or solve more tasks.
+candidate checks, and mutation detection. The optional pinned-runtime smoke compiles the S22 ZIP and reuses a scripted
+fault-injection scenario; CI syntax-checks it but cannot execute it without
+the official packages. None of these tests establish that E4B will use the
+helpers, improve tool-call behavior or solve more tasks.
 
 ## Real-model decision gate (before a broad GPU run)
 
