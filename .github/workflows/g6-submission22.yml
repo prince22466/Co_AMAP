@@ -1,0 +1,46 @@
+name: g6 submission 22 CPU and packaging
+on:
+  pull_request:
+    paths:
+      - 'Co_Kaggle/g6/submission_nb/submission_22/**'
+      - 'Co_Kaggle/g6/tests_on_tasks/tools/build_submission22.py'
+      - 'Co_Kaggle/g6/tests_on_tasks/tools/test_submission22.py'
+      - '.github/workflows/g6-submission22.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  cpu:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          filter: blob:none
+          sparse-checkout: Co_Kaggle/g6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install 'PyYAML>=6,<7'
+      - name: Native recovery / preservation / behavioral verification regressions
+        run: python -m unittest discover -s Co_Kaggle/g6/tests_on_tasks/tools -p test_submission22.py -v
+      - name: Build and hash exact submission ZIP
+        run: |
+          python Co_Kaggle/g6/tests_on_tasks/tools/build_submission22.py
+          python - <<'PY'
+          import json, pathlib, hashlib, zipfile
+          a=pathlib.Path('Co_Kaggle/g6/submission_nb/artifacts/submission_22.zip')
+          m=json.loads(a.with_suffix('.manifest.json').read_text())
+          assert hashlib.sha256(a.read_bytes()).hexdigest()==m['archive_sha256']
+          with zipfile.ZipFile(a) as z:
+              assert set(z.namelist()) == set(m['files'])
+              for path, hashvalue in m['files'].items():
+                  assert hashlib.sha256(z.read(path)).hexdigest()==hashvalue
+          print('Submission 22 ZIP / hashes validated (CPU only)')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: submission-22-e4b-unscored
+          path: |
+            Co_Kaggle/g6/submission_nb/artifacts/submission_22.zip
+            Co_Kaggle/g6/submission_nb/artifacts/submission_22.manifest.json
