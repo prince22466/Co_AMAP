@@ -23,14 +23,18 @@ def _fused_rms_kernel(
     values = tl.load(X + offsets, mask=valid, other=0).to(tl.float32)
     if HAS_RES:
         added = tl.load(R + offsets, mask=valid, other=0).to(tl.float32)
-        # Preserve the residual-add result in the input dtype, matching
-        # the observable tensor returned by the vLLM/FlagGems interface.
-        values = (values + added).to(X.dtype.element_ty).to(tl.float32)
+        # FlagGems computes RMS from the FP32 sum. It rounds the sum
+        # *only when storing* the externally observable residual tensor.
+        values = values + added
         tl.store(RES_OUT + offsets, values, mask=valid)
 
     # Padded lanes are zero, and division uses the logical hidden size.
     mean_square = tl.sum(values * values, axis=0) / H
     inv_rms = tl.rsqrt(mean_square + EPS)
     gamma = tl.load(W + col, mask=valid, other=0).to(tl.float32)
-    normalized = (values * inv_rms) * gamma
-    tl.store(Y + offsets, normalized, mask=valid)
+    normalized = values * inv_rms
+    if not HAS_RES:
+        # Match FlagGems rms_norm: normalize, round to the input dtype,
+        # then multiply by the weight (rather than rounding only at store).
+        normalized = normalized.to(X.dtype.element_ty).to(tl.float32)
+    tl.store(Y + offsets, normalized * gamma, mask=valid)

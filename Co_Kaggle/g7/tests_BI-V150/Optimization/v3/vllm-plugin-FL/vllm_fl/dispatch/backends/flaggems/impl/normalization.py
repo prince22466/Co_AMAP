@@ -35,7 +35,10 @@ def rms_norm_flaggems(
                 is_eligible, fused_rms_norm,
             )
             if is_eligible(x, residual, obj.weight):
-                return fused_rms_norm(x, residual, obj.weight, obj.variance_epsilon)
+                return fused_rms_norm(
+                    x, residual, obj.weight, obj.variance_epsilon,
+                    inplace=residual is not None,
+                )
 
     from flag_gems.modules.normalization import gems_rms_forward
 

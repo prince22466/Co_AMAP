@@ -29,14 +29,13 @@ def is_eligible(
         or x.ndim > 3
         or x.numel() == 0
         or not x.is_contiguous()
-        or x.requires_grad
-        or weight.requires_grad
+        or (torch.is_grad_enabled() and (x.requires_grad or weight.requires_grad))
         or weight.ndim != 1
         or not weight.is_contiguous()
         or weight.device != x.device
         or weight.dtype != x.dtype
         or x.shape[-1] != weight.numel()
-        or not 128 <= x.shape[-1] <= 8192
+        or not 128 <= x.shape[-1] <= 4096
     ):
         return False
 
@@ -46,7 +45,10 @@ def is_eligible(
         or residual.device != x.device
         or residual.dtype != x.dtype
         or not residual.is_contiguous()
-        or residual.requires_grad
+        or (torch.is_grad_enabled() and residual.requires_grad)
+        # In-place FlagGems mode cannot represent both results when the
+        # inputs share storage; disallow even offset-overlapping views.
+        or x.untyped_storage().data_ptr() == residual.untyped_storage().data_ptr()
     ):
         return False
     return True
@@ -57,8 +59,15 @@ def fused_rms_norm(
     residual: torch.Tensor | None,
     weight: torch.Tensor,
     epsilon: float,
+    *,
+    inplace: bool = False,
 ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
-    """Run the fused kernel; caller must check is_eligible first."""
+    """Run v3. Preserve FlagGems' in-place contract when requested.
+
+    FlagGems fused-add RMSNorm mutates x and residual, returning those same
+    tensors; the vendor PyTorch implementation instead returns new tensors.
+    A single kernel supports both semantics without changing dispatch.
+    """
     # Triton imports and JIT specialization are cached at module level.
     # Keeping the JIT function stable avoids recompilation/dispatch overhead.
     from .normalization_biv150_v3_kernel import _fused_rms_kernel
@@ -66,8 +75,10 @@ def fused_rms_norm(
 
     assert is_eligible(x, residual, weight)
     hidden = x.shape[-1]
-    out = torch.empty_like(x)
-    residual_out = torch.empty_like(x) if residual is not None else None
+    out = x if inplace and residual is not None else torch.empty_like(x)
+    residual_out = (
+        residual if inplace else torch.empty_like(x)
+    ) if residual is not None else None
     block = triton.next_power_of_2(hidden)
     warps = 4 if block <= 4096 else 8
     _fused_rms_kernel[(x.numel() // hidden,)](
