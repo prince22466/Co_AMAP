@@ -48,8 +48,58 @@ def inspect(archive):
             print("MEMBER",info.filename,"preview",repr(text[:1400]))
         print("ZIP_TEXT_PREVIEW_END")
 
+
+def task_evidence(archive, comparison=None):
+    """Read validator stdout for each of the 15 tasks. Do not infer baseline."""
+    with ZipFile(archive) as z:
+        names=z.namelist()
+        raw={re.search(r"/raw_results/([^/]+)\\.json$",name).group(1):name
+             for name in names if re.search(r"/raw_results/([^/]+)\\.json$",name)}
+        if len(raw)!=15:
+            raise ValueError("Expected 15 raw_result rows, found "+str(len(raw)))
+        old={}
+        if comparison:
+            with ZipFile(comparison) as previous:
+                for name in previous.namelist():
+                    m=re.search(r"/raw_results/([^/]+)\\.json$",name)
+                    if m:
+                        try: old[m.group(1)]=json.loads(previous.read(name))
+                        except (ValueError,UnicodeError):pass
+        print("TASK_VALIDATION_BEGIN")
+        for task in sorted(raw):
+            r=json.loads(z.read(raw[task]))
+            output=r.get("test_output") or ""
+            exc=[]
+            for line in output.splitlines():
+                if re.search(r"(?:^\\s*E\\s+|(?:ModuleNotFoundError|ImportError|SyntaxError|IndentationError|AttributeError|TypeError|NameError|AssertionError|RuntimeError|ValueError|RecursionError|fixture|[Ee]rror collecting))",line):
+                    clean=line.strip()[:260]
+                    if clean not in exc:exc.append(clean)
+            patch=r.get("agent_patch") or ""
+            files=re.findall(r"(?m)^diff --git a/(.*?) b/",patch)
+            prior=old.get(task)
+            result={
+                "id":task,"test_exit_code":r.get("test_exit_code"),
+                "resolved":r.get("resolved"),"agent_status":r.get("status"),
+                "error_message":r.get("error_message"),
+                "patch_chars":len(patch),"changed_files":files,
+                "output_head":output[:2200],"output_tail":output[-1450:],
+                "exception_examples":exc[:9],
+                "patch_first_1800":patch[:1800],
+                "previous_run_present":bool(prior),
+                "previous_test_exit_code":prior.get("test_exit_code") if prior else None,
+                "previous_test_exception_examples":(
+                    [line.strip()[:180] for line in (prior.get("test_output") or "").splitlines()
+                     if re.search(r"ModuleNotFoundError|ImportError|Error collecting|recursiv|fixture|SyntaxError",line)][:4]
+                     if prior else []),
+            }
+            print(json.dumps(result,ensure_ascii=False))
+        print("TASK_VALIDATION_END")
+
 if __name__=="__main__":
     p=argparse.ArgumentParser()
     p.add_argument("archive",type=Path)
+    p.add_argument("--compare",type=Path)
+    p.add_argument("--task-evidence",action="store_true")
     args=p.parse_args()
-    inspect(args.archive)
+    if args.task_evidence:task_evidence(args.archive,args.compare)
+    else:inspect(args.archive)
