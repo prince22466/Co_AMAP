@@ -409,7 +409,9 @@ def kernel_unified_attention(
         # an unmasked lookup can read outside a tightly sized block table.
         physical_block_idx = tl.load(
             block_tables_ptr + block_table_offset + seq_offset // BLOCK_SIZE,
-            mask=tile_mask,
+            # Non-causal/PrefixLM helpers can return a mask bound beyond
+            # seq_len for padded Q rows. Never index outside the sequence.
+            mask=tile_mask & (seq_offset < seq_len),
             other=0,
         ).to(tl.int64)
 
