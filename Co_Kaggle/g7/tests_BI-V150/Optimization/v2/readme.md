@@ -15,6 +15,10 @@ tile optimization for the competition's 4K/16K prefill-heavy workloads.
 | `vllm_fl/dispatch/backends/flaggems/flaggems.py` | Explicit `VLLM_FL_BIV150_ATTN_V2=1` dispatch opt-in, without changing default or existing FlagGems selection |
 | `tests/functional_tests/test_biv150_attention_v2.py` | Opt-in/fallback, tile-selection boundaries, and BF16 numerical checks against pinned vLLM baseline |
 
+A review fix also masks KV block-table reads for the partial last tile;
+regression tests cover non-64-aligned sequences and nonsequential physical
+KV-block mappings. Enabling both v1 and v2 flags is rejected explicitly.
+
 The 64-token KV tile applies only when **all** v1 MiniCPM prefill guards
 hold (BF16, 16 Q heads / 2 KV heads, head size 128, causal full attention,
 unquantized KV cache, no incompatible features, and no tensor descriptors),

@@ -22,6 +22,7 @@ def test_opt_in_preserves_original_default(monkeypatch):
     monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
     monkeypatch.delenv("VLLM_FL_USE_FLAGGEMS_ATTN", raising=False)
     monkeypatch.delenv("VLLM_FL_BIV150_ATTN_V2", raising=False)
+    monkeypatch.delenv("VLLM_FL_BIV150_ATTN_V1", raising=False)
     assert FlagGemsBackend().attention_backend() == BASELINE
 
 
@@ -31,6 +32,7 @@ def test_opt_in_selects_v2_on_biv150(monkeypatch):
     monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
     monkeypatch.delenv("VLLM_FL_USE_FLAGGEMS_ATTN", raising=False)
     monkeypatch.setenv("VLLM_FL_BIV150_ATTN_V2", "1")
+    monkeypatch.delenv("VLLM_FL_BIV150_ATTN_V1", raising=False)
     assert FlagGemsBackend().attention_backend() == V2
 
 
@@ -40,24 +42,41 @@ def test_opt_in_rejects_conflicting_attention_flags(monkeypatch):
     monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
     monkeypatch.setenv("VLLM_FL_USE_FLAGGEMS_ATTN", "1")
     monkeypatch.setenv("VLLM_FL_BIV150_ATTN_V2", "1")
+    monkeypatch.delenv("VLLM_FL_BIV150_ATTN_V1", raising=False)
     with pytest.raises(RuntimeError, match="cannot both be enabled"):
         FlagGemsBackend().attention_backend()
 
 
+def test_opt_in_rejects_v1_v2_conflict(monkeypatch):
+    from vllm_fl.dispatch.backends.flaggems.flaggems import FlagGemsBackend
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.delenv("VLLM_FL_USE_FLAGGEMS_ATTN", raising=False)
+    monkeypatch.setenv("VLLM_FL_BIV150_ATTN_V1", "1")
+    monkeypatch.setenv("VLLM_FL_BIV150_ATTN_V2", "1")
+    with pytest.raises(RuntimeError, match="V1 and VLLM_FL_BIV150_ATTN_V2"):
+        FlagGemsBackend().attention_backend()
+
+
 @pytest.mark.parametrize(
-    ("query_len", "context_len"),
+    ("query_len", "context_len", "permute_block_table"),
     [
-        (1, 512),      # Single-token decode: unchanged launch geometry.
-        (64, 0),       # Short uncached prefill.
-        (127, 2048),   # Short query, long cached prefix: v1 tile.
-        (128, 2048),   # Boundary of the v2 wide-tile specialization.
-        (256, 0),      # Long query but total KV < 2048: v1 tile.
-        (2048, 0),     # First chunk.
-        (2048, 4096),  # Chunked prefill after an existing prefix.
-        (2048, 14336), # 16K endpoint (expensive).
+        (1, 512, False),        # Single-token decode: unchanged geometry.
+        (64, 0, False),         # Short uncached prefill.
+        (127, 2048, False),     # Short query, long cached prefix: v1 tile.
+        (128, 2048, False),     # Boundary of the v2 64-token KV tile.
+        (128, 2049, True),      # 2177 KV tokens: partial final 64-token tile.
+        (256, 0, False),        # Long query but KV < 2048: v1 tile.
+        (2048, 0, False),       # First chunk.
+        (2048, 4096, False),    # Chunked prefill after an existing prefix.
+        (2048, 4097, True),     # Nonaligned chunked prefill; paged KV.
+        (128, 16257, True),     # Partial tile immediately beyond 16K.
+        (2048, 14336, False),   # 16K endpoint (expensive).
     ],
 )
-def test_bf16_gqa_prefill_matches_baseline(query_len, context_len):
+def test_bf16_gqa_prefill_matches_baseline(
+    query_len, context_len, permute_block_table
+):
     if not torch.cuda.is_available():
         pytest.skip("Requires a CUDA-compatible GPU (run on BI-V150)")
 
@@ -88,9 +107,13 @@ def test_bf16_gqa_prefill_matches_baseline(query_len, context_len):
         dtype=torch.bfloat16,
     )
     value_cache = torch.randn_like(key_cache)
-    block_table = torch.arange(
-        num_blocks, device=device, dtype=torch.int32
-    ).reshape(1, -1)
+    if permute_block_table:
+        # Nonsequential physical block mapping ensures the wide tile uses the
+        # correct paged-KV addresses, including the masked final tile.
+        block_ids = torch.randperm(num_blocks, device=device).to(torch.int32)
+    else:
+        block_ids = torch.arange(num_blocks, device=device, dtype=torch.int32)
+    block_table = block_ids.reshape(1, -1)
     cu_seqlens_q = torch.tensor([0, query_len], device=device, dtype=torch.int32)
     seq_lens = torch.tensor([total_len], device=device, dtype=torch.int32)
 

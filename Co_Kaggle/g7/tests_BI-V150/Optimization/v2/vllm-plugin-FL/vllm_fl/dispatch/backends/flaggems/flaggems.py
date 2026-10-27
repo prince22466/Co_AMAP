@@ -186,6 +186,14 @@ class FlagGemsBackend(Backend):
             "VLLM_FL_BIV150_ATTN_V2", "0"
         ).lower() in ("1", "true", "yes")
 
+        if use_biv150_v2 and os.environ.get(
+            "VLLM_FL_BIV150_ATTN_V1", "0"
+        ).lower() in ("1", "true", "yes"):
+            raise RuntimeError(
+                "VLLM_FL_BIV150_ATTN_V1 and VLLM_FL_BIV150_ATTN_V2 "
+                "cannot both be enabled."
+            )
+
         if use_flaggems_attn:
             if use_biv150_v2:
                 raise RuntimeError(

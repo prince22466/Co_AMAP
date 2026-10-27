@@ -403,8 +403,14 @@ def kernel_unified_attention(
         seq_offset = j * TILE_SIZE + offs_t
         tile_mask = seq_offset < max_seq_prefix_len
 
+        # The final KV tile can contain slots beyond the sequence end,
+        # especially with v2's wider 64-token tile and 16-token KV blocks.
+        # Mask the block-table lookup itself, not just downstream K/V loads:
+        # an unmasked lookup can read outside a tightly sized block table.
         physical_block_idx = tl.load(
-            block_tables_ptr + block_table_offset + seq_offset // BLOCK_SIZE
+            block_tables_ptr + block_table_offset + seq_offset // BLOCK_SIZE,
+            mask=tile_mask,
+            other=0,
         ).to(tl.int64)
 
         if USE_TD:
