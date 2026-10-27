@@ -30,7 +30,7 @@ The **15-task set is an exact ordered subset of the 30-task set**: same first 15
 
 ## Extended 30: expand only after 15-task regression
 
-Adds three Requests tasks and twelve Rich tasks to cover URL normalization, proxy/Content-Type parsing, terminal graphemes, Unicode width, segments, console capture, Markdown/markup, and state handling.
+Adds three Requests tasks and twelve Rich tasks to cover URL normalization, proxy/Content-Type parsing, terminal graphemes, Unicode width, segments, console capture, markup escaping, and state handling.
 
 | # | Instance ID | Repo | Task focus | Gold patch chars | Test file(s) |
 |---:|---|---|---|---:|---|
