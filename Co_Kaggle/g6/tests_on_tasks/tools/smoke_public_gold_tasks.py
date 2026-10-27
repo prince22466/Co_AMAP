@@ -61,7 +61,7 @@ def check_task(t, repo, env):
     if any(".." in Path(x).parts for x in test_files):
         return dict(id=task,status="UNSAFE_PATH")
     with tempfile.TemporaryDirectory() as tmp:
-        patch=Path(tmp,"tests.patch");patch.write_text(t["test_patch"])
+        patch=Path(tmp,"tests.patch");patch.write_text(t["test_patch"].rstrip("\n") + "\n")
         check,err=call(["git","apply","--check",str(patch)],repo,15)
         if check:return dict(id=task,status="TEST_PATCH_CONFLICT",note=err)
         check,err=call(["git","apply",str(patch)],repo,15)
@@ -74,7 +74,7 @@ def check_task(t, repo, env):
             return dict(id=task,status="WRONG_PACKAGE_IMPORT",note=package_path)
         cmd=[sys.executable,"-m","pytest","-q","--disable-warnings","--maxfail=2","-p","no:cacheprovider",*test_files]
         b,baseout=call(cmd,repo,48,env)
-        patch.write_text(t["patch"])
+        patch.write_text(t["patch"].rstrip("\n") + "\n")
         check,err=call(["git","apply","--check",str(patch)],repo,15)
         if check:return dict(id=task,status="GOLD_PATCH_CONFLICT",baseline_exit=b,note=err)
         check,err=call(["git","apply",str(patch)],repo,15)
