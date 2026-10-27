@@ -95,11 +95,57 @@ def task_evidence(archive, comparison=None):
             print(json.dumps(result,ensure_ascii=False))
         print("TASK_VALIDATION_END")
 
+
+def compare_zero_patch_control(patched,control):
+    """Verify task snapshots match and compare failures with S20 no-patch control."""
+    def read_side(z):
+        names=z.namelist()
+        tasks=json.loads(z.read(next(n for n in names if n.endswith("/selected_tasks.json"))))
+        raw={}
+        for n in names:
+            m=re.search(r"/raw_results/([^/]+)\.json$",n)
+            if m:raw[m.group(1)]=json.loads(z.read(n))
+        return tasks,raw
+    with ZipFile(patched) as z21,ZipFile(control) as z20:
+        tasks21,rows21=read_side(z21)
+        tasks20,rows20=read_side(z20)
+    ids21={(r["instance_id"],r["repo"],r["base_commit"],r["problem_statement"]) for r in tasks21}
+    ids20={(r["instance_id"],r["repo"],r["base_commit"],r["problem_statement"]) for r in tasks20}
+    assert ids21==ids20 and len(ids21)==15,"Task snapshots are NOT comparable"
+    assert set(rows20)==set(rows21)=={r["instance_id"] for r in tasks21}
+    assert all(not (r.get("agent_patch") or "").strip() for r in rows20.values()),"Not a zero-patch control"
+    print("CONTROL_IDENTITY",json.dumps({
+       "matched_base_commits_and_problem_statements":True,
+       "control_nonempty_patches":0,
+       "control_nonempty_test_outputs":sum(bool(r.get("test_output")) for r in rows20.values()),
+       "control_no_test_output":sum(not bool(r.get("test_output")) for r in rows20.values())}))
+    print("CONTROL_VALIDATION_BEGIN")
+    for id in sorted(rows21):
+        c=rows20[id];p=rows21[id]
+        def failed_names(r):
+            return sorted(set(re.findall(r"(?m)^FAILED (tests/[^\n]+)",r.get("test_output") or "")))
+        def error_names(r):
+            return sorted(set(re.findall(r"(?m)^ERROR (tests/[^\n]+)",r.get("test_output") or "")))
+        cfailed=failed_names(c);pfailed=failed_names(p)
+        cerr=error_names(c);perr=error_names(p)
+        print(json.dumps({"id":id,
+          "control_exit":c.get("test_exit_code"),"s21_exit":p.get("test_exit_code"),
+          "control_has_output":bool(c.get("test_output")),
+          "s21_has_output":bool(p.get("test_output")),
+          "control_failed":len(cfailed),"s21_failed":len(pfailed),
+          "control_errors":len(cerr),"s21_errors":len(perr),
+          "control_failed_names":cfailed[:12],"s21_failed_names":pfailed[:12],
+          "control_error_names":cerr[:10],"s21_error_names":perr[:10]},
+          ensure_ascii=False))
+    print("CONTROL_VALIDATION_END")
+
 if __name__=="__main__":
     p=argparse.ArgumentParser()
     p.add_argument("archive",type=Path)
     p.add_argument("--compare",type=Path)
     p.add_argument("--task-evidence",action="store_true")
+    p.add_argument("--control",type=Path)
     args=p.parse_args()
+    if args.control:compare_zero_patch_control(args.archive,args.control)
     if args.task_evidence:task_evidence(args.archive,args.compare)
     else:inspect(args.archive)
