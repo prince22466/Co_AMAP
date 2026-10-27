@@ -113,7 +113,24 @@ def test_bf16_gqa_prefill_matches_baseline(
         block_ids = torch.randperm(num_blocks, device=device).to(torch.int32)
     else:
         block_ids = torch.arange(num_blocks, device=device, dtype=torch.int32)
+    # The optimized kernel is deliberately given a *tightly sized* table.
+    # Pad the baseline-only table to a 64-token boundary: pinned upstream
+    # vLLM also performs an unmasked table read for its final (32-token)
+    # tile. Supplying the same logical pages plus harmless padding makes
+    # the reference safe without hiding the v2 tail-mask regression case.
     block_table = block_ids.reshape(1, -1)
+    padded_blocks = ((total_len + 63) // 64) * (64 // kv_block_size)
+    padded_ids = torch.cat(
+        [
+            block_ids,
+            torch.zeros(
+                padded_blocks - num_blocks,
+                device=device,
+                dtype=torch.int32,
+            ),
+        ]
+    )
+    baseline_block_table = padded_ids.reshape(1, -1)
     cu_seqlens_q = torch.tensor([0, query_len], device=device, dtype=torch.int32)
     seq_lens = torch.tensor([total_len], device=device, dtype=torch.int32)
 
@@ -137,7 +154,9 @@ def test_bf16_gqa_prefill_matches_baseline(
     expected = torch.empty_like(query)
     actual = torch.empty_like(query)
     with torch.inference_mode():
-        baseline_unified_attention(**arguments, out=expected)
+        baseline_unified_attention(
+            **{**arguments, "block_table": baseline_block_table}, out=expected
+        )
         optimized_unified_attention(**arguments, out=actual)
         torch.cuda.synchronize()
 
