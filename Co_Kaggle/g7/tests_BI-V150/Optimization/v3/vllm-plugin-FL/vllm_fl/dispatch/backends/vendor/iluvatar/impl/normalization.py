@@ -7,6 +7,7 @@ Reference normalization operator implementations using PyTorch.
 from __future__ import annotations
 
 from typing import Optional, Union
+import os
 
 import torch
 
@@ -27,6 +28,11 @@ def rms_norm_iluvatar(
     Returns:
         Normalized tensor, or tuple of (normalized, residual) if residual is provided
     """
+    if os.environ.get("VLLM_FL_BIV150_RMS_V3", "0").lower() in ("1", "true", "yes"):
+        from .normalization_biv150_v3 import is_eligible, fused_rms_norm
+        if is_eligible(x, residual, obj.weight):
+            return fused_rms_norm(x, residual, obj.weight, obj.variance_epsilon)
+
     # Get weight and epsilon from obj
     weight = obj.weight
     epsilon = obj.variance_epsilon
