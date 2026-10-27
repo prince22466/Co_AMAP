@@ -53,15 +53,15 @@ def task_evidence(archive, comparison=None):
     """Read validator stdout for each of the 15 tasks. Do not infer baseline."""
     with ZipFile(archive) as z:
         names=z.namelist()
-        raw={re.search(r"/raw_results/([^/]+)\\.json$",name).group(1):name
-             for name in names if re.search(r"/raw_results/([^/]+)\\.json$",name)}
+        raw={re.search(r"/raw_results/([^/]+)\.json$",name).group(1):name
+             for name in names if re.search(r"/raw_results/([^/]+)\.json$",name)}
         if len(raw)!=15:
             raise ValueError("Expected 15 raw_result rows, found "+str(len(raw)))
         old={}
         if comparison:
             with ZipFile(comparison) as previous:
                 for name in previous.namelist():
-                    m=re.search(r"/raw_results/([^/]+)\\.json$",name)
+                    m=re.search(r"/raw_results/([^/]+)\.json$",name)
                     if m:
                         try: old[m.group(1)]=json.loads(previous.read(name))
                         except (ValueError,UnicodeError):pass
@@ -71,7 +71,7 @@ def task_evidence(archive, comparison=None):
             output=r.get("test_output") or ""
             exc=[]
             for line in output.splitlines():
-                if re.search(r"(?:^\\s*E\\s+|(?:ModuleNotFoundError|ImportError|SyntaxError|IndentationError|AttributeError|TypeError|NameError|AssertionError|RuntimeError|ValueError|RecursionError|fixture|[Ee]rror collecting))",line):
+                if re.search(r"(?:^\s*E\s+|(?:ModuleNotFoundError|ImportError|SyntaxError|IndentationError|AttributeError|TypeError|NameError|AssertionError|RuntimeError|ValueError|RecursionError|fixture|[Ee]rror collecting))",line):
                     clean=line.strip()[:260]
                     if clean not in exc:exc.append(clean)
             patch=r.get("agent_patch") or ""
