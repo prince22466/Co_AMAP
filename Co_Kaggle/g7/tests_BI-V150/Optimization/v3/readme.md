@@ -32,7 +32,7 @@ fused operator implementation, not switching to another unmodified operator.
 
 | Path | Purpose |
 | --- | --- |
-| `vllm_fl/dispatch/backends/vendor/iluvatar/impl/normalization_biv150_v3.py` | New fused residual-add/RMSNorm Triton kernel |
+| `vllm_fl/dispatch/backends/vendor/iluvatar/impl/normalization_biv150_v3.py` | Inference-shape guards and fused operation launcher |\n| `vllm_fl/dispatch/backends/vendor/iluvatar/impl/normalization_biv150_v3_kernel.py` | New fused residual-add/RMSNorm Triton kernel |
 | `vllm_fl/dispatch/backends/vendor/iluvatar/impl/normalization.py` | Opt-in vendor dispatch with original fallback |
 | `vllm_fl/dispatch/backends/flaggems/impl/normalization.py` | Opt-in for FlagGems dispatch on BI-V150 only |
 | `tests/functional_tests/test_biv150_rmsnorm_v3.py` | Numerical and fallback regression tests |

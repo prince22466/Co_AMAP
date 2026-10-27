@@ -110,4 +110,4 @@ def test_noncontiguous_input_and_wrong_weight_dtype_fall_back(monkeypatch):
         device = "cuda"
         xx = x.to(device)
         assert not is_eligible(xx, None, weight.to(device, dtype=torch.float16))
-        assert not is_eligible(xx, xx[:, ::-1] if False else xx[:, :128], weight.to(device))
+        assert not is_eligible(xx, xx[:, :128], weight.to(device))
