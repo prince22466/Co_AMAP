@@ -44,44 +44,55 @@ use the same opt-in implementation.
 | `FlagGems/src/flag_gems/ops/flash_kernel.py` | Implements `virtual_to_cache_offset_grouped`; adds `GROUPED_PAGE_LOOKUP` to the existing `flash_varlen_fwd_kernel` paged-KV load paths |
 | `FlagGems/src/flag_gems/ops/flash_api.py` | Passes the opt-in kernel specialization at both existing varlen attention launch sites; no tile or backend selection changes |
 | `FlagGems/src/flag_gems/ops/iluvatar_grouped_paged_kv.py` | Defines the safe eligibility conditions and reads the environment flag |
-| `readme.md` | Documents the implementation and official validation procedure |
+| `vllm-plugin-FL/vllm_fl/dispatch/backends/flaggems/flaggems.py` | Uses optimized FlagGems attention by default on Iluvatar while preserving existing dispatch/fallback and override mechanisms |
+| `readme.md` | Documents automatic activation and official validation |
 
 No standalone profiling script or benchmark-script change is included.
 
-## Activation and eligibility
+## Built-in activation and eligibility
 
-By default, **the original kernel is used**:
+When the **v4 version of vllm-plugin-FL and FlagGems is installed and loaded**
+on BI-V150, standard `vllm serve` automatically selects the optimized
+FlagGems attention backend on Iluvatar via the existing FlagOS dispatcher.
+No `VLLM_FL_USE_FLAGGEMS_ATTN=1` or
+`FLAGGEMS_ILUVATAR_PAGED_KV=grouped` setting is required.
 
-```bash
-unset FLAGGEMS_ILUVATAR_PAGED_KV
-# Equivalent explicit baseline:
-export FLAGGEMS_ILUVATAR_PAGED_KV=baseline
-```
+Within that backend, grouped page-table lookup is **automatically compiled**
+for eligible paged-KV prefill; the baseline lookup remains for other shapes:
 
-To enable the experimental specialization:
-
-```bash
-export FLAGGEMS_ILUVATAR_PAGED_KV=grouped
-```
-
-The grouped path is selected only when all of these conditions hold:
-
-- Device vendor is `iluvatar`, and the active operator is FlagGems varlen attention.
-- KV cache is **paged** (not contiguous).
+- Device vendor is `iluvatar`; running the FlagGems Triton varlen operator.
+- KV cache is **paged**, not contiguous.
 - `max_seqlen_q >= 128` and `max_seqlen_k >= 8192`.
 - No dropout and no local/sliding-window attention.
-- KV page size and `BLOCK_N` are powers of two, with page size <= `BLOCK_N`
-  and `BLOCK_N` divisible by page size.
+- KV page size and `BLOCK_N` are powers of two; page size <= `BLOCK_N`
+  and `BLOCK_N` is divisible by the page size.
 
 For ineligible shapes—including single-token decode—the original page
-lookup remains in use. The **4K workload may not activate this optimization**
-because of the 8K KV-length threshold; 16K full or chunked prefill is the
-primary target.
+lookup remains in use. The **4K workload is normally unaffected by the
+grouped kernel**, although selecting FlagGems rather than the previously
+default `TRITON_ATTN` still changes its serving backend. This makes the
+official **4K and 16K** measurements and accuracy check mandatory.
 
-**Important:** the existing vLLM plugin normally selects `TRITON_ATTN`.
-This PR does not change that selection. Setting
-`FLAGGEMS_ILUVATAR_PAGED_KV=grouped` has no effect unless the serving
-path actually runs the FlagGems varlen attention kernel.
+The automatic backend choice is implemented only in the existing
+`FlagGemsBackend.attention_backend()` hook of vllm-plugin-FL, which keeps
+the existing FlagOS dispatch policy, vendor fallback, and attention-backend
+overrides. If the operator-selection policy is explicitly configured to
+prefer the Iluvatar vendor backend, it can still select `TRITON_ATTN`;
+this patch does not override that policy.
+
+For controlled baseline comparisons, the existing overrides remain
+available:
+
+```bash
+# Optional diagnostic A/B control only (not required for normal serving)
+export FLAGGEMS_ILUVATAR_PAGED_KV=baseline
+
+# Optional rollback to previous default attention backend
+export VLLM_FL_USE_FLAGGEMS_ATTN=0
+```
+
+`FLAGGEMS_ILUVATAR_PAGED_KV` defaults to `grouped` on all eligible shapes.
+A fresh server process is required when changing either setting.
 
 ## Previous evidence (from v4_preplay, not yet new v4 results)
 
@@ -101,24 +112,11 @@ not yet been validated in the official workload.
 
 ## Official 4K/16K evaluation procedure
 
-Run the **unchanged competition benchmark** against the v4 server. To
-isolate the page-lookup change, keep the model, server settings, request
-workload, and **attention backend identical** between the two runs.
-
-If explicitly evaluating the FlagGems attention backend, use the same
-`VLLM_FL_USE_FLAGGEMS_ATTN=1` setting in *both* runs. Switching from
-default `TRITON_ATTN` to FlagGems between runs would invalidate an
-attribution of any speedup to grouped page lookup.
-
-In the vLLM server environment, run baseline first:
+**Use the normal vLLM serve command** with this version of the FlagOS plugin
+installed/loaded. Do not add an optimization-enabling environment variable
+to your production/competition launch:
 
 ```bash
-cd /root/Optimization/v4
-export PYTHONPATH="$PWD/FlagGems/src:$PWD/vllm-plugin-FL:${PYTHONPATH:-}"
-export VLLM_PLUGINS=fl
-export VLLM_FL_USE_FLAGGEMS_ATTN=1
-export FLAGGEMS_ILUVATAR_PAGED_KV=baseline
-
 vllm serve /workspace/MiniCPM5-2B \
   --port 9031 \
   --compilation-config '{"cudagraph_mode": "FULL_DECODE_ONLY"}' \
@@ -127,7 +125,7 @@ vllm serve /workspace/MiniCPM5-2B \
   --max-model-len 131072
 ```
 
-From another terminal, run the **unaltered** official throughput test:
+Run the **unaltered competition throughput benchmark** from another terminal:
 
 ```bash
 python3 /workspace/vllm-plugin-FL/benchmarks/benchmark_throughput_serve.py \
@@ -137,25 +135,32 @@ python3 /workspace/vllm-plugin-FL/benchmarks/benchmark_throughput_serve.py \
   --test-cases '[[4096,1024,64,256],[16384,1024,64,128]]'
 ```
 
-Restart the same server with only
-`FLAGGEMS_ILUVATAR_PAGED_KV=grouped` changed, and repeat the **same**
-official benchmark. Record the 4K and 16K throughput results separately;
-account for prefix-cache hits or other run-to-run workload differences.
-Verify the server actually used FlagGems attention before attributing
-any result to this kernel change.
+For a causal A/B of the **grouped lookup alone**, restart the server with
+`FLAGGEMS_ILUVATAR_PAGED_KV=baseline` and re-run this identical benchmark.
+Keep the same FlagGems backend in both runs; do not switch back to
+`TRITON_ATTN` for the kernel-level control. Measure the default baseline
+vLLM/TRITON server **separately** to evaluate whether changing the default
+attention backend helps total competition throughput.
 
-Finally, run the competition's **`math_500` accuracy test**. Promotion
-requires an allowed accuracy result and an actual improvement on the
-official throughput workload.
+Before adopting this automatic default, also verify the server is actually
+using the FlagGems **Triton** varlen implementation (not the optional
+FlagGems C-extension path), then run the official `math_500` accuracy test.
+Pay attention to 4K prefix-cache hits and to overall 4K throughput; the
+grouped kernel targets long-context prefill, but the default backend change
+may affect other cases.
 
 ## Competition compliance and status
 
 - No quantization, speculative sampling, or model-hyperparameter changes.
-- No benchmark-script modification and no replacement of the principal
-  operator-selection logic.
+- No benchmark-script modification or deletion of the principal
+  operator-selection logic. The existing FlagGems backend is now the
+  automatic Iluvatar preference because it includes a real optimized kernel;
+  this backend choice still requires end-to-end validation.
 - No direct upstream FlagOS merge.
 - No v1/v2/v3/v4_preplay changes.
 
-**Status:** grouped paged-KV is implemented in v4, opt-in and disabled by
-default. Official 4K/16K throughput and `math_500` results for this PR
-are pending. Do not claim an end-to-end throughput improvement yet.
+**Status:** built-in activation implemented on eligible BI-V150 workloads,
+without a special enable flag. The automatic FlagGems backend choice and
+new v4 integration have not yet passed the official 4K/16K throughput or
+`math_500` accuracy checks. Keep this PR in Draft and do not claim an
+end-to-end throughput improvement yet.
