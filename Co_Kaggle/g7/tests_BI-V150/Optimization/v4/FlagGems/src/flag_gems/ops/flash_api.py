@@ -14,12 +14,14 @@
 
 import logging
 import math
+import os
 
 import torch
 import triton
 
 import flag_gems
 from flag_gems import runtime
+from flag_gems.ops.iluvatar_prefill_tiles import select_prefill_tiles
 from flag_gems.ops.flash_kernel import (
     block_m_splitkv_heuristic,
     block_n_splitkv_heuristic,
@@ -575,8 +577,37 @@ def mha_varlan_fwd(
             "num_stages": 1 if not is_paged else cfg["num_stages"](args),
         }
 
+        # Refine the existing varlen operator for long Iluvatar prefills only.
+        # Default stays identical; experiments are selected by an env variable.
+        if flag_gems.vendor_name == "iluvatar":
+            prefill_tiles = select_prefill_tiles(
+                max_seqlen_q=max_seqlen_q,
+                max_seqlen_k=max_seqlen_k,
+                head_size=head_size,
+                is_dropout=is_dropout,
+                is_local=is_local,
+            )
+            if prefill_tiles is not None:
+                cfg_params["BLOCK_M"], cfg_params["BLOCK_N"] = prefill_tiles
+
         logger.debug("Running flash_varlen_fwd_kernel with config: %s", cfg_params)
-        kernel(*args, **cfg_params)
+        compiled_kernel = kernel(*args, **cfg_params)
+        if (
+            flag_gems.vendor_name == "iluvatar"
+            and os.environ.get("FLAGGEMS_ILUVATAR_PREFILL_REPORT") == "1"
+            and max_seqlen_q >= 8192
+        ):
+            metadata = getattr(compiled_kernel, "metadata", None)
+            logger.warning(
+                "prefill kernel: BLOCK_M=%s BLOCK_N=%s regs/thread=%s "
+                "spills/thread=%s shared_bytes=%s warps=%s",
+                cfg_params["BLOCK_M"],
+                cfg_params["BLOCK_N"],
+                getattr(compiled_kernel, "n_regs", "unavailable"),
+                getattr(compiled_kernel, "n_spills", "unavailable"),
+                getattr(metadata, "shared", "unavailable"),
+                getattr(metadata, "num_warps", cfg_params["num_warps"]),
+            )
 
         if seqlenq_ngroups_swapped:
             out = out.reshape(
@@ -925,8 +956,37 @@ def mha_varlan_fwd_opt(
             "num_stages": 1 if not is_paged else cfg["num_stages"](args),
         }
 
+        # Refine the existing varlen operator for long Iluvatar prefills only.
+        # Default stays identical; experiments are selected by an env variable.
+        if flag_gems.vendor_name == "iluvatar":
+            prefill_tiles = select_prefill_tiles(
+                max_seqlen_q=max_seqlen_q,
+                max_seqlen_k=max_seqlen_k,
+                head_size=head_size,
+                is_dropout=is_dropout,
+                is_local=is_local,
+            )
+            if prefill_tiles is not None:
+                cfg_params["BLOCK_M"], cfg_params["BLOCK_N"] = prefill_tiles
+
         logger.debug("Running flash_varlen_fwd_kernel with config: %s", cfg_params)
-        kernel(*args, **cfg_params)
+        compiled_kernel = kernel(*args, **cfg_params)
+        if (
+            flag_gems.vendor_name == "iluvatar"
+            and os.environ.get("FLAGGEMS_ILUVATAR_PREFILL_REPORT") == "1"
+            and max_seqlen_q >= 8192
+        ):
+            metadata = getattr(compiled_kernel, "metadata", None)
+            logger.warning(
+                "prefill kernel: BLOCK_M=%s BLOCK_N=%s regs/thread=%s "
+                "spills/thread=%s shared_bytes=%s warps=%s",
+                cfg_params["BLOCK_M"],
+                cfg_params["BLOCK_N"],
+                getattr(compiled_kernel, "n_regs", "unavailable"),
+                getattr(compiled_kernel, "n_spills", "unavailable"),
+                getattr(metadata, "shared", "unavailable"),
+                getattr(metadata, "num_warps", cfg_params["num_warps"]),
+            )
 
         if seqlenq_ngroups_swapped:
             out = out.reshape(
