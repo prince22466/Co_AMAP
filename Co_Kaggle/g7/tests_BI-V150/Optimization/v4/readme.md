@@ -132,6 +132,143 @@ and kernel latency, and test the *actual MiniCPM GQA dimensions and prefill
 chunking*. Final selection still requires the unmodified official 4K/16K
 benchmark and `math_500` acceptance.
 
+## v4 follow-up — identify live attention backend and optimize paged-KV lookup
+
+**Implementation status: experimental, opt-in, not yet compiled or timed on
+BI-V150.** The preceding 16K tile sweep is completed; this is a separate,
+genuine *in-kernel* memory-access change, not another tile selection.
+
+### A. Confirm the attention backend used by the official workload
+
+The v4 vLLM FlagGems plugin returns
+`AttentionBackendEnum.TRITON_ATTN.get_path()` when
+`VLLM_FL_USE_FLAGGEMS_ATTN` is unset. Setting
+`FLAGGEMS_ILUVATAR_PAGED_KV=grouped` **alone does not cause vLLM to use
+FlagGems**. We must first establish the server's actual attention path.
+
+New opt-in diagnostic hooks (disabled by default):
+
+- `FLAGGEMS_V4_TRACE_ATTENTION=1`: the plugin reports
+  `V4_ATTN_BACKEND_SELECTED <path>` during attention backend selection.
+  The FlagGems varlen kernel launch reports
+  `V4_ATTN_KERNEL_EXECUTED ... paged=... tile=... grouped_page_lookup=...`
+  after a successful launch; duplicate shape signatures are rate-limited.
+- No operator dispatcher logic, vLLM scheduling, or competition benchmark
+  script is changed; the diagnostic flags must be **unset for performance
+  measurements**.
+
+Start vLLM with the **local v4 files** and the ordinary competition settings,
+without selecting a different attention backend:
+
+```bash
+cd /root/Optimization/v4
+export PYTHONPATH="$PWD/FlagGems/src:$PWD/vllm-plugin-FL:${PYTHONPATH:-}"
+export VLLM_PLUGINS=fl
+export FLAGGEMS_V4_TRACE_ATTENTION=1
+unset VLLM_FL_USE_FLAGGEMS_ATTN
+unset FLAGGEMS_ILUVATAR_PAGED_KV
+
+vllm serve /workspace/MiniCPM5-2B \
+  --port 9031 --served-model-name minicpm \
+  --compilation-config '{"cudagraph_mode": "FULL_DECODE_ONLY"}' \
+  --gpu-memory-utilization 0.85 --max-model-len 131072 \
+  2>&1 | tee profiling/v4_backend_default.log
+```
+
+From another terminal, run the **unmodified** official 4K/16K benchmark
+against port 9031, then inspect the server log:
+
+```bash
+python3 /workspace/vllm-plugin-FL/benchmarks/benchmark_throughput_serve.py \
+  --model /workspace/MiniCPM5-2B --served-model-name minicpm \
+  --port 9031 \
+  --test-cases '[[4096,1024,64,256],[16384,1024,64,128]]'
+
+grep -E 'V4_ATTN_BACKEND_SELECTED|V4_ATTN_KERNEL_EXECUTED' \
+  profiling/v4_backend_default.log
+```
+
+Check that the running server really imports the v4 plugin; absence of both
+markers is **inconclusive**, not proof of any particular backend. A
+`TRITON_ATTN` selection with no FlagGems kernel event indicates these
+FlagGems-specific kernel modifications will not affect that run.
+
+For a **controlled FlagGems comparison only**, restart the server with
+`VLLM_FL_USE_FLAGGEMS_ATTN=1` and repeat the official benchmark without
+editing it. Verify both the selected-backend marker **and** an executed-kernel
+marker before interpreting this as a v4 optimization result. The FlagGems
+backend choice is an experimental control, not itself a claim of performance
+improvement or a substitution for kernel optimization.
+
+### B. New paged-KV memory-access candidate
+
+The existing paged loader computes the page-table mapping for every token
+lane: `page_table[token // page_size]`. In the opt-in
+`FLAGGEMS_ILUVATAR_PAGED_KV=grouped` mode, for power-of-two page sizes
+dividing `BLOCK_N`, the same kernel instead:
+
+1. Loads **one physical page index per page** in each aligned K/V tile
+   (e.g. 2 entries rather than 32 per 32-token tile with 16-token pages).
+2. Uses `tl.gather` to expand those page indices to per-token offsets.
+3. Keeps K/V pointers, masks, dot-products, numerical operations and the
+   existing attention backend dispatch unchanged.
+
+The CPU selector enables the kernel specialization only for **paged** KV,
+`max_seqlen_q >= 128`, `max_seqlen_k >= 8192`, aligned power-of-two
+page/KV tile geometry, with neither dropout nor local attention. This
+includes a 2,048-token query chunk at a 16K context length. It excludes
+single-token decode. Default `baseline` keeps the original address path.
+The `tl.gather` expansion itself can add communication or register cost;
+**fewer page-table instructions do not guarantee reduced HBM traffic or
+better latency**.
+
+### C. Validation on BI-V150 (required before enabling)
+
+```bash
+cd /root/Optimization/v4
+export PYTHONPATH="$PWD/FlagGems/src:$PWD/vllm-plugin-FL:${PYTHONPATH:-}"
+
+# CPU-only eligibility, offset-equivalence and selector regressions.
+python3 -m pytest --noconftest -q \
+  FlagGems/tests/test_iluvatar_prefill_tiles_v4.py
+
+# Real GPU correctness: shuffled physical pages, non-full tail page,
+# 16 query heads / 2 KV heads, regular and optimized varlen paths.
+python3 -m pytest --noconftest -vv -s \
+  FlagGems/tests/test_biv150_grouped_paged_kv_v4.py
+
+# Compare only actual memory-access changes (fixed baseline 128x32 tiles).
+python3 profile_16k_prefill.py \
+  --modes baseline --kv-modes baseline grouped \
+  --seq-len 16384 --query-len 16384 \
+  --heads 16 --kv-heads 2 --head-dim 128 \
+  --shuffle-pages \
+  --output profiling/v4_grouped_full16k.csv
+
+# Repeat for 2K-query / 16K-context chunked prefill.
+python3 profile_16k_prefill.py \
+  --modes baseline --kv-modes baseline grouped \
+  --seq-len 16384 --query-len 2048 \
+  --heads 16 --kv-heads 2 --head-dim 128 \
+  --shuffle-pages \
+  --output profiling/v4_grouped_chunked16k.csv
+```
+
+The profiler now reports `kv_mode` and
+`grouped_page_lookup`, asserts that the requested compiled specialization
+was actually selected, and checks the grouped kernel output against baseline
+using identical BF16 inputs. `--shuffle-pages` stresses page-address
+correctness rather than assuming identity page mappings. These commands
+**have not yet been executed on BI-V150 for this new code**. Treat Triton
+compilation errors, output mismatches, spills or latency regressions as
+rejection criteria; keep `FLAGGEMS_ILUVATAR_PAGED_KV` unset until device
+validation, official throughput comparisons and `math_500` pass.
+
+Next profiler targets: actual page-table/global-memory loads, K/V read
+transactions/coalescing, L2 hit rate, achieved occupancy, and stall cycles.
+Only after confirming a profitable memory-lookup specialization should we
+consider a separate cache/pipeline experiment.
+
 ### Run on BI-V150
 
 Use the installed local v4 FlagGems and v4 vLLM plugin (do not accidentally
@@ -197,4 +334,7 @@ Implementation and CPU selector tests are provided. A pre-existing
 above**, and they show no improvement over the baseline for the tested shape.
 Physical K/V DRAM traffic, L2/cache metrics, achieved occupancy, the
 official 4K/16K served-throughput benchmark and `math_500` remain
-unverified. Keep this PR in draft; it is not a validated performance gain.
+unverified. The new opt-in page-grouped memory kernel and backend trace
+have source-level review only and still require BI-V150 GPU compilation,
+correctness, and performance tests. Keep this PR in draft; it is not a
+validated performance gain.
