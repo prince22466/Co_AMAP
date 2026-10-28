@@ -14,12 +14,19 @@
 
 import logging
 import math
+import os
+from functools import lru_cache
 
 import torch
 import triton
 
 import flag_gems
 from flag_gems import runtime
+from flag_gems.ops.iluvatar_prefill_tiles import (
+    select_grouped_page_lookup,
+    select_prefill_tiles,
+    unwrap_libentry_kernel,
+)
 from flag_gems.ops.flash_kernel import (
     block_m_splitkv_heuristic,
     block_n_splitkv_heuristic,
@@ -33,6 +40,13 @@ from flag_gems.utils.random_utils import philox_backend_seed_offset
 
 logger = logging.getLogger(__name__)
 _debug = False
+
+
+@lru_cache(maxsize=256)
+def _trace_v4_kernel_once(message):
+    # Diagnostic only: do not print per layer/request on the normal hot path.
+    logger.warning("V4_ATTN_KERNEL_EXECUTED %s", message)
+
 
 
 def CHECK_DEVICE(x):
@@ -575,8 +589,64 @@ def mha_varlan_fwd(
             "num_stages": 1 if not is_paged else cfg["num_stages"](args),
         }
 
+        # Refine the existing varlen operator for long Iluvatar prefills only.
+        # Default stays identical; experiments are selected by an env variable.
+        if flag_gems.vendor_name == "iluvatar":
+            prefill_tiles = select_prefill_tiles(
+                max_seqlen_q=max_seqlen_q,
+                max_seqlen_k=max_seqlen_k,
+                head_size=head_size,
+                is_dropout=is_dropout,
+                is_local=is_local,
+            )
+            if prefill_tiles is not None:
+                cfg_params["BLOCK_M"], cfg_params["BLOCK_N"] = prefill_tiles
+            if select_grouped_page_lookup(
+                is_paged=is_paged,
+                max_seqlen_q=max_seqlen_q,
+                max_seqlen_k=max_seqlen_k,
+                block_size=block_size,
+                block_n=cfg_params["BLOCK_N"],
+                is_dropout=is_dropout,
+                is_local=is_local,
+            ):
+                # Compile-time specialization of the *existing* Triton kernel,
+                # not a change to the framework's attention-operator dispatcher.
+                cfg_params["GROUPED_PAGE_LOOKUP"] = True
+
         logger.debug("Running flash_varlen_fwd_kernel with config: %s", cfg_params)
-        kernel(*args, **cfg_params)
+        launch_result = kernel(*args, **cfg_params)
+        if (
+            flag_gems.vendor_name == "iluvatar"
+            and os.environ.get("FLAGGEMS_V4_TRACE_ATTENTION") == "1"
+        ):
+            _trace_v4_kernel_once(
+                f"max_q={max_seqlen_q} max_k={max_seqlen_k} "
+                f"heads={num_heads} kv_heads={num_heads_k} head_dim={head_size} "
+                f"paged={is_paged} page_size={block_size} "
+                f"tile={cfg_params['BLOCK_M']}x{cfg_params['BLOCK_N']} "
+                f"grouped_page_lookup={cfg_params.get('GROUPED_PAGE_LOOKUP', False)}"
+            )
+        if (
+            flag_gems.vendor_name == "iluvatar"
+            and os.environ.get("FLAGGEMS_ILUVATAR_PREFILL_REPORT") == "1"
+            and max_seqlen_q >= 128
+            and max_seqlen_k >= 8192
+        ):
+            # FlagGems LibEntry returns (CompiledKernel, constexprs).
+            compiled_kernel = unwrap_libentry_kernel(launch_result)
+            metadata = getattr(compiled_kernel, "metadata", None)
+            logger.warning(
+                "prefill kernel: BLOCK_M=%s BLOCK_N=%s regs/thread=%s "
+                "spills/thread=%s shared_bytes=%s warps=%s grouped_page_lookup=%s",
+                cfg_params["BLOCK_M"],
+                cfg_params["BLOCK_N"],
+                getattr(compiled_kernel, "n_regs", "unavailable"),
+                getattr(compiled_kernel, "n_spills", "unavailable"),
+                getattr(metadata, "shared", "unavailable"),
+                getattr(metadata, "num_warps", cfg_params["num_warps"]),
+                cfg_params.get("GROUPED_PAGE_LOOKUP", False),
+            )
 
         if seqlenq_ngroups_swapped:
             out = out.reshape(
@@ -639,7 +709,7 @@ def mha_varlan_fwd_opt(
 
     is_paged = page_table is not None
     if not is_paged:
-        page_table = torch.emtpty((0, 0), device=q_device, dtype=torch.int32)
+        page_table = torch.empty((0, 0), device=q_device, dtype=torch.int32)
 
     # q shape: [total_q_tokens, num_heads, head_size]
     # k shape:
@@ -925,8 +995,64 @@ def mha_varlan_fwd_opt(
             "num_stages": 1 if not is_paged else cfg["num_stages"](args),
         }
 
+        # Refine the existing varlen operator for long Iluvatar prefills only.
+        # Default stays identical; experiments are selected by an env variable.
+        if flag_gems.vendor_name == "iluvatar":
+            prefill_tiles = select_prefill_tiles(
+                max_seqlen_q=max_seqlen_q,
+                max_seqlen_k=max_seqlen_k,
+                head_size=head_size,
+                is_dropout=is_dropout,
+                is_local=is_local,
+            )
+            if prefill_tiles is not None:
+                cfg_params["BLOCK_M"], cfg_params["BLOCK_N"] = prefill_tiles
+            if select_grouped_page_lookup(
+                is_paged=is_paged,
+                max_seqlen_q=max_seqlen_q,
+                max_seqlen_k=max_seqlen_k,
+                block_size=block_size,
+                block_n=cfg_params["BLOCK_N"],
+                is_dropout=is_dropout,
+                is_local=is_local,
+            ):
+                # Compile-time specialization of the *existing* Triton kernel,
+                # not a change to the framework's attention-operator dispatcher.
+                cfg_params["GROUPED_PAGE_LOOKUP"] = True
+
         logger.debug("Running flash_varlen_fwd_kernel with config: %s", cfg_params)
-        kernel(*args, **cfg_params)
+        launch_result = kernel(*args, **cfg_params)
+        if (
+            flag_gems.vendor_name == "iluvatar"
+            and os.environ.get("FLAGGEMS_V4_TRACE_ATTENTION") == "1"
+        ):
+            _trace_v4_kernel_once(
+                f"max_q={max_seqlen_q} max_k={max_seqlen_k} "
+                f"heads={num_heads} kv_heads={num_heads_k} head_dim={head_size} "
+                f"paged={is_paged} page_size={block_size} "
+                f"tile={cfg_params['BLOCK_M']}x{cfg_params['BLOCK_N']} "
+                f"grouped_page_lookup={cfg_params.get('GROUPED_PAGE_LOOKUP', False)}"
+            )
+        if (
+            flag_gems.vendor_name == "iluvatar"
+            and os.environ.get("FLAGGEMS_ILUVATAR_PREFILL_REPORT") == "1"
+            and max_seqlen_q >= 128
+            and max_seqlen_k >= 8192
+        ):
+            # FlagGems LibEntry returns (CompiledKernel, constexprs).
+            compiled_kernel = unwrap_libentry_kernel(launch_result)
+            metadata = getattr(compiled_kernel, "metadata", None)
+            logger.warning(
+                "prefill kernel: BLOCK_M=%s BLOCK_N=%s regs/thread=%s "
+                "spills/thread=%s shared_bytes=%s warps=%s grouped_page_lookup=%s",
+                cfg_params["BLOCK_M"],
+                cfg_params["BLOCK_N"],
+                getattr(compiled_kernel, "n_regs", "unavailable"),
+                getattr(compiled_kernel, "n_spills", "unavailable"),
+                getattr(metadata, "shared", "unavailable"),
+                getattr(metadata, "num_warps", cfg_params["num_warps"]),
+                cfg_params.get("GROUPED_PAGE_LOOKUP", False),
+            )
 
         if seqlenq_ngroups_swapped:
             out = out.reshape(

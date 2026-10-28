@@ -181,10 +181,17 @@ class FlagGemsBackend(Backend):
         ).lower() in ("1", "true", "yes")
 
         if use_flaggems_attn:
-            print("Using FlagGems attention backend.")
-            return "vllm_fl.dispatch.backends.flaggems.impl.attention.AttentionFLBackend"
+            backend = "vllm_fl.dispatch.backends.flaggems.impl.attention.AttentionFLBackend"
+            if os.environ.get("FLAGGEMS_V4_TRACE_ATTENTION") == "1":
+                print(f"V4_ATTN_BACKEND_SELECTED {backend}", flush=True)
+            else:
+                print("Using FlagGems attention backend.")
+            return backend
 
-        return AttentionBackendEnum.TRITON_ATTN.get_path()
+        backend = AttentionBackendEnum.TRITON_ATTN.get_path()
+        if os.environ.get("FLAGGEMS_V4_TRACE_ATTENTION") == "1":
+            print(f"V4_ATTN_BACKEND_SELECTED {backend}", flush=True)
+        return backend
 
     def moe_align_block_size(
         self,
