@@ -595,14 +595,13 @@ def mha_varlan_fwd(
 
         logger.debug("Running flash_varlen_fwd_kernel with config: %s", cfg_params)
         launch_result = kernel(*args, **cfg_params)
-        # FlagGems LibEntry returns (CompiledKernel, constexprs), unlike plain
-        # Triton launchers. Unwrap it before reading register/occupancy data.
-        compiled_kernel = unwrap_libentry_kernel(launch_result)
         if (
             flag_gems.vendor_name == "iluvatar"
             and os.environ.get("FLAGGEMS_ILUVATAR_PREFILL_REPORT") == "1"
             and max_seqlen_q >= 8192
         ):
+            # FlagGems LibEntry returns (CompiledKernel, constexprs).
+            compiled_kernel = unwrap_libentry_kernel(launch_result)
             metadata = getattr(compiled_kernel, "metadata", None)
             logger.warning(
                 "prefill kernel: BLOCK_M=%s BLOCK_N=%s regs/thread=%s "
@@ -977,14 +976,13 @@ def mha_varlan_fwd_opt(
 
         logger.debug("Running flash_varlen_fwd_kernel with config: %s", cfg_params)
         launch_result = kernel(*args, **cfg_params)
-        # FlagGems LibEntry returns (CompiledKernel, constexprs), unlike plain
-        # Triton launchers. Unwrap it before reading register/occupancy data.
-        compiled_kernel = unwrap_libentry_kernel(launch_result)
         if (
             flag_gems.vendor_name == "iluvatar"
             and os.environ.get("FLAGGEMS_ILUVATAR_PREFILL_REPORT") == "1"
             and max_seqlen_q >= 8192
         ):
+            # FlagGems LibEntry returns (CompiledKernel, constexprs).
+            compiled_kernel = unwrap_libentry_kernel(launch_result)
             metadata = getattr(compiled_kernel, "metadata", None)
             logger.warning(
                 "prefill kernel: BLOCK_M=%s BLOCK_N=%s regs/thread=%s "
