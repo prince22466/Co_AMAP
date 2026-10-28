@@ -78,3 +78,7 @@ def select_prefill_tiles(
             "Q accumulator guard (32768 elements per CTA)"
         )
     return block_m, block_n
+
+def unwrap_libentry_kernel(launch_result):
+    """LibEntry launches return (CompiledKernel, constexprs); plain Triton may not."""
+    return launch_result[0] if isinstance(launch_result, tuple) else launch_result
