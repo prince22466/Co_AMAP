@@ -14,12 +14,14 @@
 
 import logging
 import math
+import os
 
 import torch
 import triton
 
 import flag_gems
 from flag_gems import runtime
+from flag_gems.ops.iluvatar_grouped_paged_kv import select_grouped_page_lookup
 from flag_gems.ops.flash_kernel import (
     block_m_splitkv_heuristic,
     block_n_splitkv_heuristic,
@@ -33,6 +35,34 @@ from flag_gems.utils.random_utils import philox_backend_seed_offset
 
 logger = logging.getLogger(__name__)
 _debug = False
+
+
+def _report_grouped_paged_kv_launch(launch_result, cfg_params, *, q_len, k_len, paged):
+    """Opt-in evidence of which compiled specialization actually executed.
+
+    FlagGems' LibEntry returns (CompiledKernel, constexprs); avoid incorrectly
+    treating the return tuple itself as a compiled kernel.
+    """
+    if os.environ.get("FLAGGEMS_V4_GROUPED_REPORT") != "1":
+        return
+    compiled = launch_result[0] if isinstance(launch_result, tuple) else launch_result
+    metadata = getattr(compiled, "metadata", None)
+    logger.warning(
+        "V4_GROUPED_PAGED_KV_KERNEL q=%s kv=%s paged=%s "
+        "BLOCK_M=%s BLOCK_N=%s grouped_page_lookup=%s "
+        "regs/thread=%s spills/thread=%s shared_bytes=%s warps=%s",
+        q_len,
+        k_len,
+        paged,
+        cfg_params["BLOCK_M"],
+        cfg_params["BLOCK_N"],
+        cfg_params.get("GROUPED_PAGE_LOOKUP", False),
+        getattr(compiled, "n_regs", "unavailable"),
+        getattr(compiled, "n_spills", "unavailable"),
+        getattr(metadata, "shared", "unavailable"),
+        getattr(metadata, "num_warps", cfg_params["num_warps"]),
+    )
+
 
 
 def CHECK_DEVICE(x):
@@ -575,8 +605,26 @@ def mha_varlan_fwd(
             "num_stages": 1 if not is_paged else cfg["num_stages"](args),
         }
 
+        # Only specialize the *existing* FlashAttention operator: no tile,
+        # model-parameter, backend-selection, or benchmark changes.
+        if flag_gems.vendor_name == "iluvatar" and select_grouped_page_lookup(
+            is_paged=is_paged,
+            max_seqlen_q=max_seqlen_q,
+            max_seqlen_k=max_seqlen_k,
+            block_size=block_size,
+            block_n=cfg_params["BLOCK_N"],
+            is_dropout=is_dropout,
+            is_local=is_local,
+        ):
+            cfg_params["GROUPED_PAGE_LOOKUP"] = True
+
         logger.debug("Running flash_varlen_fwd_kernel with config: %s", cfg_params)
-        kernel(*args, **cfg_params)
+        launch_result = kernel(*args, **cfg_params)
+        if flag_gems.vendor_name == "iluvatar":
+            _report_grouped_paged_kv_launch(
+                launch_result, cfg_params,
+                q_len=max_seqlen_q, k_len=max_seqlen_k, paged=is_paged,
+            )
 
         if seqlenq_ngroups_swapped:
             out = out.reshape(
@@ -925,8 +973,26 @@ def mha_varlan_fwd_opt(
             "num_stages": 1 if not is_paged else cfg["num_stages"](args),
         }
 
+        # Only specialize the *existing* FlashAttention operator: no tile,
+        # model-parameter, backend-selection, or benchmark changes.
+        if flag_gems.vendor_name == "iluvatar" and select_grouped_page_lookup(
+            is_paged=is_paged,
+            max_seqlen_q=max_seqlen_q,
+            max_seqlen_k=max_seqlen_k,
+            block_size=block_size,
+            block_n=cfg_params["BLOCK_N"],
+            is_dropout=is_dropout,
+            is_local=is_local,
+        ):
+            cfg_params["GROUPED_PAGE_LOOKUP"] = True
+
         logger.debug("Running flash_varlen_fwd_kernel with config: %s", cfg_params)
-        kernel(*args, **cfg_params)
+        launch_result = kernel(*args, **cfg_params)
+        if flag_gems.vendor_name == "iluvatar":
+            _report_grouped_paged_kv_launch(
+                launch_result, cfg_params,
+                q_len=max_seqlen_q, k_len=max_seqlen_k, paged=is_paged,
+            )
 
         if seqlenq_ngroups_swapped:
             out = out.reshape(
