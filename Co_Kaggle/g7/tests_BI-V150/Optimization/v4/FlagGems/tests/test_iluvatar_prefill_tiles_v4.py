@@ -75,3 +75,83 @@ def test_unwrap_libentry_launch_return():
     compiled = CompiledKernel()
     assert tiles.unwrap_libentry_kernel((compiled, {"BLOCK_M": 128})) is compiled
     assert tiles.unwrap_libentry_kernel(compiled) is compiled
+
+
+def page_lookup(**overrides):
+    params = dict(
+        is_paged=True,
+        max_seqlen_q=2048,
+        max_seqlen_k=16384,
+        block_size=16,
+        block_n=32,
+        is_dropout=False,
+        is_local=False,
+        mode="grouped",
+    )
+    params.update(overrides)
+    return tiles.select_grouped_page_lookup(**params)
+
+
+def test_grouped_lookup_default_off(monkeypatch):
+    monkeypatch.delenv(tiles.PAGED_KV_ENV, raising=False)
+    assert not page_lookup(mode=None)
+    monkeypatch.setenv(tiles.PAGED_KV_ENV, "grouped")
+    assert page_lookup(mode=None)
+
+
+@pytest.mark.parametrize("page_size,kv_tile", [(8, 32), (16, 32), (16, 64), (32, 32)])
+def test_grouped_page_sizes(page_size, kv_tile):
+    assert page_lookup(block_size=page_size, block_n=kv_tile)
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"is_paged": False},
+        {"max_seqlen_q": 1},
+        {"max_seqlen_q": 127},
+        {"max_seqlen_k": 4096},
+        {"block_size": 24},
+        {"block_size": 64},
+        {"block_size": 0},
+        {"is_dropout": True},
+        {"is_local": True},
+    ],
+)
+def test_grouped_lookup_safety_gates(override):
+    assert not page_lookup(**override)
+
+
+def test_grouped_lookup_invalid_mode():
+    with pytest.raises(ValueError, match="Unsupported"):
+        page_lookup(mode="force")
+
+
+@pytest.mark.parametrize("page_size,kv_tile", [(8, 32), (16, 32), (16, 64), (32, 64)])
+def test_grouped_offset_matches_per_token_reference(page_size, kv_tile):
+    # Non-monotonic physical page table exposes incorrect page-index arithmetic.
+    physical_pages = [9, 0, 17, 3, 11, 4, 7, 2, 21, 6, 15, 1, 13, 8]
+    k_page_stride = page_size * 2 * 128
+    k_row_stride = 2 * 128
+    for tile_start in (0, kv_tile, 2 * kv_tile):
+        if tile_start + kv_tile > len(physical_pages) * page_size:
+            continue
+        grouped = tiles.grouped_page_indices(tile_start, kv_tile, page_size)
+        reference = [(tile_start + lane) // page_size for lane in range(kv_tile)]
+        assert grouped == reference
+        optimized_offsets = [
+            physical_pages[virtual_page] * k_page_stride
+            + (lane % page_size) * k_row_stride
+            for lane, virtual_page in enumerate(grouped)
+        ]
+        reference_offsets = [
+            physical_pages[virtual_page] * k_page_stride
+            + ((tile_start + lane) % page_size) * k_row_stride
+            for lane, virtual_page in enumerate(reference)
+        ]
+        assert optimized_offsets == reference_offsets
+
+
+def test_grouped_lookup_rejects_misalignment():
+    with pytest.raises(ValueError, match="boundary"):
+        tiles.grouped_page_indices(8, 32, 16)
