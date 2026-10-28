@@ -105,14 +105,25 @@ def attempt(root, path, old, new):
     after = before.replace(old, new, 1)
     if after == before:
         return {'status': 'blocked', 'reason': 'Replacement makes no change', 'behavior_verified': False}
+    baseline_had_syntax_error = False
     if path.endswith('.py'):
         try:
-            lost = definitions(before) - definitions(after)
-            if lost:
-                return {'status': 'blocked', 'reason': 'Removed top-level definitions: ' + ', '.join(sorted(lost)),
-                        'behavior_verified': False}
+            after_definitions = definitions(after)
         except (SyntaxError, ValueError) as exc:
-            return {'status': 'blocked', 'reason': 'Python syntax: ' + str(exc), 'behavior_verified': False}
+            return {'status': 'blocked', 'reason': 'Candidate Python syntax: ' + str(exc),
+                    'behavior_verified': False}
+        try:
+            before_definitions = definitions(before)
+        except (SyntaxError, ValueError):
+            # Native edits can leave a syntactically broken working tree.
+            # A structurally valid repair must not be rejected merely
+            # because the pre-repair source cannot be parsed.
+            before_definitions = set()
+            baseline_had_syntax_error = True
+        lost = before_definitions - after_definitions
+        if lost:
+            return {'status': 'blocked', 'reason': 'Removed top-level definitions: ' + ', '.join(sorted(lost)),
+                    'behavior_verified': False}
     old_mode = target.stat().st_mode
     try:
         target.write_text(after, encoding='utf-8')
@@ -123,12 +134,20 @@ def attempt(root, path, old, new):
             target.chmod(old_mode)
             return {'status': 'blocked', 'reason': 'Whitespace error; edit rolled back',
                     'detail': (check.stdout + check.stderr)[-500:], 'behavior_verified': False}
+        visible = git(root, 'status', '--porcelain', '--untracked-files=all', '--', path)
+        if visible.returncode or not visible.stdout.strip():
+            target.write_text(before, encoding='utf-8')
+            target.chmod(old_mode)
+            return {'status': 'blocked', 'reason': 'File edit not visible to git status; rolled back',
+                    'next': 'Choose a tracked or submittable file; ignored files cannot form patches.',
+                    'behavior_verified': False}
     except BaseException:
         target.write_text(before, encoding='utf-8')
         target.chmod(old_mode)
         raise
     return {'status': 'edited', 'path': path,
             'file_sha256': hashlib.sha256(after.encode()).hexdigest(),
+            'baseline_had_syntax_error': baseline_had_syntax_error,
             'next': 'Run the same focused behavior check; inspect git diff HEAD before submit_patch.',
             'behavior_verified': False, 'submission_verified': False}
 
