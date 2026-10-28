@@ -127,6 +127,23 @@ class TestNativeRecovery(unittest.TestCase):
         with self.assertRaises(ValueError):
             recover.attempt(self.root, '../pkg.py', 'return 1', 'return 2')
 
+    def test_symlinked_parent_cannot_edit_protected_test(self):
+        target = self.write('tests/original.py', 'alpha\n')
+        alias = self.root / 'src/alias'
+        alias.parent.mkdir(parents=True, exist_ok=True)
+        alias.symlink_to('../tests', target_is_directory=True)
+        with self.assertRaises(ValueError):
+            recover.attempt(self.root, 'src/alias/original.py', 'alpha', 'beta')
+        self.assertEqual(target.read_text(), 'alpha\n')
+
+    def test_staged_whitespace_blocker_rolls_back_recovery(self):
+        self.write('staged.py', 'value = 1   \n')
+        self.git('add', 'staged.py')
+        result = recover.attempt(self.root, 'pkg.py', 'return 1', 'return 2')
+        self.assertEqual(result['status'], 'blocked')
+        self.assertIn('Whitespace', result['reason'])
+        self.assertEqual((self.root / 'pkg.py').read_text(), BASE)
+
     def test_legitimate_pyproject_changes_are_advisory_not_blocked(self):
         self.write('pyproject.toml', 'requires-python = ">=3.8"\n')
         self.git('add', 'pyproject.toml')
