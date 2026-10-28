@@ -2,6 +2,7 @@
 
 | Submission and Description | public score | comments |
 | --- | ---: | --- |
+| submission.zip - submission_21 | 0.03 | `submission_nb/artifacts/submission_21.zip`;  `gemma-4-e4b-it-qat-w4a16-ct` |
 | submission.zip - submission_19 | 0.01 | `submission_nb/artifacts/submission_19.zip`;  `gemma-4-e4b-it-qat-w4a16-ct` |
 | submission.zip - submission_18 | not submitted | `submission_nb/artifacts/submission_18.zip`; |
 | submission.zip - submission_17 | not submitted | `submission_nb/artifacts/submission_17.zip`; identical to submission_16 except all three LLM stages use `gemma-4-e4b-it-qat-w4a16-ct`; exact package parity checked; no inference or benchmark run |
