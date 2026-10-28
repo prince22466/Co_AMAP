@@ -49,7 +49,7 @@ import a separate system FlagGems installation):
 ```bash
 cd /root/Optimization/v4
 export PYTHONPATH="$PWD/FlagGems/src:$PWD/vllm-plugin-FL:${PYTHONPATH:-}"
-python3 -m pytest -q FlagGems/tests/test_iluvatar_prefill_tiles_v4.py
+python3 -m pytest --noconftest -q FlagGems/tests/test_iluvatar_prefill_tiles_v4.py
 
 # Standalone hardware experiment; use the same dtype, head count, and page
 # layout as the MiniCPM 16K trace (defaults: BF16, 8 heads, head_dim=128).
@@ -57,19 +57,29 @@ python3 profile_16k_prefill.py \
   --seq-len 16384 --heads 8 --kv-heads 8 --head-dim 128 \
   --warmup 3 --iterations 10 --output profiling/v4_prefill_tiles.csv
 
+# Also cover the alternative optimized varlen entry point and unpaged layout.
+python3 profile_16k_prefill.py \
+  --entrypoint optimized --contiguous-kv \
+  --seq-len 16384 --heads 8 --kv-heads 8 --head-dim 128 \
+  --output profiling/v4_prefill_opt_contiguous.csv
+
 # Re-run only a confirmed winner. Baseline is always used when unset.
 export FLAGGEMS_ILUVATAR_PREFILL_TILE=128x64
 export FLAGGEMS_ILUVATAR_PREFILL_REPORT=1
 ```
 
-The experiment reports median GPU-event time, baseline deviation, compiler
+The experiment reports median GPU-event *launch envelopes*, baseline deviation, compiler
 register count / spills / shared memory *when exposed by the Triton backend*,
 and two analytically modeled K/V quantities: logical per-CTA load demand
 and the lower bound of one unique K/V read per KV head. **Neither estimate
 equals physical GPU DRAM traffic.** Cache reuse, memory coalescing, page-table
 accesses, and L2 hits affect physical loads. Collect device-memory read bytes,
 L2 hit rate, register spill traffic, and **achieved occupancy** separately
-using the BI-V150 vendor GPU profiler. A resource-based occupancy *upper
+using the BI-V150 vendor GPU profiler. The harness will refuse to run if the
+FlagGems C-extension attention path is enabled, because that path bypasses the
+patched Triton operator. It also verifies actual tile launch reports and
+records failed candidate compilation without abandoning the remaining sweep.
+A resource-based occupancy *upper
 bound* can be calculated only when accurate hardware limits are provided
 to the harness via `--registers-per-sm`,
 `--shared-bytes-per-sm`, `--threads-per-sm`, and
@@ -90,7 +100,9 @@ to the harness via `--registers-per-sm`,
 
 ### Status
 
-Implementation and CPU selector tests are provided. **GPU timing, physical K/V
+Implementation and CPU selector tests are provided. A pre-existing
+\`torch.emtpty\` typo in the optimized non-paged varlen entry point is fixed.
+**GPU timing, physical K/V
 load counters, achieved occupancy, and math_500 results have not been measured
 in this PR environment.** This is a candidate experiment for BI-V150 testing,
 not a validated performance claim.
