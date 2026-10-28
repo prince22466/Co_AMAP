@@ -82,3 +82,55 @@ def select_prefill_tiles(
 def unwrap_libentry_kernel(launch_result):
     """LibEntry launches return (CompiledKernel, constexprs); plain Triton may not."""
     return launch_result[0] if isinstance(launch_result, tuple) else launch_result
+
+# Opt-in actual kernel memory-access refinement, independent of tile tuning.
+PAGED_KV_ENV = "FLAGGEMS_ILUVATAR_PAGED_KV"
+
+
+def select_grouped_page_lookup(
+    *,
+    is_paged: bool,
+    max_seqlen_q: int,
+    max_seqlen_k: int,
+    block_size: int,
+    block_n: int,
+    is_dropout: bool,
+    is_local: bool,
+    mode: str | None = None,
+) -> bool:
+    """Use one page-table load per page rather than one per token.
+
+    Only supports power-of-two pages aligned with KV tiles. In addition to a
+    full 16K prompt, 2K query chunks with a long existing context are eligible.
+    Baseline remains the default; this does not change backend selection.
+    """
+    chosen = (
+        os.environ.get(PAGED_KV_ENV, "baseline") if mode is None else mode
+    ).strip().lower()
+    if chosen not in ("baseline", "grouped"):
+        raise ValueError(
+            f"Unsupported {PAGED_KV_ENV}={chosen!r}; expected baseline or grouped"
+        )
+    if chosen == "baseline":
+        return False
+    return (
+        is_paged
+        and max_seqlen_q >= 128
+        and max_seqlen_k >= 8192
+        and not is_dropout
+        and not is_local
+        and block_size > 0
+        and block_n >= block_size
+        and block_n % block_size == 0
+        and (block_size & (block_size - 1)) == 0
+        and (block_n & (block_n - 1)) == 0
+    )
+
+
+def grouped_page_indices(tile_start: int, block_n: int, block_size: int):
+    """CPU reference for physical page indices inside an aligned KV tile."""
+    if block_size <= 0 or block_n <= 0 or block_n % block_size:
+        raise ValueError("KV tile must contain an integer number of pages")
+    if tile_start % block_size:
+        raise ValueError("KV tile must start at a page boundary")
+    return [tile_start // block_size + j // block_size for j in range(block_n)]
