@@ -18,8 +18,14 @@ from pathlib import Path
 
 import torch
 
+import flag_gems
+from flag_gems.config import use_c_extension
 from flag_gems.ops.flash_api import mha_varlan_fwd
-from flag_gems.ops.iluvatar_prefill_tiles import TILE_CANDIDATES, ENV_NAME
+from flag_gems.ops.iluvatar_prefill_tiles import (
+    TILE_CANDIDATES,
+    ENV_NAME,
+    select_prefill_tiles,
+)
 
 MODES = ("baseline", *TILE_CANDIDATES, "auto")
 META_RE = re.compile(
@@ -112,13 +118,22 @@ def main():
                         help="Override for the actual BI-V150 lane-group size")
     args = parser.parse_args()
 
+    if flag_gems.vendor_name != "iluvatar":
+        raise SystemExit("This experiment requires the Iluvatar FlagGems backend")
+    if use_c_extension:
+        raise SystemExit(
+            "FlagGems C-extension attention bypasses the patched Triton kernel; "
+            "disable the C extension before profiling v4"
+        )
     if not torch.cuda.is_available():
         raise SystemExit("Requires a CUDA-compatible BI-V150 device and installed FlagGems")
     if args.seq_len < 8192:
         raise SystemExit("This harness is for long prefill (>=8192 tokens)")
-    if args.heads % args.kv_heads:
-        raise SystemExit("--heads must be divisible by --kv-heads")
-    if args.page_size <= 0 or args.batch <= 0 or args.iterations <= 0:
+    if args.heads <= 0 or args.kv_heads <= 0 or args.heads % args.kv_heads:
+        raise SystemExit("--heads must be positive and divisible by --kv-heads")
+    if args.head_dim <= 0 or args.head_dim > 256 or args.head_dim % 8:
+        raise SystemExit("--head-dim must be a multiple of 8 in [8, 256]")
+    if args.page_size <= 0 or args.batch <= 0 or args.iterations <= 0 or args.warmup < 1:
         raise SystemExit("Positive page size, batch and iterations required")
 
     torch.manual_seed(2026)
@@ -142,18 +157,26 @@ def main():
             args.batch, pages_per_seq
         )
     cu = torch.arange(args.batch + 1, device=device, dtype=torch.int32) * n
+    # Match vLLM's paged-KV call contract (seqused_k is mandatory).
+    seqused_k = (
+        torch.full((args.batch,), n, device=device, dtype=torch.int32)
+        if page_table is not None
+        else None
+    )
     out = torch.empty_like(q)
     scale = 1 / math.sqrt(d)
 
     def call():
         # Same operator invoked by the FlagGems FlashAttention entry points.
         return mha_varlan_fwd(
-            q, k, v, out, cu, cu, None, None, page_table, None,
+            q, k, v, out, cu, cu, seqused_k, None, page_table, None,
             n, n, 0.0, scale, False, True, -1, -1, 0.0, False, None,
         )[0]
 
     capture = KernelMetadata()
     logger = logging.getLogger("flag_gems.ops.flash_api")
+    previous_logger_level = logger.level
+    previous_report = os.environ.get("FLAGGEMS_ILUVATAR_PREFILL_REPORT")
     logger.addHandler(capture)
     logger.setLevel(logging.WARNING)
     os.environ["FLAGGEMS_ILUVATAR_PREFILL_REPORT"] = "1"
@@ -167,6 +190,23 @@ def main():
             for _ in range(args.warmup):
                 call()
             torch.cuda.synchronize()
+            # Reject silent fallback to guessed baseline tile parameters.
+            if not capture.last:
+                raise RuntimeError(
+                    "No v4 Triton varlen kernel report captured. Verify that "
+                    "the local FlagGems installation is loaded and C-extension "
+                    "attention is disabled."
+                )
+            expected = select_prefill_tiles(
+                max_seqlen_q=n, max_seqlen_k=n, head_size=d,
+                is_dropout=False, is_local=False, mode=mode,
+            )
+            if expected is not None:
+                actual = (capture.last["block_m"], capture.last["block_n"])
+                if actual != expected:
+                    raise RuntimeError(
+                        f"Tile selection failed: requested {expected}, got {actual}"
+                    )
             # Metadata logging is a CPU-side delay; disable it for timed runs.
             os.environ["FLAGGEMS_ILUVATAR_PREFILL_REPORT"] = "0"
             # GPU event envelope; use hardware profiler for exact kernel cycles.
@@ -184,15 +224,17 @@ def main():
             if reference is None:
                 reference = result
                 deviation = 0.0
-                correct = True
+                correct = bool(torch.isfinite(result).all().item())
+                if not correct:
+                    raise RuntimeError("Baseline kernel produced non-finite output")
             else:
                 deviation = (result.float() - reference.float()).abs().max().item()
                 correct = bool(torch.allclose(
                     result.float(), reference.float(), rtol=0.03, atol=0.03
                 ))
             meta = capture.last
-            bm = meta.get("block_m", 128)
-            bn = meta.get("block_n", 32)
+            bm = meta["block_m"]
+            bn = meta["block_n"]
             logical, minimum = modeled_kv_bytes(
                 n, n, d, h, hk, args.batch, bm, bn, q.element_size(), True
             )
@@ -213,11 +255,15 @@ def main():
             print(row, flush=True)
     finally:
         logger.removeHandler(capture)
+        logger.setLevel(previous_logger_level)
         if original_mode is None:
             os.environ.pop(ENV_NAME, None)
         else:
             os.environ[ENV_NAME] = original_mode
-        os.environ.pop("FLAGGEMS_ILUVATAR_PREFILL_REPORT", None)
+        if previous_report is None:
+            os.environ.pop("FLAGGEMS_ILUVATAR_PREFILL_REPORT", None)
+        else:
+            os.environ["FLAGGEMS_ILUVATAR_PREFILL_REPORT"] = previous_report
 
     if rows:
         baseline = rows[0]["median_gpu_ms"]
