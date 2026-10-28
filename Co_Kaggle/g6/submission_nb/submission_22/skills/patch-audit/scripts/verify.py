@@ -31,19 +31,20 @@ def trace(frame, event, arg):
 status = 'failed'
 details = ''
 try:
+    # Import-time changes (e.g. package constants / registrations) must be
+    # observable too, not just code reached after the module was imported.
+    sys.settrace(trace)
     if module:
         obj = importlib.import_module(module)
         origin = getattr(obj, '__file__', None)
         if not origin or not pathlib.Path(origin).resolve().is_relative_to(root):
             raise RuntimeError('Import does not come from checkout: ' + str(origin))
-    sys.settrace(trace)
-    try:
-        exec(compile(probe, '<focused-task-probe>', 'exec'), {'__name__': '__main__'})
-        status = 'candidate_passed'
-    finally:
-        sys.settrace(None)
+    exec(compile(probe, '<focused-task-probe>', 'exec'), {'__name__': '__main__'})
+    status = 'candidate_passed'
 except BaseException:
     details = traceback.format_exc(limit=4)[-1000:]
+finally:
+    sys.settrace(None)
 print('S22_VERIFICATION:' + json.dumps({'status': status, 'origin': origin, 'details': details, 'touched': sorted(touched)[:25]}))
 """
 
@@ -69,6 +70,16 @@ def nontrivial(probe):
                 for n in [a.test.left, *a.test.comparators]))
     ) for a in assertions)
 
+def eligible_untracked(root):
+    """Ignore runtime-generated scratch files, which are not submission patches."""
+    result = git(root, 'ls-files', '--others', '--exclude-standard')
+    if result.returncode:
+        raise ValueError('Unable to enumerate untracked files')
+    return sorted(name for name in result.stdout.splitlines()
+                  if not Path(name).name.startswith('.adk_exec_')
+                  and '__pycache__' not in Path(name).parts)
+
+
 def changed_python_lines(root):
     """Line ranges added/modified in the checkout; not semantic test coverage."""
     out = git(root, 'diff', '--unified=0', 'HEAD')
@@ -88,12 +99,10 @@ def changed_python_lines(root):
                 start = int(match.group(1))
                 count = int(match.group(2) if match.group(2) is not None else '1')
                 result.setdefault(current, set()).update(range(start, start + count))
-    others = git(root, 'ls-files', '--others', '--exclude-standard')
-    if others.returncode:
-        raise ValueError('Unable to inspect untracked Python files')
-    for name in others.stdout.splitlines():
-        if name.endswith('.py') and (root / name).is_file():
-            result[name] = set(range(1, len((root / name).read_text().splitlines()) + 1))
+    for name in eligible_untracked(root):
+        path = root / name
+        if name.endswith('.py') and path.is_file() and not path.is_symlink() and path.resolve().is_relative_to(root):
+            result[name] = set(range(1, len(path.read_text().splitlines()) + 1))
     return {name: sorted(lines) for name, lines in result.items() if lines}
 
 
@@ -101,10 +110,7 @@ def diff_fingerprint(root):
     diff = git(root, 'diff', '--binary', 'HEAD')
     if diff.returncode:
         raise ValueError('git diff HEAD failed')
-    untracked = git(root, 'ls-files', '--others', '--exclude-standard')
-    if untracked.returncode:
-        raise ValueError('Unable to enumerate untracked files')
-    lines = sorted(untracked.stdout.splitlines())
+    lines = eligible_untracked(root)
     digest = hashlib.sha256(diff.stdout.encode())
     for name in lines:
         f = root / name
