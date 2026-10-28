@@ -66,3 +66,12 @@ def test_invalid_mode_fails_closed():
 def test_register_pressure_guard():
     with pytest.raises(ValueError, match="accumulator guard"):
         select(mode="256x32", head_size=256)
+
+def test_unwrap_libentry_launch_return():
+    class CompiledKernel:
+        n_regs = 64
+        n_spills = 0
+
+    compiled = CompiledKernel()
+    assert tiles.unwrap_libentry_kernel((compiled, {"BLOCK_M": 128})) is compiled
+    assert tiles.unwrap_libentry_kernel(compiled) is compiled
