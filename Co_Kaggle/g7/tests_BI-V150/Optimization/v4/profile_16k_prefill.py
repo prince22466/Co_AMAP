@@ -20,7 +20,7 @@ import torch
 
 import flag_gems
 from flag_gems.config import use_c_extension
-from flag_gems.ops.flash_api import mha_varlan_fwd
+from flag_gems.ops.flash_api import mha_varlan_fwd, mha_varlan_fwd_opt
 from flag_gems.ops.iluvatar_prefill_tiles import (
     TILE_CANDIDATES,
     ENV_NAME,
@@ -106,6 +106,8 @@ def main():
     parser.add_argument("--batch", type=int, default=1)
     parser.add_argument("--page-size", type=int, default=16)
     parser.add_argument("--contiguous-kv", action="store_true")
+    parser.add_argument("--entrypoint", choices=("regular", "optimized"),
+                        default="regular", help="Choose which varlen forward path to test")
     parser.add_argument("--warmup", type=int, default=3)
     parser.add_argument("--iterations", type=int, default=10)
     parser.add_argument("--output", default="v4_prefill_tiles.csv")
@@ -164,14 +166,18 @@ def main():
         else None
     )
     out = torch.empty_like(q)
+    lse = torch.empty((h, args.batch * n), dtype=torch.float32, device=device)
     scale = 1 / math.sqrt(d)
 
     def call():
-        # Same operator invoked by the FlagGems FlashAttention entry points.
-        return mha_varlan_fwd(
-            q, k, v, out, cu, cu, seqused_k, None, page_table, None,
+        # Exercise the two existing FlagGems varlen Triton launch paths.
+        common = (
+            cu, cu, seqused_k, None, page_table, None,
             n, n, 0.0, scale, False, True, -1, -1, 0.0, False, None,
-        )[0]
+        )
+        if args.entrypoint == "optimized":
+            return mha_varlan_fwd_opt(q, k, v, out, lse, *common)[0]
+        return mha_varlan_fwd(q, k, v, out, *common)[0]
 
     capture = KernelMetadata()
     logger = logging.getLogger("flag_gems.ops.flash_api")
