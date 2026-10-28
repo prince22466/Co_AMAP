@@ -21,7 +21,10 @@ import triton
 
 import flag_gems
 from flag_gems import runtime
-from flag_gems.ops.iluvatar_prefill_tiles import select_prefill_tiles
+from flag_gems.ops.iluvatar_prefill_tiles import (
+    select_prefill_tiles,
+    unwrap_libentry_kernel,
+)
 from flag_gems.ops.flash_kernel import (
     block_m_splitkv_heuristic,
     block_n_splitkv_heuristic,
@@ -594,9 +597,7 @@ def mha_varlan_fwd(
         launch_result = kernel(*args, **cfg_params)
         # FlagGems LibEntry returns (CompiledKernel, constexprs), unlike plain
         # Triton launchers. Unwrap it before reading register/occupancy data.
-        compiled_kernel = (
-            launch_result[0] if isinstance(launch_result, tuple) else launch_result
-        )
+        compiled_kernel = unwrap_libentry_kernel(launch_result)
         if (
             flag_gems.vendor_name == "iluvatar"
             and os.environ.get("FLAGGEMS_ILUVATAR_PREFILL_REPORT") == "1"
@@ -978,9 +979,7 @@ def mha_varlan_fwd_opt(
         launch_result = kernel(*args, **cfg_params)
         # FlagGems LibEntry returns (CompiledKernel, constexprs), unlike plain
         # Triton launchers. Unwrap it before reading register/occupancy data.
-        compiled_kernel = (
-            launch_result[0] if isinstance(launch_result, tuple) else launch_result
-        )
+        compiled_kernel = unwrap_libentry_kernel(launch_result)
         if (
             flag_gems.vendor_name == "iluvatar"
             and os.environ.get("FLAGGEMS_ILUVATAR_PREFILL_REPORT") == "1"
