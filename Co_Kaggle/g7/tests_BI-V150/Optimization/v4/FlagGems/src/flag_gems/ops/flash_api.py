@@ -591,7 +591,12 @@ def mha_varlan_fwd(
                 cfg_params["BLOCK_M"], cfg_params["BLOCK_N"] = prefill_tiles
 
         logger.debug("Running flash_varlen_fwd_kernel with config: %s", cfg_params)
-        compiled_kernel = kernel(*args, **cfg_params)
+        launch_result = kernel(*args, **cfg_params)
+        # FlagGems LibEntry returns (CompiledKernel, constexprs), unlike plain
+        # Triton launchers. Unwrap it before reading register/occupancy data.
+        compiled_kernel = (
+            launch_result[0] if isinstance(launch_result, tuple) else launch_result
+        )
         if (
             flag_gems.vendor_name == "iluvatar"
             and os.environ.get("FLAGGEMS_ILUVATAR_PREFILL_REPORT") == "1"
@@ -970,7 +975,12 @@ def mha_varlan_fwd_opt(
                 cfg_params["BLOCK_M"], cfg_params["BLOCK_N"] = prefill_tiles
 
         logger.debug("Running flash_varlen_fwd_kernel with config: %s", cfg_params)
-        compiled_kernel = kernel(*args, **cfg_params)
+        launch_result = kernel(*args, **cfg_params)
+        # FlagGems LibEntry returns (CompiledKernel, constexprs), unlike plain
+        # Triton launchers. Unwrap it before reading register/occupancy data.
+        compiled_kernel = (
+            launch_result[0] if isinstance(launch_result, tuple) else launch_result
+        )
         if (
             flag_gems.vendor_name == "iluvatar"
             and os.environ.get("FLAGGEMS_ILUVATAR_PREFILL_REPORT") == "1"
