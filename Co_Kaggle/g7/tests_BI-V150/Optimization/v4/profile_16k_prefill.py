@@ -254,7 +254,7 @@ def main():
                     max_abs_error=round(deviation, 6),
                     correct_vs_baseline=correct,
                     logical_kv_load_bytes=logical,
-                    unique_kv_bytes_lower_bound=minimum,
+                    unique_kv_tensor_bytes=minimum,
                     physical_dram_read_bytes="requires_vendor_hardware_profiler",
                     achieved_occupancy="requires_vendor_hardware_profiler",
                     resource_occupancy_upper_bound=measured_occupancy_bound(meta, args),
