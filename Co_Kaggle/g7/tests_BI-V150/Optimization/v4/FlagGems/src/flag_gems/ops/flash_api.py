@@ -630,20 +630,22 @@ def mha_varlan_fwd(
         if (
             flag_gems.vendor_name == "iluvatar"
             and os.environ.get("FLAGGEMS_ILUVATAR_PREFILL_REPORT") == "1"
-            and max_seqlen_q >= 8192
+            and max_seqlen_q >= 128
+            and max_seqlen_k >= 8192
         ):
             # FlagGems LibEntry returns (CompiledKernel, constexprs).
             compiled_kernel = unwrap_libentry_kernel(launch_result)
             metadata = getattr(compiled_kernel, "metadata", None)
             logger.warning(
                 "prefill kernel: BLOCK_M=%s BLOCK_N=%s regs/thread=%s "
-                "spills/thread=%s shared_bytes=%s warps=%s",
+                "spills/thread=%s shared_bytes=%s warps=%s grouped_page_lookup=%s",
                 cfg_params["BLOCK_M"],
                 cfg_params["BLOCK_N"],
                 getattr(compiled_kernel, "n_regs", "unavailable"),
                 getattr(compiled_kernel, "n_spills", "unavailable"),
                 getattr(metadata, "shared", "unavailable"),
                 getattr(metadata, "num_warps", cfg_params["num_warps"]),
+                cfg_params.get("GROUPED_PAGE_LOOKUP", False),
             )
 
         if seqlenq_ngroups_swapped:
@@ -1034,20 +1036,22 @@ def mha_varlan_fwd_opt(
         if (
             flag_gems.vendor_name == "iluvatar"
             and os.environ.get("FLAGGEMS_ILUVATAR_PREFILL_REPORT") == "1"
-            and max_seqlen_q >= 8192
+            and max_seqlen_q >= 128
+            and max_seqlen_k >= 8192
         ):
             # FlagGems LibEntry returns (CompiledKernel, constexprs).
             compiled_kernel = unwrap_libentry_kernel(launch_result)
             metadata = getattr(compiled_kernel, "metadata", None)
             logger.warning(
                 "prefill kernel: BLOCK_M=%s BLOCK_N=%s regs/thread=%s "
-                "spills/thread=%s shared_bytes=%s warps=%s",
+                "spills/thread=%s shared_bytes=%s warps=%s grouped_page_lookup=%s",
                 cfg_params["BLOCK_M"],
                 cfg_params["BLOCK_N"],
                 getattr(compiled_kernel, "n_regs", "unavailable"),
                 getattr(compiled_kernel, "n_spills", "unavailable"),
                 getattr(metadata, "shared", "unavailable"),
                 getattr(metadata, "num_warps", cfg_params["num_warps"]),
+                cfg_params.get("GROUPED_PAGE_LOOKUP", False),
             )
 
         if seqlenq_ngroups_swapped:
