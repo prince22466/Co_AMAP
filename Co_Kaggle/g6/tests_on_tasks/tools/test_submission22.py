@@ -3,6 +3,8 @@ import ast
 import importlib.util
 from pathlib import Path
 import subprocess
+import json
+import sys
 import tempfile
 import unittest
 import zipfile
@@ -199,6 +201,23 @@ class TestNativeRecovery(unittest.TestCase):
         p = ("from pathlib import Path\nPath('pkg.py').write_text('def hacked(): pass')\n"
              "assert Path('pkg.py').exists()")
         self.assertEqual(verify.verify(self.root, '', p)['status'], 'blocked')
+
+    def test_skill_script_cli_arguments_match_documentation(self):
+        scripts = SOURCE / 'skills/patch-audit/scripts'
+        edit = subprocess.run(
+            [sys.executable, str(scripts / 'recover.py'),
+             '--path', 'pkg.py', '--old', 'return 1', '--new', 'return 2'],
+            cwd=self.root, capture_output=True, text=True, check=True)
+        self.assertEqual(json.loads(edit.stdout)['status'], 'edited')
+        check = subprocess.run(
+            [sys.executable, str(scripts / 'verify.py'), '--module', 'pkg',
+             '--probe', 'import pkg\\nassert pkg.render() == 2'.replace('\\n', '\n')],
+            cwd=self.root, capture_output=True, text=True, check=True)
+        self.assertTrue(json.loads(check.stdout)['candidate_passed'])
+        inspect = subprocess.run(
+            [sys.executable, str(scripts / 'audit.py')],
+            cwd=self.root, capture_output=True, text=True, check=True)
+        self.assertEqual(json.loads(inspect.stdout)['status'], 'structurally_clean')
 
     def test_package_exact_manifest_and_scripts_parse(self):
         manifest = build()
