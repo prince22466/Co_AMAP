@@ -125,6 +125,9 @@ def attempt(root, path, old, new):
             return {'status': 'blocked', 'reason': 'Removed top-level definitions: ' + ', '.join(sorted(lost)),
                     'behavior_verified': False}
     old_mode = target.stat().st_mode
+    prior_visible = git(root, 'status', '--porcelain', '--untracked-files=all', '--', path)
+    if prior_visible.returncode:
+        return {'status': 'blocked', 'reason': 'Unable to inspect pre-edit git status', 'behavior_verified': False}
     try:
         target.write_text(after, encoding='utf-8')
         target.chmod(old_mode)
@@ -136,6 +139,12 @@ def attempt(root, path, old, new):
                     'detail': (check.stdout + check.stderr)[-500:], 'behavior_verified': False}
         visible = git(root, 'status', '--porcelain', '--untracked-files=all', '--', path)
         if visible.returncode or not visible.stdout.strip():
+            if not visible.returncode and prior_visible.stdout.strip():
+                # Undoing a failed native edit can restore the exact original.
+                # Preserve the valid repair but do not advertise a patch.
+                return {'status': 'restored_baseline', 'path': path, 'submittable': False,
+                        'next': 'Working-tree error repaired. Make the requested functional change before submitting.',
+                        'behavior_verified': False, 'submission_verified': False}
             target.write_text(before, encoding='utf-8')
             target.chmod(old_mode)
             return {'status': 'blocked', 'reason': 'File edit not visible to git status; rolled back',
