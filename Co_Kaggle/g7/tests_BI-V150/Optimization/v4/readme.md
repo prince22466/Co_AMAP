@@ -41,6 +41,97 @@ Candidates:
 | `256x32` | 256 | 32 | More Q reuse; occupancy risk |
 | `auto` | shape-dependent | shape-dependent | Unvalidated candidate heuristic |
 
+## BI-V150 results — 16K prefill tile sweep (2026-10-28)
+
+**Observed outcome: no v4 tile candidate beats the existing `128x32` baseline
+for this standalone attention test.** The best measured median is **58.6681 ms**.
+Keep `FLAGGEMS_ILUVATAR_PREFILL_TILE` **unset** (or use `baseline`);
+in particular, do **not** enable the current `auto` heuristic.
+
+### Measured setup and limits
+
+- Source: user-run `profile_16k_prefill.py` CSV output
+  (`profiling/v4_prefill_tiles.csv`); the table below records the supplied
+  results, not measurements reproduced in CI.
+- BI-V150, standalone FlagGems **regular** `mha_varlan_fwd` path;
+  16,384 Q/K tokens, batch=1, BF16, 8 query heads, **8 KV heads**,
+  head dimension 128, causal attention, default paged KV (page size 16).
+  These are the **harness defaults**, not a verified MiniCPM model trace.
+- Default warmup=3 and measured iterations=10 per mode; GPU-event timing
+  captures the launch envelope and is not an isolated hardware-kernel-cycle
+  measurement. Input tensors were reused across modes.
+- `correct_vs_baseline` means a BF16 output comparison at
+  `rtol=0.03, atol=0.03`; it does **not** mean `math_500` passed.
+  Physical DRAM bytes, L2 hits and achieved occupancy were **not measured**.
+
+### Results
+
+Lower median GPU-event latency is better. `speedup` is baseline latency
+divided by candidate latency; below 1 means slower than baseline.
+
+| Mode | Q×KV tile | Median (ms) | Speedup | Registers/thread | Spills/thread | Correct vs baseline |
+| --- | --- | ---: | ---: | ---: | ---: | :---: |
+| **baseline** | **128×32** | **58.6681** | **1.0000×** | **183** | **0** | Yes |
+| 64x32 | 64×32 | 64.6954 | 0.9068× | 124 | 0 | Yes |
+| 64x64 | 64×64 | 100.9356 | 0.5812× | 151 | 0 | Yes |
+| 128x32 | 128×32 | 58.7204 | 0.9991× | 183 | 0 | Yes |
+| 128x64 | 128×64 | 115.4063 | 0.5084× | 213 | 0 | Yes |
+| 128x128 | 128×128 | 123.4205 | 0.4754× | 256 | 33 | Yes |
+| 256x32 | 256×32 | 96.5751 | 0.6075× | 256 | 59 | Yes |
+| auto | 64×64 | 101.9687 | 0.5754× | 151 | 0 | Yes |
+
+The explicit `128x32` run is only 0.09% slower than baseline, effectively
+a repeat measurement of the same configuration, not a distinct optimization.
+The current `auto` choice for this shape resolves to `64x64`; it is
+roughly **74% slower** than the baseline, so `auto` should not be promoted.
+
+### Findings and interpretation
+
+1. **Wider K/V tiles regress.** At Q tile 128, increasing KV tile
+   `32 → 64` raises the median from 58.6681 to 115.4063 ms; registers rise
+   from 183 to 213 and reported shared memory from 49,408 to 66,048 bytes.
+   Resource pressure may hurt residency/occupancy, but achieved occupancy
+   was not measured, so this is a hypothesis rather than an established cause.
+2. **More Q reuse does not guarantee better latency.** Moving from
+   `128x32` to `256x32` lowers the *modeled* logical K/V load demand
+   from 4,328,521,728 to 2,181,038,080 bytes, yet raises latency to
+   96.5751 ms and produces **59 spills/thread**. These logical load estimates
+   are **not actual DRAM traffic**.
+3. **Smaller Q tiles save registers but increase logical work.**
+   `64x32` uses 124 rather than 183 registers/thread and 33,024 instead of
+   49,408 shared bytes, but is 10.3% slower; modeled K/V load demand
+   increases to 8,623,489,024 bytes.
+4. **Numerical results are encouraging but insufficient.** All eight
+   rows passed the standalone BF16 comparison, with maximum absolute
+   differences at most 0.003906; no `math_500` accuracy conclusion follows.
+5. **No throughput improvement is demonstrated.** These are standalone
+   attention timings, not the unchanged competition 4K/16K served-throughput
+   scores. We have not established that the production server uses this
+   FlagGems attention operator for the competition prefill path.
+
+### Relationship to v1 and decision
+
+v1 already investigates **larger query tiles / Q-to-KV reuse**, but in a
+*different operator*: the vLLM Triton unified-attention implementation.
+Its BI-V150 specialization targets BF16 GQA with **16 query heads / 2 KV
+heads / head dimension 128** and has tests for *chunked* prefill
+(e.g. 2,048 query tokens with a long existing KV prefix). In contrast,
+v4 sweeps `BLOCK_M` and `BLOCK_N` in **FlagGems varlen FlashAttention**;
+the current selector requires `max_seqlen_q >= 8192` and
+`max_seqlen_k >= 8192`. The numeric tile parameters are not directly
+interchangeable between these operator implementations.
+
+**Decision:** Do not continue v4 as a Q/KV tile-only tuning effort or enable
+`auto` based on this sweep. Keep v1 and v4 separate. If pursuing v4, first
+confirm that the official 16K server actually dispatches to FlagGems
+attention (the v4 plugin otherwise defaults to `TRITON_ATTN`), then work
+on **genuine in-kernel** improvements such as paged-KV address-generation
+cost, K/V load coalescing, cache behavior or pipeline scheduling. Capture
+vendor-profiler HBM/L2 counters, register-spill traffic, achieved occupancy
+and kernel latency, and test the *actual MiniCPM GQA dimensions and prefill
+chunking*. Final selection still requires the unmodified official 4K/16K
+benchmark and `math_500` acceptance.
+
 ### Run on BI-V150
 
 Use the installed local v4 FlagGems and v4 vLLM plugin (do not accidentally
@@ -63,9 +154,9 @@ python3 profile_16k_prefill.py \
   --seq-len 16384 --heads 8 --kv-heads 8 --head-dim 128 \
   --output profiling/v4_prefill_opt_contiguous.csv
 
-# Re-run only a confirmed winner. Baseline is always used when unset.
-export FLAGGEMS_ILUVATAR_PREFILL_TILE=128x64
-export FLAGGEMS_ILUVATAR_PREFILL_REPORT=1
+# No candidate won the initial sweep; keep baseline enabled for now.
+unset FLAGGEMS_ILUVATAR_PREFILL_TILE
+unset FLAGGEMS_ILUVATAR_PREFILL_REPORT
 ```
 
 The experiment reports median GPU-event *launch envelopes*, baseline deviation, compiler
@@ -102,7 +193,8 @@ to the harness via `--registers-per-sm`,
 
 Implementation and CPU selector tests are provided. A pre-existing
 `torch.emtpty` typo in the optimized non-paged varlen entry point is fixed.
-**GPU timing, physical K/V
-load counters, achieved occupancy, and math_500 results have not been measured
-in this PR environment.** This is a candidate experiment for BI-V150 testing,
-not a validated performance claim.
+**User-reported BI-V150 standalone GPU-event timings are now documented
+above**, and they show no improvement over the baseline for the tested shape.
+Physical K/V DRAM traffic, L2/cache metrics, achieved occupancy, the
+official 4K/16K served-throughput benchmark and `math_500` remain
+unverified. Keep this PR in draft; it is not a validated performance gain.
