@@ -176,8 +176,15 @@ class FlagGemsBackend(Backend):
         if use_sparse:
             raise ValueError("use_sparse=True requires use_mla=True.")
 
+        # On Iluvatar, run the optimized FlagGems attention backend by
+        # default so the grouped paged-KV kernel is used by normal vLLM
+        # serving. Retain the existing override and fallback routing.
+        import flag_gems
+
+        default_flaggems_attn = flag_gems.vendor_name == "iluvatar"
         use_flaggems_attn = os.environ.get(
-            "VLLM_FL_USE_FLAGGEMS_ATTN", "0"
+            "VLLM_FL_USE_FLAGGEMS_ATTN",
+            "1" if default_flaggems_attn else "0",
         ).lower() in ("1", "true", "yes")
 
         if use_flaggems_attn:

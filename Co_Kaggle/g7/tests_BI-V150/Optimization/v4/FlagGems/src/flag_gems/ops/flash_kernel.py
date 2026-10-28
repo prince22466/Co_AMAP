@@ -1203,28 +1203,73 @@ def virtual_to_cache_offset(
 
 
 @triton.jit
+def virtual_to_cache_offset_grouped(
+    tile_start,
+    max_virtual_index,
+    page_table_ptr,
+    block_size: tl.constexpr,
+    k_row_stride,
+    k_page_stride,
+    BLOCK_N: tl.constexpr,
+    boundary_check: tl.constexpr,
+):
+    """Load one physical page number per page in an aligned K/V tile."""
+    PAGES_PER_TILE: tl.constexpr = BLOCK_N // block_size
+    page_lane = tl.arange(0, PAGES_PER_TILE)
+    virtual_page = tile_start // block_size + page_lane
+    if boundary_check:
+        physical_pages = tl.load(
+            page_table_ptr + virtual_page,
+            mask=tile_start + page_lane * block_size < max_virtual_index,
+            other=0,
+        ).to(tl.int64)
+    else:
+        physical_pages = tl.load(page_table_ptr + virtual_page).to(tl.int64)
+
+    token_lane = tl.arange(0, BLOCK_N)
+    # Broadcast each loaded physical page number to its block_size tokens.
+    physical_page = tl.gather(physical_pages, token_lane // block_size, axis=0)
+    return physical_page * k_page_stride + (token_lane % block_size) * k_row_stride
+
+
+@triton.jit
 def load_from_kvcache(
     virtual_index,
     max_virtual_index,
     page_table_ptr,
     k_ptr_base,
     v_ptr_base,
-    block_size,
+    block_size: tl.constexpr,
     d: tl.constexpr,
     k_row_stride,
     BLOCK_K: tl.constexpr,
     k_page_stride=0,
     boundary_check: tl.constexpr = False,
+    GROUPED_PAGE_LOOKUP: tl.constexpr = False,
+    BLOCK_N: tl.constexpr = 32,
+    tile_start=0,
 ):
-    cache_offset = virtual_to_cache_offset(
-        virtual_index,
-        max_virtual_index,
-        page_table_ptr,
-        block_size,
-        k_row_stride,
-        k_page_stride,
-        boundary_check,
-    )
+    if GROUPED_PAGE_LOOKUP:
+        cache_offset = virtual_to_cache_offset_grouped(
+            tile_start,
+            max_virtual_index,
+            page_table_ptr,
+            block_size,
+            k_row_stride,
+            k_page_stride,
+            BLOCK_N,
+            boundary_check,
+        )
+    else:
+        cache_offset = virtual_to_cache_offset(
+            virtual_index,
+            max_virtual_index,
+            page_table_ptr,
+            block_size,
+            k_row_stride,
+            k_page_stride,
+            boundary_check,
+        )
     k_offset = tl.arange(0, BLOCK_K)[:, None] + cache_offset[None, :]
     v_offset = tl.arange(0, BLOCK_K)[None, :] + cache_offset[:, None]
     if d == BLOCK_K:
@@ -1332,6 +1377,7 @@ def flash_varlen_fwd_kernel(
     BLOCK_K: tl.constexpr,
     num_warps: tl.constexpr,
     num_stages: tl.constexpr,
+    GROUPED_PAGE_LOOKUP: tl.constexpr = False,
 ):
     m_block = tl.program_id(0)
     bid = tl.program_id(1)
@@ -1451,6 +1497,9 @@ def flash_varlen_fwd_kernel(
                 BLOCK_K=BLOCK_K,
                 k_page_stride=k_page_stride,
                 boundary_check=True,
+                GROUPED_PAGE_LOOKUP=GROUPED_PAGE_LOOKUP,
+                BLOCK_N=BLOCK_N,
+                tile_start=n_block * BLOCK_N,
             )
         else:
             start_n = n_block * BLOCK_N
@@ -1547,6 +1596,9 @@ def flash_varlen_fwd_kernel(
                 k_row_stride,
                 BLOCK_K=BLOCK_K,
                 k_page_stride=k_page_stride,
+                GROUPED_PAGE_LOOKUP=GROUPED_PAGE_LOOKUP,
+                BLOCK_N=BLOCK_N,
+                tile_start=n_block * BLOCK_N,
             )
         else:
             start_n = n_block * BLOCK_N

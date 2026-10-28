@@ -20,6 +20,7 @@ import triton
 
 import flag_gems
 from flag_gems import runtime
+from flag_gems.ops.iluvatar_grouped_paged_kv import select_grouped_page_lookup
 from flag_gems.ops.flash_kernel import (
     block_m_splitkv_heuristic,
     block_n_splitkv_heuristic,
@@ -575,6 +576,19 @@ def mha_varlan_fwd(
             "num_stages": 1 if not is_paged else cfg["num_stages"](args),
         }
 
+        # Opt-in page-table load consolidation inside the existing kernel.
+        # Tile sizes, backend dispatch, and default launches stay unchanged.
+        if flag_gems.vendor_name == "iluvatar" and select_grouped_page_lookup(
+            is_paged=is_paged,
+            max_seqlen_q=max_seqlen_q,
+            max_seqlen_k=max_seqlen_k,
+            block_size=block_size,
+            block_n=cfg_params["BLOCK_N"],
+            is_dropout=is_dropout,
+            is_local=is_local,
+        ):
+            cfg_params["GROUPED_PAGE_LOOKUP"] = True
+
         logger.debug("Running flash_varlen_fwd_kernel with config: %s", cfg_params)
         kernel(*args, **cfg_params)
 
@@ -924,6 +938,19 @@ def mha_varlan_fwd_opt(
             "num_warps": cfg["num_warps"](args),
             "num_stages": 1 if not is_paged else cfg["num_stages"](args),
         }
+
+        # Opt-in page-table load consolidation inside the existing kernel.
+        # Tile sizes, backend dispatch, and default launches stay unchanged.
+        if flag_gems.vendor_name == "iluvatar" and select_grouped_page_lookup(
+            is_paged=is_paged,
+            max_seqlen_q=max_seqlen_q,
+            max_seqlen_k=max_seqlen_k,
+            block_size=block_size,
+            block_n=cfg_params["BLOCK_N"],
+            is_dropout=is_dropout,
+            is_local=is_local,
+        ):
+            cfg_params["GROUPED_PAGE_LOOKUP"] = True
 
         logger.debug("Running flash_varlen_fwd_kernel with config: %s", cfg_params)
         kernel(*args, **cfg_params)
