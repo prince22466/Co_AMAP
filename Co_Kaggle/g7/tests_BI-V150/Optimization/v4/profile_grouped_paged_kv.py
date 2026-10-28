@@ -183,7 +183,7 @@ def main():
                     result.float(), reference.float(), rtol=0.03, atol=0.03
                 ))
             row = dict(
-                mode=mode, entrypoint=args.entrypoint, query_len=nq, kv_len=nk,
+                mode=mode, entrypoint=args.entrypoint,
                 status="ok", median_gpu_ms=round(statistics.median(timings), 4),
                 min_gpu_ms=round(min(timings), 4),
                 max_abs_error=round(error, 6),
