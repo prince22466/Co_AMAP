@@ -15,6 +15,7 @@
 import logging
 import math
 import os
+from functools import lru_cache
 
 import torch
 import triton
@@ -22,6 +23,7 @@ import triton
 import flag_gems
 from flag_gems import runtime
 from flag_gems.ops.iluvatar_prefill_tiles import (
+    select_grouped_page_lookup,
     select_prefill_tiles,
     unwrap_libentry_kernel,
 )
@@ -38,6 +40,13 @@ from flag_gems.utils.random_utils import philox_backend_seed_offset
 
 logger = logging.getLogger(__name__)
 _debug = False
+
+
+@lru_cache(maxsize=256)
+def _trace_v4_kernel_once(message):
+    # Diagnostic only: do not print per layer/request on the normal hot path.
+    logger.warning("V4_ATTN_KERNEL_EXECUTED %s", message)
+
 
 
 def CHECK_DEVICE(x):
@@ -592,9 +601,32 @@ def mha_varlan_fwd(
             )
             if prefill_tiles is not None:
                 cfg_params["BLOCK_M"], cfg_params["BLOCK_N"] = prefill_tiles
+            if select_grouped_page_lookup(
+                is_paged=is_paged,
+                max_seqlen_q=max_seqlen_q,
+                max_seqlen_k=max_seqlen_k,
+                block_size=block_size,
+                block_n=cfg_params["BLOCK_N"],
+                is_dropout=is_dropout,
+                is_local=is_local,
+            ):
+                # Compile-time specialization of the *existing* Triton kernel,
+                # not a change to the framework's attention-operator dispatcher.
+                cfg_params["GROUPED_PAGE_LOOKUP"] = True
 
         logger.debug("Running flash_varlen_fwd_kernel with config: %s", cfg_params)
         launch_result = kernel(*args, **cfg_params)
+        if (
+            flag_gems.vendor_name == "iluvatar"
+            and os.environ.get("FLAGGEMS_V4_TRACE_ATTENTION") == "1"
+        ):
+            _trace_v4_kernel_once(
+                f"max_q={max_seqlen_q} max_k={max_seqlen_k} "
+                f"heads={num_heads} kv_heads={num_heads_k} head_dim={head_size} "
+                f"paged={is_paged} page_size={block_size} "
+                f"tile={cfg_params['BLOCK_M']}x{cfg_params['BLOCK_N']} "
+                f"grouped_page_lookup={cfg_params.get('GROUPED_PAGE_LOOKUP', False)}"
+            )
         if (
             flag_gems.vendor_name == "iluvatar"
             and os.environ.get("FLAGGEMS_ILUVATAR_PREFILL_REPORT") == "1"
@@ -973,9 +1005,32 @@ def mha_varlan_fwd_opt(
             )
             if prefill_tiles is not None:
                 cfg_params["BLOCK_M"], cfg_params["BLOCK_N"] = prefill_tiles
+            if select_grouped_page_lookup(
+                is_paged=is_paged,
+                max_seqlen_q=max_seqlen_q,
+                max_seqlen_k=max_seqlen_k,
+                block_size=block_size,
+                block_n=cfg_params["BLOCK_N"],
+                is_dropout=is_dropout,
+                is_local=is_local,
+            ):
+                # Compile-time specialization of the *existing* Triton kernel,
+                # not a change to the framework's attention-operator dispatcher.
+                cfg_params["GROUPED_PAGE_LOOKUP"] = True
 
         logger.debug("Running flash_varlen_fwd_kernel with config: %s", cfg_params)
         launch_result = kernel(*args, **cfg_params)
+        if (
+            flag_gems.vendor_name == "iluvatar"
+            and os.environ.get("FLAGGEMS_V4_TRACE_ATTENTION") == "1"
+        ):
+            _trace_v4_kernel_once(
+                f"max_q={max_seqlen_q} max_k={max_seqlen_k} "
+                f"heads={num_heads} kv_heads={num_heads_k} head_dim={head_size} "
+                f"paged={is_paged} page_size={block_size} "
+                f"tile={cfg_params['BLOCK_M']}x{cfg_params['BLOCK_N']} "
+                f"grouped_page_lookup={cfg_params.get('GROUPED_PAGE_LOOKUP', False)}"
+            )
         if (
             flag_gems.vendor_name == "iluvatar"
             and os.environ.get("FLAGGEMS_ILUVATAR_PREFILL_REPORT") == "1"
