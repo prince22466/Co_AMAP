@@ -53,16 +53,3 @@ def select_grouped_page_lookup(
         and (block_n & (block_n - 1)) == 0
     )
 
-
-def grouped_virtual_page_indices(
-    tile_start: int, block_n: int, block_size: int
-) -> list[int]:
-    """Pure-Python address oracle for tests (never called on the GPU path)."""
-    if block_size <= 0 or block_n <= 0 or block_n % block_size:
-        raise ValueError("KV tile must contain whole pages")
-    if tile_start < 0 or tile_start % block_size:
-        raise ValueError("KV tile must start at a valid page boundary")
-    return [
-        tile_start // block_size + lane // block_size
-        for lane in range(block_n)
-    ]
