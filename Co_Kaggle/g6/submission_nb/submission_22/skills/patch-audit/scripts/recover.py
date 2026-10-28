@@ -45,8 +45,12 @@ def safe_file(root, name):
     if base in {'pytest.ini', '.pytest.ini', '_swegemma_stubs.py', 'sitecustomize.py'}:
         raise ValueError('Refusing to modify evaluation environment')
     out = root / p
-    if out.is_symlink() or not out.resolve().is_relative_to(root):
-        raise ValueError('Path escapes checkout or is symlink')
+    if not out.resolve().is_relative_to(root):
+        raise ValueError('Path escapes checkout')
+    # Never follow an in-tree symlink into tests or another unexpected target.
+    # Checking only out.is_symlink() misses symlinked parent directories.
+    if any(item.is_symlink() for item in (out, *out.parents) if item.is_relative_to(root)):
+        raise ValueError('Symlinked file or parent directory is not editable')
     if not out.is_file() or out.stat().st_size > MAX_FILE:
         raise ValueError('Missing, non-file or oversized target')
     return out
@@ -131,7 +135,7 @@ def attempt(root, path, old, new):
     try:
         target.write_text(after, encoding='utf-8')
         target.chmod(old_mode)
-        check = git(root, 'diff', '--check')
+        check = git(root, 'diff', 'HEAD', '--check')
         if check.returncode:
             target.write_text(before, encoding='utf-8')
             target.chmod(old_mode)
