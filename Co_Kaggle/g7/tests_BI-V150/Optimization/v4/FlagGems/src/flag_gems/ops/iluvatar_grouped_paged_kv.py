@@ -4,7 +4,8 @@
 
 This module controls an internal specialization of *the same* attention
 operator. It never switches the vLLM backend, changes model hyperparameters,
-or modifies the competition benchmark. The original lookup is the default.
+or modifies the competition benchmark. Eligible workloads use the
+optimized lookup automatically; baseline can be forced for A/B validation.
 """
 
 import os
@@ -31,12 +32,13 @@ def select_grouped_page_lookup(
     contiguous KV, local attention or dropout.
     """
     selected = (
-        os.environ.get(ENV_NAME, "baseline") if mode is None else mode
+        os.environ.get(ENV_NAME, "grouped") if mode is None else mode
     ).strip().lower()
     if selected not in ("baseline", "grouped"):
         raise ValueError(
             f"Unsupported {ENV_NAME}={selected!r}; expected baseline or grouped"
         )
+    # Built-in for eligible Iluvatar workloads; allow explicit baseline A/B.
     if selected == "baseline":
         return False
 
