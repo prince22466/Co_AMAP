@@ -193,72 +193,89 @@ def main():
         for mode in dict.fromkeys(("baseline", *args.modes)):
             os.environ[ENV_NAME] = mode
             capture.last = {}
-            for _ in range(args.warmup):
-                call()
-            torch.cuda.synchronize()
-            # Reject silent fallback to guessed baseline tile parameters.
-            if not capture.last:
-                raise RuntimeError(
-                    "No v4 Triton varlen kernel report captured. Verify that "
-                    "the local FlagGems installation is loaded and C-extension "
-                    "attention is disabled."
-                )
-            expected = select_prefill_tiles(
-                max_seqlen_q=n, max_seqlen_k=n, head_size=d,
-                is_dropout=False, is_local=False, mode=mode,
-            )
-            if expected is not None:
-                actual = (capture.last["block_m"], capture.last["block_n"])
-                if actual != expected:
-                    raise RuntimeError(
-                        f"Tile selection failed: requested {expected}, got {actual}"
-                    )
-            # Metadata logging is a CPU-side delay; disable it for timed runs.
-            os.environ["FLAGGEMS_ILUVATAR_PREFILL_REPORT"] = "0"
-            # GPU event envelope; use hardware profiler for exact kernel cycles.
-            timings = []
-            for _ in range(args.iterations):
-                start = torch.cuda.Event(enable_timing=True)
-                end = torch.cuda.Event(enable_timing=True)
-                start.record()
-                result = call()
-                end.record()
-                end.synchronize()
-                timings.append(start.elapsed_time(end))
             os.environ["FLAGGEMS_ILUVATAR_PREFILL_REPORT"] = "1"
-            result = result.clone()
-            if reference is None:
-                reference = result
-                deviation = 0.0
-                correct = bool(torch.isfinite(result).all().item())
-                if not correct:
-                    raise RuntimeError("Baseline kernel produced non-finite output")
-            else:
-                deviation = (result.float() - reference.float()).abs().max().item()
-                correct = bool(torch.allclose(
-                    result.float(), reference.float(), rtol=0.03, atol=0.03
-                ))
-            meta = capture.last
-            bm = meta["block_m"]
-            bn = meta["block_n"]
-            logical, minimum = modeled_kv_bytes(
-                n, n, d, h, hk, args.batch, bm, bn, q.element_size(), True
-            )
-            row = dict(
-                mode=mode,
-                median_gpu_ms=round(statistics.median(timings), 4),
-                min_gpu_ms=round(min(timings), 4),
-                max_abs_error=round(deviation, 6),
-                correct_vs_baseline=correct,
-                logical_kv_load_bytes=logical,
-                unique_kv_bytes_lower_bound=minimum,
-                physical_dram_read_bytes="requires_vendor_hardware_profiler",
-                achieved_occupancy="requires_vendor_hardware_profiler",
-                resource_occupancy_upper_bound=measured_occupancy_bound(meta, args),
-                **meta,
-            )
-            rows.append(row)
-            print(row, flush=True)
+            try:
+                for _ in range(args.warmup):
+                    call()
+                torch.cuda.synchronize()
+                # Reject silent fallback to guessed baseline tile parameters.
+                if not capture.last:
+                    raise RuntimeError(
+                        "No v4 Triton varlen kernel report captured. Verify that "
+                        "the local FlagGems installation is loaded and C-extension "
+                        "attention is disabled."
+                    )
+                expected = select_prefill_tiles(
+                    max_seqlen_q=n, max_seqlen_k=n, head_size=d,
+                    is_dropout=False, is_local=False, mode=mode,
+                )
+                if expected is not None:
+                    actual = (capture.last["block_m"], capture.last["block_n"])
+                    if actual != expected:
+                        raise RuntimeError(
+                            f"Tile selection failed: requested {expected}, got {actual}"
+                        )
+                # Metadata logging is a CPU-side delay; disable it for timed runs.
+                os.environ["FLAGGEMS_ILUVATAR_PREFILL_REPORT"] = "0"
+                # GPU event envelope; use hardware profiler for exact kernel cycles.
+                timings = []
+                for _ in range(args.iterations):
+                    start = torch.cuda.Event(enable_timing=True)
+                    end = torch.cuda.Event(enable_timing=True)
+                    start.record()
+                    result = call()
+                    end.record()
+                    end.synchronize()
+                    timings.append(start.elapsed_time(end))
+                os.environ["FLAGGEMS_ILUVATAR_PREFILL_REPORT"] = "1"
+                result = result.clone()
+                if reference is None:
+                    reference = result
+                    deviation = 0.0
+                    correct = bool(torch.isfinite(result).all().item())
+                    if not correct:
+                        raise RuntimeError("Baseline kernel produced non-finite output")
+                else:
+                    deviation = (result.float() - reference.float()).abs().max().item()
+                    correct = bool(torch.allclose(
+                        result.float(), reference.float(), rtol=0.03, atol=0.03
+                    ))
+                meta = capture.last
+                bm = meta["block_m"]
+                bn = meta["block_n"]
+                logical, minimum = modeled_kv_bytes(
+                    n, n, d, h, hk, args.batch, bm, bn, q.element_size(), True
+                )
+                row = dict(
+                    mode=mode,
+                    status="ok",
+                    median_gpu_ms=round(statistics.median(timings), 4),
+                    min_gpu_ms=round(min(timings), 4),
+                    max_abs_error=round(deviation, 6),
+                    correct_vs_baseline=correct,
+                    logical_kv_load_bytes=logical,
+                    unique_kv_bytes_lower_bound=minimum,
+                    physical_dram_read_bytes="requires_vendor_hardware_profiler",
+                    achieved_occupancy="requires_vendor_hardware_profiler",
+                    resource_occupancy_upper_bound=measured_occupancy_bound(meta, args),
+                    **meta,
+                )
+                rows.append(row)
+                print(row, flush=True)
+            except Exception as exc:
+                # An experimental tile can fail compilation or resource limits.
+                # Record it without losing measurements of remaining candidates.
+                if mode == "baseline":
+                    raise
+                os.environ["FLAGGEMS_ILUVATAR_PREFILL_REPORT"] = "1"
+                row = dict(
+                    mode=mode,
+                    status="failed",
+                    error=f"{type(exc).__name__}: {exc}",
+                    correct_vs_baseline=False,
+                )
+                rows.append(row)
+                print(row, flush=True)
     finally:
         logger.removeHandler(capture)
         logger.setLevel(previous_logger_level)
@@ -274,7 +291,8 @@ def main():
     if rows:
         baseline = rows[0]["median_gpu_ms"]
         for row in rows:
-            row["speedup_vs_baseline"] = round(baseline / row["median_gpu_ms"], 4)
+            measured = row.get("median_gpu_ms")
+            row["speedup_vs_baseline"] = round(baseline / measured, 4) if measured else ""
         output = Path(args.output)
         output.parent.mkdir(parents=True, exist_ok=True)
         fields = list(dict.fromkeys(key for row in rows for key in row))
