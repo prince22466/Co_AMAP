@@ -1239,7 +1239,7 @@ def load_from_kvcache(
     page_table_ptr,
     k_ptr_base,
     v_ptr_base,
-    block_size,
+    block_size: tl.constexpr,
     d: tl.constexpr,
     k_row_stride,
     BLOCK_K: tl.constexpr,
