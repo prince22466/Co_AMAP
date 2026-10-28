@@ -92,10 +92,18 @@ class TestNativeRecovery(unittest.TestCase):
 
     def test_recover_from_preexisting_syntax_error(self):
         self.write('pkg.py', BASE.replace('def render():', 'def render(:'))
-        result = recover.attempt(self.root, 'pkg.py', 'def render(:', 'def render():')
+        result = recover.attempt(self.root, 'pkg.py', 'def render(:', 'def render():\n    # valid repair')
         self.assertEqual(result['status'], 'edited')
         self.assertTrue(result['baseline_had_syntax_error'])
         ast.parse((self.root / 'pkg.py').read_text())
+
+    def test_undo_broken_edit_without_inventing_nonempty_patch(self):
+        self.write('pkg.py', BASE.replace('def render():', 'def render(:'))
+        result = recover.attempt(self.root, 'pkg.py', 'def render(:', 'def render():')
+        self.assertEqual(result['status'], 'restored_baseline')
+        self.assertFalse(result['submittable'])
+        self.assertEqual((self.root / 'pkg.py').read_text(), BASE)
+        self.assertFalse(self.git('status', '--porcelain').stdout.strip())
 
     def test_ignored_file_cannot_be_reported_as_submittable(self):
         self.write('.gitignore', '__pycache__/\\ngenerated.tmp\\n'.replace('\\n', '\n'))
