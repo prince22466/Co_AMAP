@@ -1,10 +1,16 @@
-# v4 — 16K prefill attention tile refinement (BI-V150)
+# v4_pre1 — 16K prefill attention tile refinement (BI-V150)
+
+> **Directory renamed:** this experiment now lives in
+> `Optimization/v4_pre1/` on PR #159. The rename preserves the original
+> FlagGems and vLLM source tree; the example checkout paths below use
+> `/root/Optimization/v4_pre1`. Existing Python test filenames and opt-in
+> environment variable names retain their `v4` identifiers.
 
 ## Scope and competition compliance
 
 This experiment refines **the existing FlagGems Triton varlen attention kernel**
 used by the vLLM FlagGems backend. It changes only files under
-`Co_Kaggle/g7/tests_BI-V150/Optimization/v4/`.
+`Co_Kaggle/g7/tests_BI-V150/Optimization/v4_pre1/`.
 
 - No quantization, speculative decoding, or model hyperparameter changes.
 - No edits to competition benchmark scripts or vLLM operator selection.
@@ -124,7 +130,7 @@ interchangeable between these operator implementations.
 **Decision:** Do not continue v4 as a Q/KV tile-only tuning effort or enable
 `auto` based on this sweep. Keep v1 and v4 separate. If pursuing v4, first
 confirm that the official 16K server actually dispatches to FlagGems
-attention (the v4 plugin otherwise defaults to `TRITON_ATTN`), then work
+attention (the v4_pre1 plugin otherwise defaults to `TRITON_ATTN`), then work
 on **genuine in-kernel** improvements such as paged-KV address-generation
 cost, K/V load coalescing, cache behavior or pipeline scheduling. Capture
 vendor-profiler HBM/L2 counters, register-spill traffic, achieved occupancy
@@ -140,7 +146,7 @@ genuine *in-kernel* memory-access change, not another tile selection.
 
 ### A. Confirm the attention backend used by the official workload
 
-The v4 vLLM FlagGems plugin returns
+The v4_pre1 vLLM FlagGems plugin returns
 `AttentionBackendEnum.TRITON_ATTN.get_path()` when
 `VLLM_FL_USE_FLAGGEMS_ATTN` is unset. Setting
 `FLAGGEMS_ILUVATAR_PAGED_KV=grouped` **alone does not cause vLLM to use
@@ -157,16 +163,17 @@ New opt-in diagnostic hooks (disabled by default):
   script is changed; the diagnostic flags must be **unset for performance
   measurements**.
 
-Start vLLM with the **local v4 files** and the ordinary competition settings,
+Start vLLM with the **local v4_pre1 files** and the ordinary competition settings,
 without selecting a different attention backend:
 
 ```bash
-cd /root/Optimization/v4
+cd /root/Optimization/v4_pre1
 export PYTHONPATH="$PWD/FlagGems/src:$PWD/vllm-plugin-FL:${PYTHONPATH:-}"
 export VLLM_PLUGINS=fl
 export FLAGGEMS_V4_TRACE_ATTENTION=1
 unset VLLM_FL_USE_FLAGGEMS_ATTN
 unset FLAGGEMS_ILUVATAR_PAGED_KV
+mkdir -p profiling
 
 vllm serve /workspace/MiniCPM5-2B \
   --port 9031 --served-model-name minicpm \
@@ -188,7 +195,7 @@ grep -E 'V4_ATTN_BACKEND_SELECTED|V4_ATTN_KERNEL_EXECUTED' \
   profiling/v4_backend_default.log
 ```
 
-Check that the running server really imports the v4 plugin; absence of both
+Check that the running server really imports the v4_pre1 plugin; absence of both
 markers is **inconclusive**, not proof of any particular backend. A
 `TRITON_ATTN` selection with no FlagGems kernel event indicates these
 FlagGems-specific kernel modifications will not affect that run.
@@ -225,7 +232,7 @@ better latency**.
 ### C. Validation on BI-V150 (required before enabling)
 
 ```bash
-cd /root/Optimization/v4
+cd /root/Optimization/v4_pre1
 export PYTHONPATH="$PWD/FlagGems/src:$PWD/vllm-plugin-FL:${PYTHONPATH:-}"
 
 # CPU-only eligibility, offset-equivalence and selector regressions.
@@ -271,11 +278,11 @@ consider a separate cache/pipeline experiment.
 
 ### Run on BI-V150
 
-Use the installed local v4 FlagGems and v4 vLLM plugin (do not accidentally
+Use the installed local v4_pre1 FlagGems and v4_pre1 vLLM plugin (do not accidentally
 import a separate system FlagGems installation):
 
 ```bash
-cd /root/Optimization/v4
+cd /root/Optimization/v4_pre1
 export PYTHONPATH="$PWD/FlagGems/src:$PWD/vllm-plugin-FL:${PYTHONPATH:-}"
 python3 -m pytest --noconftest -q FlagGems/tests/test_iluvatar_prefill_tiles_v4.py
 
