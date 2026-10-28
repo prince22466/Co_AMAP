@@ -90,6 +90,21 @@ class TestNativeRecovery(unittest.TestCase):
         self.assertEqual(r['status'], 'blocked')
         self.assertEqual((self.root / 'pkg.py').read_text(), BASE)
 
+    def test_recover_from_preexisting_syntax_error(self):
+        self.write('pkg.py', BASE.replace('def render():', 'def render(:'))
+        result = recover.attempt(self.root, 'pkg.py', 'def render(:', 'def render():')
+        self.assertEqual(result['status'], 'edited')
+        self.assertTrue(result['baseline_had_syntax_error'])
+        ast.parse((self.root / 'pkg.py').read_text())
+
+    def test_ignored_file_cannot_be_reported_as_submittable(self):
+        self.write('.gitignore', '__pycache__/\\ngenerated.tmp\\n'.replace('\\n', '\n'))
+        self.write('generated.tmp', 'alpha\n')
+        result = recover.attempt(self.root, 'generated.tmp', 'alpha', 'beta')
+        self.assertEqual(result['status'], 'blocked')
+        self.assertIn('not visible', result['reason'])
+        self.assertEqual((self.root / 'generated.tmp').read_text(), 'alpha\n')
+
     def test_public_api_removal_rolls_back(self):
         r = recover.attempt(self.root, 'pkg.py', 'class Public:', 'if False:')
         self.assertEqual(r['status'], 'blocked')
@@ -151,6 +166,18 @@ class TestNativeRecovery(unittest.TestCase):
         self.assertEqual(result['status'], 'insufficient_evidence')
         self.assertFalse(result['candidate_passed'])
         self.assertFalse(result['changed_code_executed'])
+
+    def test_import_time_changed_line_is_traced(self):
+        self.write('pkg.py', 'FLAG = 2\n')
+        result = verify.verify(self.root, 'pkg', 'import pkg\nassert pkg.FLAG == 2')
+        self.assertEqual(result['status'], 'candidate_passed')
+        self.assertTrue(result['changed_code_executed'])
+
+    def test_generated_adk_scratch_is_not_a_candidate_patch(self):
+        self.write('.adk_exec_probe.py', 'VALUE = 2\n')
+        result = verify.verify(self.root, '', 'import os\nassert bool(os.getcwd())')
+        self.assertEqual(result['status'], 'unverified')
+        self.assertIn('No candidate patch', result['reason'])
 
     def test_import_provenance_and_no_patch(self):
         self.assertEqual(verify.verify(self.root, 'pkg', 'import pkg\nassert pkg.render() == 1')['status'],
