@@ -71,7 +71,7 @@ export FLAGGEMS_ILUVATAR_PREFILL_REPORT=1
 The experiment reports median GPU-event *launch envelopes*, baseline deviation, compiler
 register count / spills / shared memory *when exposed by the Triton backend*,
 and two analytically modeled K/V quantities: logical per-CTA load demand
-and the lower bound of one unique K/V read per KV head. **Neither estimate
+and the unique K/V tensor footprint (not a physical DRAM-read lower bound). **Neither estimate
 equals physical GPU DRAM traffic.** Cache reuse, memory coalescing, page-table
 accesses, and L2 hits affect physical loads. Collect device-memory read bytes,
 L2 hit rate, register spill traffic, and **achieved occupancy** separately
@@ -101,7 +101,7 @@ to the harness via `--registers-per-sm`,
 ### Status
 
 Implementation and CPU selector tests are provided. A pre-existing
-\`torch.emtpty\` typo in the optimized non-paged varlen entry point is fixed.
+`torch.emtpty` typo in the optimized non-paged varlen entry point is fixed.
 **GPU timing, physical K/V
 load counters, achieved occupancy, and math_500 results have not been measured
 in this PR environment.** This is a candidate experiment for BI-V150 testing,
