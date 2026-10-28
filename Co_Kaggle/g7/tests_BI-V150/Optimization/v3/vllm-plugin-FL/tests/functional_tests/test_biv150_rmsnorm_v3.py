@@ -164,6 +164,7 @@ def test_real_oot_rmsnorm_calls_v3_via_flaggems(monkeypatch):
     _require_biv150()
     pytest.importorskip("flag_gems")
 
+    from vllm.config import VllmConfig, set_current_vllm_config
     from vllm_fl.dispatch import get_default_manager
     from vllm_fl.ops.layernorm import RMSNormFL
     from vllm_fl.dispatch.backends.vendor.iluvatar.impl import normalization_biv150_v3
@@ -180,14 +181,18 @@ def test_real_oot_rmsnorm_calls_v3_via_flaggems(monkeypatch):
 
     monkeypatch.setattr(normalization_biv150_v3, "fused_rms_norm", tracked)
     monkeypatch.setenv("VLLM_FL_BIV150_RMS_V3", "1")
-    with torch.inference_mode():
-        layer = RMSNormFL(2048, dtype=torch.bfloat16).cuda()
-        assert isinstance(layer.weight, torch.nn.Parameter)
-        assert layer.weight.requires_grad
-        x = torch.randn(8, 2048, device="cuda", dtype=torch.bfloat16)
-        r = torch.randn_like(x)
-        y, new_r = layer.forward_oot(x, r)
-        torch.cuda.synchronize()
+
+    # vLLM CustomOp constructors require a current VllmConfig. A serving
+    # worker supplies it automatically; standalone pytest must do so here.
+    with set_current_vllm_config(VllmConfig()):
+        with torch.inference_mode():
+            layer = RMSNormFL(2048, dtype=torch.bfloat16).cuda()
+            assert isinstance(layer.weight, torch.nn.Parameter)
+            assert layer.weight.requires_grad
+            x = torch.randn(8, 2048, device="cuda", dtype=torch.bfloat16)
+            r = torch.randn_like(x)
+            y, new_r = layer.forward_oot(x, r)
+            torch.cuda.synchronize()
 
     assert len(launches) == 1, "RMSNormFL did not dispatch into v3"
     assert launches[0]["inplace"] is True
