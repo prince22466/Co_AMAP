@@ -138,6 +138,63 @@ and kernel latency, and test the *actual MiniCPM GQA dimensions and prefill
 chunking*. Final selection still requires the unmodified official 4K/16K
 benchmark and `math_500` acceptance.
 
+## BI-V150 measured results — grouped paged-KV candidate (2026-10-28)
+
+**User-reported hardware results:** the grouped page-table lookup compiled
+and ran on BI-V150. With **identical 128×32 tiles**, BF16, 16 query heads,
+2 KV heads, head dimension 128, and randomly shuffled paged-KV mapping,
+the new kernel reduced standalone attention GPU-event latency in both cases.
+
+| Attention workload | Original lookup median | Grouped lookup median | Speedup | Latency reduction | Max absolute output error |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Full prefill: 16,384 Q / 16,384 KV | 114.5281 ms | 97.5166 ms | **1.1744×** | 14.85% | 0.0 |
+| Chunked prefill: 2,048 Q / 16,384 KV | 27.8980 ms | 23.4170 ms | **1.1914×** | 16.06% | 0.0 |
+
+Compiler resource reporting in both runs: original lookup
+**183 registers/thread, 0 spills/thread, 49,408 shared bytes**;
+grouped lookup **187 registers/thread, 0 spills/thread, 49,160 shared bytes**;
+both use four warps. The profiler confirmed
+`grouped_page_lookup=False` for the control and `True` for the candidate.
+The logical modeled K/V tensor load estimates were the same for both
+modes in each workload. Physical DRAM bytes, L2 traffic, stalls, and achieved
+occupancy were **not collected**.
+
+The chunked experiment used `--warmup 10 --iterations 30` and the output
+`profiling/v4_pre1_chunked.csv`. The full-prefill result was supplied as
+`profiling/v4_pre1_grouped.csv`; these local CSV files have not been
+attached to this PR. Figures above are recorded from the user-supplied
+BI-V150 output rather than independently reproduced on GitHub Actions.
+
+### GPU correctness regression — passed
+
+```text
+python3 -m pytest --noconftest -vv -s \
+  FlagGems/tests/test_biv150_grouped_paged_kv_v4.py
+4 passed, 2 warnings in 28.75s
+```
+
+All **four** device tests passed:
+
+- Regular varlen path: 256 Q / 8,193 KV, including a partial final page.
+- Regular varlen path: 2,048 Q / 16,384 KV.
+- Optimized varlen path: 256 Q / 8,193 KV, including a partial final page.
+- Optimized varlen path: 2,048 Q / 16,384 KV.
+
+All tests use 16 query heads, 2 KV heads, BF16, shuffled physical
+KV pages, and compare grouped results against the original implementation
+with BF16 `atol=0.03, rtol=0.03`. The two warnings concern the
+deprecated `use_cuda_graph` option and absence of the Triton replay
+benchmarker (event-timing fallback); they are nonfatal.
+
+**Interpretation:** grouped page-table lookup is now a *measured,
+GPU-correctness-tested standalone attention candidate*, not merely a
+source-level hypothesis. A 1.1914× standalone attention speedup must **not**
+be presented as 19.14% improvement in served token throughput. Repeated
+runs, backend execution traces, unchanged 4K/16K served-throughput
+comparison using the *same FlagGems backend*, and `math_500` accuracy
+are still required before production or competition adoption. Keep
+`FLAGGEMS_ILUVATAR_PAGED_KV` unset by default.
+
 ## v4 follow-up — identify live attention backend and optimize paged-KV lookup
 
 **Implementation status: experimental, opt-in, not yet compiled or timed on
@@ -261,15 +318,16 @@ python3 profile_16k_prefill.py \
   --output profiling/v4_grouped_chunked16k.csv
 ```
 
-The profiler now reports `kv_mode` and
+The profiler reports `kv_mode` and
 `grouped_page_lookup`, asserts that the requested compiled specialization
 was actually selected, and checks the grouped kernel output against baseline
 using identical BF16 inputs. `--shuffle-pages` stresses page-address
-correctness rather than assuming identity page mappings. These commands
-**have not yet been executed on BI-V150 for this new code**. Treat Triton
-compilation errors, output mismatches, spills or latency regressions as
-rejection criteria; keep `FLAGGEMS_ILUVATAR_PAGED_KV` unset until device
-validation, official throughput comparisons and `math_500` pass.
+correctness rather than assuming identity page mappings. **The full-16K
+and 2K/16K chunked comparisons have now run successfully on BI-V150**
+(see measured results above). Treat additional compilation errors, output
+mismatches, spills or latency regressions as rejection criteria; keep
+`FLAGGEMS_ILUVATAR_PAGED_KV` unset until official served-throughput
+comparisons and `math_500` pass.
 
 Next profiler targets: actual page-table/global-memory loads, K/V read
 transactions/coalescing, L2 hit rate, achieved occupancy, and stall cycles.
@@ -337,11 +395,11 @@ to the harness via `--registers-per-sm`,
 
 Implementation and CPU selector tests are provided. A pre-existing
 `torch.emtpty` typo in the optimized non-paged varlen entry point is fixed.
-**User-reported BI-V150 standalone GPU-event timings are now documented
-above**, and they show no improvement over the baseline for the tested shape.
-Physical K/V DRAM traffic, L2/cache metrics, achieved occupancy, the
-official 4K/16K served-throughput benchmark and `math_500` remain
-unverified. The new opt-in page-grouped memory kernel and backend trace
-have source-level review only and still require BI-V150 GPU compilation,
-correctness, and performance tests. Keep this PR in draft; it is not a
-validated performance gain.
+**The earlier tile-only sweep showed no gain.** The newer
+opt-in grouped paged-KV memory-access kernel has now compiled and run on
+BI-V150 with 1.1744× (full 16K) and 1.1914× (2K query / 16K KV)
+standalone GPU-event speedups, and **all four BI-V150 GPU correctness
+regressions passed**. Physical DRAM/L2 counters and achieved occupancy
+remain unmeasured; production attention-backend execution traces,
+the unchanged official 4K/16K served-throughput comparison and
+`math_500` are still pending. Keep this PR in draft pending these gates.
