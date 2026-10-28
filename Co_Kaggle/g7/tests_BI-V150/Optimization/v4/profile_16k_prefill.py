@@ -167,7 +167,9 @@ def main():
             for _ in range(args.warmup):
                 call()
             torch.cuda.synchronize()
-            # Measure only GPU execution elapsed between events.
+            # Metadata logging is a CPU-side delay; disable it for timed runs.
+            os.environ["FLAGGEMS_ILUVATAR_PREFILL_REPORT"] = "0"
+            # GPU event envelope; use hardware profiler for exact kernel cycles.
             timings = []
             for _ in range(args.iterations):
                 start = torch.cuda.Event(enable_timing=True)
@@ -177,6 +179,7 @@ def main():
                 end.record()
                 end.synchronize()
                 timings.append(start.elapsed_time(end))
+            os.environ["FLAGGEMS_ILUVATAR_PREFILL_REPORT"] = "1"
             result = result.clone()
             if reference is None:
                 reference = result
