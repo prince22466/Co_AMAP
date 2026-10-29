@@ -2,6 +2,7 @@
 
 | Submission and Description | public score | comments |
 | --- | ---: | --- |
+| submission.zip - submission_24 | not submitted | `submission_nb/artifacts/submission_24.zip`; E4B QAT, no LoRA; native editor plus two-round independent review, fresh stage context, bounded thinking, finalizer-only submit; official-runtime scripted checks passed; real E4B improvement unmeasured |
 | submission.zip - submission_21 | 0.03 | `submission_nb/artifacts/submission_21.zip`;  `gemma-4-e4b-it-qat-w4a16-ct` |
 | submission.zip - submission_19 | 0.01 | `submission_nb/artifacts/submission_19.zip`;  `gemma-4-e4b-it-qat-w4a16-ct` |
 | submission.zip - submission_18 | not submitted | `submission_nb/artifacts/submission_18.zip`; |
