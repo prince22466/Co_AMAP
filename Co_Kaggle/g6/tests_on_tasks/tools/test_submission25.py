@@ -179,7 +179,7 @@ class WorkbenchTests(unittest.TestCase):
 
     def test_assertion_can_use_saved_repository_result(self):
         self.assertEqual(self.w.check(dict(
-            op='probe', code='import sample\\nactual = sample.render(True)\\nassert actual == ""'
+            op='probe', code='import sample\nactual = sample.render(True)\nassert actual == ""'
         ))['status'], 'FAIL')
         self.fix()
         result = self.w.check()
@@ -189,11 +189,11 @@ class WorkbenchTests(unittest.TestCase):
 
     def test_untracked_python_edits_are_rejected_before_mutation(self):
         path = self.root / 'untracked.py'
-        path.write_text('def answer():\\n    return 1\\n')
+        path.write_text('def answer():\n    return 1\n')
         before = path.read_bytes()
         self.w.read('untracked.py')
         with self.assertRaisesRegex(ValueError, 'Untracked files'):
-            self.w.edit('untracked.py', 2, 2, '    return 2\\n')
+            self.w.edit('untracked.py', 2, 2, '    return 2\n')
         self.assertEqual(path.read_bytes(), before)
         self.assertNotIn('untracked.py', self.w.diff()['changed'])
 
