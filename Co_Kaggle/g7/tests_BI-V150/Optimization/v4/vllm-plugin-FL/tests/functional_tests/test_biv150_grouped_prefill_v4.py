@@ -6,6 +6,7 @@ prefill/decode batches. This is NOT a performance/competition benchmark.
 """
 
 import math
+from itertools import accumulate
 
 import pytest
 import torch
@@ -58,7 +59,7 @@ def test_grouped_prefill_matches_original_triton(query_lengths, kv_lengths):
         start += page_count
 
     cu_q = torch.tensor(
-        [0] + list(__import__("itertools").accumulate(query_lengths)),
+        [0] + list(accumulate(query_lengths)),
         device=device, dtype=torch.int32,
     )
     seq_lens = torch.tensor(kv_lengths, device=device, dtype=torch.int32)
