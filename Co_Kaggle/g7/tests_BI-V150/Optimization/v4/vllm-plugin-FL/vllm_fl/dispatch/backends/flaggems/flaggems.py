@@ -176,20 +176,25 @@ class FlagGemsBackend(Backend):
         if use_sparse:
             raise ValueError("use_sparse=True requires use_mla=True.")
 
-        # On Iluvatar, run the optimized FlagGems attention backend by
-        # default so the grouped paged-KV kernel is used by normal vLLM
-        # serving. Retain the existing override and fallback routing.
-        import flag_gems
-
-        default_flaggems_attn = flag_gems.vendor_name == "iluvatar"
+        # Keep FlagGems attention as an explicit override, not the default:
+        # whole-model FlagGems dispatch regressed total serving throughput.
+        # The default Iluvatar path below retains the original vLLM Triton
+        # attention backend/metadata and optimizes only eligible 16K prefill.
         use_flaggems_attn = os.environ.get(
-            "VLLM_FL_USE_FLAGGEMS_ATTN",
-            "1" if default_flaggems_attn else "0",
+            "VLLM_FL_USE_FLAGGEMS_ATTN", "0"
         ).lower() in ("1", "true", "yes")
 
         if use_flaggems_attn:
             print("Using FlagGems attention backend.")
             return "vllm_fl.dispatch.backends.flaggems.impl.attention.AttentionFLBackend"
+
+        import flag_gems
+
+        if flag_gems.vendor_name == "iluvatar":
+            return (
+                "vllm_fl.dispatch.backends.vendor.iluvatar.impl."
+                "attention_grouped_v4.BIV150GroupedPrefillAttentionBackend"
+            )
 
         return AttentionBackendEnum.TRITON_ATTN.get_path()
 
