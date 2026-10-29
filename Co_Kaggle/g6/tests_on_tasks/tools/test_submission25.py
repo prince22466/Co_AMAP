@@ -220,6 +220,16 @@ Path('invented.py').write_text('pass')
                                 text=True, capture_output=True, check=True)
         self.assertEqual(json.loads(result.stdout)['status'], 'OK')
 
+    def test_search_prioritizes_implementation_over_docs_and_examples(self):
+        for name in ['docs/aaa.md', 'examples/aaa.py']:
+            file = self.root / name
+            file.parent.mkdir(parents=True, exist_ok=True)
+            file.write_text('# render documentation\n' * 20)
+        work.git(self.root, 'add', 'docs', 'examples')
+        result = self.w.search('render')
+        self.assertTrue(result['source_matches'][0].startswith('sample.py:'), result)
+        self.assertTrue(result['test_matches'][0].startswith('tests/test_sample.py:'), result)
+
 
 class PackageTests(unittest.TestCase):
     def test_deterministic_allowlisted_artifact(self):

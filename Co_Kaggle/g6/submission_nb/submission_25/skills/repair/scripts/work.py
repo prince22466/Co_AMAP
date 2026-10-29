@@ -85,11 +85,15 @@ def safe(root, name):
     return out
 
 
+def is_test(name):
+    p = Path(name)
+    return (any(x.lower() in {'tests', 'test', 'testing'} for x in p.parts)
+            or p.name.startswith(('test_', 'conftest')) or p.name.endswith('_test.py'))
+
+
 def protected(name):
     p = Path(name)
-    return (any(x.lower() in {'tests', 'test', 'testing', '__pycache__'} for x in p.parts)
-            or p.name.startswith(('test_', 'conftest', '.adk_exec_'))
-            or p.name.endswith('_test.py')
+    return (is_test(name) or '__pycache__' in p.parts or p.name.startswith('.adk_exec_')
             or p.name in {'setup.py', 'sitecustomize.py', 'usercustomize.py', '_swegemma_stubs.py'})
 
 
@@ -174,7 +178,7 @@ class Workbench:
         return dict(status='OK', help=HELP, edit_attempts=self.state['attempts'],
                     edit_limit=MAX_EDITS, changed=changed(self.root),
                     source_examples=[n for n in names if n.endswith('.py') and not protected(n)][:12],
-                    test_examples=[n for n in names if n.endswith('.py') and protected(n)][:8])
+                    test_examples=[n for n in names if n.endswith('.py') and is_test(n)][:8])
 
     def search(self, query, path=''):
         if not query or len(query) > 200:
@@ -187,6 +191,11 @@ class Workbench:
         if path:
             safe(self.root, path)
             names = [n for n in names if n == path or n.startswith(path.rstrip('/') + '/')]
+        # Documentation/examples often precede the package alphabetically and
+        # otherwise consume every result slot before implementation is searched.
+        auxiliary = {'docs', 'doc', 'examples', 'example', 'benchmarks', 'benchmark', 'scripts', 'tools'}
+        names.sort(key=lambda n: (not n.endswith('.py'),
+                                 any(p in auxiliary for p in Path(n).parts[:-1]), n))
         result, tests, paths = [], [], []
         for name in names:
             if pattern.search(name):
@@ -197,7 +206,7 @@ class Workbench:
                 lines = contents(safe(self.root, name)).decode('utf-8').splitlines()
             except (ValueError, UnicodeError):
                 continue
-            target = tests if protected(name) else result
+            target = tests if is_test(name) else result
             if len(target) >= 7:
                 continue
             for i, line in enumerate(lines, 1):

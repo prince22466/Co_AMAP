@@ -25,7 +25,7 @@ task solution, ID, reference patch, or grading assertion is included in the ZIP.
 
 ## What local validation covers
 
-Local result: **24 tests passed**, including both packaged official-runtime
+Local result: **25 tests passed**, including both packaged official-runtime
 scenarios. [Machine-readable evidence](validation.json) records the tested ZIP hash,
 runtime versions and smoke conditions. The main smoke used 12 scripted model
 responses and nine charged tools; these are fixture counts, not benchmark savings.
@@ -37,7 +37,7 @@ missing edit arguments, repeat/attempt limits, passing-check rollback, interrupt
 edit recovery, checks modifying source/tests, malformed/missing API probes,
 real pytest fail-to-pass, zero cases, timeouts, protected paths, docstring-only
 diffs, bounded read output, deterministic packaging, complete-run comparison,
-pilot promotion, and explicit S25 archive selection in the shared evaluator.
+implementation-first search, pilot promotion, and explicit S25 archive selection in the shared evaluator.
 
 Two tests use the actual official ADK compiler, skill executor, native submission
 tool and subprocess sandbox. One exercises malformed wrapper recovery and a
