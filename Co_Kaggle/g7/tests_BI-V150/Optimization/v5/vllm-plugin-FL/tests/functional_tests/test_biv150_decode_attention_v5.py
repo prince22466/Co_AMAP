@@ -63,12 +63,18 @@ def test_v5_matches_vllm_unified_attention(
     if not torch.cuda.is_available():
         pytest.skip("Requires BI-V150 or another CUDA-compatible GPU")
 
-    from vllm.v1.attention.ops.triton_unified_attention import (
-        unified_attention as baseline_attention,
-    )
+    from vllm.v1.attention.ops import triton_unified_attention as baseline_module
     from vllm_fl.dispatch.backends.vendor.iluvatar.impl import (
         triton_unified_attention_decode_v5 as optimized_module,
     )
+
+    # Make the 3D test deterministic even if the surrounding test
+    # environment enables vLLM batch-invariant execution (which ordinarily
+    # suppresses the 3D kernel). Compare both implementations with the
+    # same intended dispatch mode.
+    monkeypatch.setattr(baseline_module, "is_batch_invariant", False)
+    monkeypatch.setattr(optimized_module, "is_batch_invariant", False)
+    baseline_attention = baseline_module.unified_attention
 
     # Verify the optimized path is actually selected in 2D/3D decode.
     seen_launches = []
