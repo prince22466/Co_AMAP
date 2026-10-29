@@ -1,0 +1,41 @@
+name: S21 public quick-set gold smoke (CPU)
+on:
+  push:
+    branches: [g6/validated-quick-task-sets]
+    paths:
+      - 'Co_Kaggle/g6/tests_on_tasks/tools/smoke_public_gold_tasks.py'
+      - '.github/workflows/g6-public-task-gold-smoke.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  gold-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 28
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            Co_Kaggle/g6/tests_on_tasks/tools/smoke_public_gold_tasks.py
+            Co_Kaggle/g6/competition_material/competition_data/tasks.jsonl
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install CPU test-only dependencies
+        run: |
+          python -m pip install --disable-pip-version-check -q \
+            pytest pytest-mock pytest-cov \
+            pygments markdown-it-py typing-extensions wcwidth \
+            requests urllib3 idna charset-normalizer certifi \
+            pydantic starlette httpx python-multipart annotated-doc annotated-types typer
+      - name: Validate candidate gold patches against original baselines
+        run: |
+          python Co_Kaggle/g6/tests_on_tasks/tools/smoke_public_gold_tasks.py \
+            Co_Kaggle/g6/competition_material/competition_data/tasks.jsonl \
+            --output task-gold-smoke.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: public-task-gold-smoke
+          path: task-gold-smoke.json
+          if-no-files-found: warn
