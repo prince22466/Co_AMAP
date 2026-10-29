@@ -1,0 +1,45 @@
+name: g6 submission 25 CPU and official ADK runtime
+on:
+  pull_request:
+    paths:
+      - 'Co_Kaggle/g6/submission_nb/submission_25/**'
+      - 'Co_Kaggle/g6/submission_nb/artifacts/submission_25*'
+      - 'Co_Kaggle/g6/tests_on_tasks/tools/*submission25*.py'
+      - 'Co_Kaggle/g6/tests_on_tasks/tools/*submission24*.py'
+      - '.github/workflows/g6-submission25.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      LITELLM_LOCAL_MODEL_COST_MAP: 'True'
+      OTEL_SDK_DISABLED: 'true'
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          filter: blob:none
+          sparse-checkout: Co_Kaggle/g6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install official compiler and test dependencies
+        run: |
+          python Co_Kaggle/g6/tests_on_tasks/tools/install_submission24_runtime.py --wheel-dir /tmp/g6-wheels
+          python -m pip install pytest==8.4.2
+      - name: Regression and packaged runtime tests
+        run: python -m unittest discover -s Co_Kaggle/g6/tests_on_tasks/tools -p 'test_submission25*.py' -v
+      - name: Verify release archive and retain smoke evidence
+        run: |
+          python Co_Kaggle/g6/tests_on_tasks/tools/smoke_submission25.py --output /tmp/s25-smoke
+          git diff --exit-code -- Co_Kaggle/g6/submission_nb/artifacts/submission_25.zip Co_Kaggle/g6/submission_nb/artifacts/submission_25.manifest.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: submission-25-e4b-unscored
+          path: |
+            Co_Kaggle/g6/submission_nb/artifacts/submission_25.zip
+            Co_Kaggle/g6/submission_nb/artifacts/submission_25.manifest.json
+            /tmp/s25-smoke/smoke.json

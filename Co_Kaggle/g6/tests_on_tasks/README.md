@@ -1,6 +1,12 @@
 # Agent development workflow
 
-The current [Submission 16 candidate](../submission_nb/submission_16/README.md) addresses the
+The latest [Submission 25 candidate](../submission_nb/submission_25/README.md) replaces
+S24's repeated editor/reviewer loop with one repair agent and a checked edit workbench.
+S24 solved 1/15 in the archived S1 run; S25's real-model score is unmeasured.
+Run its five-task pilot before the full S1 comparison. The package, commands,
+promotion target and remaining risks are documented in the linked README.
+
+The earlier [Submission 16 candidate](../submission_nb/submission_16/README.md) addresses the
 missing-action, repeated-failure accounting and absent verification seen in Submission 15's
 first-ten diagnostic run. Use [the Submission 16 notebook](submission_16_testing.ipynb): CPU preflight
 first, then a real-Gemma repair smoke gate before the unchanged ten-task evaluation. Its 19 CPU
