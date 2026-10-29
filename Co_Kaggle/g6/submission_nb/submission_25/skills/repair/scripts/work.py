@@ -146,6 +146,57 @@ finally:
 '''
 
 
+
+def observable_assertions(tree, repository_files):
+    """Find assertions connected to imports actually executed from the checkout.
+
+    This is a conservative relevance heuristic, not semantic proof. In
+    particular, a successful check can still assert the wrong requirement.
+    """
+    modules = set()
+    for file in repository_files:
+        if not file.endswith('.py'):
+            continue
+        module = file[:-3].replace('/', '.')
+        if module.endswith('.__init__'):
+            module = module[:-9]
+        modules.add(module)
+        if module.startswith('src.'):
+            modules.add(module[4:])
+
+    connected, assertions = set(), set()
+
+    def uses_connected(node):
+        return any(isinstance(child, ast.Name) and child.id in connected
+                   for child in ast.walk(node))
+
+    def bind(target):
+        for child in ast.walk(target):
+            if isinstance(child, ast.Name):
+                connected.add(child.id)
+
+    for statement in tree.body:
+        if isinstance(statement, ast.Import):
+            for alias in statement.names:
+                if any(m == alias.name or m.startswith(alias.name + '.')
+                       for m in modules):
+                    connected.add(alias.asname or alias.name.split('.')[0])
+        elif isinstance(statement, ast.ImportFrom):
+            if statement.module and any(
+                    m == statement.module or m.startswith(statement.module + '.')
+                    for m in modules):
+                for alias in statement.names:
+                    connected.add(alias.asname or alias.name)
+        elif isinstance(statement, (ast.Assign, ast.AnnAssign, ast.NamedExpr)):
+            if uses_connected(statement.value):
+                targets = statement.targets if isinstance(statement, ast.Assign) else [statement.target]
+                for target in targets:
+                    bind(target)
+        elif isinstance(statement, ast.Assert) and uses_connected(statement.test):
+            assertions.add(statement.lineno)
+    return assertions
+
+
 class Workbench:
     def __init__(self, root):
         self.root = root.resolve()
@@ -303,9 +354,13 @@ class Workbench:
                 result = execute([sys.executable, str(temp / 'runner.py'), str(self.root),
                                   str(temp / 'probe.txt'), str(evidence)], self.root, env=env)
                 covered = json.loads(evidence.read_text()) if evidence.exists() else {}
-                valid = bool(assertions & set(covered.get('probe_lines', []))) and bool(covered.get('files'))
+                observed = observable_assertions(tree, covered.get('files', []))
+                valid = bool(observed & set(covered.get('probe_lines', [])))
                 result['repository_files'] = covered.get('files', [])[:12]
                 result['assertion_executed'] = bool(assertions & set(covered.get('probe_lines', [])))
+                result['assertion_observes_repository'] = valid
+                if result['exit_code'] == 0 and not valid:
+                    result['reason'] = 'No executed assertion depends on an observed repository import'
                 result['behavior_failure'] = bool(result['exit_code'] and 'AssertionError' in result['output'] and valid)
             else:
                 target = spec['path'].split('::', 1)[0]
@@ -350,6 +405,8 @@ class Workbench:
         file = safe(self.root, path)
         if file.suffix != '.py' or protected(path):
             raise ValueError('Edit existing implementation .py files only; tests/setup are protected')
+        if path not in self.files():
+            raise ValueError('Untracked files cannot be submitted by git diff; edit Git-tracked Python files only')
         before = contents(file)
         key = digest(before + json.dumps([path, start, end, text, self.state['reads'].get(path)], sort_keys=True).encode())
         if key in self.state['failed_edits']:
