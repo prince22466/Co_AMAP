@@ -32,8 +32,8 @@ restores it on the next operation if an edit was interrupted.
 PASS means a check executed successfully, not proof that the task is solved.
 fail_to_pass additionally means the identical check failed on the clean starting
 tree before passing on this patch. A docstring-only diff is reported explicitly.
-Tests with zero executed cases and probes without an executed assertion/local
-Python activity are BLOCKED. Inspect failure output; never claim it passed.
+Tests with zero executed cases and probes without an executed assertion linked
+through imports/assignments to observed local Python activity are BLOCKED. Inspect failure output; never claim it passed.
 Missing tests or imperfect probes do not prevent submitting a valid partial fix.
 Checks that modify tracked files or create non-ignored files are blocked and
 their file changes restored. Put temporary test output outside the checkout.
