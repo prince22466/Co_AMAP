@@ -1,4 +1,5 @@
 """CPU packaging/comparison regressions. These do not run E4B."""
+import argparse
 import importlib.util
 from pathlib import Path
 import subprocess
@@ -8,7 +9,7 @@ import zipfile
 
 from build_submission24 import ARCHIVE, FILES, SOURCE, build
 from compare_submission24 import S1_IDS, compare, normalize
-from run_submission24_eval import baseline_ready, extract_package
+from run_submission24_eval import baseline_ready, extract_package, nonnegative_minutes
 
 
 class Packaging(unittest.TestCase):
@@ -71,6 +72,13 @@ class Comparison(unittest.TestCase):
 
 
 class EvaluationPreflight(unittest.TestCase):
+    def test_nonfinite_time_limits_are_rejected(self):
+        for value in ['nan', 'inf', '-inf', '-1']:
+            with self.subTest(value=value), self.assertRaises(argparse.ArgumentTypeError):
+                nonnegative_minutes(value)
+        self.assertEqual(nonnegative_minutes('0'), 0)
+        self.assertEqual(nonnegative_minutes('4.5'), 4.5)
+
     def test_baseline_failure_is_distinguished_from_environment_error(self):
         healthy = dict(resolved=False, test_exit_code=1, test_output='FAILED test_behavior - AssertionError')
         self.assertTrue(baseline_ready(healthy))

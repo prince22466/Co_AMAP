@@ -73,6 +73,8 @@ the compiler, Runner, native tools and skill executor. Scripted tests cover synt
 failure -> reviewer feedback -> repair -> same-probe success -> one submission;
 empty patches; a locator returning text instead of a call; context isolation;
 hint propagation; reasoning configuration; and real `SessionTrace` serialization.
+The 17-test suite also covers evaluation-runner settings, failed-task recording,
+authenticated server requests, baseline-only execution and cancellation cleanup.
 
 ## Real E4B evaluation
 
@@ -96,6 +98,12 @@ Use the exact ID returned by `/v1/models` for `--served-model` (the notebook oft
 serves an absolute model path). The runner checks that it identifies E4B QAT. It
 performs baseline-only verification before spending inference calls and stops on
 environment-blocked baselines. It never changes benchmark tests or setup hooks.
+It uses the notebook's `LOCAL_API_KEY` environment variable when set, for both
+the model-list check and inference; credentials are not written to the manifest.
+Cache and compaction settings match the archived S1 runs and are recorded in the
+manifest. Per-task evaluator exceptions become explicit failed rows with a
+traceback, so later tasks and repeats remain in the evidence. A baseline exception
+blocks candidate inference. User cancellation still stops the run and closes its sandbox.
 
 The pilot has the four distinct S21/S22 wins plus `rich_3882`. Inspect traces before
 expanding: aim for at least three solved pilot tasks, nonempty patches and no

@@ -58,10 +58,29 @@ submission preserves the diff. Other cases cover empty output and a locator
 that emits plain text, plus previous-tool-context removal and harness hint retention.
 
 `runtime_smoke.json` is **scripted mechanics only**, with package hash and runtime
-versions. The unit/runtime suite contains 12 passing tests at authoring time.
+versions. The unit/runtime suite contains 17 passing tests after PR review.
 The new CI workflow repeats them and verifies the committed ZIP is reproducible.
 This does not test E4B's token parser, generated repairs, success rate, latency
 on GPU, or the competition-wide 12-hour wall-clock budget.
+
+## PR review corrections
+
+Review of commit `86a913a` reproduced two evaluation-runner defects against the
+official runtime: it omitted the archived S1 cache/compaction configuration, and
+an official `ContainerSetupError` escaped before the failed task and run summary
+were saved. The runner now records and applies the same context settings, retains
+each failed outcome with its traceback, continues the remaining tasks, and blocks
+candidate inference when the baseline preflight fails. Candidate errors are listed
+in each repeat's summary. Regression tests fail against the original code and pass
+after correction.
+
+The review also fixed the runner's hard-coded unauthenticated model check / `EMPTY`
+inference key: it now honors notebook v11's `LOCAL_API_KEY` for both requests without
+recording it in the manifest. Nonfinite time limits are rejected. Tests cover both
+repeat seeds, baseline-only execution without a server request, complete results
+after an injected failure, and cancellation propagation with sandbox cleanup.
+The graph smoke now uses the same ADK App cache/compaction configuration as v11.
+The submission package bytes and agent architecture are unchanged by these fixes.
 
 ## Acceptance still requiring GPU execution
 

@@ -8,14 +8,30 @@ import asyncio
 import hashlib
 import importlib.metadata
 import json
+import math
+import os
 from pathlib import Path
 import re
 import tempfile
-from urllib.request import urlopen
+import time
+import traceback
+from urllib.request import Request, urlopen
 import zipfile
 
 from build_submission24 import ARCHIVE, MODEL, build
 from compare_submission24 import PILOT_IDS, S1_IDS, normalize
+
+# Same settings as notebook v11 and both archived S1 run manifests.
+CONTEXT_CACHE = {'min_tokens': 2048, 'ttl_seconds': 1800, 'cache_intervals': 10}
+COMPACTION = {'compaction_interval': 15, 'overlap_size': 2,
+              'token_threshold': 14336, 'event_retention_size': 5}
+
+
+def nonnegative_minutes(value):
+    minutes = float(value)
+    if not math.isfinite(minutes) or minutes < 0:
+        raise argparse.ArgumentTypeError('--time-limit must be finite and nonnegative')
+    return minutes
 
 
 def baseline_ready(row):
@@ -49,12 +65,15 @@ def extract_package(archive, target):
 
 async def evaluate(args):
     from adk_submission import ModelRegistry
+    from google.adk.agents.context_cache_config import ContextCacheConfig
+    from google.adk.apps._configs import EventsCompactionConfig
     from google.adk.models.lite_llm import LiteLlm
     from swegemma.budget import EvaluationBudget
     from swegemma.config import EvalConfig, build_submission_limits
     from swegemma.evaluate import Evaluator
-    from swegemma.models import load_tasks
+    from swegemma.models import TaskResult, load_tasks
 
+    nonnegative_minutes(args.time_limit)
     if args.output.exists() and any(args.output.iterdir()):
         raise ValueError('Choose a new output directory; previous evidence is never overwritten')
     if args.archive is None:
@@ -65,8 +84,11 @@ async def evaluate(args):
     if set(task_ids) - tasks.keys():
         raise ValueError('Missing required task IDs: ' + str(sorted(set(task_ids) - tasks.keys())))
     served = args.served_model
+    api_key = os.environ.get('LOCAL_API_KEY') or 'EMPTY'
     if not args.baseline_only:
-        with urlopen(args.model_url.rstrip('/') + '/models', timeout=15) as response:
+        request = Request(args.model_url.rstrip('/') + '/models',
+                          headers={'Authorization': 'Bearer ' + api_key})
+        with urlopen(request, timeout=15) as response:
             available = [m['id'] for m in json.load(response)['data']]
         if served not in available or MODEL not in served:
             raise ValueError('Server must expose the exact E4B QAT model; available IDs: ' + str(available))
@@ -78,6 +100,7 @@ async def evaluate(args):
         'tasks_sha256': hashlib.sha256(args.tasks.read_bytes()).hexdigest(),
         'model_alias': MODEL, 'served_model': served, 'repeats': args.repeats,
         'sandbox': args.sandbox,
+        'context_cache': CONTEXT_CACHE, 'compaction': COMPACTION,
         'runtime_versions': {n: importlib.metadata.version(n) for n in
                              ['adk-submission', 'adk-eval-core', 'swegemma', 'google-adk', 'google-genai', 'litellm']},
         'effective_limits': {'max_tool_calls': 40, 'max_turns': 48, 'max_time_minutes': time_limit,
@@ -96,7 +119,7 @@ async def evaluate(args):
         async def run(name, baseline=False, seed=0):
             models = ModelRegistry()
             models.register(MODEL, LiteLlm(model='openai/' + served, api_base=args.model_url,
-                                           api_key='EMPTY', seed=seed))
+                                           api_key=api_key, seed=seed))
             folder = args.output / name; folder.mkdir()
             config = EvalConfig(tasks_path=args.tasks, snapshots_dir=args.snapshots,
                 results_dir=folder, submission_dir=package, models=models,
@@ -104,12 +127,26 @@ async def evaluate(args):
                 budget=EvaluationBudget(tool_calls=40, turns=48, time_minutes=time_limit),
                 timeout_seconds=30, verification_timeout_seconds=300,
                 skip_agent_patch=baseline, display_mode='quiet',
+                context_cache_config=ContextCacheConfig(**CONTEXT_CACHE),
+                events_compaction_config=EventsCompactionConfig(**COMPACTION),
                 limits=limits, generation_constraints=constraints)
             evaluator = Evaluator(config)
             rows = []
             try:
-                for task_id in task_ids:
-                    result = await evaluator.evaluate_task(tasks[task_id])
+                for index, task_id in enumerate(task_ids, start=1):
+                    started = time.perf_counter()
+                    try:
+                        result = await evaluator.evaluate_task(tasks[task_id],
+                            task_index=index, total_tasks=len(task_ids))
+                    except Exception as exc:
+                        # The official evaluator propagates setup failures. Keep an
+                        # explicit failed outcome instead of losing the rest of a run.
+                        # Cancellation/KeyboardInterrupt still propagate normally.
+                        result = TaskResult(instance_id=task_id, repo=tasks[task_id].repo,
+                            resolved=False, agent_patch='', test_exit_code=-1, test_output='',
+                            duration_seconds=time.perf_counter() - started, task_index=index,
+                            error=f'{type(exc).__name__}: {exc}',
+                            exception_traceback=traceback.format_exc())
                     row = serialize_result(result)
                     rows.append(row)
                     # Separate from the evaluator's own task_results.jsonl; retain every outcome.
@@ -132,6 +169,8 @@ async def evaluate(args):
                 reports.append({'run': name, 'seed': repeat + 1,
                     'resolved': sum(r['resolved'] for r in indexed.values()),
                     'empty_patches': sum(not r['agent_patch'].strip() for r in indexed.values()),
+                    'agent_error_ids': [n for n, r in indexed.items()
+                                        if r.get('error') or r.get('error_message')],
                     'solved_ids': [n for n, r in indexed.items() if r['resolved']]})
             report = {'stage': 'evaluation_complete', 'runs': reports,
                       'note': 'Use compare_submission24.py per complete S1 run. Do not select only the best repeat.'}
@@ -145,18 +184,17 @@ def main():
     parser.add_argument('--tasks', type=Path, required=True)
     parser.add_argument('--snapshots', type=Path, required=True)
     parser.add_argument('--wheels', type=Path)
-    parser.add_argument('--model-url', default='http://localhost:8000/v1')
+    parser.add_argument('--model-url', default='http://localhost:8000/v1',
+                        help='Existing server; uses LOCAL_API_KEY when set, otherwise EMPTY')
     parser.add_argument('--served-model', default=MODEL, help='Exact /v1/models ID; may be an absolute model path')
     parser.add_argument('--sandbox', choices=['docker', 'subprocess'], default='subprocess')
     parser.add_argument('--stage', choices=['pilot', 's1'], default='pilot')
     parser.add_argument('--repeats', type=int, choices=[1, 2, 3], default=1)
-    parser.add_argument('--time-limit', type=float, default=0,
+    parser.add_argument('--time-limit', type=nonnegative_minutes, default=0,
                         help='Minutes; 0 matches historical S1 (disabled); 4 matches submission scoring config')
     parser.add_argument('--baseline-only', action='store_true')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
-    if args.time_limit < 0:
-        parser.error('--time-limit must be nonnegative')
     report = asyncio.run(evaluate(args))
     print(json.dumps(report, indent=2))
     if report['stage'] == 'baseline_blocked':

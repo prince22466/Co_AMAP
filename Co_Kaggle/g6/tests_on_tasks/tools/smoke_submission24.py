@@ -12,6 +12,7 @@ import tempfile
 import zipfile
 
 from build_submission24 import ARCHIVE, MODEL, build
+from run_submission24_eval import COMPACTION, CONTEXT_CACHE
 
 FIXTURE = '# LOCATOR_RAW_READ_SENTINEL\ndef render():\n    return "first second"\n'
 BROKEN = 'def render(:\n    return "first second"\n'
@@ -36,6 +37,8 @@ async def run_smoke(output=None, empty=False, malformed_locator=False):
     from google.adk.runners import Runner
     from google.adk.sessions import InMemorySessionService
     from google.adk.agents.run_config import RunConfig
+    from google.adk.agents.context_cache_config import ContextCacheConfig
+    from google.adk.apps.app import App, EventsCompactionConfig
     from google.genai import types
     from swegemma.config import build_submission_limits
     from swegemma.context import SwegemmaContext
@@ -122,7 +125,10 @@ async def run_smoke(output=None, empty=False, malformed_locator=False):
             session = await sessions.create_session(app_name='smoke24', user_id='test', state={
                 'problem_description': 'Make formatter.render return first, newline, second.',
                 'hints': 'HARNESS_HINT_SENTINEL: preserve the return type.'})
-            runner = Runner(agent=agent, app_name='smoke24', session_service=sessions)
+            app = App(name='smoke24', root_agent=agent,
+                context_cache_config=ContextCacheConfig(**CONTEXT_CACHE),
+                events_compaction_config=EventsCompactionConfig(**COMPACTION))
+            runner = Runner(app=app, session_service=sessions)
             async def consume():
                 async for event in runner.run_async(user_id='test', session_id=session.id,
                     new_message=types.Content(role='user', parts=[types.Part(text='Complete the task.')]),
@@ -164,6 +170,7 @@ async def run_smoke(output=None, empty=False, malformed_locator=False):
                 conditions['empty_patch_detected'] = all('empty patch' in a['blockers'] for a in audits)
             report = {'passed': all(conditions.values()), 'conditions': conditions,
                 'scope': 'scripted mechanics; no E4B inference', 'versions': versions,
+                'context_cache': CONTEXT_CACHE, 'compaction': COMPACTION,
                 'model_calls': sum(positions.values()), 'tool_calls_used': ctx.tool_calls_used,
                 'package_sha256': manifest['archive_sha256'], 'stage_order': role_order}
             if output:
