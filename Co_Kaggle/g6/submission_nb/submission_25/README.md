@@ -39,8 +39,9 @@ or mandatory fail-to-pass condition before source can reach the evaluator.
   canonical invocation is in the main prompt, and malformed-wrapper recovery is
   tested with a scripted model; real E4B dispatch must pass the pilot.
 - Correct localization, complete API plumbing, relevant assertions, and stopping
-  still depend on E4B. A passing weak probe cannot establish task correctness.
-- Edits are limited to existing implementation `.py` files, at most 100 observed
+  still depend on E4B. A passing probe must have an executed assertion linked
+  to observed repository imports, but that heuristic cannot establish task correctness.
+- Edits are limited to existing **Git-tracked** implementation `.py` files, at most 100 observed
   lines per edit and 1 MB per file. New-file and packaging changes are unsupported.
 - Focused checks have a six-second limit; long/network-dependent tests may be
   blocked. That retains the source patch rather than producing an empty result.
