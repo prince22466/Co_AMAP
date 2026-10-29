@@ -15,9 +15,11 @@ import torch
 @pytest.mark.parametrize(
     "query_lengths,kv_lengths",
     [
-        ([256], [8193]),        # incomplete final page
-        ([2048], [16384]),     # long chunked prefill
-        ([128, 1], [8193, 8193]),  # prefill + decode in same launch
+        ([256], [8193]),          # incomplete final page; grouped path
+        ([2048], [16384]),        # long chunked prefill; grouped path
+        ([128, 1], [8193, 8193]), # prefill + decode in same launch
+        ([1], [16384]),           # decode-only: original Triton path
+        ([128], [4096]),          # short-context prefill: original path
     ],
 )
 def test_grouped_prefill_matches_original_triton(query_lengths, kv_lengths):
