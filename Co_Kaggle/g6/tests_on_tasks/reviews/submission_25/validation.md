@@ -25,7 +25,7 @@ task solution, ID, reference patch, or grading assertion is included in the ZIP.
 
 ## What local validation covers
 
-Local result: **25 tests passed**, including both packaged official-runtime
+CI result: **27 tests passed**, including both packaged official-runtime
 scenarios. [Machine-readable evidence](validation.json) records the tested ZIP hash,
 runtime versions and smoke conditions. The main smoke used 12 scripted model
 responses and nine charged tools; these are fixture counts, not benchmark savings.
@@ -37,7 +37,9 @@ missing edit arguments, repeat/attempt limits, passing-check rollback, interrupt
 edit recovery, checks modifying source/tests, malformed/missing API probes,
 real pytest fail-to-pass, zero cases, timeouts, protected paths, docstring-only
 diffs, bounded read output, deterministic packaging, complete-run comparison,
-implementation-first search, pilot promotion, and explicit S25 archive selection in the shared evaluator.
+implementation-first search, pilot promotion, explicit S25 archive selection in the shared evaluator,
+rejection of untracked-file edits, blocking of import-only tautological probes,
+and support for assertions over saved repository results.
 
 Two tests use the actual official ADK compiler, skill executor, native submission
 tool and subprocess sandbox. One exercises malformed wrapper recovery and a
@@ -60,7 +62,8 @@ permits the E4B QAT model used here; the older original 31B-only text is superse
 
 The workbench's checks are cooperative safeguards, not an adversarial sandbox.
 In particular, arbitrary probe Python can access other sandbox paths and Git
-metadata. A successful probe may be too weak. Existing-file-only editing,
+metadata. A successful probe may be too weak even when its assertion is
+connected to observed repository imports. Git-tracked existing-file-only editing,
 six-second checks, skill-dispatch dependence and journal recovery only on a
 subsequent workbench call are explicit limits. Native submission remains available
 without a passing test so incomplete attempts can still receive official grading.
