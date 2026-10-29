@@ -184,6 +184,19 @@ class FlagGemsBackend(Backend):
             print("Using FlagGems attention backend.")
             return "vllm_fl.dispatch.backends.flaggems.impl.attention.AttentionFLBackend"
 
+        # Keep the existing FlagOS dispatch ordering and vendor fallbacks.
+        # On Iluvatar, the default Triton attention implementation is backed
+        # by our v5 decode-optimized unified-attention kernel. Other vendors
+        # keep the original TRITON_ATTN class; the explicit FlagGems override
+        # above remains unchanged.
+        import flag_gems
+
+        if getattr(flag_gems, "vendor_name", None) == "iluvatar":
+            return (
+                "vllm_fl.dispatch.backends.vendor.iluvatar.impl."
+                "attention_decode_v5.BIV150DecodeAttentionBackend"
+            )
+
         return AttentionBackendEnum.TRITON_ATTN.get_path()
 
     def moe_align_block_size(
