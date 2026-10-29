@@ -53,7 +53,7 @@ measured speedup transfers automatically.
 | `vllm-plugin-FL/vllm_fl/dispatch/backends/flaggems/flaggems.py` | Undo the automatic FlagGems backend replacement. Default Iluvatar FlagOS path uses a vLLM Triton-derived optimized backend; keep existing dispatch selection, fallbacks and explicit FlagGems override |
 | `vllm-plugin-FL/vllm_fl/dispatch/backends/vendor/iluvatar/impl/attention_grouped_v4.py` | Thin vLLM Triton backend adapter: original decode/short-prefill fallback, custom prefill forward only for eligible shapes |
 | `vllm-plugin-FL/vllm_fl/dispatch/backends/vendor/iluvatar/impl/triton_unified_attention_grouped_v4.py` | vLLM v0.24.0 Triton unified attention with grouped page loads gated by shape and per-sequence phase; no v1 tile changes |
-| `vllm-plugin-FL/tests/functional_tests/test_biv150_grouped_prefill_v4.py` | GPU correctness checks against original vLLM Triton on shuffled physical pages, partial pages, long prefill and mixed prefill/decode |
+| `vllm-plugin-FL/tests/functional_tests/test_biv150_grouped_prefill_v4.py` | GPU correctness checks against original vLLM Triton on shuffled physical pages, partial pages, long prefill, mixed prefill/decode, decode-only and 4K prefill |
 | `readme.md` | Rationale, code map, verification and competition gates |
 
 The previous FlagGems grouped implementation from #161 remains in the
