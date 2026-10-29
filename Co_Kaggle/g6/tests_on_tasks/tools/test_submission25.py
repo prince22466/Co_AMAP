@@ -104,6 +104,8 @@ class WorkbenchTests(unittest.TestCase):
 
     def test_missing_api_and_empty_checks_never_pass(self):
         for code in ['print("all passed")', 'assert True',
+                     'import sample\nassert True',
+                     'import sample\nassert 1 == 1',
                      'import sample\nassert sample.missing_api() == 1',
                      'import sample\\nassert sample.render() == ""']:
             with self.subTest(code=code):
@@ -174,6 +176,26 @@ class WorkbenchTests(unittest.TestCase):
         recovered = work.Workbench(self.root)
         self.assertEqual((self.root / 'sample.py').read_text(), BASE)
         self.assertFalse((recovered.store / 'pending.json').exists())
+
+    def test_assertion_can_use_saved_repository_result(self):
+        self.assertEqual(self.w.check(dict(
+            op='probe', code='import sample\\nactual = sample.render(True)\\nassert actual == ""'
+        ))['status'], 'FAIL')
+        self.fix()
+        result = self.w.check()
+        self.assertEqual(result['status'], 'PASS')
+        self.assertTrue(result['assertion_observes_repository'])
+        self.assertTrue(result['fail_to_pass'])
+
+    def test_untracked_python_edits_are_rejected_before_mutation(self):
+        path = self.root / 'untracked.py'
+        path.write_text('def answer():\\n    return 1\\n')
+        before = path.read_bytes()
+        self.w.read('untracked.py')
+        with self.assertRaisesRegex(ValueError, 'Untracked files'):
+            self.w.edit('untracked.py', 2, 2, '    return 2\\n')
+        self.assertEqual(path.read_bytes(), before)
+        self.assertNotIn('untracked.py', self.w.diff()['changed'])
 
     def test_timeout_is_blocked_and_preserves_patch(self):
         self.fix()
