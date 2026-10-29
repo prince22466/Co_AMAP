@@ -27,7 +27,8 @@ token position -> KV logical page -> block_table[page] -> physical block
 For an aligned decode tile, adjacent token positions usually share a page:
 
 - For 3D decode, a 16-token KV tile usually fits in one 16-token KV page.
-  The optimized kernel loads one scalar page index.
+  The optimized kernel loads one scalar page index, then broadcasts it
+  to the vector shape used by the downstream K/V pointer expressions.
 - For 2D decode, a 32-token KV tile spans two 16-token KV pages.
   The kernel loads two physical page indices and broadcasts them to
   the 32 KV lanes with Triton `tl.gather`.
@@ -120,6 +121,9 @@ isolated decode kernel timings, not just a standalone kernel speedup.
 - Source-level change prepared for review.
 - The plugin's functional test suite covers unaligned/shuffled KV pages,
   4K/16K contexts, 2D and 3D decode, and prefill/shape fallback.
+- PR review fixed a scalar-to-vector shape error in the one-page decode
+  path and now verifies that 2D/3D decode really select the specialized
+  kernel. These tests still require execution on BI-V150.
 - **No BI-V150 GPU test, 4K/16K throughput improvement, or MATH-500
   accuracy result is claimed at PR creation time.**
 - Accept only if hardware correctness passes, MATH-500 stays within the

@@ -58,7 +58,7 @@ def test_existing_explicit_flaggems_override_is_respected(monkeypatch):
     ],
 )
 def test_v5_matches_vllm_unified_attention(
-    query_len, kv_len, num_q_heads, num_kv_heads, num_segments
+    query_len, kv_len, num_q_heads, num_kv_heads, num_segments, monkeypatch
 ):
     if not torch.cuda.is_available():
         pytest.skip("Requires BI-V150 or another CUDA-compatible GPU")
@@ -66,8 +66,28 @@ def test_v5_matches_vllm_unified_attention(
     from vllm.v1.attention.ops.triton_unified_attention import (
         unified_attention as baseline_attention,
     )
-    from vllm_fl.dispatch.backends.vendor.iluvatar.impl.triton_unified_attention_decode_v5 import (
-        unified_attention as optimized_attention,
+    from vllm_fl.dispatch.backends.vendor.iluvatar.impl import (
+        triton_unified_attention_decode_v5 as optimized_module,
+    )
+
+    # Verify the optimized path is actually selected in 2D/3D decode.
+    seen_launches = []
+    jit_kernel = optimized_module.kernel_unified_attention
+
+    class KernelSpy:
+        def __getitem__(self, grid):
+            launch = jit_kernel[grid]
+
+            def capture(**kwargs):
+                seen_launches.append(
+                    (kwargs["DECODE_PAGE_LOOKUP"], kwargs["IS_3D"])
+                )
+                return launch(**kwargs)
+
+            return capture
+
+    monkeypatch.setattr(
+        optimized_module, "kernel_unified_attention", KernelSpy()
     )
 
     torch.manual_seed(2026)
@@ -138,9 +158,14 @@ def test_v5_matches_vllm_unified_attention(
     expected = torch.empty_like(query)
     actual = torch.empty_like(query)
     call_attention(baseline_attention, expected)
-    call_attention(optimized_attention, actual)
+    call_attention(optimized_module.unified_attention, actual)
     torch.cuda.synchronize()
     torch.testing.assert_close(actual, expected, rtol=3e-2, atol=3e-2)
+
+    expected_optimized = (
+        query_len == 1 and num_q_heads == 16 and num_kv_heads == 2
+    )
+    assert seen_launches == [(expected_optimized, bool(num_segments))]
 
 
 def test_decode_paged_lookup_is_not_enabled_for_prefill(monkeypatch):

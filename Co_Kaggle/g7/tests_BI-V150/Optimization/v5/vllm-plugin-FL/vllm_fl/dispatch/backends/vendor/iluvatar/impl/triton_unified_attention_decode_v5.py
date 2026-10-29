@@ -411,11 +411,17 @@ def kernel_unified_attention(
             # with the standard 16-token vLLM KV cache pages.
             if BLOCK_SIZE >= TILE_SIZE:
                 # The tile fits entirely in a single aligned KV page.
-                physical_block_idx = tl.load(
+                physical_block_scalar = tl.load(
                     block_tables_ptr
                     + block_table_offset
                     + (j * TILE_SIZE) // BLOCK_SIZE
                 ).to(tl.int64)
+                # The K/V pointer expressions below index this as a
+                # vector ([:, None] / [None, :]). A scalar cannot be
+                # indexed in Triton; broadcast it across all tile lanes.
+                physical_block_idx = tl.broadcast_to(
+                    physical_block_scalar, (TILE_SIZE,)
+                )
             else:
                 # KV tile comprises whole pages (e.g. 32 tokens / 16 per page).
                 page_start = (j * TILE_SIZE) // BLOCK_SIZE
