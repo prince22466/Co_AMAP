@@ -1,61 +1,135 @@
-Link:https://www.kaggle.com/competitions/neurips-2026-smart-buildings/data
+# Data and Submission Interface
 
+**Primary source:** [Kaggle — Data](https://www.kaggle.com/competitions/neurips-2026-smart-buildings/data)  
+**Cross-check:** [Official starter kit](https://github.com/smart-buildings-2026/starter-kit) and its [transfer-policy template](https://github.com/smart-buildings-2026/starter-kit/blob/main/smart_buildings/baselines/transfer_policy.py)
 
-downloaded data is in competition_material\competition_data,
-embeddings,graphs,snapshots are too large to download. which should be inspected in kaggle.
+## 1. What you build
 
+This is a **building-control competition**, not a tabular prediction task. There is **no test CSV with labels to predict**.
 
-# Dataset Description
+Submit a **Python control policy** that, at every **5-minute** simulation step:
 
-What You're Building
-You are not predicting labels, and there is no test CSV. You submit a control policy: a Python class that, every 5 minutes, reads a building's sensor observations and outputs HVAC control actions. We run your policy inside the simulator on held-out buildings and score how well it balances occupant comfort, energy cost, and carbon emissions (see the Evaluation tab).
+1. Receives the current building's observation vector.
+2. Chooses the HVAC equipment to run.
+3. Returns discrete equipment commands and continuous control setpoints.
 
-How to Submit
-You submit a Kaggle notebook, nothing else. A working example is on the Code tab: TransferPolicy Notebook. Copy it, replace the control logic in get_action, and submit.
+The objective is a single policy that works on unseen building layouts and weather conditions. See [Evaluation.md](Evaluation.md) for the reward and leaderboard metric.
 
-Your class subclasses smart_buildings_inference_server.Policy and implements __init__(building_meta_data, action_spec) and get_action(obs).
-When you run the notebook yourself, it plays one public example scenario so you can check it works.
-When you submit, the same notebook is re-run against the hidden test scenarios. You do not change any code.
-To train and score locally, use the starter kit on GitHub. It has the same simulator, the 30 training scenarios, the baselines, and a local scorer.
+## 2. How to submit on Kaggle
 
-Overview
-This competition has no static dataset. You get a building simulator and a procedural building generator, so you can create as much training data as you want. All buildings are simulated with an extended version of Google's open-source Smart Buildings Control Suite, and each one is a Gym-compatible reinforcement learning environment.
+The competition uses **Kaggle Notebook submissions**, not a manually uploaded prediction CSV. The organizer's **TransferPolicy Notebook** on the competition's [Code tab](https://www.kaggle.com/competitions/neurips-2026-smart-buildings/code) is the starting example.
 
-Buildings
-The generator varies each building's:
+In the Kaggle inference environment, the policy subclass follows this interface:
 
-Number of floors (2–4), width, length, and perimeter shape
-Room layout and occupancy
-Envelope construction (six material properties)
-Number of air handler units (AHUs), which is set by footprint (at most 10 zones per AHU)
-Every zone has its own VAV box. Each building has one hot-water system.
+- Inherit from \`smart_buildings_inference_server.Policy\`.
+- Implement \`__init__(building_meta_data, action_spec)\`.
+- Implement \`get_action(obs)\`, returning an action dictionary.
 
-Weather
-Weather covers a range of climates. The training set pairs 6 buildings with 30 weather strips, named <station>_<n>. Each strip is a different 30-day window of recorded data.
+The action dictionary has two entries:
 
-Your score comes only from the hidden test set, not the 30 training scenarios. The test buildings come from the same generator and parameter ranges as the training buildings, but they are evaluated under different weather than the training set. Your policy must generalize to both new buildings and new weather conditions.
+| Key | Type | Meaning |
+| --- | --- | --- |
+| \`discrete_action\` | Integer array (typically \`int32\`) | AHU and hot-water-system on/off commands |
+| \`continuous_action\` | Floating-point array (typically \`float32\`) | Normalized HVAC setpoints |
 
-Test buildings and test weather are never released during the competition. Your policy receives each test building's metadata only at runtime, inside the evaluation sandbox. You may generate as many additional buildings and scenarios as you like for training.
+The notebook runs a public example scenario as a check; the evaluation gateway runs the **same submitted notebook** against hidden scenarios. The hidden evaluation does not require changing the policy code.
 
-Observation Space
-At each 5-minute step, your policy receives a flat vector (its length depends on the building) containing:
+**Important interface distinction:** The **local starter-kit** \`TransferPolicy\` class implements the same constructor and action method but **does not need to inherit from a base class**. When submitting on Kaggle, follow the organizer's **Kaggle inference-server notebook**, not the local class definition verbatim.
 
-Per zone: air temperature, current heating and cooling setpoints, damper position, reheat valve position, and airflow setpoint
-Per AHU: supply-air temperature, static pressure, airflow (sensed and setpoint), recirculation, cooling-request count, and fan run status
-Hot-water system: supply water temperature (sensed and setpoint)
-Building-wide: occupancy count, comfort-schedule flags (in comfort mode now or soon), outside air temperature, and time of day and day of week (cyclically encoded)
-A building metadata dict is passed to your policy's constructor. It contains action indices, observation field names, the zone-to-AHU assignment, the floor plan, the schedule, and normalization constants.
+The competition's [code requirements](https://www.kaggle.com/competitions/neurips-2026-smart-buildings/overview) specify an execution limit of **9 hours** for CPU or GPU notebooks and **disabled internet access**.
 
-Action Space
-The action is hybrid: some parts are discrete and some are continuous.
+## 3. Training data and simulator
 
-Discrete ({0, 1}, shape ((K+1,))): an on/off run command for each AHU and for the hot-water pump
-Continuous ([-1, 1], shape ((3K+2+2V,))):
-Per AHU: supply-air temperature, static pressure, and recirculation
-Hot-water system: supply-water temperature and differential pressure
-Per zone: damper position and reheat valve position
-(K) is the number of AHUs and (V) is the number of zones. Zero is the middle of each continuous range, not "off". Read the index lists in the metadata rather than assuming the order of the action vector.
+There is no fixed labeled training dataset. The organizers provide:
 
-The simulator enforces ventilation minimums: a running AHU keeps a minimum static pressure, recirculates at most 70%, and every damper stays at least 10% open. Shutting off all airflow is not a viable strategy.
+- A Gym-compatible simulator built on an extended version of Google's **Smart Buildings Control Suite**.
+- A procedural building generator to produce additional training buildings.
+- **30 shipped training scenarios**, based on **6 buildings** and **5 weather stations**.
+- Baseline controllers, an evaluation runner, and a local score calculator.
 
-The full file guide, setup instructions and local scoring tools are in the starter kit README on GitHub.
+The shipped training scenarios pair each building with one 30-day weather strip from each of five stations, as specified in [\`training_set.yaml\`](https://github.com/smart-buildings-2026/starter-kit/blob/main/smart_buildings/training_set.yaml). These are **30 selected building–weather pairs**, not every possible cross-product of every available weather strip.
+
+The stations used in the shipped scenarios are \`fairbanks\`, \`denver\`, \`atlanta\`, \`phoenix\`, and \`singapore\`. Each weather strip is a distinct 30-day window of recorded weather. Participants can generate additional training scenarios.
+
+The **hidden evaluation buildings and weather** are not provided during the competition. Building metadata is given to the policy at evaluation time, so the policy must generalize to new configurations.
+
+### Building variation
+
+The procedural generator varies:
+
+- Floor count (**2–4**), footprint, perimeter, and floor layout
+- Zone and occupancy configuration
+- Six building-envelope material properties
+- Air-handler units (**AHUs**), with at most **10 zones per AHU**
+- Zone-level variable-air-volume (**VAV**) boxes
+
+Each zone has one VAV box, and each building has a central hot-water system.
+
+## 4. Observation space
+
+At each step, \`get_action(obs)\` receives a **flat observation vector**. Its length depends on the building, so do **not** hard-code observation offsets.
+
+| Scope | Observation fields |
+| --- | --- |
+| Each zone | Air temperature; heating and cooling setpoints; damper position; reheat valve position; airflow setpoint |
+| Each AHU | Supply-air temperature; static pressure; measured and setpoint airflow; recirculation; cooling-request count; fan status |
+| Hot-water system | Supply-water temperature (sensed and setpoint) |
+| Building and environment | Occupancy count; current/upcoming comfort-schedule flags; outdoor-air temperature; cyclic time-of-day and day-of-week encodings |
+
+The \`building_meta_data\` dictionary provides the **observation field names**, action indices, zone-to-AHU assignments, floor plan, comfort schedule, and normalization constants.
+
+## 5. Action space
+
+Let:
+
+- \`K\` = number of AHUs.
+- \`V\` = number of zones (and VAV boxes).
+
+The action is a **dictionary with variable-length discrete and continuous arrays**:
+
+| Component | Range | Shape | Controls |
+| --- | --- | --- | --- |
+| \`discrete_action\` | \`{0, 1}\` | \`(K + 1,)\` | One on/off command per AHU, plus one for the hot-water system |
+| \`continuous_action\` | \`[-1, 1]\` | \`(3K + 2 + 2V,)\` | Three setpoints per AHU, two for hot water, and two per zone |
+
+### Continuous action breakdown
+
+| Equipment | Number | Controlled variables |
+| --- | --- | --- |
+| AHUs | \`3K\` | Supply-air temperature, static pressure, recirculation |
+| Hot-water system | \`2\` | Supply-water temperature, differential pressure |
+| VAV boxes | \`2V\` | Damper position, reheat valve position |
+
+**Zero is the midpoint of a normalized continuous range, not the off command.** Use the action-index mappings from \`building_meta_data\` rather than assuming the fields appear in contiguous groups or a fixed order. The official local template documents \`temp_indices\`, \`pressure_indices\`, \`recirculation_indices\`, \`water_indices\`, and \`zone_action_indices\`.
+
+### Simulator-imposed ventilation limits
+
+The simulator enforces these physical limits:
+
+- A running AHU maintains a minimum static pressure.
+- Recirculation is capped at **70%**.
+- Every VAV damper remains at least **10%** open.
+
+Turning off all airflow is therefore not a viable universal energy-saving strategy.
+
+## 6. Local development
+
+The [starter kit](https://github.com/smart-buildings-2026/starter-kit) includes the simulator, generator, training scenarios, reference policies, and tools for local evaluation.
+
+\`\`\`bash
+pip install -e .
+
+# Inspect a public training scenario and its spaces.
+python -m smart_buildings.run_environment --building building_train_1 --weather fairbanks_1
+
+# Evaluate the unmodified starter policy on all 30 shipped scenarios.
+python -m smart_buildings.evaluate
+\`\`\`
+
+The local policy implementation is in \`smart_buildings/baselines/transfer_policy.py\`. The supplied example returns an all-zero action for compatibility testing, **not** as a recommended competitive strategy.
+
+## 7. Repository data availability
+
+This GitHub repository currently contains the Markdown competition documents but **does not contain** a checked-in \`Co_Kaggle/g8/competition_material/competition_data/\` directory. Large simulator inputs should be obtained from the **official starter kit** or inspected in the Kaggle environment; their presence on a local computer is not evidence that they are committed here.
+
+**Verification note (2026-10-30):** The observation/action shapes, training-scenario definitions, and local policy method signatures above were checked against the organizer's public starter kit. The Kaggle **Data** page did not expose its complete text to automated retrieval during this review, so Kaggle-only notebook/gateway details should be rechecked against the live organizer example before a submission.
