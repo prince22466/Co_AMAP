@@ -20,7 +20,8 @@ async def evaluate(args):
     report = await evaluate_official(args)
     if report['stage'] == 'evaluation_complete' and args.stage == 'pilot':
         report['pilot_ids'] = list(PILOT_IDS)
-        report['objective_pilot_pass_each_repeat'] = all(objective_pilot_pass(r) for r in report['runs'])
+        report['objective_pilot_pass_each_repeat'] = bool(report['runs']) and all(
+            objective_pilot_pass(r) for r in report['runs'])
         report['ready_for_full_s1'] = False  # Must inspect actual real-model traces first.
         report['manual_gate'] = ('Read every model-emitted call/result, verify native edit and explicit '
                                  'nonempty submit_patch, inspect relevant tests, no repeated dispatch loops.')
