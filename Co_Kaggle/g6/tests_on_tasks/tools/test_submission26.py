@@ -44,6 +44,16 @@ class Submission26PackageTests(unittest.TestCase):
         self.assertNotIn('file_path="scripts/work.py"', text)
         self.assertLess(len(text), 3500)
 
+    def test_pilot_gate_never_equates_nonempty_patch_with_resolution(self):
+        from run_submission26_eval import objective_pilot_pass
+        good = dict(resolved=3, solved_ids=['rich_4077', 'rich_3518', 'rich_3454'],
+                    empty_patches=1, agent_error_ids=[])
+        self.assertTrue(objective_pilot_pass(good))
+        for change in (dict(resolved=2), dict(solved_ids=['rich_3518']),
+                       dict(empty_patches=2), dict(agent_error_ids=['rich_3882'])):
+            with self.subTest(change=change):
+                self.assertFalse(objective_pilot_pass(dict(good, **change)))
+
     def test_budget_and_scope(self):
         data = yaml.safe_load((SOURCE / 'eval_config.yaml').read_text())
         self.assertEqual(data['evaluation']['max_tool_calls'], 40)
