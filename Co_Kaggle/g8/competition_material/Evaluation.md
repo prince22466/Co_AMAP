@@ -13,9 +13,9 @@ The policy must balance **occupant comfort**, **energy cost**, and **carbon emis
 
 Every **5 minutes**, the simulator produces:
 
-\[
+$$
 r_t = 0.6\,p_t - 0.2\,c_t - 0.2\,e_t
-\]
+$$
 
 where:
 
@@ -39,9 +39,9 @@ Consequently, letting even one occupied zone become extremely uncomfortable can 
 
 Comfort is a penalty (`p_t <= 0`), while energy cost and emissions are nonnegative (`c_t >= 0`, `e_t >= 0`). Therefore:
 
-\[
+$$
 r_t \le 0.
-\]
+$$
 
 A reward of zero would require perfect occupied-zone comfort **and** zero energy cost **and** zero carbon emissions. The competition treats this as the ideal, but not an attainable practical controller result.
 
@@ -49,33 +49,33 @@ A reward of zero would require perfect occupied-zone comfort **and** zero energy
 
 Each scenario lasts **30 days**, or:
 
-\[
+$$
 30 \times 24 \times 12 = 8{,}640 \text{ steps}.
-\]
+$$
 
 All steps are scored, **including the first**; there is no unscored warm-up.
 
 For scenario `s`, the episode return is:
 
-\[
+$$
 R_s = \sum_{t=1}^{8640} r_{s,t},
 \qquad
 \bar r_s = \frac{R_s}{8640}.
-\]
+$$
 
-Here, \(\bar r_s\) is the **mean reward per step**, not the episode total.
+Here, $\bar r_s$ is the **mean reward per step**, not the episode total.
 
 ## 4. Leaderboard score
 
 Let `S` be the evaluated set of building–weather scenarios. The score is:
 
-\[
+$$
 \operatorname{score}
 = \frac{1}{|S|}\sum_{s\in S}\left|\bar r_s-0\right|
 = -\frac{1}{|S|}\sum_{s\in S}\bar r_s.
-\]
+$$
 
-The second equality follows from \(\bar r_s \le 0\).
+The second equality follows from $\bar r_s \le 0$.
 
 **Interpretation:** The score is the average *magnitude of per-step loss*. **Minimizing the leaderboard score** is equivalent to maximizing the average scenario return.
 
