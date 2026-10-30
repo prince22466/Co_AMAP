@@ -14,7 +14,7 @@ All development results below come from **the same selected 15 S1 tasks**. Kaggl
 | S1 recorded duration | 34.9 min | 30.1 min | 49.6 min | **15.5 min** |
 | Aggregate observed tokens | 3.28M | 3.67M | 3.34M | **4.10M** |
 
-The [submission records](../../submission_records.md) show **S25 Kaggle public score = 0.00**; S24 was not submitted to Kaggle. Durations and observed tokens are evaluator trace aggregates (including repeated context), **not** GPU billing, unique generated tokens, or evidence of efficient solving. S25 was faster largely because most tasks ended without a useful patch.
+The [submission records](../../submission_records.md) show **S25 Kaggle public score = 0.00**; S24 was not submitted to Kaggle. Durations and observed tokens are evaluator trace aggregates (including repeated context), **not** GPU billing, unique generated tokens, or evidence of efficient solving. The shorter duration coincided with widespread unsuccessful or empty-patch termination; it does not demonstrate faster task solving.
 
 S25 lost S24's `rich_4077` success. Its only nonempty patch (`rich_4075`, 861 bytes) failed evaluation and was recovered as an **unsubmitted working-tree fallback**, not a successful explicit submission.
 
@@ -27,11 +27,13 @@ S25 lost S24's `rich_4077` success. Its only nonempty patch (`rich_4075`, 861 by
 | **Missing script arguments** | `fastapi_14258`: repeated `args={"op":"read","path":"fastapi/routing.py"}` without the required outer `file_path`; no patch | The tool could not even begin the intended read. |
 | **Silent wrong-operation fallback** | `requests_7205`: calls omitted `args.op` while supplying `args.query="netrc"`; the script returned `status` help rather than searching; 40 charged calls exhausted | `work.py` defaults missing `--op` to `status`. A superficially successful tool response concealed a no-op and permitted repetition. |
 | **No outer-call recovery** | Repeated invalid calls persisted until turn/tool limits; `rich_4077` hit turn limit with only one charged tool call | Protections *inside* `work.py` cannot intercept invalid `run_skill_script` calls rejected **before** that script runs. Prompt rules such as “never repeat” are not enforcement. |
-| **Over-restrictive editing scope** | `rich_4075` needed project-version/packaging changes but `pyproject.toml` and docs could not be edited; the agent later changed `rich/errors.py` without addressing the task | S25 allowed edits only to existing tracked, non-protected `.py` implementation files. This blocks legitimate packaging, metadata, configuration, docs, and new-file work. |
+| **Over-restrictive editing scope** | In `rich_4075`, attempts to edit `pyproject.toml` and documentation were rejected; the agent later changed `rich/errors.py`. The actual requirement is **uncertain** because the S1 task list and trace describe different issues. | S25 allowed edits only to existing tracked, non-protected `.py` implementation files. Regardless of the task-label discrepancy, this blocks legitimate packaging, metadata, configuration, documentation, and new-file repairs. |
 | **Verification tests overinterpreted** | PR #166 passed 27 tests and official-runtime scripted smoke tests; S25 still resolved 0/15 with real E4B | Scripted model calls prove tool mechanics, **not** that E4B will construct, correct, or interpret those calls, or solve real tasks. |
-| **Pilot gate was documented but not used to prevent a full run** | S25 README required a five-task pilot and explicit promotion targets; full S1 testing and Kaggle submission followed despite severe dispatch failure | A written launch criterion is not an enforced release gate. The observed result should have stopped promotion. |
+| **Pilot promotion was not substantiated** | S25 README specified a five-task pilot, but the checked-in PR #166 evidence contains **no passing real-E4B pilot**. Full S1 diagnostics and a Kaggle score were subsequently recorded; the S1 result failed the documented targets. | An unverified README gate is not a release gate. The precise order of any private pilot and Kaggle runs cannot be reconstructed from the checked-in evidence; promotion must require a recorded passing pilot. |
 
 The printed S25 log contains approximately **670 real `run_skill_script` attempt lines** (plus duplicated diagnostic display excerpts), with at least **366 visible `INVALID_ARGUMENTS`** and **54 `SCRIPT_NOT_FOUND`** responses. These are diagnostic occurrence counts, not distinct tasks or charged-tool counts; the harness can reject some calls before charging a tool. The dominant problem was **model–tool incompatibility**, prior to patch correctness.
+
+`rich_4075` is also a task-provenance warning: [`selected_tasks_s1.txt`](selected_tasks_s1.txt) labels it **Console empty output**, whereas the S25 agent trace discusses **dropping Python 3.8 support**. The earlier [S21–22 review](submission_21_22_review.md) already flagged this discrepancy. Until the original task record and evaluator are checked, do **not** treat either title or the agent's proposed fix as ground truth. The `.py`-only edit restriction is still independently established by `work.py`.
 
 The `ensurepip unavailable` warning appears in multiple submissions and is **not supported as the primary cause** of S25's collapse. Likewise, zero thinking budget, 4,096 maximum output tokens, and E4B's underlying code-reasoning limits may contribute, but **this run does not isolate their causal effect**.
 
@@ -54,7 +56,7 @@ These are **regression requirements**, not optional prompt suggestions. A future
 3. **Never silently treat a malformed operation as success.** Missing/unknown `op` or required arguments must fail explicitly. A successful status/help response must not substitute for the search/read/edit requested.
 4. **Never let identical unsuccessful calls consume the full budget.** Detect and bound repeated invalid outer calls, unchanged queries, failed edits, and empty checks *at the layer that sees them*, using mechanisms permitted by the official runtime. After a small bounded retry count, switch strategy or stop; reserve budget for patch creation and `submit_patch`.
 5. **Never forbid legitimate repair files by blanket extension/path restrictions.** Permit task-required tracked/untracked additions and modifications to source, packaging metadata, config, and documentation while preventing benchmark/evaluator tampering. Verify the final Git patch includes all intended files.
-6. **Never equate a syntactically valid patch or generic green test with a solved task.** Check the requested behavior using relevant baseline/candidate assertions when feasible; distinguish blocked environment tests, zero-collected tests, and irrelevant checks from evidence of correctness. Recheck the *final* patch.
+6. **Never equate a syntactically valid patch or generic green test with a solved task.** Confirm the task ID against its original problem description before designing the fix, especially when task lists and traces disagree. Check the requested behavior using relevant baseline/candidate assertions when feasible; distinguish blocked environment tests, zero-collected tests, and irrelevant checks from evidence of correctness. Recheck the *final* patch.
 7. **Never count scripted-model, unit, packaging, or official-runtime smoke tests as E4B task-performance evidence.** Keep them in CI, but label their scope. Run actual E4B tool dispatch, edit, and submission pilots before any broad evaluation or improvement claim.
 8. **Never promote a candidate after a failing pilot.** Make the pilot an actual release decision with inspected trace/error counts and required regression cases; a README checklist alone is insufficient.
 9. **Never infer improvement from shorter runtime, more tool calls, or more guardrails.** Report resolution rate, empty patches, valid tool-call rate, repeated-error loops, patch relevance, and observed resource use together.
@@ -67,18 +69,19 @@ These rules reinforce the earlier [S17–19 review](submission_17_18_19_review.m
 **Gate A — CPU/official-runtime mechanics (necessary but insufficient).**
 - Package compiles against the official runtime and passes schema/sandbox/patch tests.
 - Missing required tool arguments and missing `op` are rejected explicitly; no silent status/no-op.
-- Native read/edit/write/command/submit pathways remain callable; legitimate `.toml`, docs, and new-file tasks are not arbitrarily blocked.
+- The known working native read/edit/write/command/submit path remains callable **unless** a replacement demonstrates equivalent real-E4B task and tool-use reliability under matched conditions. Legitimate `.toml`, documentation, configuration, and new-file repairs are not arbitrarily blocked.
 - Failure handling is exercised at the *outer* tool-dispatch boundary, not only inside an optional script.
 
 **Gate B — Actual E4B pilot (mandatory before full S1 or Kaggle).**
-- Run real E4B on a small fixed task subset, including the historical successes `rich_4077`, `rich_3905`, `rich_3518`, and `rich_3454` where applicable.
-- Inspect every model-emitted call and result; require the agent to demonstrate source read, a real edit, meaningful verification where supported, and nonempty patch submission.
-- **Block promotion** on sustained malformed-wrapper loops, repeated silent status calls, or inability to produce any useful patch. Compare against the native-tool control under matching model/runtime/budget conditions.
+- For an E4B successor, use the **predeclared five-task pilot** from S25: `rich_4077`, `rich_3905`, `rich_3518`, `rich_3454`, `rich_3882`. Require **at least 3/5 resolved**, retention of `rich_4077`, **no more than one empty patch**, and **zero agent execution errors in every repeat** before full S1 or Kaggle. These are development release criteria, not hidden-score predictions.
+- Inspect **every model-emitted call and result**. Require demonstrated source read, a real edit, meaningful verification where supported, and nonempty patch submission. Record malformed outer calls, valid operation dispatches, repeated no-op responses, and charged-versus-rejected tool calls; passing scripted-model tests do not count.
+- **Block promotion** on sustained malformed-wrapper loops, repeated silent status calls, or inability to produce useful patches. Compare against the native-tool control under matching model/runtime/budget conditions.
 - Where feasible, repeat nondeterministic evaluations; investigate any loss of previously solved cases rather than hiding it in an aggregate score.
 
 **Gate C — Matched task-solving evidence (before an improvement claim).**
 - Run the same 15 S1 tasks, same model and evaluation limits, alongside retained S21/S22/S24 controls where feasible.
 - Report task-by-task resolved IDs, empty patches, tool-call failures, execution-limit failures, time/tokens, and actual diffs. A single S1 run is development evidence, not statistical proof of general improvement.
+- Keep a separate **unused public-task validation set**, where available, so repeated optimization on the S1 tasks cannot masquerade as generalization. Do not modify reference grading tests to manufacture passes.
 - Do not call a candidate “better” unless it shows real task-resolution gains and acceptable non-regression under replicated tests. Only then spend resources on a broader Kaggle run.
 
 ## 6. Conclusion
