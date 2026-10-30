@@ -16,7 +16,7 @@ All development results below come from **the same selected 15 S1 tasks**. Kaggl
 
 The [submission records](../../submission_records.md) show **S25 Kaggle public score = 0.00**; S24 was not submitted to Kaggle. Durations and observed tokens are evaluator trace aggregates (including repeated context), **not** GPU billing, unique generated tokens, or evidence of efficient solving. The shorter duration coincided with widespread unsuccessful or empty-patch termination; it does not demonstrate faster task solving.
 
-S25 lost S24's `rich_4077` success. Its only nonempty patch (`rich_4075`, 861 bytes) failed evaluation and was recovered as an **unsubmitted working-tree fallback**, not a successful explicit submission.
+S25 lost S24's `rich_4077` success. Its only nonempty patch (`rich_4075`, 861 bytes) failed evaluation and was recovered as an **unsubmitted working-tree fallback**, not a successful explicit submission. The printed S25 trace shows only **four explicit `submit_patch` calls**, all returning `patch_size: 0`; **no nonempty patch was explicitly submitted** in this S1 evaluation.
 
 ## 2. Confirmed root causes
 
