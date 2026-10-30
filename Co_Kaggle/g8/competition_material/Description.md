@@ -1,17 +1,49 @@
-# Smart Buildings Competition - Train an efficient HVAC control system that generalizes to buildings it hasn't seen before.
+# NeurIPS 2026 Smart Buildings Competition — Overview
 
-https://www.kaggle.com/competitions/neurips-2026-smart-buildings/overview
+**Challenge:** Train an efficient HVAC control system that generalizes to buildings it has not seen before.
 
-## Overview
+**Official source:** [Kaggle competition overview](https://www.kaggle.com/competitions/neurips-2026-smart-buildings/overview)
 
-In the Smart Buildings Challenge, participants will create a model based on simulated building size, layout, weather, material properties, and HVAC systems. Successful submissions could improve energy efficiency and contribute to global sustainability efforts.
+## Competition at a glance
 
-## Description
+In the **Smart Buildings Challenge**, participants develop a control policy for buildings with different sizes, floor plans, weather, construction materials, and HVAC configurations.
 
-Buildings account for nearly 40% of carbon emissions in the United States. HVAC systems are one of the biggest contributors, consuming 40–60% of a building’s energy and 15% of global energy. Even with advances in AI, most buildings still operate much as they did decades ago. Optimizing energy use with machine learning could have a significant, positive impact on combating climate change.
+The goal is to improve energy efficiency and reduce carbon emissions **without sacrificing occupant comfort**. Crucially, the policy must transfer to previously unseen buildings rather than merely perform well in one familiar environment.
 
-Most control systems are designed for a single building. Move them somewhere new, and performance often drops. The policies that worked in one place don’t transfer to unseen buildings and scenarios. However, most research focuses on same-building, rather than cross-building, solutions. This lack of transferability makes it difficult to scale energy savings across campuses, cities, and regions.
+## Why this challenge matters
 
-In this competition, hosted by the NSF AI Institute in Dynamic Systems, Harvard University, Columbia University, the University of Washington, and Kajima Corporation, you’ll train control policies on simulated buildings, then evaluate them on an unseen set that may differ in size, layout, weather, material properties, and HVAC systems. The goal is a policy that can adapt to a new building with minimal configuration.
+According to the competition description:
 
-Transferable policies could scale energy savings globally and make real progress against climate change. Put your ML skills to work on this high-impact, unsolved optimization problem. Winning solutions may have the opportunity to test their models on three real buildings.
+- Buildings account for nearly **40% of carbon emissions in the United States**.
+- HVAC systems consume **40–60% of a building's energy** and **15% of global energy**.
+- Many existing building controllers are tailored to one building, and their performance declines when transferred to another.
+
+Although machine learning has advanced, most building-control research still evaluates policies on the same building used for development. This limits the ability to deploy energy-saving policies across campuses, cities, and regions.
+
+## The task: transferable HVAC control
+
+Participants train control policies using simulated buildings. Organizers evaluate the policies on **unseen buildings and weather scenarios** that can differ in:
+
+- Building size and floor layout
+- Climate and weather conditions
+- Construction and envelope material properties
+- HVAC equipment and system configurations
+
+A successful policy must adapt to these differences with minimal per-building configuration.
+
+This is a **sequential control task**, not a conventional fixed-label prediction problem. For the control interface, observations, and submission format, see [Data.md](Data.md). For the exact scoring formula, see [Evaluation.md](Evaluation.md).
+
+## Organizers and potential impact
+
+The competition is hosted by the **NSF AI Institute in Dynamic Systems, Harvard University, Columbia University, the University of Washington, and Kajima Corporation**.
+
+Policies that generalize well could make large-scale building-energy optimization more practical. **Winning solutions may have an opportunity to be tested on three real buildings**, as stated on the official competition page.
+
+## Official resources
+
+- [Competition overview](https://www.kaggle.com/competitions/neurips-2026-smart-buildings/overview)
+- [Competition data and submission interface](https://www.kaggle.com/competitions/neurips-2026-smart-buildings/data)
+- [Evaluation and scoring](https://www.kaggle.com/competitions/neurips-2026-smart-buildings/overview/evaluation)
+- [Organizer's starter kit](https://github.com/smart-buildings-2026/starter-kit)
+
+> **Source fidelity:** This document reorganizes and lightly paraphrases the official Kaggle *Description* section. The numerical motivation and claims about potential real-building testing are attributed to the organizers, not independently established here.
