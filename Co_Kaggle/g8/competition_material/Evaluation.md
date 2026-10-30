@@ -21,9 +21,9 @@ where:
 
 | Term | Meaning | Contribution to reward |
 | --- | --- | --- |
-| \`p_t\` | Occupant comfort (a nonpositive regret term) | \`0.6 p_t\` |
-| \`c_t\` | Energy cost, including electricity and gas (nonnegative) | \`-0.2 c_t\` |
-| \`e_t\` | Carbon emissions (nonnegative) | \`-0.2 e_t\` |
+| `p_t` | Occupant comfort (a nonpositive regret term) | `0.6 p_t` |
+| `c_t` | Energy cost, including electricity and gas (nonnegative) | `-0.2 c_t` |
+| `e_t` | Carbon emissions (nonnegative) | `-0.2 e_t` |
 
 ### Comfort penalty
 
@@ -37,7 +37,7 @@ Consequently, letting even one occupied zone become extremely uncomfortable can 
 
 ### Why the reward is never positive
 
-Comfort is a penalty (\`p_t <= 0\`), while energy cost and emissions are nonnegative (\`c_t >= 0\`, \`e_t >= 0\`). Therefore:
+Comfort is a penalty (`p_t <= 0`), while energy cost and emissions are nonnegative (`c_t >= 0`, `e_t >= 0`). Therefore:
 
 \[
 r_t \le 0.
@@ -55,7 +55,7 @@ Each scenario lasts **30 days**, or:
 
 All steps are scored, **including the first**; there is no unscored warm-up.
 
-For scenario \`s\`, the episode return is:
+For scenario `s`, the episode return is:
 
 \[
 R_s = \sum_{t=1}^{8640} r_{s,t},
@@ -67,7 +67,7 @@ Here, \(\bar r_s\) is the **mean reward per step**, not the episode total.
 
 ## 4. Leaderboard score
 
-Let \`S\` be the evaluated set of building–weather scenarios. The score is:
+Let `S` be the evaluated set of building–weather scenarios. The score is:
 
 \[
 \operatorname{score}
