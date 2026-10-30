@@ -2,7 +2,7 @@
 
 | Submission and Description | public score | comments |
 | --- | ---: | --- |
-| submission.zip - submission_25 | not submitted | `submission_nb/artifacts/submission_25.zip`; E4B QAT, no LoRA; one repair agent, numbered checked edits, saved behavioral checks and rollback; real E4B score unmeasured; pilot before full S1 |
+| submission.zip - submission_25 | 0.00 | `submission_nb/artifacts/submission_25.zip`; E4B QAT, no LoRA; one repair agent, numbered checked edits, saved behavioral checks and rollback; real E4B score unmeasured; pilot before full S1 |
 | submission.zip - submission_24 | not submitted | `submission_nb/artifacts/submission_24.zip`; E4B QAT, no LoRA; two-round editor/reviewer pipeline; S1 development test: 1/15 resolved, 3 empty patches, 5 turn-limit errors (not a leaderboard score) |
 | submission.zip - submission_23 | 0.10 | `submission_nb/artifacts/submission_23.zip`; 31B |
 | submission.zip - submission_22 | not submitted | `submission_nb/artifacts/submission_22.zip`; E4B |
