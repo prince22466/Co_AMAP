@@ -119,8 +119,9 @@ def reshape_and_cache_flash(
         block_stride = key_cache.stride(0)
         assert key_cache.stride(0) == value_cache.stride(0)
 
-        # Decode writes are latency-sensitive: keep one token per program.
-        # Larger prefill writes amortize CTA scheduling over four cache slots.
+        # Small writes keep one token per program to limit register pressure.
+        # Larger writes (typically prefill) amortize CTA scheduling across
+        # four cache slots; the threshold is based on tokens, not phase.
         tokens_per_program = 4 if num_tokens >= 256 else 1
         grid = (triton.cdiv(num_tokens, tokens_per_program),)
         with torch_device_fn.device(key.device):
