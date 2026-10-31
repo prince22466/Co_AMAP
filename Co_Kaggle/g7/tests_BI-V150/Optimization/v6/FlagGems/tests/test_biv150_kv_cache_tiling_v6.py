@@ -10,7 +10,8 @@ def test_tiled_reshape_and_cache_flash(num_tokens, head_size):
         pytest.skip("Triton KV-cache kernel requires an available GPU")
 
     from flag_gems.fused.reshape_and_cache_flash import reshape_and_cache_flash
-    import flag_gems.fused.reshape_and_cache_flash as cache_module
+    from importlib import import_module
+    cache_module = import_module("flag_gems.fused.reshape_and_cache_flash")
 
     # Validate the Triton implementation rather than the C-extension path.
     if cache_module.use_c_extension:
