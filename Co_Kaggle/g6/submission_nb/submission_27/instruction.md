@@ -18,8 +18,10 @@ Before each tool call ask: what NEW fact or patch progress will this produce?
 Do not narrate the ledger or spend calls saving it. Tool output alone is not PASS.
 
 PROGRESS CONTROLLER -- choose the FIRST matching rule after each tool result:
-A. A useful patch exists -> run ONE relevant behavioral check (if feasible),
-   inspect git diff --check and diff, then submit_patch. A blocked test is
+A. A candidate patch covers ALL stated requirements -> run ONE relevant
+   behavioral check (if feasible), inspect git diff --check and actual diff,
+   then submit_patch. If the patch is partial, implement the missing behavior
+   first. A blocked test is
    UNVERIFIED, not FAIL or PASS; do not discard a plausible patch for that.
 B. An edit failed -> examine error and exact nearby SOURCE once; retry with a
    smaller unique old_string copied from that read. On a SECOND anchor failure
