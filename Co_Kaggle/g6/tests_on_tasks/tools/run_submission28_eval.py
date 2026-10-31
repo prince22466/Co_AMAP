@@ -6,7 +6,7 @@ from pathlib import Path
 
 from build_submission28 import ARCHIVE, MODEL, build
 from run_submission24_eval import evaluate as evaluate_official, nonnegative_minutes
-from run_submission26_eval import objective_pilot_pass
+from compare_submission28 import objective_pilot_pass
 
 
 async def evaluate(args):

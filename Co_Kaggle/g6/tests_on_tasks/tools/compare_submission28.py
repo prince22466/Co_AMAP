@@ -44,6 +44,19 @@ def compare(baseline: dict, candidate: dict) -> dict:
     }
 
 
+def objective_pilot_pass(run: dict) -> bool:
+    """Require a genuine new success while retaining both demonstrated S27 wins.
+
+    The legacy S25 checker requires rich_4077, which S27 did not solve.
+    This gate therefore tests improvement over the *observed* S27 pilot.
+    """
+    solved = set(run.get("solved_ids", []))
+    return (run.get("resolved", 0) >= 3
+            and {"rich_3905", "rich_3454"} <= solved
+            and run.get("empty_patches", 99) <= 1
+            and not run.get("agent_error_ids"))
+
+
 def main() -> None:
     """Read paired prints and emit a JSON report; do not alter evaluation files."""
     parser = argparse.ArgumentParser(description=__doc__)

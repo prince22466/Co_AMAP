@@ -5,7 +5,7 @@ import zipfile
 
 import yaml
 from build_submission28 import ARCHIVE, FILES, IncludeLoader, SOURCE, TOOLS, build
-from compare_submission28 import compare
+from compare_submission28 import compare, objective_pilot_pass
 from analyze_submission27_traces import analyze
 
 
@@ -74,6 +74,19 @@ class Submission28Tests(unittest.TestCase):
         self.assertEqual(result["candidate_empty_on_matched"], 1)
         self.assertEqual(result["baseline_exhausted_on_matched"], 1)
         self.assertEqual(result["actions"]["reads"]["baseline"], 1)
+
+    def test_pilot_gate_requires_both_retained_wins_plus_one_new(self):
+        """Do not accidentally inherit S25's different regression gate."""
+        good = {"resolved": 3,
+                "solved_ids": ["rich_3905", "rich_3454", "rich_3882"],
+                "empty_patches": 1, "agent_error_ids": []}
+        self.assertTrue(objective_pilot_pass(good))
+        self.assertFalse(objective_pilot_pass(
+            {**good, "solved_ids": ["rich_3905", "rich_3882", "rich_4077"]}))
+        self.assertFalse(objective_pilot_pass({**good, "resolved": 2}))
+        self.assertFalse(objective_pilot_pass({**good, "empty_patches": 2}))
+        self.assertFalse(objective_pilot_pass(
+            {**good, "agent_error_ids": ["rich_3518"]}))
 
     def test_unmatched_tasks_are_reported(self):
         """A truncated candidate trace must not appear to be a full run."""
