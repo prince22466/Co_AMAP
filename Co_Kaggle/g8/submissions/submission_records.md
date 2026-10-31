@@ -1,4 +1,4 @@
-# submission records, with public scores and the submission_x.zip and its descriptions
+# submission records, with public scores and the submission-nb - Version x and its descriptions
 
 | Submission and Description | public score | comments |
 | --- | ---: | --- |
