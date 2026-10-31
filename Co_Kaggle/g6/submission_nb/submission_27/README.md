@@ -45,6 +45,22 @@ The analyzer labels same-path repeated reads and same-path failed edits as
 which can omit tasks/details. Use complete structured tool-call traces for
 precise duplicate-argument and progress findings.
 
+## Official evaluator pilot command
+
+Use the existing locally served E4B QAT model. The wrapper runs the official
+baseline preflight before evaluating any candidate; it writes raw outcomes to
+a new output directory and does not overwrite prior traces.
+
+```bash
+python Co_Kaggle/g6/tests_on_tasks/tools/run_submission27_eval.py \
+  --tasks /kaggle/input/competitions/gemma-4-developer-agent/tasks.jsonl \
+  --snapshots /kaggle/input/competitions/gemma-4-developer-agent/snapshots \
+  --wheels /kaggle/input/competitions/gemma-4-developer-agent/wheels \
+  --served-model gemma-4-e4b-it-qat-w4a16-ct \
+  --stage pilot --repeats 2 --time-limit 4 \
+  --output /kaggle/working/s27-pilot
+```
+
 ## Real-model gate (not replaced by CPU unit tests)
 
 Run the same five S25 regression IDs (`rich_4077`, `rich_3905`, `rich_3518`,
