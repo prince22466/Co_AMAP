@@ -44,30 +44,35 @@ def reshape_and_cache_flash_kernel(
     k_scale,
     v_scale,
     n: tl.constexpr,
+    num_tokens: tl.constexpr,
+    TOKENS_PER_PROGRAM: tl.constexpr,
 ):
-    token_idx = tl.program_id(0)
-    slot_idx = tl.load(slot_mapping + token_idx)
-    if slot_idx < 0:
-        return
+    # Batch several cache insertions per CTA during prefill. The innermost
+    # dimension remains contiguous, and each token retains its own page slot.
+    token_idx = tl.program_id(0) * TOKENS_PER_PROGRAM + tl.arange(
+        0, TOKENS_PER_PROGRAM
+    )
+    valid_token = token_idx < num_tokens
+    slot_idx = tl.load(slot_mapping + token_idx, mask=valid_token, other=-1)
+    valid_slot = valid_token & (slot_idx >= 0)
 
     block_idx = slot_idx // block_size
     block_offset = slot_idx % block_size
     i = tl.arange(0, triton.next_power_of_2(n))
-    mask = i < n
+    mask = valid_slot[:, None] & (i[None, :] < n)
 
-    src_key_idx = token_idx * key_stride + i
-    src_value_idx = token_idx * value_stride + i
-    head_idx = i // head_size
-    head_offset = i % head_size
+    src_key_idx = token_idx[:, None] * key_stride + i[None, :]
+    src_value_idx = token_idx[:, None] * value_stride + i[None, :]
+    # The NHD page layout places all head elements of one token together.
+    # Avoid the per-element head division/modulo in the previous kernel.
     tgt_key_value_idx = (
-        block_idx * block_stride
-        + block_offset * num_heads * head_size
-        + head_idx * head_size
-        + head_offset
+        block_idx[:, None] * block_stride
+        + block_offset[:, None] * n
+        + i[None, :]
     )
 
-    tgt_key = tl.load(key + src_key_idx, mask=mask)
-    tgt_value = tl.load(value + src_value_idx, mask=mask)
+    tgt_key = tl.load(key + src_key_idx, mask=mask, other=0)
+    tgt_value = tl.load(value + src_value_idx, mask=mask, other=0)
 
     # TODO: support fp8 dtype
     tl.store(key_cache + tgt_key_value_idx, tgt_key, mask=mask)
@@ -114,7 +119,11 @@ def reshape_and_cache_flash(
         block_stride = key_cache.stride(0)
         assert key_cache.stride(0) == value_cache.stride(0)
 
-        grid = (num_tokens,)
+        # Small writes keep one token per program to limit register pressure.
+        # Larger writes (typically prefill) amortize CTA scheduling across
+        # four cache slots; the threshold is based on tokens, not phase.
+        tokens_per_program = 4 if num_tokens >= 256 else 1
+        grid = (triton.cdiv(num_tokens, tokens_per_program),)
         with torch_device_fn.device(key.device):
             reshape_and_cache_flash_kernel[grid](
                 key,
@@ -131,4 +140,6 @@ def reshape_and_cache_flash(
                 k_scale,
                 v_scale,
                 num_heads * head_size,
+                num_tokens,
+                tokens_per_program,
             )
