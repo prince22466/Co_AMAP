@@ -8,13 +8,10 @@
 ## Executive findings
 
 1. **The v5 decode kernel is faster in direct, matched-input GPU tests.** All **30/30** tested configurations (4,096/16,384/17,408 KV lengths × batches 1/8/16/32/64 × 2D/3D) passed the benchmark's numerical comparison and were faster than upstream vLLM. Reported attention-call latency reductions range from **10.09% to 23.72%** (unweighted average approximately **14.4%**). Output error printed as `0.00000`, which is *rounded reporting*, not a claim of bitwise identity.
-2. **v5 improves the recorded end-to-end 4K and 16K serving metrics over the self-run baseline:** 4K **2,092.46 vs 1,881.95 total tok/s (+11.19%)**; 16K **937.09 vs 861.88 total tok/s (+8.73%)**. These are comparisons of published run summaries, **not a controlled same-process kernel on/off experiment**, and should not be described as fully isolated decode-caused gains.
-3. **16K KV-cache capacity is a hard constraint at concurrency 64.** Server allocation was **522,960 KV tokens**. Given the model's measured/config-derived **43,008 bytes/token (42 KiB/token)**, this is approximately **20.95 GiB** of allocated KV storage. At 64 simultaneous 16K prefixes alone, demand would be **1,048,576 tokens (42 GiB)**; after 1,024 generated tokens/request, **1,114,112 tokens (~44.63 GiB)**. With no prefix sharing, roughly **31 full 16K prefixes** or **30 full 17,408-token contexts** fit at once. The actual scheduler can use partial/chunked contexts, so these are capacity bounds, not a prediction of exact instantaneous running-request count.
-4. **KV saturation and queueing were observed, not inferred solely from capacity.** During a monitored v5 serving run, `vllm:kv_cache_usage_perc` peaked at **0.9997**, waiting requests peaked at **63**, running requests peaked at **64**, and `vllm:num_preemptions_total` increased by **8**. Those extrema/counter changes span the *whole monitored 4K+16K interval* and are not safely attributable exclusively to 16K. Later 16K server snapshots commonly showed **29–31 running requests**, high cache usage (roughly 93–100%), and a waiting queue. Snapshot prefix-cache hit rate was **0.0%**.
-5. **Prefill/decode overlap is a major observed serving symptom.** Engine logs repeatedly reported ~**11–20 generated tok/s** during intervals with ongoing prefill throughput (~1,638 prompt tok/s), compared with ~**243–254 generated tok/s** in some intervals with **0 prompt tok/s**. These are engine-wide, windowed throughput reports—not per-kernel timings or a controlled A/B. They show interference/correlation but do **not** isolate scheduling versus GPU prefill contention versus disabled v5 specialization.
-6. **v5's specialization has a significant eligibility limitation.** The code enables `DECODE_PAGE_LOOKUP` only when **`max_seqlen_q == 1`** (plus strict shape/dtype/cache checks). A fused attention call containing any prefill with `max_seqlen_q > 1` falls back to the original page lookup for that invocation, including its decode tokens. The 3D path is also disabled by mixed prefill, missing segment buffers, threshold excess, or batch-invariance settings. **How often this actually occurs in official serving remains unmeasured.**
-7. **The 16K workload remains much slower end-to-end than 4K**, despite decode improvement: 16K output throughput **55.13 vs 418.49 tok/s**, mean TTFT **588.44 vs 11.61 s**, and mean TPOT **475.30 vs 139.82 ms**. This is consistent with long-prefill work, KV memory pressure, waiting/preemption and decode contention; there is insufficient evidence to apportion exact causal shares.
-8. **v1 remains the stronger published 16K serving candidate.** Its 16K summary reports **1,209.43 tok/s**, versus v5 **937.09 tok/s** (v5 **22.52% lower** than v1), consistent with prioritizing long-context prefill performance rather than assuming decode-only acceleration will dominate total throughput. This comparison is across version summaries; other environment differences have not been ruled out.
+2. **16K KV-cache capacity is a hard constraint at concurrency 64.** Server allocation was **522,960 KV tokens**. Given the model's measured/config-derived **43,008 bytes/token (42 KiB/token)**, this is approximately **20.95 GiB** of allocated KV storage. At 64 simultaneous 16K prefixes alone, demand would be **1,048,576 tokens (42 GiB)**; after 1,024 generated tokens/request, **1,114,112 tokens (~44.63 GiB)**. With no prefix sharing, roughly **31 full 16K prefixes** or **30 full 17,408-token contexts** fit at once. The actual scheduler can use partial/chunked contexts, so these are capacity bounds, not a prediction of exact instantaneous running-request count.
+3. **KV saturation and queueing were observed, not inferred solely from capacity.** During a monitored v5 serving run, `vllm:kv_cache_usage_perc` peaked at **0.9997**, waiting requests peaked at **63**, running requests peaked at **64**, and `vllm:num_preemptions_total` increased by **8**. Those extrema/counter changes span the *whole monitored 4K+16K interval* and are not safely attributable exclusively to 16K. Later 16K server snapshots commonly showed **29–31 running requests**, high cache usage (roughly 93–100%), and a waiting queue. Snapshot prefix-cache hit rate was **0.0%**.
+4. **Prefill/decode overlap is a major observed serving symptom.** Engine logs repeatedly reported ~**11–20 generated tok/s** during intervals with ongoing prefill throughput (~1,638 prompt tok/s), compared with ~**243–254 generated tok/s** in some intervals with **0 prompt tok/s**. These are engine-wide, windowed throughput reports—not per-kernel timings or a controlled A/B. They show interference/correlation but do **not** isolate scheduling versus GPU prefill contention versus disabled v5 specialization.
+
 
 ## 1. Implementation: what v5 actually changes
 
@@ -65,29 +62,9 @@ Other batches (8 and 16 at 4K/17,408) also passed and showed lower latency; see 
 
 A nominal 42-layer model extrapolation of the 16K/B32/3D saving is **42 × (2.960 − 2.578) = ~16.0 ms** of attention time per hypothetical full decode step, *if* per-layer conditions and execution are comparable. This is illustrative only, not measured total-model step time.
 
-## 3. Official-workload serving results
 
-Runs use the unchanged competition workloads. The summaries average the **last three successful runs**, excluding the first; all individual runs in [v5 raw results](4k16k_rawruns.csv) were marked SUCCESS.
 
-| Metric | 4K baseline | 4K v5 | 16K baseline | 16K v5 |
-| --- | ---: | ---: | ---: | ---: |
-| Total throughput (tok/s) | 1,881.95 | **2,092.46** | 861.88 | **937.09** |
-| Output throughput (tok/s) | 376.39 | **418.49** | 50.70 | **55.13** |
-| Mean TTFT (ms) | 12,309.34 | **11,609.70** | 636,512.47 | **588,437.58** |
-| Median TTFT (ms) | 3,513.29 | 3,356.29 | 687,934.06 | 634,741.13 |
-| P99 TTFT (ms) | 74,084.96 | 69,800.41 | 1,233,906.07 | 1,135,598.54 |
-| Mean TPOT (ms) | 156.12 | **139.82** | 518.00 | **475.30** |
-| Duration (s) | 696.75 | 626.69 | 2,585.31 | 2,377.82 |
-
-Relative to baseline: **4K total throughput +11.19%, 16K +8.73%, 4K mean TPOT −10.44%, 16K mean TPOT −8.24%, 16K mean TTFT −7.55%**.
-
-**Repeatability:** last-three 16K total-throughput runs were **937.14, 937.15, 936.98 tok/s**; the corresponding 4K runs were **2,085.57, 2,041.12, 2,150.69 tok/s**. The very stable 16K numbers suggest reproducibility within this setup; they do not establish causal attribution.
-
-**Comparative status:** [v1](../v1/4k16k_summary.csv) publishes **2,149.82 tok/s (4K)** and **1,209.43 tok/s (16K)**, so v1 remains the strongest published 16K serving candidate. v5 is a validated *decode direction*, not the current best 16K system-wide solution.
-
-**Sources:** [v5 summary](4k16k_summary.csv), [v5 individual runs](4k16k_rawruns.csv), [v5 summary note](summary.txt), [self-run baseline summary](../../4k16K_summary_benchmark.csv), [v1 summary](../v1/4k16k_summary.csv).
-
-## 4. The real 16K bottlenecks: evidence and limits
+## 3. The real 16K bottlenecks: evidence and limits
 
 ### 4.1 KV-cache saturation, capacity-limited effective concurrency — **directly observed**
 
@@ -132,24 +109,3 @@ The official 16K run processes **2,097,152 prompt tokens** and **131,072 generat
 ### 4.6 Other candidates: GEMM, launch/scheduler gaps, paged-KV traffic — **not isolated by v5 evidence**
 
 Earlier project profiling identified attention (especially 16K prefill), GEMM/Linear and GPU scheduling gaps as optimization opportunities. The v5 experiment does **not** quantify GEMM time, GPU idle time, CPU scheduling overhead, occupancy, cache bandwidth, or physical-page-lookup share. These remain valid **investigation targets**, not additional root causes proven by the v5 monitoring run.
-
-## 5. Recommended investigation priority (no benchmark or rule changes)
-
-1. **Protect the confirmed v5 decode win.** Retain existing operator selection and standard fallback; keep the 30-case BF16 correctness/performance matrix. Archive `/tmp/v5_decode_full.csv` and its execution metadata in this directory if available.
-2. **Prove serving-time code activation.** Capture vLLM EngineCore PID environment (`PYTHONPATH`, plugin variables), dispatch/backend identification, vLLM version and KV-cache block count for every official run. A correct interactive-shell import is not proof that an existing server process loaded the same code.
-3. **Separate 4K from 16K scheduler metrics.** Collect time-aligned metrics per official workload: GPU KV usage, running/waiting requests, preemption deltas, prompt/output tok/s, and prefill/decode GPU time. Archive raw logs or CSV traces.
-4. **Measure actual 2D/3D and `DECODE_PAGE_LOOKUP` eligibility frequency.** In an isolated diagnostic run (not by editing the competition benchmark), record how many attention invocations/tokens take the v5 fast path, particularly during mixed prefill/decode. Preserve operator-selection logic.
-5. **Profile genuine 16K prefill, including chunked prefill and GEMM.** Benchmark prefill attention separately with identical inputs, correlate scheduler steps with GPU activity, then test kernel-level tiling/data-reuse changes only after validating correctness.
-6. **Treat KV capacity as a first-class constraint.** Measure effective concurrent full-context sequences and preemption/recompute costs; optimize KV handling at kernel/memory-access level where feasible. Do not misrepresent adjusting benchmark concurrency or parameters as a competition optimization.
-7. **Compare a new independent v1+v5 kernel candidate only after isolation tests.** v1 currently leads at 16K; combining valid prefill and decode kernel improvements may help but is not guaranteed. Re-run unchanged official 4K/16K cases and **MATH-500 accuracy** for each promoted candidate.
-
-## 6. Status and methodological limits
-
-- **Kernel result:** verified in supplied local console logs; 30/30 numerical checks reported PASS, no microbenchmark regressions; raw `/tmp` benchmark artifact not committed here.
-- **Serving result:** published per-run and summary CSVs support positive *association* of v5 version with 4K/16K throughput improvement over the original reference. The data do not by themselves prove the **entire** gain is caused by the decode lookup instructions.
-- **Scheduler result:** observations are from user-supplied terminal/server logs, not yet archived as full raw traces in this directory; counter deltas and extrema span both cases unless split.
-- **16K root-cause ranking:** KV-cache saturation and waiting are measured constraints. Prefill/decode contention is strongly suggested by interval logs. The mixed-batch fast-path gate is proven by code; its production cost is **unmeasured**. No exact percent attribution across these mechanisms is currently justified.
-- **Accuracy gate:** `summary.txt` still marks **v5 MATH-500 accuracy >=0.95 as TBD**. Kernel-output agreement is not a substitute for the competition's model-level accuracy evaluation.
-- **Competition compliance:** No quantization or speculative sampling, no benchmark-script edits, no operator-only switching without optimization, no removal of primary operator-selection logic, and no direct merge of upstream FlagOS changes are proposed.
-
-**Bottom line:** v5 successfully reduces *decode attention* latency, but 16K serving is primarily constrained at the system level by insufficient KV capacity for 64 full long contexts, observable queueing, and strong prefill/decode interference. Measure real mixed-batch activation and prefill cost before attributing the remaining throughput gap to decode itself.
