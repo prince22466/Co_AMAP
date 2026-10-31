@@ -17,3 +17,23 @@ Both comparisons use the summary averages of the last 3 successful runs for each
 
 Accuracy(math_500 eval) >=0.95 : NA(performance isnt obviously better than self-run benmark, accuracy doesnt matter anymore)
 
+================================================================================
+Follow-up GPU-level root-cause investigation — 2026-10-31
+================================================================================
+See: v4_performance_regression_findings.md (in this directory).
+
+BI-V150 GPU event microbenchmarks, original vLLM Triton vs updated v4:
+- Q=16384, KV=16384: 298.441 ms vs 366.124 ms (+22.68% with grouped lookup).
+- Q=2048, KV=16384:   70.481 ms vs  88.014 ms (+24.88% with grouped lookup).
+- Disabling grouped lookup inside the same v4 Triton kernel restores near-
+  baseline latencies (298.423 ms and 70.532 ms, respectively).
+- All compared GPU outputs passed the local numerical equivalence check.
+
+Conclusion: the grouped page-lookup specialization is the confirmed source
+of the 16K prefill ATTENTION KERNEL slowdown on BI-V150. It is a strong
+candidate explanation for the -5.06% end-to-end 16K serving regression;
+a separate serving-level ON/OFF experiment is still needed to quantify
+how much of the end-to-end difference it explains.
+
+The first original-v4 FlagGems backend-switch regression (237.83 tok/s)
+is a different integration issue; see the report for chronology.
