@@ -31,6 +31,13 @@ class Submission27Tests(unittest.TestCase):
         self.assertNotIn('sub_agents', config)
         self.assertEqual(config['include_contents'], 'default')
 
+    def test_s26_configuration_is_byte_identical(self):
+        baseline = SOURCE.parent / 'submission_26'
+        self.assertEqual((SOURCE / 'agent.yaml').read_bytes(),
+                         (baseline / 'agent.yaml').read_bytes())
+        self.assertEqual((SOURCE / 'eval_config.yaml').read_bytes(),
+                         (baseline / 'eval_config.yaml').read_bytes())
+
     def test_contract_addresses_failure_modes(self):
         instruction = (SOURCE / 'instruction.md').read_text()
         for criterion in ('R =', 'L =', 'H =', 'F =', 'SECOND anchor failure',
