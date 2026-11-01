@@ -141,15 +141,30 @@ for shape in [(1, 1), (2, 4), (4, 7)]:
 meta, obs, set_zone, set_outside = scenario(1, 4)
 set_zone(0, 305.)
 policy = Policy(meta, None)
-set_outside(292.)
+# Moderately cool outdoor air can replace the compressor entirely.
+# For 305 K in one zone: return ~297.5 K; coil target ~290.6 K.
+set_outside(288.)
 free_c, _ = check(policy, obs)
 set_outside(309.)
 hot_c, _ = check(policy, obs)
+# 292 K outside air is still too warm to reach the 290.6 K coil target
+# (even at the minimum 15% return air). Economizing would waste exhaust power.
+set_outside(292.)
+ineffective_c, _ = check(policy, obs)
 set_outside(235.)
 cold_c, _ = check(policy, obs)
 index = meta["recirculation_indices"][0]
-assert free_c[index] < hot_c[index], "Use more outside air when useful for cooling"
+assert free_c[index] < hot_c[index], "Use outside air when it fully replaces cooling"
+assert np.isclose(ineffective_c[index], hot_c[index]), (
+    "Do not economize when mixed air cannot meet the cooling target"
+)
 assert np.isclose(cold_c[index], hot_c[index]), "Protect against subfreezing free-cool"
+
+# With no cooling demand, recirculation remains at its high-return default.
+set_zone(0, 295.)
+set_outside(288.)
+comfort_c, comfort_d = check(policy, obs)
+assert comfort_d[0] == 0 and comfort_c[index] == 1.0
 
 
 # One invalid zone must not invalidate a whole AHU. Missing/invalid setpoints
@@ -174,5 +189,18 @@ for step in range(128):
     check(policy, obs)
 duration = time.perf_counter() - start
 assert duration < 10., f"Too slow: {duration:.3f}s for 128 steps"
-print(f"PASS: notebook syntax, dynamic shapes, heat/cool/mixed, free-cooling, "
-      f"sensor failure, reset and O(zones) latency: {duration:.3f}s/128")
+# Notebook must start the official gateway, not merely declare a policy.
+class FakeInferenceServer:
+    def __init__(self, cls):
+        assert cls is Policy
+
+    def run(self):
+        self.called = True
+
+
+gateway.SmartBuildingsInferenceServer = FakeInferenceServer
+exec("".join(notebook["cells"][-1]["source"]), namespace)
+
+print(f"PASS: notebook syntax + entrypoint, dynamic shapes, heat/cool/mixed, "
+      f"free-cooling conditions, sensor failure, reset, "
+      f"and O(zones) latency: {duration:.3f}s/128")
