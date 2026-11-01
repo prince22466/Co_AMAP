@@ -267,6 +267,8 @@ HEURISTICS_CONFIGS = {
     },
     "linear": {
         "EVEN_K": linear_heur_even_k,
+        "EVEN_M": lambda args: args["M"] % args["BLOCK_M"] == 0,
+        "EVEN_N": lambda args: args["N"] % args["BLOCK_N"] == 0,
     },
     "rand": {
         "BLOCK": rand_heur_block,
