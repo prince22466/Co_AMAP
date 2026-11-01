@@ -14,11 +14,13 @@ attention/scheduler logic, or competition benchmark scripts are changed.
 * **MM — L2-friendly grouping:** The pre-existing `GROUP_M=8` parameter was
   not used by `mm_kernel`. Group program IDs into nearby M tiles before
   advancing across N, improving the potential reuse of A/B tiles in L2.
-  Grouping degenerates naturally when decode's `M=1` produces one M tile.
+  For M <= 128 the original row-major tile ordering is retained, avoiding
+  unnecessary grouped-index arithmetic during small-batch decode.
 * **MM and Linear — edge-safe address generation:** Avoid `% M` / `% N`
   remapping of out-of-range tiles. Mask invalid rows and columns rather than
   loading duplicate edge data. Compile-time `EVEN_M`/`EVEN_N` specializations
   keep interior loads unmasked when the full dimension is tile-aligned.
+  Preserve the original `tl.max_contiguous/tl.multiple_of` alignment hints.
 * **Linear — accumulate into dot:** Pass the existing fp32 accumulator directly
   to `tl.dot` rather than producing a temporary dot result then performing an
   additional vector add. Preserve `allow_tf32=False` and the existing bias
@@ -40,8 +42,10 @@ python3 -m pytest -q -s tests/test_iluvatar_gemm_linear_v7.py
 The dedicated tests exercise FP16/BF16, prefill-like M=4096/16384,
 decode-like M=1, ragged M/N/K, weight transpose, bias, `mm.out`, and
 1D/3D Linear input. They import the Iluvatar implementation directly so a
-Torch or vendor fallback cannot hide a kernel failure. These tests are
-hardware-gated and are not claimed as passed.
+Torch or vendor fallback cannot hide a kernel failure. The tests assert
+transposed matrix strides and use non-scaled inputs to avoid overly
+permissive absolute error allowances. These tests are hardware-gated and
+are not claimed as passed.
 
 Also run the existing FlagGems `test_linear.py`, `test_mm.py`, and
 `test_addmm.py` suites with the regular BI-V150 environment.

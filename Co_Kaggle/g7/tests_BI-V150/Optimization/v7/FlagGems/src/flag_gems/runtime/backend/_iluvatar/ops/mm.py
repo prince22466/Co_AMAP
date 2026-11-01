@@ -117,24 +117,29 @@ def mm_kernel(
     # Process groups of M tiles for each N tile to reuse matrix blocks in L2.
     grid_m = tl.cdiv(M, BLOCK_M)
     grid_n = tl.cdiv(N, BLOCK_N)
-    group_width = GROUP_M * grid_n
-    group_id = pid // group_width
-    group_size_m = min(grid_m - group_id * GROUP_M, GROUP_M)
-    pid_m = group_id * GROUP_M + (pid % group_size_m)
-    pid_n = (pid % group_width) // group_size_m
+    if GROUP_M == 1:
+        # Decode-sized GEMMs: avoid unnecessary grouped-ID division.
+        pid_m = pid // grid_n
+        pid_n = pid % grid_n
+    else:
+        group_width = GROUP_M * grid_n
+        group_id = pid // group_width
+        group_size_m = min(grid_m - group_id * GROUP_M, GROUP_M)
+        pid_m = group_id * GROUP_M + (pid % group_size_m)
+        pid_n = (pid % group_width) // group_size_m
     # do matrix multiplication
     if UPGRADE_A_OFFS:
         rm = (pid_m * BLOCK_M + tl.arange(0, BLOCK_M)).to(tl.int64)
-        ram = rm
+        ram = tl.max_contiguous(tl.multiple_of(rm, BLOCK_M), BLOCK_M)
     else:
         rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
-        ram = rm
+        ram = tl.max_contiguous(tl.multiple_of(rm, BLOCK_M), BLOCK_M)
     if UPGRADE_B_OFFS:
         rn = (pid_n * BLOCK_N + tl.arange(0, BLOCK_N)).to(tl.int64)
-        rbn = rn
+        rbn = tl.max_contiguous(tl.multiple_of(rn, BLOCK_N), BLOCK_N)
     else:
         rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
-        rbn = rn
+        rbn = tl.max_contiguous(tl.multiple_of(rn, BLOCK_N), BLOCK_N)
     rk = pid_z * BLOCK_K + tl.arange(0, BLOCK_K)
     # pointers
     A = A + (ram[:, None] * stride_am + rk[None, :] * stride_ak)
@@ -259,7 +264,7 @@ def _launch_mm(a, b, c, M, N, K):
             acc_dtype=acc_dtype_tl,
             input_precision=None,
             fp8_fast_accum=True,
-            GROUP_M=8,
+            GROUP_M=1 if M <= 128 else 8,
             AB_DTYPE=ab_dtype_tl,
         )
     return c

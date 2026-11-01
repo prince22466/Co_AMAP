@@ -31,6 +31,7 @@ SHAPES = [
     (7, 133, 131),
     (65, 129, 96),
     (128, 256, 256),
+    (16, 2560, 512),
     (4096, 128, 128),
     (16384, 128, 128),
 ]
@@ -38,7 +39,7 @@ SHAPES = [
 
 def _assert_close(actual, expected, dtype):
     if dtype == torch.bfloat16:
-        torch.testing.assert_close(actual, expected, rtol=0.05, atol=0.05)
+        torch.testing.assert_close(actual, expected, rtol=0.025, atol=0.05)
     else:
         torch.testing.assert_close(actual, expected, rtol=0.01, atol=0.02)
 
@@ -51,15 +52,16 @@ def test_v7_iluvatar_linear(m, k, n, dtype, with_bias):
     from flag_gems.runtime.backend._iluvatar.ops.linear import linear
 
     torch.manual_seed(22466)
-    x = torch.randn((m, k), device="cuda", dtype=dtype) * 0.1
-    weight = torch.randn((n, k), device="cuda", dtype=dtype) * 0.1
+    x = torch.randn((m, k), device="cuda", dtype=dtype)
+    weight = torch.randn((n, k), device="cuda", dtype=dtype)
     bias = (
-        torch.randn(n, device="cuda", dtype=dtype) * 0.1
+        torch.randn(n, device="cuda", dtype=dtype)
         if with_bias
         else None
     )
     expected = torch.nn.functional.linear(x, weight, bias)
     actual = linear(x, weight, bias)
+    assert actual.shape == expected.shape
     _assert_close(actual, expected, dtype)
 
 
@@ -71,11 +73,14 @@ def test_v7_iluvatar_mm_and_mm_out(m, k, n, dtype, transposed_weight):
     from flag_gems.runtime.backend._iluvatar.ops.mm import mm, mm_out
 
     torch.manual_seed(22466)
-    a = torch.randn((m, k), device="cuda", dtype=dtype) * 0.1
+    a = torch.randn((m, k), device="cuda", dtype=dtype)
     if transposed_weight:
-        b = torch.randn((n, k), device="cuda", dtype=dtype).t() * 0.1
+        storage = torch.randn((n, k), device="cuda", dtype=dtype)
+        b = storage.t()
+        assert b.stride() == (1, k), "Expected a column-major weight"
     else:
-        b = torch.randn((k, n), device="cuda", dtype=dtype) * 0.1
+        b = torch.randn((k, n), device="cuda", dtype=dtype)
+        assert b.stride() == (n, 1), "Expected a row-major weight"
 
     expected = torch.mm(a, b)
     _assert_close(mm(a, b), expected, dtype)
@@ -92,10 +97,10 @@ def test_v7_iluvatar_linear_batch_dimensions(with_bias):
     from flag_gems.runtime.backend._iluvatar.ops.linear import linear
 
     dtype = torch.float16
-    weight = torch.randn((96, 128), dtype=dtype, device="cuda") * 0.1
-    bias = torch.randn(96, dtype=dtype, device="cuda") * 0.1 if with_bias else None
+    weight = torch.randn((96, 128), dtype=dtype, device="cuda")
+    bias = torch.randn(96, dtype=dtype, device="cuda") if with_bias else None
     for shape in [(128,), (2, 3, 128)]:
-        x = torch.randn(shape, dtype=dtype, device="cuda") * 0.1
+        x = torch.randn(shape, dtype=dtype, device="cuda")
         _assert_close(
             linear(x, weight, bias),
             torch.nn.functional.linear(x, weight, bias),

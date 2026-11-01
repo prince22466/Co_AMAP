@@ -73,8 +73,8 @@ def linear_kernel(
     rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
     rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
     # Mask only edge tiles; avoid modulo instructions and duplicated tail reads.
-    ram = rm
-    rbn = rn
+    ram = tl.max_contiguous(tl.multiple_of(rm, BLOCK_M), BLOCK_M)
+    rbn = tl.max_contiguous(tl.multiple_of(rn, BLOCK_N), BLOCK_N)
     rk = pid_z * BLOCK_K + tl.arange(0, BLOCK_K)
 
     A = input_ptr + (ram[:, None] * stride_im + rk[None, :] * stride_ik)
