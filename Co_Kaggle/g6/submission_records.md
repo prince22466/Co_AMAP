@@ -2,6 +2,7 @@
 
 | Submission and Description | public score | comments |
 | --- | ---: | --- |
+| submission.zip - submission_28 | not submitted | `submission_nb/artifacts/submission_28.zip`; E4B single agent; sequential inspect, edit, check and submit workflow with bounded retries |
 | submission.zip - submission_27 | running | `submission_nb/artifacts/submission_27.zip`; E4B single agent; S26 with prompt-guided evidence ledger, repetition detection and progress control |
 | submission.zip - submission_26 | not submitted | `submission_nb/artifacts/submission_26.zip`; E4B single agent; restores native tools and prompts for bounded search and early edits |
 | submission.zip - submission_25 | 0.00 | `submission_nb/artifacts/submission_25.zip`; E4B QAT, no LoRA; one repair agent, numbered checked edits, saved behavioral checks and rollback;|
