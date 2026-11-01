@@ -2,15 +2,15 @@
 
 | Submission and Description | public score | comments |
 | --- | ---: | --- |
-| submission.zip - submission_27 | running | `submission_nb/artifacts/submission_27.zip`;  |
-| submission.zip - submission_26 | not submitted | `submission_nb/artifacts/submission_26.zip`;  |
-| submission.zip - submission_25 | 0.00 | `submission_nb/artifacts/submission_25.zip`; E4B QAT, no LoRA; one repair agent, numbered checked edits, saved behavioral checks and rollback; real E4B score unmeasured; pilot before full S1 |
-| submission.zip - submission_24 | 0.05 | `submission_nb/artifacts/submission_24.zip`; E4B QAT, no LoRA; two-round editor/reviewer pipeline; S1 development test: 1/15 resolved, 3 empty patches, 5 turn-limit errors (not a leaderboard score) |
-| submission.zip - submission_23 | 0.10 | `submission_nb/artifacts/submission_23.zip`; 31B |
-| submission.zip - submission_22 | not submitted | `submission_nb/artifacts/submission_22.zip`; E4B |
-| submission.zip - submission_21 | 0.03 | `submission_nb/artifacts/submission_21.zip`;  `gemma-4-e4b-it-qat-w4a16-ct` |
-| submission.zip - submission_19 | 0.01 | `submission_nb/artifacts/submission_19.zip`;  `gemma-4-e4b-it-qat-w4a16-ct` |
-| submission.zip - submission_18 | not submitted | `submission_nb/artifacts/submission_18.zip`; |
+| submission.zip - submission_27 | running | `submission_nb/artifacts/submission_27.zip`; E4B single agent; S26 with prompt-guided evidence ledger, repetition detection and progress control |
+| submission.zip - submission_26 | not submitted | `submission_nb/artifacts/submission_26.zip`; E4B single agent; restores native tools and prompts for bounded search and early edits |
+| submission.zip - submission_25 | 0.00 | `submission_nb/artifacts/submission_25.zip`; E4B QAT, no LoRA; one repair agent, numbered checked edits, saved behavioral checks and rollback;|
+| submission.zip - submission_24 | 0.05 | `submission_nb/artifacts/submission_24.zip`; E4B QAT, no LoRA; two-round editor/reviewer pipeline; |
+| submission.zip - submission_23 | 0.10 | `submission_nb/artifacts/submission_23.zip`; same as submission_22 with 31B model |
+| submission.zip - submission_22 | not submitted | `submission_nb/artifacts/submission_22.zip`; E4B single agent; native edits with optional edit recovery and behavioral checks |
+| submission.zip - submission_21 | 0.03 | `submission_nb/artifacts/submission_21.zip`; E4B single agent; native editing restored, with optional patch audit and prompt-guided before/after checks |
+| submission.zip - submission_19 | 0.01 | `submission_nb/artifacts/submission_19.zip`; E4B single agent; native edits with optional structural patch audit and stronger verification instructions |
+| submission.zip - submission_18 | not submitted | `submission_nb/artifacts/submission_18.zip`; E4B single agent; native read, edit, command and submit tools replace the workbench |
 | submission.zip - submission_17 | not submitted | `submission_nb/artifacts/submission_17.zip`; identical to submission_16 except all three LLM stages use `gemma-4-e4b-it-qat-w4a16-ct`; exact package parity checked; no inference or benchmark run |
 | submission.zip · submission_16 | error | `submission_nb/artifacts/submission_16.zip`; submission_16.zip has problems |
 | submission.zip · submission_15 (revised 12B) | not submitted | `submission_nb/artifacts/submission_15.zip`; same 12B model as submission_13; enforced two-round coder/verifier workflow, guarded edits and fresh assertion evidence; CPU checks passed; 2/10 target unmeasured |
