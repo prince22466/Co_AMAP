@@ -167,6 +167,18 @@ comfort_c, comfort_d = check(policy, obs)
 assert comfort_d[0] == 0 and comfort_c[index] == 1.0
 
 
+# One zone in a large AHU needs enough fan pressure to remain effective.
+# A mean-only pressure rule would dilute its request behind neutral zones.
+meta, obs, set_zone, _ = scenario(1, 30)
+set_zone(0, 313.)
+c, d = check(Policy(meta, None), obs)
+pressure_index = meta["pressure_indices"][0]
+pressure_pa = (float(c[pressure_index]) + 1.0) * 1000.0
+assert d[0] == 1 and pressure_pa > 900.0, (
+    "A severe isolated hot zone should not disappear from fan demand"
+)
+
+
 # One invalid zone must not invalidate a whole AHU. Missing/invalid setpoints
 # should fall back to public schedule limits.
 meta, obs, set_zone, _ = scenario(2, 4)
