@@ -82,8 +82,11 @@ def inspect_printout(raw: str) -> dict:
             elif "📖 read_file " in action:
                 latest_tool = "read"
             else:
-                latest_tool = None
-            continue
+                # Timestamped tool *results* (including ❌) also match EVENT.
+                # Let those fall through for failure analysis below.
+                action = None
+            if action is not None:
+                continue
         if latest_tool == "edit" and "❌" in line:
             row["failed_edits"] += 1
             if "mandatory input parameters" in line:
@@ -121,8 +124,15 @@ def assess(baseline_text: str, candidate_text: str, stage: str) -> dict:
     require(len(done) == expected, f"incomplete_results: expected={expected}, got={len(done)}")
     if target is not None:
         require(observed == target, f"pilot_task_ids_mismatch: {sorted(observed ^ target)}")
-    require(not paired["missing_from_candidate"], "baseline_tasks_missing")
-    require(not paired["missing_from_baseline"], "candidate_has_unmatched_tasks")
+    if stage == "s1":
+        require(not paired["missing_from_candidate"], "baseline_tasks_missing")
+        require(not paired["missing_from_baseline"], "candidate_has_unmatched_tasks")
+    else:
+        # A five-task S29 pilot may be compared with a full S27 S1 trace.
+        require(target <= {t["task_id"] for t in baseline["tasks"]
+                           if t["resolved"] is not None},
+                "baseline_missing_pilot_tasks")
+        require(not paired["missing_from_baseline"], "candidate_has_unmatched_tasks")
     wins = {t["id"] for t in done if t["resolved"]}
     require(KNOWN_SUCCESSES <= wins, "lost_known_s27_win")
     require(len(wins) >= 3, "fewer_than_three_resolved")
