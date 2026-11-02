@@ -1,4 +1,4 @@
-"""Version 8 synthetic contract, physics and runtime tests.
+"""Version 8 synthetic interface, temporal behavior and runtime tests.
 
 Executes the exact notebook policy cell with a stub Kaggle server.
 These tests do not substitute for the 30-scenario official score.
@@ -120,6 +120,8 @@ for shape in [(1, 1), (2, 4), (4, 7)]:
     set_zone(0, 305.)
     c, d = check(policy, obs)
     assert d[0] == 1 and d[-1] == 0
+    if shape[0] > 1:
+        assert not np.any(d[1:shape[0]]), "Other AHUs stay idle"
     assert c[meta["temp_indices"][0]] < 1.
     assert c[meta["recirculation_indices"][0]] == 1.0
 
