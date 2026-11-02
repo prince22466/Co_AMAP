@@ -34,6 +34,7 @@ def tool_telemetry(raw: str) -> dict:
                 "graph_calls": 0, "write_file_calls": 0,
                 "edit_calls": 0, "native_edit_failures": 0,
                 "guard_markers": 0, "submit_calls": 0,
+                "failed_edits_at_first_guard": None,
             }
             continue
         e = EVENT.match(line)
@@ -52,6 +53,9 @@ def tool_telemetry(raw: str) -> dict:
                 "❌" in action and "old_string not found" in action):
             metrics["native_edit_failures"] += 1
         if "S32_GUARDED_LINE_EDIT_OK" in action:
+            if metrics["guard_markers"] == 0:
+                metrics["failed_edits_at_first_guard"] = metrics[
+                    "native_edit_failures"]
             metrics["guard_markers"] += 1
         if "🤖 submit_patch" in action:
             metrics["submit_calls"] += 1
@@ -118,6 +122,12 @@ def assess(s29_text: str, s30_text: str, candidate_text: str,
     # then mandatory ATIF review is needed before trusting the shell edit.
     guard_tasks = {name for name, metrics in telemetry["by_task"].items()
                    if metrics["guard_markers"]}
+    for name, metrics in telemetry["by_task"].items():
+        require(metrics["guard_markers"] <= 1,
+                "repeated_guard_fallback:" + name)
+        if metrics["guard_markers"]:
+            require((metrics["failed_edits_at_first_guard"] or 0) >= 2,
+                    "guard_before_two_failed_edits:" + name)
     if variant == "control":
         require(not shell_mutations, "control_used_shell_mutation")
         require(not guard_tasks, "control_used_guard")
