@@ -181,19 +181,19 @@ class Submission31Tests(unittest.TestCase):
         self.assertTrue(assess(s29, s30, valid)["pass_printed_trace_triage"])
 
         before_edit = valid.replace(
-            "  [   1.0s] ✏️ edit_file (source.py)\\n"
-            "  [   1.1s]   ✓ {'status':'ok'}\\n"
+            "  [   1.0s] ✏️ edit_file (source.py)\n"
+            "  [   1.1s]   ✓ {'status':'ok'}\n"
             "  [   1.3s] 🔧 run_command python -c 'assert 2 == 2'",
-            "  [   0.5s] 🔧 run_command python -c 'assert 2 == 2'\\n"
-            "  [   1.0s] ✏️ edit_file (source.py)\\n"
+            "  [   0.5s] 🔧 run_command python -c 'assert 2 == 2'\n"
+            "  [   1.0s] ✏️ edit_file (source.py)\n"
             "  [   1.1s]   ✓ {'status':'ok'}",
         )
         self.assertIn("too_few_targeted_test_attempts",
                       assess(s29, s30, before_edit)["failures"])
         after_submit = valid.replace(
-            "  [   1.3s] 🔧 run_command python -c 'assert 2 == 2'\\n"
+            "  [   1.3s] 🔧 run_command python -c 'assert 2 == 2'\n"
             "  [   1.8s] 🤖 submit_patch",
-            "  [   1.8s] 🤖 submit_patch\\n"
+            "  [   1.8s] 🤖 submit_patch\n"
             "  [   2.1s] 🔧 run_command python -c 'assert 2 == 2'",
         )
         self.assertIn("too_few_targeted_test_attempts",
