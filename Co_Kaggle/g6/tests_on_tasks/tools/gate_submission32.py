@@ -94,7 +94,7 @@ def assess(s29_text: str, s30_text: str, candidate_text: str,
     require(sum(r["patch_chars"] == 0 for r in rows.values()) <= 1,
             "excessive_empty_patches")
     for name, row in rows.items():
-        require(row["patch_chars"] <= 50000,
+        require(row["patch_chars"] is not None and row["patch_chars"] <= 50000,
                 "oversized_patch:" + name)
         require(row["largest_diff_stat_lines"] <= 1000,
                 "unbounded_lines:" + name)
