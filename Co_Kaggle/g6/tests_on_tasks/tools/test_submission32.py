@@ -147,26 +147,41 @@ class Packaging(unittest.TestCase):
     def test_guard_rejects_symlink_and_parent_escape(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            source = root / "source.py"
+            workspace = root / "workspace"
+            workspace.mkdir()
+            source = workspace / "source.py"
             source.write_text("VALUE = 1\n")
-            link = root / "alias.py"
+            link = workspace / "alias.py"
             link.symlink_to(source)
             result = run_guard(link, 1, "VALUE = 1", "VALUE = 2")
             self.assertNotEqual(result.returncode, 0)
             self.assertEqual(source.read_text(), "VALUE = 1\n")
-            # This is a pure workspace-relative command: absolute paths and
-            # ../ escapes fail before any source file can be written.
+
+            # Make the traversal destination exist, so only the path guard
+            # (not a missing file) can explain the rejected command.
+            destination = root / "outside.py"
+            destination.write_text("VALUE = 1\n")
             command = guarded_command(source, 1, "VALUE = 1", "VALUE = 2")
             self.assertIn("p = Path('source.py')", command)
             outside = command.replace("p = Path('source.py')",
                                       "p = Path('../outside.py')", 1)
             self.assertNotEqual(outside, command,
-                                "Traversal test must actually change the path")
-            result = subprocess.run(outside, shell=True, cwd=root,
+                                "Traversal test must really change the path")
+            result = subprocess.run(outside, shell=True, cwd=workspace,
                                     text=True, capture_output=True,
                                     executable="/bin/bash", timeout=8)
             self.assertNotEqual(result.returncode, 0, result.stdout)
-            self.assertEqual(source.read_text(), "VALUE = 1\\n")
+            self.assertEqual(destination.read_text(), "VALUE = 1\n")
+            self.assertEqual(source.read_text(), "VALUE = 1\n")
+
+            absolute = command.replace("p = Path('source.py')",
+                                       f"p = Path({str(source)!r})", 1)
+            self.assertNotEqual(absolute, command)
+            result = subprocess.run(absolute, shell=True, cwd=workspace,
+                                    text=True, capture_output=True,
+                                    executable="/bin/bash", timeout=8)
+            self.assertNotEqual(result.returncode, 0, result.stdout)
+            self.assertEqual(source.read_text(), "VALUE = 1\n")
 
     def test_guard_preserves_crlf_and_missing_final_newline(self):
         with tempfile.TemporaryDirectory() as folder:
