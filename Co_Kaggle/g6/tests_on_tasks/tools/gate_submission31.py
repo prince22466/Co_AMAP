@@ -53,7 +53,7 @@ def inspect_verification(raw: str) -> dict:
         if re.search(r"✏️ edit_file\b", event):
             pending_edit = True
             continue
-        if pending_edit and re.search(r"\b✓\s*\{", event):
+        if pending_edit and re.search(r"✓\s*\{", event):
             edited = True
             pending_edit = False
             continue
