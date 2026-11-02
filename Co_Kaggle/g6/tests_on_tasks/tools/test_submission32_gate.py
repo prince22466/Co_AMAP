@@ -9,7 +9,8 @@ from gate_submission32 import (PILOT_IDS, S29_WINS, S30_GAIN_WINS,
 DIAG = Path(__file__).resolve().parents[1] / "diagnostics"
 
 
-def trace(ids, solved=(), *, empty=(), unsafe=False, guard=False, graph=False):
+def trace(ids, solved=(), *, empty=(), unsafe=False, guard=False,
+          guard_without_failures=False, graph=False):
     result = []
     for i, name in enumerate(ids, 1):
         result.append(f"[candidate {i}/{len(ids)}] Evaluating {name} (repo)")
@@ -22,6 +23,10 @@ def trace(ids, solved=(), *, empty=(), unsafe=False, guard=False, graph=False):
             result.append("  [  0.4s] ✏️ edit_file (source.py)")
             result.append("  [  0.5s]   ✓ {'status':'ok'}")
         if guard and i == 1:
+            if not guard_without_failures:
+                for tick in (0.61, 0.63):
+                    result.append(f"  [ {tick:.2f}s] ✏️ edit_file (source.py)")
+                    result.append(f"  [ {tick:.2f}s]   ❌ {{'status':'error', 'error_type':'FileEditError'}}")
             result.append('  [  0.7s]   → S32_GUARDED_LINE_EDIT_OK source.py 2')
         result.append("  [  1.0s] 🤖 submit_patch")
         result.append(f"  -> resolved={name in solved}, "
@@ -76,6 +81,11 @@ class GateTests(unittest.TestCase):
         self.assertTrue(result["preliminary_gate_pass"], result["failures"])
         self.assertTrue(result["manual_ATIF_review_required"])
         self.assertFalse(result["promotion_approved"])
+        unguarded = trace(S1_IDS, self.wins, unsafe=True, guard=True,
+                          guard_without_failures=True)
+        failed = assess(self.s29, self.s30, unguarded, "s1", "primary")
+        self.assertIn("guard_before_two_failed_edits:fastapi_14258",
+                      failed["failures"])
 
     def test_fixed_pilot_and_real_s30_trace_fail(self):
         self.assertEqual(len(PILOT_IDS), 7)
