@@ -135,6 +135,26 @@ class Packaging(unittest.TestCase):
             self.assertNotEqual(run_guard(p, 1, "VALUE = 1", "VALUE = 2").returncode, 0)
             self.assertEqual(p.read_bytes(), before)
 
+    def test_guard_rejects_symlink_and_parent_escape(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            source = root / "source.py"
+            source.write_text("VALUE = 1\n")
+            link = root / "alias.py"
+            link.symlink_to(source)
+            result = run_guard(link, 1, "VALUE = 1", "VALUE = 2")
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(source.read_text(), "VALUE = 1\n")
+            # This is a pure workspace-relative command: absolute paths and
+            # ../ escapes fail before any source file can be written.
+            command = guarded_command(source, 1, "VALUE = 1", "VALUE = 2")
+            outside = command.replace('p = Path("source.py")',
+                                      'p = Path("../outside.py")')
+            result = subprocess.run(outside, shell=True, cwd=root,
+                                    text=True, capture_output=True,
+                                    executable="/bin/bash", timeout=8)
+            self.assertNotEqual(result.returncode, 0)
+
     def test_guard_preserves_crlf_and_missing_final_newline(self):
         with tempfile.TemporaryDirectory() as folder:
             p = Path(folder) / "example.py"
