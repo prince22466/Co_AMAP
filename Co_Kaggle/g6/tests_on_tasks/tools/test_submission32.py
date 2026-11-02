@@ -77,6 +77,15 @@ class Packaging(unittest.TestCase):
         self.assertEqual(primary["agent.yaml"], control["agent.yaml"])
         self.assertEqual(primary["eval_config.yaml"], control["eval_config.yaml"])
         self.assertNotEqual(primary["instruction.md"], control["instruction.md"])
+        treatment = primary["instruction.md"].decode()
+        comparator = control["instruction.md"].decode()
+        self.assertEqual(treatment.split(
+            "BOUNDED RECOVERY FOR ONE-LINE PYTHON REPLACEMENTS ONLY:")[0],
+            comparator.split(
+                "NATIVE-ONLY RECOVERY (this control has NO shell fallback):")[0])
+        self.assertEqual(treatment.split(
+            "PROVE / SUBMIT (reserve 6+ calls):")[1],
+            comparator.split("PROVE / SUBMIT (reserve 6+ calls):")[1])
         config = primary["agent.yaml"].decode()
         self.assertNotIn("write_file", config)
         self.assertNotIn("search_similar_code", config)
