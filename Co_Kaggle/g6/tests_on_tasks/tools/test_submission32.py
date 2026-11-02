@@ -25,7 +25,7 @@ def guarded_command(path: Path, line: int, old: str, new: str) -> str:
     code = match.group(1)
     for target, replacement in (
         ('p = Path("PATH_TO_EXISTING_PY_FILE")',
-         f'p = Path({str(path)!r})'),
+         f'p = Path({path.name!r})'),
         ("n = 123", f"n = {line}"),
         ('old = "EXACT_EXISTING_LINE_WITHOUT_NEWLINE"',
          f"old = {old!r}"),
