@@ -92,6 +92,19 @@ class Packaging(unittest.TestCase):
         self.assertNotIn("run_skill_script", config)
         self.assertIn("submit_patch", config)
 
+    def test_evaluator_refuses_swapped_control_and_primary_archives(self):
+        from run_submission32_eval import ensure_correct_variant
+        primary = ARTIFACT_DIR / VARIANTS["primary"][1]
+        control = ARTIFACT_DIR / VARIANTS["control"][1]
+        self.assertEqual(ensure_correct_variant("primary", primary), primary)
+        self.assertEqual(ensure_correct_variant("control", control), control)
+        with self.assertRaisesRegex(ValueError, "mismatched A/B"):
+            ensure_correct_variant("primary", control)
+        with self.assertRaisesRegex(ValueError, "mismatched A/B"):
+            ensure_correct_variant("control", primary)
+        with self.assertRaisesRegex(ValueError, "Unknown S32"):
+            ensure_correct_variant("not-a-variant", None)
+
     def test_reject_unexpected_native_tool_or_lora(self):
         files = payload("primary")
         invalid = dict(files)
