@@ -66,6 +66,7 @@ initial 7-task pilot is a cost-saving screen, NOT an alternative S1 gate.
 cd Co_Kaggle/g6/tests_on_tasks/tools
 python build_submission31.py
 python -m unittest test_submission31.py
+python smoke_submission31.py  # requires official adk-submission/swegemma wheels
 python gate_submission31.py \
   ../diagnostics/submission-29-zip_s1TasksPrintouts.txt \
   ../diagnostics/submission-30-zip_s1TasksPrintouts.txt \
@@ -77,11 +78,16 @@ Official-runner (requires installed harness, snapshots and served E4B):
 ```bash
 python run_submission31_eval.py --tasks /path/to/tasks.jsonl \
   --snapshots /path/to/snapshots --wheels /path/to/wheels \
-  --stage pilot --repeats 2 --time-limit 4 --output /path/to/new-pilot
+  --stage pilot --repeats 2 --time-limit 0 --output /path/to/new-pilot
 python run_submission31_eval.py --tasks /path/to/tasks.jsonl \
   --snapshots /path/to/snapshots --wheels /path/to/wheels \
-  --stage s1 --repeats 2 --time-limit 4 --output /path/to/new-s1
+  --stage s1 --repeats 2 --time-limit 0 --output /path/to/new-s1
 ```
+
+The historical S1 notebook disabled per-task wall-clock limits. Use
+`--time-limit 0` for an approximately comparable matched experiment;
+repeat at `--time-limit 4` to validate the actual four-minute packaged
+limit. Do not compare time-limited and unlimited runs as equivalent.
 
 The official runner never changes reference tests or grading. A real
 reported success requires official `resolved` booleans; synthetic unit
