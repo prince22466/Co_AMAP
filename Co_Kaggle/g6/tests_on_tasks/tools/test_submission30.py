@@ -37,10 +37,14 @@ def synthetic(ids: tuple[str, ...], winners: set[str], *,
 class Submission30Tests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        # Check the checked-in artifact before build() can overwrite it.
+        cls.checked_in_archive = ARTIFACT.read_bytes()
         cls.manifest = build()
 
     def test_zip_deterministic_complete_and_unchanged(self):
         data = ARTIFACT.read_bytes()
+        self.assertEqual(self.checked_in_archive, data,
+                         "Committed ZIP differs from deterministic builder")
         self.assertEqual(self.manifest["archive_sha256"],
                          hashlib.sha256(data).hexdigest())
         self.assertEqual(self.manifest["archive_sha256"],
