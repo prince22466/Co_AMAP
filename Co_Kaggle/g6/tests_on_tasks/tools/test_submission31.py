@@ -26,11 +26,11 @@ def synthetic(ids, solved, *, graph_count=0, checks=0, empty=(),
         out.append("  [   0.1s] 📖 read_file (source.py)")
         if i <= graph_count:
             out.append("  [   0.3s] 🔗 get_code_neighbors (package.Class)")
-        if i <= checks:
-            out.append("  [   0.5s] 🔧 run_command python -c 'assert 2 == 2'")
         if name not in empty:
             out.append("  [   1.0s] ✏️ edit_file (source.py)")
             out.append("  [   1.1s]   ✓ {'status':'ok'}")
+        if i <= checks:
+            out.append("  [   1.3s] 🔧 run_command python -c 'assert 2 == 2'")
         if extra_events and i == 1:
             out.extend(extra_events)
         out.append("  [   1.8s] 🤖 submit_patch")
@@ -172,6 +172,39 @@ class Submission31Tests(unittest.TestCase):
                           graph_count=3, checks=4)
         self.assertIn("below_5_resolved",
                       assess(s29, s30, fewer, "pilot")["failures"])
+
+    def test_verification_must_follow_a_successful_edit_and_precede_submission(self):
+        s29 = synthetic(S1_IDS, S29_WINS)
+        s30 = synthetic(S1_IDS, {"rich_3905", "rich_3454"} | S30_NEW_WINS)
+        wins = set(S29_WINS) | set(S30_NEW_WINS)
+        valid = synthetic(S1_IDS, wins, graph_count=4, checks=5)
+        self.assertTrue(assess(s29, s30, valid)["pass_printed_trace_triage"])
+
+        before_edit = valid.replace(
+            "  [   1.0s] ✏️ edit_file (source.py)\\n"
+            "  [   1.1s]   ✓ {'status':'ok'}\\n"
+            "  [   1.3s] 🔧 run_command python -c 'assert 2 == 2'",
+            "  [   0.5s] 🔧 run_command python -c 'assert 2 == 2'\\n"
+            "  [   1.0s] ✏️ edit_file (source.py)\\n"
+            "  [   1.1s]   ✓ {'status':'ok'}",
+        )
+        self.assertIn("too_few_targeted_test_attempts",
+                      assess(s29, s30, before_edit)["failures"])
+        after_submit = valid.replace(
+            "  [   1.3s] 🔧 run_command python -c 'assert 2 == 2'\\n"
+            "  [   1.8s] 🤖 submit_patch",
+            "  [   1.8s] 🤖 submit_patch\\n"
+            "  [   2.1s] 🔧 run_command python -c 'assert 2 == 2'",
+        )
+        self.assertIn("too_few_targeted_test_attempts",
+                      assess(s29, s30, after_submit)["failures"])
+
+        failed_edit = valid.replace(
+            "  [   1.1s]   ✓ {'status':'ok'}",
+            "  [   1.1s]   ❌ {'status':'error'}",
+        )
+        self.assertIn("too_few_targeted_test_attempts",
+                      assess(s29, s30, failed_edit)["failures"])
 
     def test_qualification_is_not_behavioral_proof(self):
         raw = synthetic(S1_IDS, set(), graph_count=5, checks=6)
