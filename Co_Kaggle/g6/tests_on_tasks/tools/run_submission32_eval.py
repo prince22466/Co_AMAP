@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 from pathlib import Path
 
@@ -24,10 +25,26 @@ def score_passed(run: dict, stage: str) -> bool:
             and not run.get("agent_error_ids"))
 
 
+def ensure_correct_variant(variant: str, supplied_archive: Path | None) -> Path:
+    """Reject an inadvertently swapped primary/control ZIP in matched runs."""
+    if variant not in VARIANTS:
+        raise ValueError("Unknown S32 variant")
+    expected = ARTIFACT_DIR / VARIANTS[variant][1]
+    if supplied_archive is None:
+        build_variant(variant)
+        return expected
+    if not supplied_archive.is_file() or not expected.is_file():
+        raise ValueError("Missing supplied or checked-in S32 archive")
+    digest = lambda p: hashlib.sha256(p.read_bytes()).digest()
+    if digest(supplied_archive) != digest(expected):
+        raise ValueError(
+            f"Archive differs from {variant} ZIP. Refusing mismatched A/B evaluation."
+        )
+    return supplied_archive
+
+
 async def evaluate(args) -> dict:
-    if args.archive is None:
-        build_variant(args.variant)
-        args.archive = ARTIFACT_DIR / VARIANTS[args.variant][1]
+    args.archive = ensure_correct_variant(args.variant, args.archive)
     # Only the pilot task set differs; verification remains the stock harness.
     official.PILOT_IDS = PILOT_IDS
     report = await official.evaluate(args)
