@@ -24,27 +24,62 @@ CALL = re.compile(r"^\s*\[\s*[\d.]+s\]\s*🔧 run_command\s+(.+)$")
 
 
 def inspect_verification(raw: str) -> dict:
-    """Count evidence-bearing test command *attempts*, not passing assertions."""
+    """Count test commands only AFTER a successful edit and BEFORE submit.
+
+    Printed traces can establish timing and edit success, but cannot prove
+    an assertion targets the issue or that a test actually passed. That
+    still requires inspecting the full ATIF and requested behavior.
+    """
     tasks: dict[str, list[str]] = {}
     current = None
+    pending_edit = False
+    edited = False
+    submitted = False
     for line in raw.splitlines():
         match = STAGE.match(line)
         if match:
             current = match[1]
             tasks[current] = []
+            pending_edit = edited = submitted = False
             continue
-        event = CALL.match(line)
-        if event and current:
-            command = event[1].strip()
-            if (re.search(r"\bpytest\s+\S*(?:test_|tests/|::)", command)
-                or re.search(r"\bpython(?:3)?\s+(?:-c\b|-\s*<<)", command)
-                or re.search(r"\bpython(?:3)?\s+-m\s+unittest\s+\S+", command)):
-                tasks[current].append(command[:200])
+        if current is None:
+            continue
+        # Only timestamped lines are actual call/response events; card
+        # summaries repeat tool names and must never count as new calls.
+        timestamped = re.match(r"^\s*\[\s*[\d.]+s\]\s*(.*)$", line)
+        if not timestamped:
+            continue
+        event = timestamped[1]
+        if re.search(r"✏️ edit_file\b", event):
+            pending_edit = True
+            continue
+        if pending_edit and re.search(r"\b✓\s*\{", event):
+            edited = True
+            pending_edit = False
+            continue
+        if pending_edit and "❌" in event:
+            pending_edit = False
+            continue
+        if re.search(r"🤖 submit_patch\b", event):
+            submitted = True
+            continue
+        if not edited or submitted:
+            continue
+        command = CALL.match(line)
+        if command:
+            cmd = command[1].strip()
+            if (re.search(r"\bpytest\s+\S*(?:test_|tests/|::)", cmd)
+                or re.search(r"\bpython(?:3)?\s+(?:-c\b|-\s*<<)", cmd)
+                or re.search(r"\bpython(?:3)?\s+-m\s+unittest\s+\S+", cmd)):
+                tasks[current].append(cmd[:200])
     return {
         "tasks_with_test_attempt": sum(bool(x) for x in tasks.values()),
         "task_commands": {name: commands for name, commands in tasks.items()
                           if commands},
-        "qualification": "Attempt counts, not evidence of correct assertions or test pass",
+        "qualification": (
+            "Only post-successful-edit, pre-submit test attempts counted; "
+            "their relevance and PASS/FAIL still require ATIF/manual review"
+        ),
     }
 
 
