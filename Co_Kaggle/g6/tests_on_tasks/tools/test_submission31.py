@@ -206,6 +206,23 @@ class Submission31Tests(unittest.TestCase):
         self.assertIn("too_few_targeted_test_attempts",
                       assess(s29, s30, failed_edit)["failures"])
 
+    def test_targeted_pytest_flags_are_recognized_after_edit(self):
+        raw = synthetic(S1_IDS, set(), graph_count=3, checks=0)
+        checked = raw.replace(
+            "  [   1.8s] 🤖 submit_patch",
+            "  [   1.7s] 🔧 run_command pytest -q tests/test_behavior.py::test_case\n"
+            "  [   1.8s] 🤖 submit_patch",
+        )
+        self.assertEqual(inspect_verification(checked)[
+            "tasks_with_test_attempt"], 15)
+        broad = raw.replace(
+            "  [   1.8s] 🤖 submit_patch",
+            "  [   1.7s] 🔧 run_command pytest -q\n"
+            "  [   1.8s] 🤖 submit_patch",
+        )
+        self.assertEqual(inspect_verification(broad)[
+            "tasks_with_test_attempt"], 0)
+
     def test_qualification_is_not_behavioral_proof(self):
         raw = synthetic(S1_IDS, set(), graph_count=5, checks=6)
         self.assertEqual(inspect_verification(raw)[
