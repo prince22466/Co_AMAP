@@ -157,12 +157,16 @@ class Packaging(unittest.TestCase):
             # This is a pure workspace-relative command: absolute paths and
             # ../ escapes fail before any source file can be written.
             command = guarded_command(source, 1, "VALUE = 1", "VALUE = 2")
-            outside = command.replace('p = Path("source.py")',
-                                      'p = Path("../outside.py")')
+            self.assertIn("p = Path('source.py')", command)
+            outside = command.replace("p = Path('source.py')",
+                                      "p = Path('../outside.py')", 1)
+            self.assertNotEqual(outside, command,
+                                "Traversal test must actually change the path")
             result = subprocess.run(outside, shell=True, cwd=root,
                                     text=True, capture_output=True,
                                     executable="/bin/bash", timeout=8)
-            self.assertNotEqual(result.returncode, 0)
+            self.assertNotEqual(result.returncode, 0, result.stdout)
+            self.assertEqual(source.read_text(), "VALUE = 1\\n")
 
     def test_guard_preserves_crlf_and_missing_final_newline(self):
         with tempfile.TemporaryDirectory() as folder:
