@@ -14,7 +14,7 @@
 | submission.zip - submission_18 | not submitted | `submission_nb/artifacts/submission_18.zip`; E4B single agent; native read, edit, command and submit tools replace the workbench |
 | submission.zip - submission_17 | not submitted | `submission_nb/artifacts/submission_17.zip`; identical to submission_16 except all three LLM stages use `gemma-4-e4b-it-qat-w4a16-ct`; exact package parity checked; no inference or benchmark run |
 | submission.zip · submission_16 | error | `submission_nb/artifacts/submission_16.zip`; submission_16.zip has problems |
-| submission.zip · submission_15 | not submitted | `submission_nb/artifacts/submission_15.zip`; same 12B model as submission_13; enforced two-round coder/verifier workflow, guarded edits and fresh assertion evidence; CPU checks passed; 2/10 target unmeasured |
+| submission.zip · submission_15 | not submitted | `submission_nb/artifacts/submission_15.zip`; same 12B model as submission_13; enforced two-round coder/verifier workflow, guarded edits and fresh assertion evidence; |
 | submission.zip · submission_14 | 0.00 | `submission_nb/artifacts/submission_14.zip`; same as submission_13, but with 4B model |
 | submission.zip · submission_13 | not submitted | `submission_nb\artifacts\submission_13.zip`; submission_12 with `gemma-4-12b-it-qat-w4a16-ct` for all three agents; fixes public-API coverage checks, repeated-check stopping and graph evidence tracking |
 | submission.zip · submission_12 | 0.13 | `submission_nb\artifacts\submission_12.zip`; same three 31B agents as submission_10; adds graph-guided contract tracing and repair checks for Python API changes across multiple layers; preserves tools and budgets |
