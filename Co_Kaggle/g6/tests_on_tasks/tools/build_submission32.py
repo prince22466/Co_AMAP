@@ -98,6 +98,19 @@ def validate(files: dict[str, bytes], variant: str) -> None:
               "Control must not include fallback")
         check("NO shell fallback" in prompt,
               "Control must explicitly exclude the treatment")
+        treatment = (SOURCE / "instruction.md").read_text(encoding="utf-8")
+        treatment_start = "BOUNDED RECOVERY FOR ONE-LINE PYTHON REPLACEMENTS ONLY:"
+        control_start = "NATIVE-ONLY RECOVERY (this control has NO shell fallback):"
+        common_end = "PROVE / SUBMIT (reserve 6+ calls):"
+        check(treatment_start in treatment and control_start in prompt
+              and common_end in treatment and common_end in prompt,
+              "Missing treatment/control boundary")
+        check(treatment.split(treatment_start, 1)[0] ==
+              prompt.split(control_start, 1)[0],
+              "Control changed task reasoning instructions before recovery")
+        check(treatment.split(common_end, 1)[1] ==
+              prompt.split(common_end, 1)[1],
+              "Control changed proof/submission instructions after recovery")
 
 
 def build_variant(variant: str) -> dict:
