@@ -68,7 +68,7 @@ def inspect_verification(raw: str) -> dict:
         command = CALL.match(line)
         if command:
             cmd = command[1].strip()
-            if (re.search(r"\bpytest\s+\S*(?:test_|tests/|::)", cmd)
+            if (re.search(r"\bpytest\b.*(?:\btests?/|\btest_\w+|::)", cmd)
                 or re.search(r"\bpython(?:3)?\s+(?:-c\b|-\s*<<)", cmd)
                 or re.search(r"\bpython(?:3)?\s+-m\s+unittest\s+\S+", cmd)):
                 tasks[current].append(cmd[:200])
