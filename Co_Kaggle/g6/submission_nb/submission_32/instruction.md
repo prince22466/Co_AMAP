@@ -49,7 +49,10 @@ p = Path("PATH_TO_EXISTING_PY_FILE")
 n = 123
 old = "EXACT_EXISTING_LINE_WITHOUT_NEWLINE"
 new = "REPLACEMENT_LINE_WITHOUT_NEWLINE"
-assert p.is_file() and p.suffix == ".py" and p.stat().st_size < 200000
+assert (not p.is_absolute() and ".." not in p.parts and
+        p.is_file() and not p.is_symlink() and p.suffix == ".py"
+        and p.stat().st_size < 200000)
+assert p.resolve().is_relative_to(Path.cwd().resolve())
 with p.open("r", encoding="utf-8", newline="") as source:
     lines = source.read().splitlines(keepends=True)
 assert 1 <= n <= len(lines) and lines[n - 1].rstrip("\r\n") == old
