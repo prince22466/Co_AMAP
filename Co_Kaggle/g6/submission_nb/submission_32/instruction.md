@@ -50,10 +50,12 @@ n = 123
 old = "EXACT_EXISTING_LINE_WITHOUT_NEWLINE"
 new = "REPLACEMENT_LINE_WITHOUT_NEWLINE"
 assert p.is_file() and p.suffix == ".py" and p.stat().st_size < 200000
-lines = p.read_text().splitlines(keepends=True)
+with p.open("r", encoding="utf-8", newline="") as source:
+    lines = source.read().splitlines(keepends=True)
 assert 1 <= n <= len(lines) and lines[n - 1].rstrip("\r\n") == old
-assert "\n" not in new and "\r" not in new and len(new) < 400
-ending = "\r\n" if lines[n - 1].endswith("\r\n") else "\n"
+assert old != new and "\n" not in new and "\r" not in new and len(new) < 400
+ending = ("\r\n" if lines[n - 1].endswith("\r\n") else
+          "\n" if lines[n - 1].endswith("\n") else "")
 lines[n - 1] = new + ending
 updated = "".join(lines)
 ast.parse(updated, filename=str(p))
