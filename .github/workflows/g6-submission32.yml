@@ -1,0 +1,40 @@
+name: G6 Submission 32 CPU Contract
+
+on:
+  pull_request:
+    paths:
+      - 'Co_Kaggle/g6/submission_nb/submission_32/**'
+      - 'Co_Kaggle/g6/submission_nb/artifacts/submission_32*.zip'
+      - 'Co_Kaggle/g6/tests_on_tasks/tools/*submission32*.py'
+      - 'Co_Kaggle/g6/tests_on_tasks/reviews/submission_32/**'
+      - '.github/workflows/g6-submission32.yml'
+  workflow_dispatch:
+
+jobs:
+  submission32-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install CPU validation dependency
+        run: python -m pip install pyyaml
+      - name: Compile every S32 Python tool
+        run: python -m py_compile Co_Kaggle/g6/tests_on_tasks/tools/*submission32*.py
+      - name: Run guarded-edit and trace-regression tests
+        working-directory: Co_Kaggle/g6/tests_on_tasks/tools
+        run: python -m unittest -v test_submission32.py test_submission32_gate.py
+      - name: Verify deterministic packages match committed ZIPs
+        run: git diff --exit-code -- Co_Kaggle/g6/submission_nb/artifacts/submission_32.zip Co_Kaggle/g6/submission_nb/artifacts/submission_32_control.zip
+      - name: Upload both unscored S32 packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: submission32-cpu-artifacts
+          if-no-files-found: error
+          path: |
+            Co_Kaggle/g6/submission_nb/artifacts/submission_32.zip
+            Co_Kaggle/g6/submission_nb/artifacts/submission_32_control.zip
+            Co_Kaggle/g6/submission_nb/artifacts/submission_32.manifest.json
+            Co_Kaggle/g6/submission_nb/artifacts/submission_32_control.manifest.json
