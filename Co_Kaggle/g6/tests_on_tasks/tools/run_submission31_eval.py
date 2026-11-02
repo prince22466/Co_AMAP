@@ -38,7 +38,7 @@ async def evaluate(args) -> dict:
     if report.get("stage") == "evaluation_complete":
         runs = report.get("runs") or []
         report["score_gate_each_repeat"] = (
-            len(runs) == args.repeats and
+            args.repeats >= 2 and len(runs) == args.repeats and
             all(score_passed(run) for run in runs))
     else:
         report["score_gate_each_repeat"] = False
