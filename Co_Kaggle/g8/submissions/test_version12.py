@@ -9,6 +9,7 @@ from pathlib import Path
 import sys
 import time
 import types
+
 import numpy as np
 
 nb = json.loads((Path(__file__).parent / 'submission-nb - Version 12.ipynb').read_text())
@@ -51,9 +52,13 @@ def scenario(num_ahus=2, per_ahu=3, temperature=295., outdoor=297.):
          'ahu_zone_assignments':assignments,'zone_action_indices':action_index,
          'comfort_temp_window':[293.,297.], 'eco_temp_window':[288.,302.],
          'morning_start_hour':8.,'evening_start_hour':18.,
-         'observation_normalization_metadata':{
-            'zone_air_temperature_sensor':{'sample_mean':295.,'sample_std':5.}}
-         }
+         'observation_normalization_metadata': {
+            'zone_air_temperature_sensor': {
+                'sample_mean': 295.0, 'sample_std': 5.0},
+            'outside_air_temperature_sensor': {
+                'sample_mean': 295.0, 'sample_std': 10.0},
+        },
+    }
     x = np.zeros(len(fields), dtype=np.float64)
     x[0] = math.sin(2*math.pi*12/24)
     x[1] = math.cos(2*math.pi*12/24)
@@ -63,7 +68,8 @@ def scenario(num_ahus=2, per_ahu=3, temperature=295., outdoor=297.):
         if n.endswith('zone_air_temperature_sensor'):x[i]=(temperature-295.)/5.
         elif n.endswith('_heating_temperature_setpoint_sensor'):x[i]=293.
         elif n.endswith('_cooling_temperature_setpoint_sensor'):x[i]=297.
-        elif n.endswith('outside_air_temperature_sensor'):x[i]=outdoor
+        elif n.endswith('outside_air_temperature_sensor'):
+            x[i] = (outdoor - 295.0) / 10.0
     def set_temp(zone, new):
         x[fields.index(f'VAV_{zone}_zone_air_temperature_sensor')] = (new-295.)/5.
     return m, x, set_temp
@@ -219,8 +225,91 @@ assert switches[0] == 1 and switches[-1] == 1
 valve_idx = meta['zone_action_indices']['VAV_1']['reheat_valve_percentage_command']
 assert actions[valve_idx] > -1.0, 'Cold room needs local reheat'
 
+
+# Weather sensor values in the actual simulator are normalized (mean=295 K,
+# std=10 K). Regression: a cold outdoor z-score is NOT -2 Kelvin.
+meta, obs, set_temp = scenario(1, 2, outdoor=260.0)
+policy = Policy(meta, None)
+states = policy._read_zones(obs, policy.ahus[0], policy.comfort)
+assert all(abs(state['outdoor'] - 260.0) < 1e-10 for state in states)
+set_temp(0, 307.0)
+commands, switches = check(policy, obs)
+assert switches[0] == 1
+recirc_idx = meta['recirculation_indices'][0]
+assert commands[recirc_idx] < 0.999, (
+    'A cold outside-air reading should activate useful economizer mixing')
+
+# When outdoor normalization is unknown, never treat z-scores as Kelvin.
+meta['observation_normalization_metadata'].pop(
+    'outside_air_temperature_sensor')
+policy = Policy(meta, None)
+states = policy._read_zones(obs, policy.ahus[0], policy.comfort)
+assert np.isnan(states[0]['outdoor'])
+commands, _ = check(policy, obs)
+assert commands[recirc_idx] == 1.0
+
+# Invalid outdoor z-scores are ignored safely, not allowed to pollute the RLS.
+meta, obs, set_temp = scenario(1, 1)
+outdoor_idx = meta['observation_field_names'].index(
+    'ahs_ahu_0_outside_air_temperature_sensor')
+obs[outdoor_idx] = float('nan')
+policy = Policy(meta, None)
+assert np.isnan(policy._read_zones(obs, policy.ahus[0], policy.eco)[0]['outdoor'])
+check(policy, obs)
+
+# A shared boiler has ONE water temperature. The pending model for the
+# mixed AHU must record the final highest commanded setpoint (348 K),
+# not its local candidate's provisional 340 K value.
+meta, obs, set_temp = scenario(2, 1)
+policy = Policy(meta, None)
+continuous, discrete = policy._initial_actions()
+heat_demands, pending = [], []
+heat_mode = policy.OPERATING_POINTS[2]
+mixed_mode = policy.OPERATING_POINTS[3]
+for ahu, mode in zip(policy.ahus, (heat_mode, mixed_mode)):
+    states = policy._read_zones(obs, ahu, policy.comfort)
+    policy._apply_vav_actions(
+        states, mode, [(0.0, 1.0, 1.0)],
+        continuous, heat_demands, pending)
+common = policy._apply_shared_hot_water(
+    heat_demands, continuous, discrete)
+policy._remember_issued_actions(pending, common)
+assert common == 348.0 and discrete[-1] == 1
+for state, config, damper, valve in pending:
+    model = state['zone']['model']
+    expected = Model.features(
+        state['temp'], state['outdoor'], 1.0,
+        config.supply_k, damper, valve, 1.0, 348.0)
+    assert np.allclose(model.last_features, expected, atol=1e-12)
+
+# Ensure numeric ordering works when AHU identifiers reach two digits.
+meta, obs, set_temp = scenario(12, 1)
+set_temp(10, 307.0)
+policy = Policy(meta, None)
+_, switches = check(policy, obs)
+assert switches[10] == 1 and switches[2] == 0
+
+# A 30-day evaluation has 8,640 decisions per scenario. Unexcited RLS
+# dimensions must remain bounded rather than grow exponentially across
+# days of identical actions.
+model = Model()
+for _ in range(10_000):
+    features = model.features(295.0, 295.0, 0.0, 305.0,
+                              0.0, 0.0, 0.0, 310.0)
+    model.remember(295.0, features)
+    model.observe(295.0)
+assert model.samples == 10_000
+assert np.isfinite(model.weights).all()
+assert np.isfinite(model.covariance).all()
+assert np.max(np.diag(model.covariance)) <= (
+    model.MAX_COVARIANCE_DIAGONAL + 1e-8)
+
 # The last notebook cell is the official submission entry point.
 assert 'SmartBuildingsInferenceServer(TransferPolicy).run()' in (
     ''.join(nb['cells'][2]['source']))
 
-print(f'PASS: notebook syntax, variable layouts, typed bounds, cold/hot/mixed safety, reset, RLS, missing sensors, latency ({elapsed:.2f}s/128)')
+print(f'PASS V12: notebook syntax, dynamic mappings, hybrid-action bounds, '
+      f'cool/heat/mixed safety, reset, long-horizon bounded RLS, '
+      f'normalized weather sensors, shared boiler actions, scalar scoring '
+      f'parity, safe pruning, missing actuators, and '
+      f'128-step latency ({elapsed:.2f}s)')
