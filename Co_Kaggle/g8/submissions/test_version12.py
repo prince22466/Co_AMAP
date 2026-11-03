@@ -26,63 +26,101 @@ exec(source, ns)
 Policy, Model = ns['TransferPolicy'], ns['ZoneResponseModel']
 
 
-def scenario(num_ahus=2, per_ahu=3, temperature=295., outdoor=297.):
-    fields = ['hod_sin_000','hod_cos_000','dow_sin_000','dow_cos_000']
-    assignments, action_index = {}, {}
-    for ahu in range(num_ahus):
-        assignments[f'ahu_{ahu}'] = []
-        fields.append(f'ahs_ahu_{ahu}_outside_air_temperature_sensor')
+def scenario(num_ahus=2, per_ahu=3, temperature=295.0, outdoor=297.0):
+    """Construct a variable-size building with correctly normalized sensors.
+
+    Zone and outdoor temperatures are z-scores; comfort setpoints are raw
+    Kelvin. Actuator indices follow the organizer's interleaved layout.
+    """
+    fields = ['hod_sin_000', 'hod_cos_000', 'dow_sin_000', 'dow_cos_000']
+    assignments = {}
+    action_indices = {}
+
+    for ahu_id in range(num_ahus):
+        ahu_name = f'ahu_{ahu_id}'
+        assignments[ahu_name] = []
+        fields.append(f'ahs_{ahu_name}_outside_air_temperature_sensor')
+
         for local in range(per_ahu):
-            i = ahu*per_ahu+local
-            assignments[f'ahu_{ahu}'].append(f'room_{i}')
-            names = [f'VAV_{i}_zone_air_temperature_sensor',
-                     f'VAV_{i}_zone_air_heating_temperature_setpoint_sensor',
-                     f'VAV_{i}_zone_air_cooling_temperature_setpoint_sensor']
-            fields.extend(names)
-            action_index[f'VAV_{i}'] = {
-                'supply_air_damper_percentage_command': 3*num_ahus+2+2*i,
-                'reheat_valve_percentage_command': 3*num_ahus+2+2*i+1}
-    m = {'observation_field_names':fields,
-         'n_continuous_action':3*num_ahus+2+2*num_ahus*per_ahu,
-         'n_discrete_action':num_ahus+1,
-         'temp_indices':[3*i for i in range(num_ahus)],
-         'pressure_indices':[3*i+1 for i in range(num_ahus)]+[3*num_ahus+1],
-         'recirculation_indices':[3*i+2 for i in range(num_ahus)],
-         'water_indices':[3*num_ahus],
-         'ahu_zone_assignments':assignments,'zone_action_indices':action_index,
-         'comfort_temp_window':[293.,297.], 'eco_temp_window':[288.,302.],
-         'morning_start_hour':8.,'evening_start_hour':18.,
-         'observation_normalization_metadata': {
+            zone_id = ahu_id * per_ahu + local
+            vav = f'VAV_{zone_id}'
+            assignments[ahu_name].append(f'room_{zone_id}')
+            fields.extend([
+                f'{vav}_zone_air_temperature_sensor',
+                f'{vav}_zone_air_heating_temperature_setpoint_sensor',
+                f'{vav}_zone_air_cooling_temperature_setpoint_sensor',
+            ])
+            first_vav_action = 3 * num_ahus + 2 + 2 * zone_id
+            action_indices[vav] = {
+                'supply_air_damper_percentage_command': first_vav_action,
+                'reheat_valve_percentage_command': first_vav_action + 1,
+            }
+
+    meta = {
+        'observation_field_names': fields,
+        'n_continuous_action': 3 * num_ahus + 2 + 2 * num_ahus * per_ahu,
+        'n_discrete_action': num_ahus + 1,
+        'temp_indices': [3 * i for i in range(num_ahus)],
+        'pressure_indices': (
+            [3 * i + 1 for i in range(num_ahus)] + [3 * num_ahus + 1]
+        ),
+        'recirculation_indices': [3 * i + 2 for i in range(num_ahus)],
+        'water_indices': [3 * num_ahus],
+        'ahu_zone_assignments': assignments,
+        'zone_action_indices': action_indices,
+        'comfort_temp_window': [293.0, 297.0],
+        'eco_temp_window': [288.0, 302.0],
+        'morning_start_hour': 8.0,
+        'evening_start_hour': 18.0,
+        'observation_normalization_metadata': {
             'zone_air_temperature_sensor': {
-                'sample_mean': 295.0, 'sample_std': 5.0},
+                'sample_mean': 295.0, 'sample_std': 5.0,
+            },
             'outside_air_temperature_sensor': {
-                'sample_mean': 295.0, 'sample_std': 10.0},
+                'sample_mean': 295.0, 'sample_std': 10.0,
+            },
         },
     }
-    x = np.zeros(len(fields), dtype=np.float64)
-    x[0] = math.sin(2*math.pi*12/24)
-    x[1] = math.cos(2*math.pi*12/24)
-    x[2] = math.sin(2*math.pi*2/7)
-    x[3] = math.cos(2*math.pi*2/7)
-    for i,n in enumerate(fields):
-        if n.endswith('zone_air_temperature_sensor'):x[i]=(temperature-295.)/5.
-        elif n.endswith('_heating_temperature_setpoint_sensor'):x[i]=293.
-        elif n.endswith('_cooling_temperature_setpoint_sensor'):x[i]=297.
-        elif n.endswith('outside_air_temperature_sensor'):
-            x[i] = (outdoor - 295.0) / 10.0
-    def set_temp(zone, new):
-        x[fields.index(f'VAV_{zone}_zone_air_temperature_sensor')] = (new-295.)/5.
-    return m, x, set_temp
+
+    obs = np.zeros(len(fields), dtype=np.float64)
+    obs[0] = math.sin(2 * math.pi * 12 / 24)
+    obs[1] = math.cos(2 * math.pi * 12 / 24)
+    obs[2] = math.sin(2 * math.pi * 2 / 7)
+    obs[3] = math.cos(2 * math.pi * 2 / 7)
+    field_index = {field: i for i, field in enumerate(fields)}
+
+    for name, index in field_index.items():
+        if name.endswith('zone_air_temperature_sensor'):
+            obs[index] = (temperature - 295.0) / 5.0
+        elif name.endswith('_heating_temperature_setpoint_sensor'):
+            obs[index] = 293.0
+        elif name.endswith('_cooling_temperature_setpoint_sensor'):
+            obs[index] = 297.0
+        elif name.endswith('outside_air_temperature_sensor'):
+            obs[index] = (outdoor - 295.0) / 10.0
+
+    def set_temp(zone_id, temperature_k):
+        """Set a zone's Kelvin temperature using its normalized sensor."""
+        index = field_index[f'VAV_{zone_id}_zone_air_temperature_sensor']
+        obs[index] = (temperature_k - 295.0) / 5.0
+
+    return meta, obs, set_temp
 
 
-def check(policy, x):
-    a = policy.get_action(x)
-    c,d = a['continuous_action'],a['discrete_action']
-    assert c.shape == (policy.continuous_count,) and c.dtype == np.float32
-    assert d.shape == (policy.discrete_count,) and d.dtype == np.int32
-    assert np.all(np.isfinite(c)) and np.all(np.abs(c) <= 1.000001)
-    assert set(d).issubset({0,1})
-    return c,d
+def check(policy, obs):
+    """Validate the complete Kaggle hybrid-action contract."""
+    action = policy.get_action(obs)
+    continuous = action['continuous_action']
+    discrete = action['discrete_action']
+    assert set(action) == {'continuous_action', 'discrete_action'}
+    assert continuous.shape == (policy.continuous_count,)
+    assert discrete.shape == (policy.discrete_count,)
+    assert continuous.dtype == np.float32
+    assert discrete.dtype == np.int32
+    assert np.isfinite(continuous).all()
+    assert np.all(np.abs(continuous) <= 1.000001)
+    assert np.isin(discrete, (0, 1)).all()
+    return continuous, discrete
 
 
 for shape in [(1,1),(2,3),(4,7)]:
