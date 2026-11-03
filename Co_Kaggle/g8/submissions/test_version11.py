@@ -32,7 +32,8 @@ exec(policy_code, namespace)
 Policy = namespace["TransferPolicy"]
 
 
-def scenario(ahu_count=2, zones_each=3, with_airflow=True):
+def scenario(ahu_count=2, zones_each=3, with_airflow=True,
+             with_supply_sensors=False):
     """Build arbitrary-size building metadata with metadata-indexed controls."""
     fields = ["comfort_mode_now"]
     assignments, vav_actions = {}, {}
@@ -45,6 +46,8 @@ def scenario(ahu_count=2, zones_each=3, with_airflow=True):
                 f"ahs_{ahu_name}_supply_air_flowrate_sensor",
                 f"ahs_{ahu_name}_supply_air_flowrate_setpoint",
             ])
+        if with_supply_sensors:
+            fields.append(f"ahs_{ahu_name}_supply_air_temperature_sensor")
         for local in range(zones_each):
             number = ahu * zones_each + local
             vav_name = f"VAV_{number}"
@@ -72,7 +75,12 @@ def scenario(ahu_count=2, zones_each=3, with_airflow=True):
         "comfort_temp_window": [293.0, 297.0],
         "eco_temp_window": [288.0, 302.0],
         "observation_normalization_metadata": {
-            "zone_air_temperature_sensor": {"sample_mean": 295.0, "sample_std": 5.0}
+            "zone_air_temperature_sensor": {
+                "sample_mean": 295.0, "sample_std": 5.0
+            },
+            "supply_air_temperature_sensor": {
+                "sample_mean": 290.0, "sample_std": 5.0
+            } if with_supply_sensors else {},
         },
     }
     observation = np.zeros(len(fields), dtype=np.float64)
@@ -85,6 +93,8 @@ def scenario(ahu_count=2, zones_each=3, with_airflow=True):
             observation[index] = 293.0
         elif name.endswith("zone_air_cooling_temperature_setpoint_sensor"):
             observation[index] = 297.0
+        elif name.endswith("supply_air_temperature_sensor"):
+            observation[index] = 2.0  # Normalized (300 K - 290 K) / 5 K
         elif name.endswith("supply_air_flowrate_sensor"):
             observation[index] = 10.0
         elif name.endswith("supply_air_flowrate_setpoint"):
@@ -242,6 +252,80 @@ def test_bad_sensors_mapping_and_missing_valves():
     assert switches[-1] == 0, "No valid reheat valve, no hot-water demand"
 
 
+def test_safeguard_binds_for_mild_cooling():
+    """An actual headroom cap must bind, not merely remain inactive."""
+    meta, obs, set_temp, _ = scenario(1, 4)
+    set_temp(0, 297.35)  # 0.35 K above cooling setpoint
+    for zone in (1, 2, 3):
+        set_temp(zone, 289.0)
+    policy = Policy(meta, None)
+    actions, switches = checked(policy, obs)
+    supply_k = 295.0 + 10.0 * float(actions[meta["temp_indices"][0]])
+    assert switches[0] == switches[-1] == 1
+    assert abs(supply_k - 296.95) < 1e-3, "Hot-zone guard must bind"
+
+    policy.MAX_REHEAT_AVOIDANCE_RESET_K = 0.0
+    no_reset, _ = checked(policy, obs)
+    no_reset_k = 295.0 + 10.0 * float(no_reset[meta["temp_indices"][0]])
+    assert supply_k > no_reset_k + 0.5, "The guard must allow some reset"
+
+
+def test_measured_supply_telemetry_and_fallbacks():
+    """A cold supply sensor must strengthen reheat only for its own AHU."""
+    meta, obs, set_temp, _ = scenario(2, 2, with_supply_sensors=True)
+    set_temp(0, 291.5)
+    set_temp(2, 291.5)
+    policy = Policy(meta, None)
+    field_idx = {
+        name: index for index, name in enumerate(meta["observation_field_names"])
+    }
+    vav_indices = meta["zone_action_indices"]
+    first_valve = vav_indices["VAV_0"]["reheat_valve_percentage_command"]
+    other_valve = vav_indices["VAV_2"]["reheat_valve_percentage_command"]
+    first_sensor = field_idx["ahs_ahu_0_supply_air_temperature_sensor"]
+    other_sensor = field_idx["ahs_ahu_1_supply_air_temperature_sensor"]
+
+    initial, switches = checked(policy, obs)
+    assert switches[0] == switches[1] == switches[-1] == 1
+    assert abs(float(initial[first_valve]) - float(initial[other_valve])) < 1e-6
+
+    # One AHU delivers 275 K air despite the 305 K cooling-coil command.
+    obs[first_sensor] = (275.0 - 290.0) / 5.0
+    cold, _ = checked(policy, obs)
+    assert cold[first_valve] > initial[first_valve] + 0.5
+    assert abs(float(cold[other_valve]) - float(initial[other_valve])) < 1e-6
+
+    # Reject malformed and physically implausible normalized observations.
+    obs[first_sensor] = float("nan")
+    invalid, _ = checked(policy, obs)
+    assert abs(float(invalid[first_valve]) - float(initial[first_valve])) < 1e-6
+    obs[first_sensor] = (500.0 - 290.0) / 5.0
+    invalid, _ = checked(policy, obs)
+    assert abs(float(invalid[first_valve]) - float(initial[first_valve])) < 1e-6
+
+    # Missing supply normalization does not treat normalized data as kelvin.
+    meta["observation_normalization_metadata"].pop("supply_air_temperature_sensor")
+    obs[first_sensor] = (275.0 - 290.0) / 5.0
+    unsupported, _ = checked(Policy(meta, None), obs)
+    assert abs(float(unsupported[first_valve]) - float(initial[first_valve])) < 1e-6
+
+    # Cooling damper should not increase because of a warm *command* if the
+    # observed supply is already much colder; matched telemetry matters.
+    meta["observation_normalization_metadata"]["supply_air_temperature_sensor"] = {
+        "sample_mean": 290.0, "sample_std": 5.0
+    }
+    set_temp(0, 298.0)
+    set_temp(2, 295.0)
+    obs[first_sensor] = (300.0 - 290.0) / 5.0
+    obs[other_sensor] = (300.0 - 290.0) / 5.0
+    policy = Policy(meta, None)
+    warm_supply, _ = checked(policy, obs)
+    obs[first_sensor] = (280.0 - 290.0) / 5.0
+    cold_supply, _ = checked(policy, obs)
+    damper_idx = vav_indices["VAV_0"]["supply_air_damper_percentage_command"]
+    assert cold_supply[damper_idx] < warm_supply[damper_idx]
+
+
 def test_runtime_and_gateway():
     """128 invocations and the exact organizer gateway cell."""
     meta, obs, set_temp, _ = scenario(6, 10)
@@ -271,8 +355,11 @@ if __name__ == "__main__":
     test_mild_conflict_and_terminal_coupling()
     test_severe_cooling_and_multiple_ahus()
     test_bad_sensors_mapping_and_missing_valves()
+    test_safeguard_binds_for_mild_cooling()
+    test_measured_supply_telemetry_and_fallbacks()
     seconds = test_runtime_and_gateway()
-    print("PASS V11: 6 grouped checks (actual notebook/gateway, dynamic "
-          "action contract, reheat-aware reset/ablation, cooling guard, "
-          "multi-AHU independence, missing sensors, and 128-step "
+    print("PASS V11: 8 grouped checks (actual notebook/gateway, dynamic "
+          "action contract, reheat-aware reset/ablation, binding cooling "
+          "headroom guard, matched normalized AHU telemetry, independent "
+          "multi-AHU control, missing sensors, and 128-step "
           f"runtime {seconds:.3f}s)")
