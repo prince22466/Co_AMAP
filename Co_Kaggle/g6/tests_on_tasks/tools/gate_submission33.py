@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import re
 
 from compare_submission24 import S1_IDS
 from gate_submission29 import inspect_printout
@@ -16,15 +17,34 @@ from gate_submission32 import tool_telemetry
 
 S29_WINS = frozenset(("rich_3905", "rich_3518", "rich_3454"))
 S30_GAINS = frozenset(("rich_4077", "rich_3882"))
+SUMMARY = re.compile(
+    r"^\\d+\\t([^\\t]+)\\t(True|False)\\t(\\d+)\\t([\\d.]+)\\t",
+    re.MULTILINE,
+)
+
+
+def summary_rows(raw: str) -> dict[str, dict]:
+    """Use final 15-row scored results, even when detailed events are elided."""
+    rows: dict[str, dict] = {}
+    for task, resolved, patch_chars, duration in SUMMARY.findall(raw):
+        if task in rows:
+            raise ValueError("Duplicate scored task row: " + task)
+        rows[task] = {
+            "id": task, "resolved": resolved == "True",
+            "patch_chars": int(patch_chars),
+            "duration_seconds": float(duration),
+        }
+    return rows
 
 
 def assess(s29_raw: str, s30_raw: str, candidate_raw: str) -> dict:
-    old29, old30, candidate = [
-        inspect_printout(raw) for raw in (s29_raw, s30_raw, candidate_raw)
+    baseline29, baseline30, observed = [
+        summary_rows(raw) for raw in (s29_raw, s30_raw, candidate_raw)
     ]
-    baseline29 = {r["id"]: r for r in old29["tasks"]}
-    baseline30 = {r["id"]: r for r in old30["tasks"]}
-    observed = {r["id"]: r for r in candidate["tasks"]}
+    detail = {
+        row["id"]: row
+        for row in inspect_printout(candidate_raw)["tasks"]
+    }
     required = set(S1_IDS)
     failures: list[str] = []
 
@@ -39,8 +59,9 @@ def assess(s29_raw: str, s30_raw: str, candidate_raw: str) -> dict:
     check(all(baseline30.get(i, {}).get("resolved") for i in S30_GAINS),
           "baseline30_missing_expected_wins")
     check(set(observed) == required, "candidate_task_set_mismatch")
-    check(len(candidate["tasks"]) == len(S1_IDS),
+    check(len(observed) == len(S1_IDS),
           "duplicate_or_missing_task_rows")
+    check(set(detail) == required, "incomplete_detailed_tool_events")
 
     wins = {
         name for name, row in observed.items() if row.get("resolved") is True
@@ -52,7 +73,8 @@ def assess(s29_raw: str, s30_raw: str, candidate_raw: str) -> dict:
     unsafe = []
     too_slow = []
     for name, row in observed.items():
-        count = row.get("failed_edits") or 0
+        recorded = detail.get(name, {})
+        count = recorded.get("failed_edits") or 0
         errors += count
         if row.get("duration_seconds") is not None and row[
                 "duration_seconds"] > 240:
@@ -61,9 +83,9 @@ def assess(s29_raw: str, s30_raw: str, candidate_raw: str) -> dict:
         patch_size = row.get("patch_chars")
         check(patch_size is not None and 0 < patch_size <= 50000,
               "empty_or_oversize_patch:" + name)
-        check((row.get("largest_diff_stat_lines") or 0) <= 1000,
+        check((recorded.get("largest_diff_stat_lines") or 0) <= 1000,
               "large_diff_numstat:" + name)
-        if row.get("unsafe_shell_commands"):
+        if recorded.get("unsafe_shell_commands"):
             unsafe.append(name)
     check(errors <= 45, "too_many_native_edit_errors")
     check(not unsafe, "shell_source_mutation_observed")
@@ -92,6 +114,7 @@ def assess(s29_raw: str, s30_raw: str, candidate_raw: str) -> dict:
         "repeated_submit_tasks": sorted(repeated_submits),
         "over_four_minute_tasks": sorted(too_slow),
         "printed_trace_details_present": sorted(trace["by_task"]),
+        "scored_summary_rows": len(observed),
         "triage_passed": not failures,
         "failures": failures,
         "promotion_approved": False,
