@@ -81,12 +81,16 @@ def assess(s29_raw: str, s30_raw: str, candidate_raw: str) -> dict:
             too_slow.append(name)
         check(count <= 8, "excessive_native_edit_errors:" + name)
         patch_size = row.get("patch_chars")
-        check(patch_size is not None and 0 < patch_size <= 50000,
-              "empty_or_oversize_patch:" + name)
+        check(patch_size is not None and patch_size <= 50000,
+              "missing_or_oversize_patch:" + name)
         check((recorded.get("largest_diff_stat_lines") or 0) <= 1000,
               "large_diff_numstat:" + name)
         if recorded.get("unsafe_shell_commands"):
             unsafe.append(name)
+    # One empty patch is permitted by the S30/S32 promotion precedent.
+    # Do not accidentally require all 15 tasks to produce patches.
+    empty_patches = sum(row["patch_chars"] == 0 for row in observed.values())
+    check(empty_patches <= 1, "excessive_empty_patches")
     check(errors <= 45, "too_many_native_edit_errors")
     check(not unsafe, "shell_source_mutation_observed")
 
@@ -107,8 +111,7 @@ def assess(s29_raw: str, s30_raw: str, candidate_raw: str) -> dict:
         "resolved_ids": sorted(wins),
         "s29_retained": sorted(wins & S29_WINS),
         "s30_new_retained": sorted(wins & S30_GAINS),
-        "empty_patches": sum((r.get("patch_chars") or 0) == 0
-                             for r in observed.values()),
+        "empty_patches": empty_patches,
         "native_edit_failures_reported": errors,
         "unsafe_shell_tasks": sorted(unsafe),
         "repeated_submit_tasks": sorted(repeated_submits),
