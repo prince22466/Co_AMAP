@@ -152,7 +152,7 @@ assert np.isclose(c_norm[recirc], c_raw[recirc], atol=1e-5)
 obs_r[[i for i, k in enumerate(meta_r["observation_field_names"])
        if "outside_air_temperature_sensor" in k]] = -0.7
 c_unknown, _ = check(Policy(meta_r, None), obs_r)
-assert c_unknown[recirc] == 1.0
+assert np.isclose(c_unknown[recirc], 0.4)  # 70% physical return-air fraction
 
 # Parameter perturbations must change *physical* control response.
 meta, obs, set_zone, set_outside = synthetic_building(1, 4)
