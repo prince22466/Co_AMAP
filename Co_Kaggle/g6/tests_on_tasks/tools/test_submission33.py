@@ -10,7 +10,7 @@ import tempfile
 import unittest
 import zipfile
 
-from build_submission33 import FILES, SOURCE, build, payload, validate
+from build_submission33 import ARTIFACT, FILES, SOURCE, build, payload, validate
 
 
 class Submission33Packaging(unittest.TestCase):
@@ -21,6 +21,9 @@ class Submission33Packaging(unittest.TestCase):
             manifest1 = build(first)
             manifest2 = build(second)
             self.assertEqual(first.read_bytes(), second.read_bytes())
+            # The submitted artifact must match the deterministic source builder.
+            self.assertTrue(ARTIFACT.is_file())
+            self.assertEqual(first.read_bytes(), ARTIFACT.read_bytes())
             self.assertEqual(manifest1["sha256"], manifest2["sha256"])
             self.assertEqual(manifest1["sha256"],
                              hashlib.sha256(first.read_bytes()).hexdigest())
