@@ -1,0 +1,40 @@
+name: G6 Submission 33 CPU Contract
+
+on:
+  pull_request:
+    paths:
+      - 'Co_Kaggle/g6/submission_nb/submission_33/**'
+      - 'Co_Kaggle/g6/submission_nb/artifacts/submission_33.zip'
+      - 'Co_Kaggle/g6/tests_on_tasks/tools/*submission33*.py'
+      - '.github/workflows/g6-submission33.yml'
+  workflow_dispatch:
+
+jobs:
+  submission33-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install CPU packaging dependency
+        run: python -m pip install pyyaml
+      - name: Compile S33 Python tools
+        run: python -m py_compile Co_Kaggle/g6/tests_on_tasks/tools/*submission33*.py
+      - name: Run packaging and diagnostic-gate regressions
+        working-directory: Co_Kaggle/g6/tests_on_tasks/tools
+        run: python -m unittest -v test_submission33.py test_gate_submission33.py
+      - name: Regenerate and verify reproducible archive
+        working-directory: Co_Kaggle/g6/tests_on_tasks/tools
+        run: python build_submission33.py
+      - name: Assert generated ZIP equals reviewed committed artifact
+        run: git diff --exit-code -- Co_Kaggle/g6/submission_nb/artifacts/submission_33.zip
+      - name: Upload unscored S33 package
+        uses: actions/upload-artifact@v4
+        with:
+          name: submission33-cpu-artifacts
+          if-no-files-found: error
+          path: |
+            Co_Kaggle/g6/submission_nb/artifacts/submission_33.zip
+            Co_Kaggle/g6/submission_nb/artifacts/submission_33.manifest.json
