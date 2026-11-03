@@ -18,7 +18,7 @@ from gate_submission32 import tool_telemetry
 S29_WINS = frozenset(("rich_3905", "rich_3518", "rich_3454"))
 S30_GAINS = frozenset(("rich_4077", "rich_3882"))
 SUMMARY = re.compile(
-    r"^\\d+\\t([^\\t]+)\\t(True|False)\\t(\\d+)\\t([\\d.]+)\\t",
+    r"^\d+\t([^\t]+)\t(True|False)\t(\d+)\t([\d.]+)\t",
     re.MULTILINE,
 )
 
