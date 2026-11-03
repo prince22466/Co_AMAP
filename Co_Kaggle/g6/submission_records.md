@@ -2,6 +2,10 @@
 
 | Submission and Description | public score | comments |
 | --- | ---: | --- |
+| submission.zip - submission_32 | not submitted | `submission_nb/artifacts/submission_32.zip`; |
+| submission.zip - submission_31 | not submitted | `submission_nb/artifacts/submission_31.zip`; |
+| submission.zip - submission_30 | running | `submission_nb/artifacts/submission_30.zip`; |
+| submission.zip - submission_29 | not submitted | `submission_nb/artifacts/submission_29.zip`; |
 | submission.zip - submission_28 | not submitted | `submission_nb/artifacts/submission_28.zip`; E4B single agent; sequential inspect, edit, check and submit workflow with bounded retries |
 | submission.zip - submission_27 | 0.05 | `submission_nb/artifacts/submission_27.zip`; E4B single agent; S26 with prompt-guided evidence ledger, repetition detection and progress control |
 | submission.zip - submission_26 | not submitted | `submission_nb/artifacts/submission_26.zip`; E4B single agent; restores native tools and prompts for bounded search and early edits |
