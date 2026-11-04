@@ -225,7 +225,9 @@ check(policy, obs)
 for temperature_k in [295.1, 295.2]:
     set_zone(0, temperature_k)
     continuous, discrete = check(policy, obs)
-assert policy.disturbance_k_per_step == {}, (
+missing_damper_zone = policy.ahus[0]["zones"][0]["temperature"]
+assert missing_damper_zone not in policy.previous_zone
+assert missing_damper_zone not in policy.disturbance_k_per_step, (
     "Observer must not estimate heat gains from unobservable actuator commands"
 )
 # The valid second terminal still has the proper metadata-resolved indices.
@@ -249,6 +251,9 @@ assert abs(policy._predict_nominal_change_k(sample) - expected_k) < 1e-12
 
 # 6. Reset matches a fresh policy, including all state and current actions;
 # observer state must not leak between independent building episodes.
+meta, obs, set_zone, _ = scenario(1, 1, temp=295.0, outdoor=295.0)
+policy = Policy(meta, None)
+check(policy, obs)
 policy.reset()
 assert policy.previous_zone == {} and policy.disturbance_k_per_step == {}
 fresh = Policy(meta, None)
