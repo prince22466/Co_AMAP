@@ -76,3 +76,50 @@ calls by roughly 10–24% across tested cases, but 16K serving remained
 capacity/queueing-constrained, and those tests do not validate this stack.
 **No BI-V150 combined-kernel test, matched serving A/B, or accuracy
 score for v8+v5 is claimed. Do not merge on source inspection alone.**
+
+## v7 GEMM / Linear kernel stack (experimental)
+
+v8 additionally carries the **existing FlagGems Iluvatar MM and Linear kernel**
+changes from standalone v7, preserving the above **v1 prefill/mixed + v5
+pure-decode attention stack**. The four v7 files are copied unchanged:
+
+- `FlagGems/src/flag_gems/runtime/backend/_iluvatar/ops/mm.py`:
+  grouped M-tile scheduling for large-M GEMMs (GROUP_M=8), keeping the
+  original row-major mapping for M <= 128, and edge-masked loads
+  instead of modulo-wrapped addresses.
+- `FlagGems/src/flag_gems/runtime/backend/_iluvatar/ops/linear.py`:
+  edge-masked loads and FP32 accumulator forwarding to `tl.dot`, with
+  the existing `allow_tf32=False` and optional bias behavior.
+- `FlagGems/src/flag_gems/runtime/backend/_iluvatar/heuristics_config_utils.py`:
+  add the matching `EVEN_M` and `EVEN_N` Linear compile-time heuristics.
+  These are required by the updated Linear kernel signature.
+- `FlagGems/tests/test_iluvatar_gemm_linear_v7.py`:
+  hardware-gated FP16/BF16 correctness checks for decode-like and
+  prefill-like shapes, tails, transposed weights, bias, `mm_out`, and 1D/3D inputs.
+
+These changes affect the *implementation of existing* Iluvatar operators.
+There is no v7 activation switch, no replacement operator backend, and no
+change to FlagOS/vLLM dispatch priorities, attention selection, model settings,
+quantization, speculative decoding, or the official benchmark script.
+Other platform implementations are unchanged. Standalone v7 remains intact.
+
+### Required BI-V150 validation
+
+```bash
+cd /root/Optimization/v8
+export PYTHONPATH="$PWD/FlagGems/src:$PWD/vllm-plugin-FL:${PYTHONPATH:-}"
+export VLLM_PLUGINS=fl
+
+python3 -m pytest -q -s --noconftest FlagGems/tests/test_iluvatar_gemm_linear_v7.py vllm-plugin-FL/tests/functional_tests/test_biv150_attention_v1.py vllm-plugin-FL/tests/functional_tests/test_biv150_v1_v5_stack.py
+```
+
+Also run the existing FlagGems `test_mm.py`, `test_linear.py`, and
+`test_addmm.py` suites in the same supported GPU environment. Verify in
+production GPU traces that the new MM/Linear kernels are executed, since vLLM
+may use native GEMMs on some paths. Compare identical v8(v1+v5) and
+v8(v1+v5+v7) server runs on both **unchanged** official 4K/16K
+cases `[[4096,1024,64,256],[16384,1024,64,128]]`, then run `math_500`.
+
+**This port has not been GPU-tested or benchmarked in this PR.**
+Do not claim a serving throughput or accuracy improvement until the
+hardware checks and paired official measurements pass.
