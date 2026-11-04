@@ -12,7 +12,7 @@ from gate_submission35 import (
 PATCH = ("diff --git a/pkg/module.py b/pkg/module.py\n"
          "--- a/pkg/module.py\n"
          "+++ b/pkg/module.py\n"
-         "@@ -2,2 +2,2 @@\n"
+         "@@ -2 +2 @@\n"
          "-return False\n"
          "+return True\n")
 
@@ -116,6 +116,15 @@ class S35GateTests(unittest.TestCase):
         duplicate = primary + [dict(primary[0])]
         with self.assertRaisesRegex(ValueError, "duplicate"):
             summarize(duplicate, stage="s1")
+
+    def test_missing_tool_transcript_blocks_screen_but_keeps_scores(self):
+        primary = results(PILOT_IDS, {"rich_4077", "rich_3518", "rich_3905"})
+        control = results(PILOT_IDS, {"rich_4077", "rich_3905"})
+        report = compare(primary, control, stage="pilot")
+        self.assertEqual(report["delta_resolved"], 1)
+        self.assertFalse(report["single_run_screen_passed"])
+        self.assertIn("tool_traces_not_supplied", report["single_run_blockers"])
+        self.assertFalse(report["promotion_approved"])
 
     def test_empty_patch_or_agent_error_blocks(self):
         primary = results(PILOT_IDS, {"rich_4077", "rich_3905", "rich_3518"})
