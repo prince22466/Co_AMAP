@@ -1,97 +1,89 @@
-# Submission 35 — 31B-native tool recovery with optional instruction skill
+# Submission 35 — E4B native-tool recovery with optional skill
 
-**Status: candidate, no real-model task tests yet.** Do not infer issue
-resolution from package tests or a successful CI check.
+**Status: unscored candidate.** S35 uses the **exact same model and generation
+settings as S34**, not 31B. Real-model results are required before promotion.
 
-## Motivation and measured baseline
+## Evidence and goal
 
-S34 E4B resolved **2/15 S1 tasks**, with **128 visible FileEditError**
-events, **45 missing-argument errors** and **5 empty patches**. It lost S29's
-`rich_3518` and `rich_3454` successes despite shortening the prompt.
-The same-path retry instruction was not enforced: `requests_7315`,
-`rich_3934`, and `rich_4076` each showed dozens of edit failures.
+S34's single recorded E4B S1 run resolved 2/15 selected tasks and showed
+128 visible FileEditError events, 45 malformed native-edit calls and five
+empty patches. It lost S29's successes on `rich_3518` and `rich_3454`.
+Prompt shortening did not prevent repeated failed operations.
 
-The competition supports 31B, 12B, E4B and E2B independently. S10's
-earlier **31B** public Kaggle score was 0.15 (different harness topology);
-that score motivates a capacity experiment but does not predict S35.
+S35 targets three capabilities without switching models:
+1. **Tool-call reliability:** named native-tool arguments, five native tools,
+   no `write_file` (a known overwrite hazard). The unrestricted
+   `run_command` shell remains available, so this is not a sandbox.
+2. **Feedback interpretation:** distinguish malformed calls, exact-match
+   failures, no-op edits, missing dependencies, and behavioral test failures.
+3. **Failure recovery:** after two failed edits at a location, optionally
+   consult an ADK instruction-only recovery skill and use a guarded,
+   small `git apply --check` fallback. No custom script dispatcher.
 
-## The system: reliable native interface + optional recovery knowledge
+The optional skill **cannot intercept a malformed native call or enforce retry
+limits**. The model must choose to load and follow it. The harness's
+declarative format does not offer submission-defined tool callbacks. The
+offline diagnostic gate detects failures *after* the run, not during it.
 
-**Primary S35 uses a single 31B agent** with five native tools:
-`run_command`, `read_file`, `edit_file`, `get_status`,
-`submit_patch`. The model sees concrete tool argument schemas in a
-bounded 2.6K-character core instruction. `write_file` is *not
-registered*; this prevents accidental calls to that destructive tool,
-although `run_command` is still powerful and therefore not a security
-boundary.
+## Exact S34 model parity
 
-An optional **instruction-only** `tool-recovery` ADK skill supplies an
-error taxonomy and a bounded `git apply --check` fallback. It registers
-no extra edit tool and has no script to dispatch. Native tools remain the
-primary path. The intended escalation is:
+Both S35 variants retain these S34 settings:
 
-1. Inspect narrow source and try a native exact `edit_file`.
-2. On missing tool arguments, correct the required schema ONCE. On an
-   unmatched/ambiguous old string, reread local lines and retry ONCE.
-3. After two failures, if the optional skill is actually loaded, use its
-   recovery instructions to choose a new verified site or **one** small
-   `git apply --check` + `git apply` command. Never overwrite source
-   with `cat > source`, `write_file`, `sed -i`, or Python file rewrites.
-4. Verify the *requested* behavior and inspect the final diff before submit.
+| Setting | S34 | S35 primary and control |
+| --- | --- | --- |
+| Model | `gemma-4-e4b-it-qat-w4a16-ct` | **Identical** |
+| Temperature / top-p | 0.0 / 0.95 | **Identical** |
+| Max output tokens | 4096 | **Identical** |
+| Thinking budget / thoughts | 512 / false | **Identical** |
+| Time / tool calls / turns | 4 min / 40 / 48 | **Identical** |
+| Conversation history | `include_contents: default` | **Identical** |
 
-These are **prompt-level decisions** except for tool availability
-(`write_file` is removed) and the host's existing tool validators.
-The competition's declarative submission format does **not** permit
-a competitor-defined interception callback for malformed outer tool calls.
-In particular, the skill cannot catch errors before `load_skill`
-has been called; failure/repetition limits are NOT mechanically enforced.
-The offline diagnostics gate detects such failure *after* a run.
+S35 intentionally differs from S34 in its prompt, native tool list and
+optional skill. Therefore S34→S35 is **not** a single-variable ablation.
+The additional no-skill S35 control isolates the skill's effect within S35.
 
-## Matched control: isolate the skill
+## S35 experimental variants
 
-The PR ships two archives:
+| Archive | Native tools | Other capability |
+| --- | --- | --- |
+| `submission_35.zip` | `run_command`, `read_file`, `edit_file`, `get_status`, `submit_patch` | Optional `tool-recovery` skill |
+| `submission_35_control.zip` | Exactly the same five | No skill |
 
-| Archive | Model | Native tools | Instruction | Extra |
-| --- | --- | --- | --- | --- |
-| `submission_35.zip` | Gemma 4 31B QAT | Same 5 | Identical | Optional `tool-recovery` |
-| `submission_35_control.zip` | Gemma 4 31B QAT | Same 5 | Identical | No skill |
+The control uses exactly the same E4B model, generation, task prompt,
+sampling and evaluation limits as the primary. The **only difference
+between the S35 variants** is skill registration and its packaged
+`SKILL.md`. Neither uses LoRA or additional LLM agents.
 
-The only difference is the skill registration and its `SKILL.md`.
-Both share exact generation parameters (temperature 0, output 8192,
-thinking budget 2048, thoughts hidden), 40 tools, 48 turns, 4 minutes
-and the same source/task set. No LoRA or external model is used.
-This pair can identify the effect of providing the *skill*; it cannot
-isolate 31B-vs-E4B because historical E4B setups differ.
+The skill contains an error taxonomy and one example of a bounded
+`git apply --check` sequence. It registers no tools, scripts or wrappers.
+It is an optional reference, not a mandatory workflow. The `write_file`
+tool is absent in both archives, so new files would require another
+permitted approach and should only be created when strictly required.
 
-**Keep the models separate:** do not attempt to put 31B and E4B agents
-inside one submission. The competition permits only one model variant
-per archive.
-
-## Build and CPU validation
+## Build and CPU checks
 
 From `Co_Kaggle/g6/tests_on_tasks/tools/`:
 
 ```bash
-python -m pip install pyyaml
+python -m pip install 'pyyaml>=6,<7'
 python build_submission35.py
 python -m unittest -v \
   test_submission35.py test_gate_submission35.py test_run_submission35.py
 ```
 
-CI verifies two deterministic archives byte-for-byte against the
-committed ZIPs, exact allowed tool set, ablation parity, skill metadata,
-runner model scoping, negative configuration tests, and safety-screen
-logic. **No CI check invokes a real Gemma model or guarantees that
-the model will load the skill.**
+The builder validates S35 model, sampling and budget against the
+**actual S34 `agent.yaml` / `eval_config.yaml`**, checks for forbidden
+extra tools or models, validates skill metadata, and builds two
+deterministic ZIPs. CI verifies they exactly match the committed
+artifacts. **CPU tests are not task-resolution evidence and do not
+compile the archives through the live competition runtime.**
 
-## Paired official-runner evaluation
+## Matched E4B evaluation
 
-The runner delegates task execution and phase-2 checking to the
-existing stock `run_submission24_eval.py` pipeline. It temporarily
-points that runner at the competition-approved 31B model, and restores
-the model setting after evaluation. Start the **31B vLLM server first**,
-make sure the official wheels/snapshots and tasks are present, then
-run a paired 5-task pilot. From `tests_on_tasks/tools/`:
+Start the same E4B vLLM model used for S34. The runner delegates
+execution and phase-2 verification to the existing harness without
+changing the evaluator's model. With tasks, snapshots and wheels
+available, run two same-seed pilots (from `tests_on_tasks/tools/`):
 
 ```bash
 python run_submission35_eval.py --variant control \
@@ -102,13 +94,12 @@ python run_submission35_eval.py --variant primary \
   --stage pilot --repeats 2 --time-limit 4 --output /path/s35-primary-pilot
 ```
 
-The pilot IDs are `rich_4077`, `rich_3518`, `rich_4076`,
-`requests_7315`, and `rich_3905`. These include two historically
-straightforward successes and three problematic edit/tool trajectories.
-No grader tests or benchmark reference fixes are injected into the
-agent. Check baseline environment readiness before drawing conclusions.
+Pilot: `rich_4077`, `rich_3518`, `rich_4076`,
+`requests_7315` and `rich_3905`. Selected to mix known
+previous successes with observed edit failures; no reference fixes or
+grader modifications are included in the agent ZIP.
 
-Compare **the same repeat** from each pair using official JSONL:
+Compare each matching repeat's official JSONL files:
 
 ```bash
 python gate_submission35.py --stage pilot \
@@ -116,40 +107,41 @@ python gate_submission35.py --stage pilot \
   --primary /path/s35-primary-pilot/candidate_1
 ```
 
-For a fuller tool-failure diagnostic, pass `--primary-printout` and
-`--control-printout` if notebook-style *complete* time-stamped
-printouts are also available. The official runner stores full ATIF
-traces within JSONL; the printed-event gate is only a proxy and fails
-closed when detailed task events are missing. Review actual edit args
-and the final patch in the stored traces and outputs.
+The JSONL gate compares resolved tasks, empty/oversized patches,
+protected-file changes and agent errors. **The safety-screen result
+remains blocked without complete printed tool telemetry**, even with
+valid JSONL, because the gate deliberately does not reconstruct full
+native-tool arguments from ATIF. For a complete screen, supply
+`--primary-printout` with a full, matching timestamped tool printout;
+`--control-printout` provides supplementary control telemetry.
+If these are unavailable, manually review the official JSONL `trace`
+fields and actual patches, without interpreting a blocked screen as a
+failed score.
 
-If the pilot is promising, repeat both variants using
-`--stage s1 --repeats 2`, first with `--time-limit 0` to match
-historical unlimited-time diagnostics and *separately* with
-`--time-limit 4` for competition-like timing. Do not mix those
-windows when comparing results.
+Run `--stage s1 --repeats 2` only after the five-task pilot is useful.
+Use matched `--time-limit 0` for historical unlimited-time comparisons
+and separately matched `--time-limit 4` for competition-like timing.
+Never compare unlimited-time wins directly with timed wins.
 
-## Promotion requirements and stop rules
+## Promotion criteria and caveats
 
-For **each of two matched S1 repetitions**, the primary should reach
-at least 5/15, retain the three known S29 successful tasks, beat its
-same-seed no-skill 31B control, have <=2 empty patches, no destructive
-diff, and no systematic malformed-argument or repeated-edit streaks.
-Review full ATIF and targeted behavior tests before promotion.
+For both matched 15-task repeats, aim for at least 5/15 resolved,
+retain all three S29 historical wins (`rich_3905`, `rich_3518`,
+`rich_3454`), beat the **same-seed E4B no-skill control**, have
+at most two empty patches, no destructive patch and no systematic
+repeated failed edits or malformed native calls. Inspect the final
+behavior and raw ATIF call arguments; the analyzer never marks
+`promotion_approved` automatically.
 
-A successful skill activation alone does not establish recovery; the
-agent must change to a more productive action and then produce a
-verified, correct patch. If the skill is never loaded, its value remains
-unmeasured. If the control outperforms the primary, remove the skill
-rather than adding more instructions. If both 31B variants improve
-similarly over historical E4B, that suggests model capacity may be
-important, **but it is not a causal comparison** without an E4B run
-with the same exact architecture.
+Skill registration is not proof of skill use. If no `load_skill`
+call occurs, the skill did not demonstrably help. If the control
+outperforms the primary, discard the skill rather than expanding
+the instructions again. If both variants remain weak, isolate the
+tool-surface reduction next, without changing model size.
 
 ## Explicit non-goals
 
-- No custom Python callbacks or forbidden host tool registration.
-- No custom `run_skill_script` editor (S25 failed severely here).
-- No mandatory multi-agent graph/verification stages (S31 regressed).
-- No pretrained reference fixes, evaluator tampering or fabricated wins.
-- No claim of runtime-enforced repetition detection/context reset.
+- No external Python callbacks, model switch, LoRA, or model mixing.
+- No mandatory multi-agent stages or custom skill-script editors.
+- No grader modifications, benchmark reference fixes or claims of
+  mechanically enforced context compaction or retry limits.
