@@ -130,11 +130,12 @@ def tool_events(text: str, *, stage: str) -> dict:
         elif "📖 read_file (" in event:
             row["reads"] += 1
             pending = "read"
-            failed_streak = 0
+            # A reread is not itself recovery; retain the same-path edit
+            # failure count until a successful edit or different edit site.
         elif "🔧 run_command " in event:
             row["commands"] += 1
             pending = "command"
-            failed_streak = 0
+            # A shell command does not erase earlier failed edits either.
             if "git diff" in event:
                 row["diff_commands"] += 1
         elif "submit_patch" in event and "🤖" in event:
