@@ -41,8 +41,16 @@ def policy_classes():
     server.SmartBuildingsInferenceServer = FakeInferenceServer
     gateway = types.ModuleType("kaggle_evaluation")
     gateway.smart_buildings_inference_server = server
-    original = sys.modules.get("kaggle_evaluation")
-    sys.modules["kaggle_evaluation"] = gateway
+    # The notebook includes Kaggle's optional starter imports. They are
+    # unused by the controller and absent from this NumPy-only CI runner.
+    # Stub them here instead of installing unrelated packages.
+    optional_modules = {
+        "kaggle_evaluation": gateway,
+        "pandas": types.ModuleType("pandas"),
+        "kagglehub": types.ModuleType("kagglehub"),
+    }
+    originals = {name: sys.modules.get(name) for name in optional_modules}
+    sys.modules.update(optional_modules)
     try:
         notebook = json.loads(NOTEBOOK.read_text(encoding="utf-8"))
         assert notebook["nbformat"] == 4
@@ -70,10 +78,11 @@ def policy_classes():
         assert gateway_count == 1, "Official gateway must run exactly once"
         assert gateway_calls == [namespace["TransferPolicy"]]
     finally:
-        if original is None:
-            sys.modules.pop("kaggle_evaluation", None)
-        else:
-            sys.modules["kaggle_evaluation"] = original
+        for name, original in originals.items():
+            if original is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = original
     return namespace["PhysicsBaselinePolicy"], namespace["TransferPolicy"]
 
 BASE, ILC = policy_classes()
