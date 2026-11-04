@@ -1,8 +1,8 @@
 """Paired S35 E4B official-harness evaluation; no new benchmark or scorer.
 
 Uses the same official evaluator as earlier g6 runs. The only variant
-difference is the optional instruction-only recovery skill. The global
-model override below is confined to this single-process CLI runner.
+difference is the optional instruction-only recovery skill. The evaluator
+already uses the S34 E4B model, so only pilot task IDs are temporarily changed.
 """
 from __future__ import annotations
 
@@ -36,12 +36,14 @@ def verified_archive(variant: str, supplied: Path | None) -> Path:
 
 async def evaluate(args) -> dict:
     args.archive = verified_archive(args.variant, args.archive)
-    old_model, old_pilot = official.MODEL, official.PILOT_IDS
-    official.MODEL, official.PILOT_IDS = MODEL, PILOT_IDS
+    if official.MODEL != MODEL:
+        raise ValueError("Evaluator model must equal S34 E4B")
+    old_pilot = official.PILOT_IDS
+    official.PILOT_IDS = PILOT_IDS
     try:
         report = await official.evaluate(args)
     finally:
-        official.MODEL, official.PILOT_IDS = old_model, old_pilot
+        official.PILOT_IDS = old_pilot
     report["submission"] = 35
     report["variant"] = args.variant
     report["model"] = MODEL
