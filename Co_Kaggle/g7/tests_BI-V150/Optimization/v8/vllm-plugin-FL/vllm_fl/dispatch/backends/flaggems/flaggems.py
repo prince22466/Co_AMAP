@@ -184,16 +184,17 @@ class FlagGemsBackend(Backend):
             print("Using FlagGems attention backend.")
             return "vllm_fl.dispatch.backends.flaggems.impl.attention.AttentionFLBackend"
 
-        # On Iluvatar, use the plugin-owned optimized v1 Triton attention
-        # automatically. The kernel retains baseline dispatch for untuned
-        # shapes; other platforms keep the standard Triton backend. Preserve
-        # the FlagGems override and the existing MLA/sparse guards above.
+        # Iluvatar selects the integrated v1+v4 optimized Triton kernel.
+        # Grouped address lookup is guarded inside the kernel: decode and
+        # unsupported prefill use the original v1-equivalent page addressing.
+        # Preserve the existing FlagGems override and platform fallbacks.
         from vllm.platforms import current_platform
 
         if getattr(current_platform, "vendor_name", None) == "iluvatar":
             return (
                 "vllm_fl.dispatch.backends.vendor.iluvatar.impl."
-                "attention_biv150.BIV150TritonAttentionBackend"
+                "attention_biv150_grouped_v4."
+                "BIV150V1GroupedV4AttentionBackend"
             )
 
         return AttentionBackendEnum.TRITON_ATTN.get_path()
