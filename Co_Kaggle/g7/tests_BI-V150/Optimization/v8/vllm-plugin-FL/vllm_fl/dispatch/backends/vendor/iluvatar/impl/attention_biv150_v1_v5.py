@@ -2,10 +2,10 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """Phase-aware v1 prefill + v5 pure-decode Triton attention on BI-V150.
 
-Retains the existing vLLM Triton backend interface, metadata, cache writes,
-and operator priorities. The v1 and v5 launchers remain intact and separate.
-The decision depends only on the invocation's query-length metadata; mixed
-prefill/decode always takes v1, not the v5-only decode specialization.
+Retains the vLLM Triton backend interface, metadata and operator priorities.
+The v1/v5 attention launchers remain intact; compatible paged KV writes use
+the existing v6 optimized kernel, with inherited fallback for other layouts.
+Only pure decode uses the v5 attention launcher; mixed batches use v1.
 """
 
 import torch
@@ -86,7 +86,7 @@ class BIV150V1V5AttentionImpl(BIV150TritonAttentionImpl):
 
 
 class BIV150V1V5AttentionBackend(TritonAttentionBackend):
-    """Reuse vLLM Triton attention metadata and KV-cache update behavior."""
+    """Reuse vLLM metadata; specialize only eligible paged KV-cache writes."""
 
     @staticmethod
     def get_impl_cls() -> type[BIV150V1V5AttentionImpl]:

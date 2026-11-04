@@ -39,7 +39,8 @@ def test_v6_nhd_layout_and_threshold(tokens, dtype):
         assert not supports_v6_kv_write(key, value, hnd_cache, slots, "auto")
         assert not supports_v6_kv_write(key, value, kv_cache, slots, "fp8")
         assert not supports_v6_kv_write(
-            key, value, kv_cache, slots[::2], "auto"
+            key, value, kv_cache,
+            torch.arange(tokens * 2, dtype=torch.int32)[::2], "auto"
         )
 
 
