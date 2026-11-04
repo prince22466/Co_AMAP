@@ -144,13 +144,14 @@ class Version20Test(unittest.TestCase):
         self.assertGreater(new["hot_surface"], old["hot_surface"])
 
     def test_hysteresis_and_episode_reset(self):
-        self.policy.get_action(observation(first=297.27))
-        keep = self.policy.get_action(observation(first=297.20))
+        self.policy.get_action(observation(first=297.25))
+        keep = self.policy.get_action(observation(first=297.16))
         self.assertEqual(keep["discrete_action"][0], 1)
         self.policy.reset()
-        reset_result = self.policy.get_action(observation(first=297.20))
-        # Newly observed 0.20 K surfaces still exceed the ON threshold;
-        # check the reset state itself, not an assumed off-switch response.
+        reset_result = self.policy.get_action(observation(first=297.16))
+        # 0.16 K is between the OFF (0.06) and ON (0.17) thresholds:
+        # it remains on only when the previous AHU state has been retained.
+        self.assertEqual(reset_result["discrete_action"][0], 0)
         self.assertEqual(len(self.policy._previous_zone_temp), 2)
         self.assertTrue(np.isclose(
             self.policy._filtered_zone_trend[self.policy.ahus[0]["zones"][0]["temperature"]],
@@ -158,7 +159,7 @@ class Version20Test(unittest.TestCase):
         fresh = TransferPolicy(metadata(), None)
         np.testing.assert_array_equal(
             reset_result["continuous_action"],
-            fresh.get_action(observation(first=297.20))["continuous_action"])
+            fresh.get_action(observation(first=297.16))["continuous_action"])
 
     def test_invalid_or_missing_observations_do_not_leak_history(self):
         self.policy.get_action(observation(first=300.0))
