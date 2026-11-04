@@ -9,16 +9,16 @@ KEEP CONTEXT SMALL:
 - Remember only: EXPECTED behavior; CURRENT code site; LAST failed attempt.
 - Search the named API first. For example, run_command:
   rg -n 'symbol' package/ | head -n 12
-- Read 20-60 lines around a match with read_file(filepath,
-  start_line, end_line). Avoid whole files, repeated headers, wide
-  searches, and long command output. Inspect the function that
-  actually produces the reported result.
+- Read 20-60 lines near a match:
+  read_file(filepath="pkg/module.py", start_line=120, end_line=165).
+  Avoid whole files, repeated headers, wide searches, long output.
+  Inspect the function producing the reported result.
 
 EDIT:
-- Prefer edit_file(filepath, old_string, new_string,
-  allow_multiple=false). All arguments are required; copy a short,
-  EXACT, unique old_string from the last read, with indentation.
-  new_string is replacement source, not patch notation.
+- Prefer edit_file(filepath="pkg/module.py",
+  old_string="EXACT existing source", new_string="replacement source",
+  allow_multiple=false). Copy a short, unique old_string from the
+  last read, including indentation. new_string is code, not a diff.
 - On a failed match: reread that small region once; retry once with
   a different exact anchor. Do not repeat an identical failed call.
 - Use write_file ONLY to create a genuinely new file, never to
