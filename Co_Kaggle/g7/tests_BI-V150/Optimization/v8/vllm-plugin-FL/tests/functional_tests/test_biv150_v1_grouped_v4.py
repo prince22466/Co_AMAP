@@ -1,7 +1,7 @@
-"""BI-V150 v8 experimental v1+v4 grouped paged-KV lookup regression.
+"""BI-V150 v8 automatically selected v1+v4 grouped paged-KV lookup regression.
 
-Keep the default v1 selection unchanged. Compare the combined operator
-against the v1 operator on identical physical KV pages; benchmark scripts
+Compare the automatically selected combined operator against the preserved
+v1 operator on identical physical KV pages; benchmark scripts
 and model hyperparameters are not modified.
 """
 import math
@@ -11,10 +11,6 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-V1 = (
-    "vllm_fl.dispatch.backends.vendor.iluvatar.impl."
-    "attention_biv150.BIV150TritonAttentionBackend"
-)
 V1_V4 = (
     "vllm_fl.dispatch.backends.vendor.iluvatar.impl."
     "attention_biv150_grouped_v4.BIV150V1GroupedV4AttentionBackend"
@@ -23,7 +19,7 @@ TRITON = "vllm.v1.attention.backends.triton_attn.TritonAttentionBackend"
 FLAGGEMS = "vllm_fl.dispatch.backends.flaggems.impl.attention.AttentionFLBackend"
 
 
-def _backend(monkeypatch, vendor, enabled=False, flaggems=False):
+def _backend(monkeypatch, vendor, flaggems=False):
     import vllm.platforms
     from vllm_fl.dispatch.backends.flaggems.flaggems import FlagGemsBackend
 
@@ -31,25 +27,27 @@ def _backend(monkeypatch, vendor, enabled=False, flaggems=False):
     monkeypatch.setattr(
         vllm.platforms, "current_platform", SimpleNamespace(vendor_name=vendor)
     )
-    monkeypatch.setenv("VLLM_FL_BIV150_GROUPED_V4", "1" if enabled else "0")
     monkeypatch.setenv("VLLM_FL_USE_FLAGGEMS_ATTN", "1" if flaggems else "0")
     return FlagGemsBackend().attention_backend()
 
 
-def test_v1_stays_default_on_iluvatar(monkeypatch):
-    assert _backend(monkeypatch, "iluvatar") == V1
+def test_grouped_v4_selected_automatically_on_iluvatar(monkeypatch):
+    monkeypatch.delenv("VLLM_FL_BIV150_GROUPED_V4", raising=False)
+    assert _backend(monkeypatch, "iluvatar") == V1_V4
 
 
-def test_grouped_v4_requires_explicit_opt_in(monkeypatch):
-    assert _backend(monkeypatch, "iluvatar", enabled=True) == V1_V4
+@pytest.mark.parametrize("legacy_value", ["0", "1"])
+def test_legacy_grouped_flag_has_no_effect(monkeypatch, legacy_value):
+    monkeypatch.setenv("VLLM_FL_BIV150_GROUPED_V4", legacy_value)
+    assert _backend(monkeypatch, "iluvatar") == V1_V4
 
 
 def test_grouped_v4_does_not_change_other_platforms(monkeypatch):
-    assert _backend(monkeypatch, "nvidia", enabled=True) == TRITON
+    assert _backend(monkeypatch, "nvidia") == TRITON
 
 
 def test_explicit_flaggems_override_keeps_priority(monkeypatch):
-    assert _backend(monkeypatch, "iluvatar", enabled=True, flaggems=True) == FLAGGEMS
+    assert _backend(monkeypatch, "iluvatar", flaggems=True) == FLAGGEMS
 
 
 @pytest.mark.parametrize(

@@ -1,68 +1,63 @@
-# v8 — new start point for further optimization
+# v8 — v1 tiled attention + automatic v4 grouped paged-KV lookup
 
-**Goal:** v8 first copy everything of v1, and stack other applicable optimization efforts from v2 to v7.  
-v2 will be skipped, because it is same direction of v1 but with different parameters and less performative.
+v8 builds on v1's optimized Triton attention. v2's competing tile parameters
+are not included; the previously reverted v3 RMSNorm experiment stays out.
 
-## Automatic v1 attention activation
+## Built-in v1 + v4 activation on Iluvatar
 
-In v8, `FlagGemsBackend.attention_backend()` chooses the existing
-`BIV150TritonAttentionBackend` automatically when vLLM's current platform
-reports `vendor_name == "iluvatar"`. No
-`VLLM_FL_BIV150_ATTN_V1` environment variable is required.
+On the Iluvatar platform, `FlagGemsBackend.attention_backend()`
+**automatically selects** `BIV150V1GroupedV4AttentionBackend`. There
+is **no v4 startup environment variable**: the legacy
+`VLLM_FL_BIV150_GROUPED_V4` has no effect on selection.
 
-This uses the already tuned v1 Triton unified-attention kernel; it does not
-change the model, the official benchmark, or the framework's per-operator
-priority policy. Non-Iluvatar devices retain standard
-`TRITON_ATTN`. The existing explicit
-`VLLM_FL_USE_FLAGGEMS_ATTN=1` override remains available.
+The new Triton kernel combines two concrete operator optimizations:
+- v1's BF16/GQA query tiling (`BLOCK_M=32` for eligible prefill).
+- v4's grouped page-ID lookup: load each KV-cache page ID once per tile
+  and expand to token lanes with Triton `tl.gather`.
 
-Start v8 with its `FlagGems/src` and `vllm-plugin-FL` on
-`PYTHONPATH` and `VLLM_PLUGINS=fl`; no attention-specific toggle is needed.
-The selector tests check automatic selection, platform fallback, and the
-explicit FlagGems override. GPU correctness and official throughput/accuracy
-benchmarks must be run on BI-V150 before accepting this candidate.
+This implementation preserves vLLM's Triton backend metadata, KV-cache write,
+operator interfaces and existing FlagOS priority. The original v1 kernel and
+adapter remain unchanged for A/B verification and rollback. Non-Iluvatar
+platforms retain `TRITON_ATTN`; the existing explicit
+`VLLM_FL_USE_FLAGGEMS_ATTN=1` override still takes precedence.
 
-## Experimental v4 grouped paged-KV lookup stacked onto v1
+### Eligibility and fallbacks
 
-The default **remains v1**. This experimental candidate combines v1's tuned
-query tiling (`BLOCK_M=32` for eligible BF16 GQA prefill) with the actual
-v4 kernel-level grouped physical-page-table load: load one page ID per
-KV-cache page, then expand with Triton `tl.gather`. The original v1
-attention kernel and its backend are retained byte-for-byte; the combined
-candidate lives in its own plugin-owned kernel and adapter. No FlagGems
-backends or framework priority policy are replaced.
+Grouped page lookup is applied **inside the combined kernel**, only if the
+original v1 BF16, causal, nonquantized MiniCPM GQA specialization is eligible
+(16 Q heads, 2 KV heads, head dimension 128, no unsupported sinks,
+multimodal-prefix, sliding window, ALiBi or softcap), and:
+- the batch has 2D prefill, max query length >=128, max KV length >=8192;
+- page size and KV tile are power-of-two aligned, and KV tile > page size;
+- the individual sequence has query length >=128 and KV length >=8192.
 
-**Activation (BI-V150 Iluvatar only):**
+Short prefill, decode, unsupported layouts and mixed-batch decode sequences
+retain **v1-equivalent original page lookup** and computation. This is
+kernel-level conditional specialization, not a new framework attention policy.
+
+## Start vLLM without an attention-specific toggle
 
 ```bash
-# Default control: tuned v1 kernel only.
-unset VLLM_FL_BIV150_GROUPED_V4
+cd /root/Optimization/v8
+export PYTHONPATH="$PWD/FlagGems/src:$PWD/vllm-plugin-FL:${PYTHONPATH:-}"
+export VLLM_PLUGINS=fl
+unset VLLM_FL_USE_FLAGGEMS_ATTN VLLM_ATTENTION_BACKEND
 
-# Experimental candidate: v1 tiles + v4 grouped paged-KV loads.
-export VLLM_FL_BIV150_GROUPED_V4=1
+vllm serve /workspace/MiniCPM5-2B \
+  --port 9031 \
+  --compilation-config '{"cudagraph_mode":"FULL_DECODE_ONLY"}' \
+  --served-model-name minicpm \
+  --gpu-memory-utilization 0.85 \
+  --max-model-len 131072
 ```
 
-Restart all serving workers after switching the environment variable.
-The existing `VLLM_FL_USE_FLAGGEMS_ATTN=1` override still takes precedence;
-non-Iluvatar platforms keep the standard Triton backend.
+The `unset` only removes earlier explicit backend overrides; it is not
+required to activate v4. Check the **server worker** import path and confirm
+the selected class `BIV150V1GroupedV4AttentionBackend`. A GPU trace is
+needed to establish whether long-prefill kernels specialize to grouped
+page lookup, rather than assuming this from a selector log.
 
-The experimental grouped lookup activates only for decoder-attention
-2D prefill with v1's eligible BF16 GQA 16-query-head/2-KV-head,
-head-dimension-128 geometry, causal/non-quantized cache, context
-`max_seqlen_k >= 8192`, `max_seqlen_q >= 128`, a supported
-power-of-two page size, and `TILE_SIZE_PREFILL > block_size` with
-page-aligned tiling. Each sequence additionally needs query length >=128
-and KV length >=8192; decode sequences in mixed batches use ordinary
-per-token page-table addressing. Unsupported cases retain v1 behavior.
-
-**Why experimental:** v4's initial whole-backend FlagGems replacement
-caused a severe official serving regression. The revised v4 Triton
-prefill-only implementation in `Optimization/v4` was not yet validated
-by 4K/16K serving or MATH-500. Earlier kernel-only observations do not
-establish a benefit when combined with v1. Keep this off unless GPU A/B
-shows a real total-throughput improvement.
-
-**BI-V150 correctness gate:**
+## BI-V150 validation (not yet run)
 
 ```bash
 cd /root/Optimization/v8
@@ -73,14 +68,31 @@ python3 -m pytest -q -s --noconftest \
   vllm-plugin-FL/tests/functional_tests/test_biv150_v1_grouped_v4.py
 ```
 
-Restart the same v8 serving configuration once with the flag unset and
-once set to 1. Verify actual selected backend in serving logs, then run
-the unchanged competition 4K/16K benchmark
-`[[4096,1024,64,256],[16384,1024,64,128]]`.
-Record total/output throughput, TTFT, ITL/TPOT, GPU idle time, and
-KV-cache preemptions under identical resource and prefix-cache conditions.
-Only consider promotion after MATH-500 accuracy passes.
+For an A/B test, run the **pre-integration v8/v1 baseline** (main at
+PR #207 creation, `f059f21695d32c71e494adabff5a0cb3457cf259`)
+against this automatic v1+v4 branch. Do **not** attempt to A/B using
+`VLLM_FL_BIV150_GROUPED_V4`, which is deliberately ignored. Use
+separate server restarts, the same server configuration, GPU conditions
+and prefix-cache state, and the unchanged competition benchmark:
 
-**Status:** CPU/static source review only. No BI-V150 compile, kernel
-correctness run, serving A/B, or MATH-500 result has been obtained for
-this integrated v1+v4 candidate.
+```bash
+cd /workspace
+python3 /workspace/vllm-plugin-FL/benchmarks/benchmark_throughput_serve.py \
+  --model /workspace/MiniCPM5-2B \
+  --served-model-name minicpm \
+  --port 9031 \
+  --test-cases '[[4096,1024,64,256],[16384,1024,64,128]]'
+```
+
+Compare total/output tokens/s, TTFT, TPOT/ITL, GPU idle gaps and KV
+preemptions. Run `math_500` accuracy before promoting to production.
+
+## Historical risk and status
+
+v4's first attempt replaced the default whole-model Triton attention backend
+with FlagGems and severely regressed serving. The later v4 Triton operator
+rewrite avoided that design but has no confirmed end-to-end speedup. Integrating
+it with v1 **does not establish** a throughput gain.
+
+**Status: source-level integration; BI-V150 compilation, correctness, 4K/16K
+serving A/B, and MATH-500 accuracy remain mandatory.**
