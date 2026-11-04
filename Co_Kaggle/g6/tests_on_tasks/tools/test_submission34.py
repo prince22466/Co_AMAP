@@ -30,8 +30,7 @@ class Submission34Contract(unittest.TestCase):
             one, two = (Path(tmp) / filename
                         for filename in ("one.zip", "two.zip"))
             first, second = build(one), build(two)
-            self.assertEqual(first, second | {
-                "archive_sha256": first["archive_sha256"]})
+            self.assertEqual(first, second)
             self.assertEqual(one.read_bytes(), two.read_bytes())
             self.assertTrue(ARTIFACT.is_file(), "Commit the reviewable ZIP")
             self.assertEqual(one.read_bytes(), ARTIFACT.read_bytes())
