@@ -193,6 +193,34 @@ class IterativeLearningTests(unittest.TestCase):
             assert_action(self, self.policy.get_action(
                 observation(slot, dow=2, zone_temperatures=(320.0, 250.0))))
 
+    def test_iteration_uses_executed_not_planned_correction(self):
+        self.first_day()
+        self.policy.get_action(observation(0, dow=2))  # commit day one
+        applied = float(self.policy.day_data["applied"][1, 0])
+        self.assertGreater(applied, 0.0)
+        for slot in range(1, 288):
+            self.policy.get_action(observation(slot, dow=2))
+        self.policy.get_action(observation(0, dow=3))  # commit day two
+        expected = ILC.RETENTION * applied + ILC.LEARNING_RATE * 1.2
+        self.assertAlmostEqual(
+            float(self.policy.profiles["weekday"]["heat"][1, 0]),
+            expected, places=5)
+
+    def test_weather_gated_day_does_not_replay_unexecuted_profile(self):
+        self.first_day()
+        self.policy.get_action(observation(0, dow=2, outdoor_k=304.0))
+        old_profile = float(self.policy.profiles["weekday"]["cool"][0, 0])
+        self.assertGreater(old_profile, 0.0)
+        self.assertEqual(float(self.policy.day_data["applied"][0, 0]), 0.0)
+        for slot in range(1, 288):
+            self.policy.get_action(observation(slot, dow=2, outdoor_k=304.0))
+        self.policy.get_action(observation(0, dow=3, outdoor_k=304.0))
+        # Same temperature error, but the old correction was never applied.
+        # An invalid ILC implementation would accumulate 90% of it anyway.
+        self.assertAlmostEqual(
+            float(self.policy.profiles["weekday"]["cool"][0, 0]),
+            old_profile, places=5)
+
     def test_true_delayed_error_update_and_bounds(self):
         self.first_day()
         self.policy.get_action(observation(0, dow=2))  # commit day 1
