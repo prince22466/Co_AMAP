@@ -3,24 +3,25 @@
 **Goal:** v8 first copy everything of v1, and stack other applicable optimization efforts from v2 to v7.  
 v2 will be skipped, because it is same direction of v1 but with different parameters and less performative.
 
-## Automatic v1 attention activation
+## Automatic v1 + v5 attention activation
 
-In v8, `FlagGemsBackend.attention_backend()` chooses the existing
-`BIV150TritonAttentionBackend` automatically when vLLM's current platform
-reports `vendor_name == "iluvatar"`. No
-`VLLM_FL_BIV150_ATTN_V1` environment variable is required.
+On Iluvatar, `FlagGemsBackend.attention_backend()` now automatically
+selects `BIV150V1V5AttentionBackend` (the combined Triton adapter).
+Within its `forward` method, **v1 handles prefill and mixed batches**,
+and **v5 handles invocation-wide pure decode**. The original tuned v1
+attention kernel is unchanged; v5's page lookup optimization is a
+separate, shape-gated Triton kernel.
 
-This uses the already tuned v1 Triton unified-attention kernel; it does not
-change the model, the official benchmark, or the framework's per-operator
-priority policy. Non-Iluvatar devices retain standard
-`TRITON_ATTN`. The existing explicit
+Neither `VLLM_FL_BIV150_ATTN_V1` nor a new v5 enable flag is needed.
+No model or official benchmark changes are made, and the original
+framework operator-priority policy is preserved. Non-Iluvatar devices
+retain `TRITON_ATTN`, and the explicit
 `VLLM_FL_USE_FLAGGEMS_ATTN=1` override remains available.
 
 Start v8 with its `FlagGems/src` and `vllm-plugin-FL` on
-`PYTHONPATH` and `VLLM_PLUGINS=fl`; no attention-specific toggle is needed.
-The selector tests check automatic selection, platform fallback, and the
-explicit FlagGems override. GPU correctness and official throughput/accuracy
-benchmarks must be run on BI-V150 before accepting this candidate.
+`PYTHONPATH` and `VLLM_PLUGINS=fl`, without an attention-specific
+toggle. Kernel correctness and official throughput/accuracy must be
+validated on BI-V150 before promotion.
 
 ## v5 pure-decode stack (experimental; source only)
 
