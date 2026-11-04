@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 import re
 
-from compare_submission24 import S1_IDS
+from compare_submission24 import S1_IDS, load_rows, normalize
 
 
 TASK = re.compile(r"^\[candidate \d+/\d+\] Evaluating (\S+)")
@@ -172,14 +172,87 @@ def compare(before: str, after: str) -> dict:
     }
 
 
+
+def summarize_jsonl(rows: list[dict]) -> dict:
+    """Summarize actual official-runner results, not formatted console events."""
+    indexed = normalize(rows, expected=S1_IDS)  # Reject duplicates and missing tasks.
+    wins = sorted(name for name, row in indexed.items() if row["resolved"])
+    patches = {name: row["agent_patch"] for name, row in indexed.items()}
+    invalid_durations = [
+        name for name, row in indexed.items()
+        if not isinstance(row.get("duration_seconds"), (int, float))
+        or row["duration_seconds"] < 0
+    ]
+    if invalid_durations:
+        raise ValueError("Missing or invalid task durations: " +
+                         ", ".join(invalid_durations))
+    return {
+        "resolved": len(wins),
+        "solved_ids": wins,
+        "empty_patches": sum(not text.strip() for text in patches.values()),
+        "largest_patch_chars": max(map(len, patches.values())),
+        "total_duration_minutes": round(sum(
+            row["duration_seconds"] for row in indexed.values()) / 60, 2),
+        "over_four_minute_tasks": sum(
+            row["duration_seconds"] > 240 for row in indexed.values()),
+        "agent_error_ids": sorted(
+            name for name, row in indexed.items()
+            if row.get("error") or row.get("error_message")),
+    }
+
+
+def compare_jsonl(baseline_rows: list[dict],
+                  candidate_rows: list[dict]) -> dict:
+    """Compare one complete matched run of each archive.
+
+    Use candidate_1 against candidate_1 (same evaluation seeds) and
+    candidate_2 against candidate_2. Neither CPU checks nor an aggregate
+    row prove the requested behavior or safe patch content.
+    """
+    a = summarize_jsonl(baseline_rows)
+    b = summarize_jsonl(candidate_rows)
+    old_wins, new_wins = set(a["solved_ids"]), set(b["solved_ids"])
+    provisional = (
+        b["resolved"] >= 5
+        and S29_WINS <= new_wins
+        and b["largest_patch_chars"] <= 50000
+        and b["empty_patches"] <= 2
+        and not b["agent_error_ids"]
+    )
+    return {
+        "input_format": "official_runner_jsonl",
+        "baseline": a,
+        "candidate": b,
+        "gained": sorted(new_wins - old_wins),
+        "lost": sorted(old_wins - new_wins),
+        "delta_resolved": b["resolved"] - a["resolved"],
+        "single_run_target_met": provisional,
+        "promotion_approved": False,
+        "limitations": [
+            "One matched run cannot establish a reliable improvement.",
+            "Patch length only flags large overwrites; inspect actual diffs.",
+            "Use --format printout for printed-event tool diagnostics.",
+            "A valid package and passed CPU tests are not E4B resolution.",
+        ],
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("baseline29", type=Path)
     parser.add_argument("candidate34", type=Path)
     parser.add_argument("--output", type=Path)
+    parser.add_argument(
+        "--format", choices=("printout", "jsonl"), default="printout",
+        help="printout: notebook console; jsonl: evaluator candidate run directory or JSONL file",
+    )
     args = parser.parse_args()
-    report = compare(args.baseline29.read_text(encoding="utf-8"),
-                     args.candidate34.read_text(encoding="utf-8"))
+    if args.format == "jsonl":
+        report = compare_jsonl(load_rows(args.baseline29),
+                               load_rows(args.candidate34))
+    else:
+        report = compare(args.baseline29.read_text(encoding="utf-8"),
+                         args.candidate34.read_text(encoding="utf-8"))
     data = json.dumps(report, indent=2) + "\n"
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
