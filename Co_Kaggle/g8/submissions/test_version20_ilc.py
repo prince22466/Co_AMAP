@@ -16,10 +16,11 @@ NOTEBOOK = Path(__file__).with_name("submission-nb - Version 20.ipynb")
 
 
 def policy_classes():
-    """Run the *entire* Kaggle submission cell in a fresh mocked kernel.
+    """Execute notebook code cells in order using a mocked Kaggle gateway.
 
-    This fails if TransferPolicy is in an unexecuted earlier cell or if the
-    official gateway gets called before the class exists.
+    Kaggle runs notebook cells in one shared Python namespace. The controller
+    may be defined in one cell and the gateway launched in a later cell.
+    We verify both the execution order and exactly one gateway invocation.
     """
     gateway_calls = []
     server = types.ModuleType("smart_buildings_inference_server")
@@ -40,27 +41,48 @@ def policy_classes():
     server.SmartBuildingsInferenceServer = FakeInferenceServer
     gateway = types.ModuleType("kaggle_evaluation")
     gateway.smart_buildings_inference_server = server
-    original = sys.modules.get("kaggle_evaluation")
-    sys.modules["kaggle_evaluation"] = gateway
+    # The notebook includes Kaggle's optional starter imports. They are
+    # unused by the controller and absent from this NumPy-only CI runner.
+    # Stub them here instead of installing unrelated packages.
+    optional_modules = {
+        "kaggle_evaluation": gateway,
+        "pandas": types.ModuleType("pandas"),
+        "kagglehub": types.ModuleType("kagglehub"),
+    }
+    originals = {name: sys.modules.get(name) for name in optional_modules}
+    sys.modules.update(optional_modules)
     try:
         notebook = json.loads(NOTEBOOK.read_text(encoding="utf-8"))
         assert notebook["nbformat"] == 4
         code_cells = [
             cell for cell in notebook["cells"] if cell["cell_type"] == "code"
         ]
-        # Standalone Kaggle execution: all imports, policies and gateway must
-        # be in the same cell. Running the last cell alone must be sufficient.
-        assert len(code_cells) == 1, "V19 must have exactly one runnable code cell"
-        source = "".join(code_cells[0]["source"])
-        assert source.count("SmartBuildingsInferenceServer(TransferPolicy).run()") == 1
-        namespace = {}
-        exec(compile(source, str(NOTEBOOK), "exec"), namespace)
+        # Kaggle executes all code cells sequentially in a shared namespace.
+        # Do not require a single cell: the official gateway may be last.
+        assert code_cells, "Notebook must contain executable code"
+        gateway_expression = (
+            "SmartBuildingsInferenceServer(TransferPolicy).run()"
+        )
+        namespace = {"__name__": "__main__"}
+        gateway_count = 0
+        for cell_number, cell in enumerate(code_cells, start=1):
+            source = cell["source"]
+            if isinstance(source, list):
+                source = "".join(source)
+            gateway_count += source.count(gateway_expression)
+            exec(
+                compile(source, f"{NOTEBOOK}:cell-{cell_number}", "exec"),
+                namespace,
+            )
+
+        assert gateway_count == 1, "Official gateway must run exactly once"
         assert gateway_calls == [namespace["TransferPolicy"]]
     finally:
-        if original is None:
-            sys.modules.pop("kaggle_evaluation", None)
-        else:
-            sys.modules["kaggle_evaluation"] = original
+        for name, original in originals.items():
+            if original is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = original
     return namespace["PhysicsBaselinePolicy"], namespace["TransferPolicy"]
 
 BASE, ILC = policy_classes()
