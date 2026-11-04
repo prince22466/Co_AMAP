@@ -82,7 +82,7 @@ def metadata():
     }
 
 
-def observation(slot, dow=1, zone_temperatures=(300.0, 291.0),
+def observation(slot, dow=1, zone_temperatures=(300.0, 293.0),
                 outdoor_k=294.0, valid_clock=True):
     values = []
     for temp in zone_temperatures:
@@ -195,6 +195,7 @@ class IterativeLearningTests(unittest.TestCase):
 
     def test_true_delayed_error_update_and_bounds(self):
         self.first_day()
+        self.policy.get_action(observation(0, dow=2))  # commit day 1
         cool = self.policy.profiles["weekday"]["cool"]
         heat = self.policy.profiles["weekday"]["heat"]
         self.assertGreater(float(cool[0, 0]), 0.0)
