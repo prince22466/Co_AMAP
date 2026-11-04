@@ -61,8 +61,8 @@ class Submission35PackageTests(unittest.TestCase):
             {"agent.yaml": originals["agent.yaml"].replace(
                 b"  - edit_file\n", b"  - write_file\n")},
             {"agent.yaml": originals["agent.yaml"].replace(
-                b"gemma-4-31b-it-qat-w4a16-ct",
-                b"gemma-4-e4b-it-qat-w4a16-ct")},
+                b"gemma-4-e4b-it-qat-w4a16-ct",
+                b"gemma-4-31b-it-qat-w4a16-ct")},
             {"agent.yaml": originals["agent.yaml"].replace(
                 b"skills/tool-recovery", b"skills/random-skill")},
             {"eval_config.yaml": originals["eval_config.yaml"].replace(
