@@ -60,6 +60,18 @@ class Submission34Telemetry(unittest.TestCase):
         self.assertIn("rich_3518", result["lost"])
         self.assertFalse(result["single_run_target_met"])
 
+    def test_later_file_reads_are_not_counted_as_edits(self):
+        raw = fake({"rich_3905"})
+        raw = raw.replace(
+            "  [ 2.3s] 🔧 run_command pytest -q tests/test_code.py",
+            "  [ 2.2s] 📖 read_file (code.py)\\n"
+            "  [ 2.21s]   ✓ {'status': 'ok', 'filepath': 'code.py'}\\n"
+            "  [ 2.3s] 🔧 run_command pytest -q tests/test_code.py",
+            1)
+        result = parse(raw)
+        self.assertEqual(result["traces"][S1_IDS[0]]["successful_edits"], 1)
+        self.assertTrue(result["traces"][S1_IDS[0]]["first_edit_success"])
+
     def test_reject_incomplete_and_duplicate_logs(self):
         good = fake({"rich_3905"})
         for bad in (fake(set(), truncated=True),
