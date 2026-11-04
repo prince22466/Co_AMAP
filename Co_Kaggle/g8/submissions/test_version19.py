@@ -99,10 +99,10 @@ def observation(slot, dow=1, zone_temperatures=(300.0, 293.0),
     return np.asarray(values, dtype=np.float64)
 
 
-def assert_action(test, action):
+def assert_action(test, action, continuous_size=9, discrete_size=2):
     continuous, discrete = action["continuous_action"], action["discrete_action"]
-    test.assertEqual(continuous.shape, (9,))
-    test.assertEqual(discrete.shape, (2,))
+    test.assertEqual(continuous.shape, (continuous_size,))
+    test.assertEqual(discrete.shape, (discrete_size,))
     test.assertEqual(continuous.dtype, np.float32)
     test.assertEqual(discrete.dtype, np.int32)
     test.assertTrue(np.isfinite(continuous).all())
@@ -269,6 +269,61 @@ class IterativeLearningTests(unittest.TestCase):
                     self.policy._time_key(obs),
                     (slot, weekday, "weekday" if weekday < 5 else "weekend"),
                 )
+
+    def test_multiple_ahus_use_metadata_indices(self):
+        # Two independent AHUs share one hot-water system. None of the action
+        # or observation indices have been derived from an assumed fixed size.
+        meta = metadata()
+        meta.update({
+            "n_continuous_action": 12,
+            "n_discrete_action": 3,
+            "temp_indices": [0, 3],
+            "pressure_indices": [1, 4, 7],
+            "recirculation_indices": [2, 5],
+            "water_indices": [6],
+            "ahu_zone_assignments": {
+                "0": ["room_0"],
+                "1": ["room_1"],
+            },
+            "zone_action_indices": {
+                "VAV_0": {
+                    "supply_air_damper_percentage_command": 8,
+                    "reheat_valve_percentage_command": 9,
+                },
+                "VAV_1": {
+                    "supply_air_damper_percentage_command": 10,
+                    "reheat_valve_percentage_command": 11,
+                },
+            },
+        })
+        fields = list(meta["observation_field_names"])
+        fields.insert(7, "ahs_1_outside_air_temperature_sensor")
+        meta["observation_field_names"] = fields
+
+        learner = ILC(meta, None)
+        base = BASE(meta, None)
+
+        def two_ahu_obs(slot, dow):
+            single = observation(slot, dow=dow)
+            return np.insert(single, 7, single[6])
+
+        for slot in range(288):
+            obs = two_ahu_obs(slot, 1)
+            a = learner.get_action(obs)
+            np.testing.assert_array_equal(
+                a["continuous_action"], base.get_action(obs)["continuous_action"],
+            )
+            assert_action(self, a, continuous_size=12, discrete_size=3)
+
+        obs = two_ahu_obs(0, 2)
+        a = learner.get_action(obs)
+        b = base.get_action(obs)
+        self.assertEqual(a["discrete_action"].tolist(), b["discrete_action"].tolist())
+        self.assertGreater(float(a["continuous_action"][8]),
+                           float(b["continuous_action"][8]))
+        self.assertGreater(float(a["continuous_action"][11]),
+                           float(b["continuous_action"][11]))
+        assert_action(self, a, continuous_size=12, discrete_size=3)
 
     def test_true_delayed_error_update_and_bounds(self):
         self.first_day()
