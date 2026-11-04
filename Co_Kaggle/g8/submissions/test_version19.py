@@ -221,6 +221,55 @@ class IterativeLearningTests(unittest.TestCase):
             float(self.policy.profiles["weekday"]["cool"][0, 0]),
             old_profile, places=5)
 
+    def test_backward_clock_jump_cannot_train_partial_day(self):
+        # 246 samples would satisfy the minimum size, but no midnight was seen.
+        for slot in range(246):
+            self.policy.get_action(observation(slot, dow=1))
+        obs = observation(0, dow=2)
+        np.testing.assert_array_equal(
+            self.policy.get_action(obs)["continuous_action"],
+            self.baseline.get_action(obs)["continuous_action"],
+        )
+        self.assertFalse(self.policy.profiles["weekday"]["ready"].any())
+
+    def test_midnight_requires_next_weekday(self):
+        # A repeated clock-day number is inconsistent with a new calendar day.
+        self.first_day(dow=1)
+        obs = observation(0, dow=1)
+        self.policy.get_action(obs)
+        self.assertFalse(self.policy.profiles["weekday"]["ready"].any())
+
+    def test_weekend_to_weekday_rollover_is_valid(self):
+        # Sunday -> Monday should commit the Sunday history but *not* use it
+        # on Monday (the weekday and weekend profiles remain independent).
+        self.first_day(dow=6)
+        obs = observation(0, dow=0)
+        new_action = self.policy.get_action(obs)
+        self.assertTrue(self.policy.profiles["weekend"]["ready"].any())
+        np.testing.assert_array_equal(
+            new_action["continuous_action"],
+            self.baseline.get_action(obs)["continuous_action"],
+        )
+
+    def test_mode_reversal_does_not_replay_opposite_actuator(self):
+        self.first_day()
+        obs = observation(0, dow=2, zone_temperatures=(293.0, 300.0))
+        action = self.policy.get_action(obs)
+        reference = self.baseline.get_action(obs)
+        np.testing.assert_array_equal(
+            action["continuous_action"], reference["continuous_action"])
+        np.testing.assert_array_equal(
+            action["discrete_action"], reference["discrete_action"])
+
+    def test_time_slot_decode_matches_float32_observations(self):
+        for weekday in (0, 4, 5, 6):
+            for slot in range(288):
+                obs = observation(slot, dow=weekday).astype(np.float32)
+                self.assertEqual(
+                    self.policy._time_key(obs),
+                    (slot, weekday, "weekday" if weekday < 5 else "weekend"),
+                )
+
     def test_true_delayed_error_update_and_bounds(self):
         self.first_day()
         self.policy.get_action(observation(0, dow=2))  # commit day 1
