@@ -1,0 +1,43 @@
+name: Smart Buildings V17 ESC synthetic tests
+
+on:
+  push:
+    branches: [g8/version-17-extremum-seeking]
+    paths:
+      - 'Co_Kaggle/g8/submissions/submission-nb - Version 17.ipynb'
+      - 'Co_Kaggle/g8/submissions/test_version17.py'
+      - '.github/workflows/smart-buildings-v17.yml'
+  pull_request:
+    paths:
+      - 'Co_Kaggle/g8/submissions/submission-nb - Version 17.ipynb'
+      - 'Co_Kaggle/g8/submissions/test_version17.py'
+      - '.github/workflows/smart-buildings-v17.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  synthetic-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install minimal runtime dependencies
+        run: python -m pip install --disable-pip-version-check numpy
+      - name: Compile all Version 17 Python cells and test file
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          path = Path("Co_Kaggle/g8/submissions/submission-nb - Version 17.ipynb")
+          for i, cell in enumerate(json.loads(path.read_text())["cells"]):
+              if cell["cell_type"] == "code":
+                  compile("".join(cell["source"]), f"{path}:cell{i}", "exec")
+          compile(Path("Co_Kaggle/g8/submissions/test_version17.py").read_text(),
+                  "test_version17.py", "exec")
+          PY
+      - name: Execute synthetic regression tests
+        run: python Co_Kaggle/g8/submissions/test_version17.py
