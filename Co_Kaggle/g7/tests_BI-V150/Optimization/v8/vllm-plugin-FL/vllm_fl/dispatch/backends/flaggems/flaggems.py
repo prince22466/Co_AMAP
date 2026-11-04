@@ -191,6 +191,18 @@ class FlagGemsBackend(Backend):
         from vllm.platforms import current_platform
 
         if getattr(current_platform, "vendor_name", None) == "iluvatar":
+            # Explicit experiment only: keep proven v1 as the default.
+            # This switches between two genuinely optimized Triton kernels,
+            # without changing FlagOS operator selection/fallback priority.
+            grouped_v4 = os.environ.get(
+                "VLLM_FL_BIV150_GROUPED_V4", "0"
+            ).lower() in ("1", "true", "yes")
+            if grouped_v4:
+                return (
+                    "vllm_fl.dispatch.backends.vendor.iluvatar.impl."
+                    "attention_biv150_grouped_v4."
+                    "BIV150V1GroupedV4AttentionBackend"
+                )
             return (
                 "vllm_fl.dispatch.backends.vendor.iluvatar.impl."
                 "attention_biv150.BIV150TritonAttentionBackend"
