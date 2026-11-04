@@ -10,7 +10,7 @@ import zipfile
 import yaml
 
 from build_submission35 import (
-    ARTIFACT_DIR, MODEL, ROOT_FILES, SKILL_FILE, TOOLS,
+    ARTIFACT_DIR, MODEL, REFERENCE34, ROOT_FILES, SKILL_FILE, TOOLS,
     VARIANTS, archive_path, build_payload, build_variant,
     validate,
 )
@@ -33,6 +33,34 @@ class Submission35PackageTests(unittest.TestCase):
         self.assertNotIn("write_file", a["tools"])
         self.assertNotIn("agent_tool", str(a))
         self.assertNotIn("sub_agents", a)
+
+    def test_exact_s34_model_sampling_and_budget_parity(self) -> None:
+        # Fail if S35 silently changes model capacity or generation settings.
+        def load_agent(raw: bytes) -> dict:
+            return yaml.safe_load(raw.replace(b"!include", b""))
+
+        baseline = load_agent((REFERENCE34 / "agent.yaml").read_bytes())
+        for variant in VARIANTS:
+            with self.subTest(variant=variant):
+                payload = build_payload(variant)
+                cfg = load_agent(payload["agent.yaml"])
+                self.assertEqual(cfg["model"], baseline["model"])
+                self.assertEqual(cfg["model"], MODEL)
+                self.assertEqual(
+                    cfg["generate_content_config"],
+                    baseline["generate_content_config"],
+                )
+                self.assertEqual(cfg["include_contents"],
+                                 baseline["include_contents"])
+                self.assertEqual(
+                    cfg["tools"],
+                    [tool for tool in baseline["tools"]
+                     if tool != "write_file"],
+                )
+                self.assertEqual(
+                    payload["eval_config.yaml"],
+                    (REFERENCE34 / "eval_config.yaml").read_bytes(),
+                )
 
     def test_all_archives_are_deterministic_and_committed(self) -> None:
         for variant in VARIANTS:
