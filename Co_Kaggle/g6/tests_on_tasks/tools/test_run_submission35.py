@@ -25,9 +25,10 @@ class S35RunnerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Unknown S35"):
             verified_archive("not-a-variant", None)
 
-    def test_official_model_override_is_scoped(self):
+    def test_official_e4b_model_and_pilot_scope(self):
         build_variant("primary")
         old_model, old_pilot = official.MODEL, official.PILOT_IDS
+        self.assertEqual(old_model, MODEL)  # Both runners use the S34 model.
 
         async def fake_official(args):
             self.assertEqual(official.MODEL, MODEL)
@@ -47,7 +48,7 @@ class S35RunnerTests(unittest.TestCase):
         self.assertEqual(official.MODEL, old_model)
         self.assertEqual(official.PILOT_IDS, old_pilot)
 
-    def test_restore_model_after_official_evaluator_error(self):
+    def test_restore_pilot_after_official_evaluator_error(self):
         build_variant("control")
         old_model, old_pilot = official.MODEL, official.PILOT_IDS
 
