@@ -35,7 +35,7 @@ cat > /tmp/s35-recovery.patch <<'PATCH'
 diff --git a/pkg/module.py b/pkg/module.py
 --- a/pkg/module.py
 +++ b/pkg/module.py
-@@ -12,3 +12,4 @@
+@@ -12,3 +12,3 @@
  existing context line
 -old code line
 +new code line
