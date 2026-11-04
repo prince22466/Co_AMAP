@@ -200,13 +200,44 @@ assert 0 < k.p_tt <= 1 and 0 < k.p_dd <= 0.1
 k.observe(315.0)
 assert abs(k.temperature-315.0) < 1e-9 and k.drift == 0
 
-# Invalid sensors, missing valve and bounded return under repeated decisions.
-meta, obs, zone = synthetic(2,4,missing_actuator=True)
-zone(0,286)
-zone(1,float("nan"))
-policy = Policy(meta,None)
+# Unavailable actuators must NEVER trigger futile conditioning.
+meta, obs, set_zone = synthetic(1, 1, missing_actuator=True)
+set_zone(0, 286.0)  # Cold zone cannot reheat: valve missing.
+policy = Policy(meta, None)
+commands, switches = action(policy, obs)
+assert not switches.any(), "missing valve must not start AHU or hot water"
+assert np.isclose(commands[meta["temp_indices"][0]], 1.0)
+
+meta, obs, set_zone = synthetic(1, 1)
+meta["zone_action_indices"]["VAV_0"].pop(
+    "supply_air_damper_percentage_command")
+set_zone(0, 307.0)  # Hot zone cannot command cooling flow: damper missing.
+policy = Policy(meta, None)
+_, switches = action(policy, obs)
+assert not switches.any(), "missing damper must not start AHU"
+
+# A skipped sensor reading invalidates the Kalman time step and old effort.
+meta, obs, set_zone = synthetic(1, 2)
+policy = Policy(meta, None)
+set_zone(0, 306.0)
+action(policy, obs)
+zone_idx = policy.ahus[0]["zones"][0]["temperature"]
+assert zone_idx in policy.zone_filters
+set_zone(0, float("nan"))
+action(policy, obs)
+assert zone_idx not in policy.zone_filters, "observer must reset after data gap"
+set_zone(0, 306.0)
+action(policy, obs)
+assert zone_idx in policy.zone_filters
+assert policy.zone_filters[zone_idx].drift == 0.0
+
+# Malformed zone sensors should not produce NaNs in any action field.
+meta, obs, set_zone = synthetic(2, 4)
+set_zone(0, 286.0)
+set_zone(1, float("nan"))
+policy = Policy(meta, None)
 for _ in range(10):
-    action(policy,obs)
+    action(policy, obs)
 
 # Check no hidden per-step optimization and a bounded CPU-only synthetic budget.
 assert "import scipy" not in source and "from scipy" not in source and "import cma" not in source
