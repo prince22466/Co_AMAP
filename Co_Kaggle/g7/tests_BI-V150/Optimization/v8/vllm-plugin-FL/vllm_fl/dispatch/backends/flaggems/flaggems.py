@@ -180,26 +180,17 @@ class FlagGemsBackend(Backend):
             "VLLM_FL_USE_FLAGGEMS_ATTN", "0"
         ).lower() in ("1", "true", "yes")
 
-        # Iluvatar dispatch prioritizes flagos over vendor:iluvatar, so a
-        # change only to the vendor backend would not be selected by default.
-        # Opt in here for controlled v0/v1 testing without changing that order.
-        use_biv150_v1 = os.environ.get(
-            "VLLM_FL_BIV150_ATTN_V1", "0"
-        ).lower() in ("1", "true", "yes")
-
         if use_flaggems_attn:
-            # Avoid ambiguous behavior when two attention overrides are set.
-            if use_biv150_v1:
-                raise RuntimeError(
-                    "VLLM_FL_BIV150_ATTN_V1 and VLLM_FL_USE_FLAGGEMS_ATTN "
-                    "cannot both be enabled."
-                )
             print("Using FlagGems attention backend.")
             return "vllm_fl.dispatch.backends.flaggems.impl.attention.AttentionFLBackend"
 
-        if use_biv150_v1:
-            # Enabled explicitly in the BI-V150 test environment.
-            # Avoid brittle platform detection based on the GPU display name.
+        # On Iluvatar, use the plugin-owned optimized v1 Triton attention
+        # automatically. The kernel retains baseline dispatch for untuned
+        # shapes; other platforms keep the standard Triton backend. Preserve
+        # the FlagGems override and the existing MLA/sparse guards above.
+        from vllm.platforms import current_platform
+
+        if getattr(current_platform, "vendor_name", None) == "iluvatar":
             return (
                 "vllm_fl.dispatch.backends.vendor.iluvatar.impl."
                 "attention_biv150.BIV150TritonAttentionBackend"
