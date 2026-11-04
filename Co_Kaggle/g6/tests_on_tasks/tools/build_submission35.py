@@ -1,4 +1,4 @@
-"""Build deterministic S35 31B archives (skill-enabled and no-skill control).
+"""Build deterministic S35 E4B archives (skill-enabled and no-skill control).
 
 CPU/package validation does not establish model tool-use or task resolution.
 """
@@ -15,7 +15,7 @@ import yaml
 G6 = Path(__file__).resolve().parents[2]
 SOURCE = G6 / "submission_nb/submission_35"
 ARTIFACT_DIR = G6 / "submission_nb/artifacts"
-MODEL = "gemma-4-31b-it-qat-w4a16-ct"
+MODEL = "gemma-4-e4b-it-qat-w4a16-ct"
 TOOLS = ("run_command", "read_file", "edit_file", "get_status", "submit_patch")
 EVAL_BUDGET = {
     "timeout_seconds": 30, "max_tool_calls": 40,
@@ -93,8 +93,8 @@ def validate(variant: str, payload: dict[str, bytes]) -> None:
             "Tool interface changed or dangerous tool reintroduced")
     generation = agent["generate_content_config"]
     require(generation == {
-        "temperature": 0.0, "top_p": 0.95, "max_output_tokens": 8192,
-        "thinking_config": {"thinking_budget": 2048, "include_thoughts": False},
+        "temperature": 0.0, "top_p": 0.95, "max_output_tokens": 4096,
+        "thinking_config": {"thinking_budget": 512, "include_thoughts": False},
     }, "Unexpected sampling config")
     require(yaml.safe_load(payload["eval_config.yaml"]) == {
         "evaluation": EVAL_BUDGET}, "Evaluation limits changed")
