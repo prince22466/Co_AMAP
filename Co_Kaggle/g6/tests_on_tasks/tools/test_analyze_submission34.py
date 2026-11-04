@@ -4,7 +4,7 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
-from analyze_submission34 import compare, parse
+from analyze_submission34 import compare, parse, compare_jsonl, summarize_jsonl
 from compare_submission24 import S1_IDS
 
 
@@ -35,6 +35,21 @@ def fake(wins: set[str], *, invalid_first: bool = False,
     if duplicate:
         rows.append(rows[-1])
     return "\n".join(rows) + "\n"
+
+
+def evaluation_rows(wins: set[str]) -> list[dict]:
+    """Representative official evaluator JSONL rows."""
+    return [
+        {
+            "instance_id": task,
+            "resolved": task in wins,
+            "agent_patch": "diff --git a/example.py b/example.py\n+fix\n",
+            "duration_seconds": 12.0,
+            "error": None,
+        }
+        for task in S1_IDS
+    ]
+
 
 
 class Submission34Telemetry(unittest.TestCase):
@@ -84,6 +99,39 @@ class Submission34Telemetry(unittest.TestCase):
         self.assertEqual(report["baseline"]["resolved"], 3)
         self.assertEqual(report["candidate"]["resolved"], 2)
         self.assertFalse(report["promotion_approved"])
+
+    def test_official_jsonl_results_can_be_compared(self):
+        old = evaluation_rows({"rich_3905", "rich_3518", "rich_3454"})
+        new = evaluation_rows({
+            "rich_3905", "rich_3518", "rich_3454",
+            "rich_4077", "rich_3882",
+        })
+        report = compare_jsonl(old, new)
+        self.assertEqual(report["input_format"], "official_runner_jsonl")
+        self.assertEqual(report["delta_resolved"], 2)
+        self.assertTrue(report["single_run_target_met"])
+        self.assertFalse(report["promotion_approved"])
+
+    def test_jsonl_incomplete_duplicate_or_invalid_duration_rejected(self):
+        baseline = evaluation_rows({"rich_3905"})
+        for candidate in (
+            baseline[:-1],
+            baseline + [dict(baseline[0])],
+        ):
+            with self.subTest(rows=len(candidate)), self.assertRaises(ValueError):
+                compare_jsonl(baseline, candidate)
+        invalid_duration = evaluation_rows(set())
+        invalid_duration[0]["duration_seconds"] = None
+        with self.assertRaisesRegex(ValueError, "task durations"):
+            summarize_jsonl(invalid_duration)
+
+    def test_jsonl_oversized_patch_never_passes_provisional_gate(self):
+        baseline = evaluation_rows({"rich_3905", "rich_3518", "rich_3454"})
+        candidate = evaluation_rows({
+            "rich_3905", "rich_3518", "rich_3454", "rich_3882", "rich_4077",
+        })
+        candidate[0]["agent_patch"] = "a" * 50001
+        self.assertFalse(compare_jsonl(baseline, candidate)["single_run_target_met"])
 
     def test_reject_incomplete_and_duplicate_logs(self):
         good = fake({"rich_3905"})
