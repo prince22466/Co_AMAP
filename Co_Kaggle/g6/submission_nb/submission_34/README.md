@@ -76,20 +76,38 @@ python run_submission24_eval.py --tasks /path/tasks.jsonl \
 ```
 
 Also repeat with `--time-limit 4`. Never mix unlimited-time and timed
-scores when claiming progress. For an individual pair of complete S1
-printed logs:
+scores when claiming progress.
+
+The runner writes **JSONL result files**, not notebook-style printed traces.
+Compare each same-seed pair from the two run directories using:
+
+```bash
+python analyze_submission34.py \
+ /path/s29-matched/candidate_1 \
+ /path/s34-matched/candidate_1 --format jsonl
+python analyze_submission34.py \
+ /path/s29-matched/candidate_2 \
+ /path/s34-matched/candidate_2 --format jsonl
+```
+
+`--format jsonl` reads each candidate's `notebook_task_results.jsonl`
+and compares scores, retained wins, empty and oversized patches, durations,
+and agent errors. It does not reconstruct native tool-call telemetry.
+
+When using the separate **notebook-style printed diagnostics**, use the
+default `--format printout` to compare tool-use proxies:
 
 ```bash
 python analyze_submission34.py \
  ../diagnostics/submission-29-zip_s1TasksPrintouts.txt \
- /path/submission-34-zip_s1TasksPrintouts.txt
+ /path/submission-34-zip_s1TasksPrintouts.txt --format printout
 ```
 
-The analyzer reports resolved IDs, lost and gained tasks, read and edit
-events, malformed edit calls, first-edit success proxy, duplicate submits,
-diff-check commands, and total reported input/output tokens. Printed-token
-totals include repeated context; they are not unique tokens or a measure
-of the working context size. Review the full ATIF traces and actual patches.
+The printout analyzer additionally reports read/edit events, malformed
+calls, first-edit success proxy, duplicate submits, diff checks and
+reported input/output tokens. Printed-token totals include repeated context;
+they are not unique tokens or a measured effective working context. Review
+the full ATIF traces and actual patches for both formats.
 
 **Predeclared promotion target, for each of two matched S1 repeats:**
 at least 5/15 solved, retain all three S29 wins
