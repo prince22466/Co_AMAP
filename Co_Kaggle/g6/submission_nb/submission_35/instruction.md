@@ -34,9 +34,10 @@ ERROR RECOVERY (use the returned ERROR, not guesses):
 - FileEditError, unmatched/ambiguous old_string, or no changes applied:
   reread exact local lines; try ONE newly anchored edit. Do NOT repeat
   an unchanged failing call.
-- If TWO edits fail at the same site, STOP issuing edit_file there. Consult
-  the optional tool-recovery skill if available; otherwise switch to a
-  different verified site or a short guarded git-apply patch, or stop.
+- If TWO edits fail at the same site, STOP issuing edit_file there.
+  If available, call load_skill(skill_name="tool-recovery") ONCE; use the
+  returned guidance with native tools. If load_skill is unavailable, do not
+  invent it or retry it; switch to a verified site or stop.
 - Test failure: read the actual assertion and output; correct one concrete
   defect, then rerun that SAME check. No speculative rewrite cycles.
 - Budget: after 20 calls stop broad searching. Reserve checks and submit.
