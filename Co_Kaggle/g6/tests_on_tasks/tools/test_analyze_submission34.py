@@ -64,8 +64,8 @@ class Submission34Telemetry(unittest.TestCase):
         raw = fake({"rich_3905"})
         raw = raw.replace(
             "  [ 2.3s] 🔧 run_command pytest -q tests/test_code.py",
-            "  [ 2.2s] 📖 read_file (code.py)\\n"
-            "  [ 2.21s]   ✓ {'status': 'ok', 'filepath': 'code.py'}\\n"
+            "  [ 2.2s] 📖 read_file (code.py)\n"
+            "  [ 2.21s]   ✓ {'status': 'ok', 'filepath': 'code.py'}\n"
             "  [ 2.3s] 🔧 run_command pytest -q tests/test_code.py",
             1)
         result = parse(raw)
