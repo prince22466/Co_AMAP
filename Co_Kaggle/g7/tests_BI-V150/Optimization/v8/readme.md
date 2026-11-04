@@ -105,11 +105,20 @@ forward paths are replaced.
 cd /root/Optimization/v8
 export PYTHONPATH="$PWD/FlagGems/src:$PWD/vllm-plugin-FL:${PYTHONPATH:-}"
 export VLLM_PLUGINS=fl
-python3 -m pytest -q -s --noconftest \
-  FlagGems/tests/test_biv150_kv_cache_tiling_v6.py \
-  vllm-plugin-FL/tests/functional_tests/test_biv150_v1_v5_v6_stack.py \
-  vllm-plugin-FL/tests/functional_tests/test_biv150_attention_v1.py \
-  vllm-plugin-FL/tests/functional_tests/test_biv150_v1_v5_stack.py
+
+# Separate processes: both repositories define a top-level Python "tests" package.
+(
+  cd FlagGems
+  python3 -m pytest -q -s --noconftest \
+    tests/test_biv150_kv_cache_tiling_v6.py
+)
+(
+  cd vllm-plugin-FL
+  python3 -m pytest -q -s --noconftest \
+    tests/functional_tests/test_biv150_v1_v5_v6_stack.py \
+    tests/functional_tests/test_biv150_attention_v1.py \
+    tests/functional_tests/test_biv150_v1_v5_stack.py
+)
 ```
 
 Inspect a serving-worker GPU trace to confirm that eligible prefill batches
