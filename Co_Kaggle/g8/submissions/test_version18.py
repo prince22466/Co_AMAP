@@ -1,7 +1,8 @@
-"""Version 18 synthetic contract, physics and runtime tests.
+"""Version 18 notebook interface and disturbance-observer regression tests.
 
-Executes the exact notebook policy cell with a stub Kaggle server.
-These tests do not substitute for the 30-scenario official score.
+This script executes the EXACT notebook policy cell with a stub of the Kaggle
+gateway. It checks causality, thermal-residual signs, guards, and control
+outputs, but it cannot establish simulator comfort/energy performance.
 """
 import json
 import math
@@ -111,7 +112,7 @@ def check(policy, obs):
 
 
 
-# Contract and base physical plant dispatch across different building sizes.
+# 1. Action contract: temperatures, mixed loads, and changing building size.
 for shape in [(1, 1), (2, 4), (4, 7)]:
     meta, obs, set_zone, set_outdoor = scenario(*shape)
     policy = Policy(meta, None)
@@ -132,7 +133,7 @@ for shape in [(1, 1), (2, 4), (4, 7)]:
         assert d[0] == d[-1] == 1
         assert c[meta["zone_action_indices"]["VAV_1"]["reheat_valve_percentage_command"]] > -1.
 
-# Positive hidden heat gain, before the raw cooling deadband is breached:
+# 2. Positive hidden heat gain, before the cooling deadband is breached:
 # a true DOB must respond earlier than the exact same policy without observer.
 meta, obs, set_zone, _ = scenario(1, 1, temp=296.8, outdoor=296.8)
 dob, ablation = Policy(meta, None), Policy(meta, None)
@@ -146,7 +147,7 @@ assert dob.disturbance_k_per_step[key] > 0.0
 assert dd[0] == 1 and db[0] == 0, "Positive residual must advance cooling"
 assert cd[meta["temp_indices"][0]] < cb[meta["temp_indices"][0]]
 
-# Negative unknown disturbance should advance heating, without guessing a
+# 3. Negative disturbance should advance heating, without guessing a
 # physical sign from a simple temperature derivative.
 meta, obs, set_zone, _ = scenario(1, 1, temp=293.2, outdoor=293.2)
 dob, ablation = Policy(meta, None), Policy(meta, None)
@@ -159,7 +160,7 @@ key = dob.ahus[0]["zones"][0]["temperature"]
 assert dob.disturbance_k_per_step[key] < 0.0
 assert dd[0] == dd[-1] == 1 and db[0] == 0 and db[-1] == 0
 
-# Action-conditioned innovation differs from raw trend. With the same
+# 4. Action-conditioned innovation differs from raw trend. With the same
 # positive measured delta, turning on reheat makes the residual *smaller*.
 meta, obs, set_zone, _ = scenario(1, 1, temp=292., outdoor=292.)
 p1, p2 = Policy(meta, None), Policy(meta, None)
@@ -174,14 +175,16 @@ check(p1, obs)
 check(p2, obs)
 assert p1.disturbance_k_per_step[key] < p2.disturbance_k_per_step[key]
 
-# Disturbance clamps and outlier rejection; an unrealistic jump cannot
+# 5. Disturbance clamps and outlier rejection; an unrealistic jump cannot
 # poison the observer and there is never an unbounded integral windup.
 meta, obs, set_zone, _ = scenario(1, 1, temp=295., outdoor=295.)
 policy = Policy(meta, None)
 check(policy, obs)
+key = policy.ahus[0]["zones"][0]["temperature"]  # Never reuse another scenario's key.
 set_zone(0, 310.)
 check(policy, obs)
-assert policy.disturbance_k_per_step[key] == 0.0, "15 K spike must be ignored"
+assert key not in policy.disturbance_k_per_step, "15 K spike must be ignored"
+assert key not in policy.previous_zone, "A jumped sensor must not seed the next model"
 policy.reset()
 set_zone(0, 295.)
 check(policy, obs)
@@ -191,7 +194,60 @@ for _ in range(100):
 assert all(abs(d) <= policy.DISTURBANCE_LIMIT_K_PER_STEP + 1e-8
            for d in policy.disturbance_k_per_step.values())
 
-# A reset must return to the same output and prior state as a new policy;
+# An established positive estimate must be cleared on a bad sensor step.
+# Otherwise an invalid sample can keep an old offset alive (false cooling).
+meta, obs, set_zone, _ = scenario(1, 1, temp=296.8, outdoor=296.8)
+policy = Policy(meta, None)
+for measured_k in [296.8, 296.95, 297.10]:
+    set_zone(0, measured_k)
+    check(policy, obs)
+key = policy.ahus[0]["zones"][0]["temperature"]
+assert policy.disturbance_k_per_step[key] > 0.0
+set_zone(0, 312.0)
+check(policy, obs)
+assert key not in policy.disturbance_k_per_step
+assert key not in policy.previous_zone
+set_zone(0, 297.10)
+check(policy, obs)
+assert key not in policy.disturbance_k_per_step, (
+    "First valid sample after a jump must reinitialize, not estimate from a spike"
+)
+
+# With a missing/invalid VAV command index, no unknown action may contaminate
+# another command slot or produce a false action-conditioned disturbance.
+meta, obs, set_zone, _ = scenario(1, 2, temp=295.0, outdoor=295.0)
+meta["zone_action_indices"]["VAV_0"]["supply_air_damper_percentage_command"] = -1
+meta["zone_action_indices"]["VAV_0"]["reheat_valve_percentage_command"] = 1_000_000
+policy = Policy(meta, None)
+assert policy.ahus[0]["zones"][0]["damper"] is None
+assert policy.ahus[0]["zones"][0]["valve"] is None
+check(policy, obs)
+for temperature_k in [295.1, 295.2]:
+    set_zone(0, temperature_k)
+    continuous, discrete = check(policy, obs)
+assert policy.disturbance_k_per_step == {}, (
+    "Observer must not estimate heat gains from unobservable actuator commands"
+)
+# The valid second terminal still has the proper metadata-resolved indices.
+set_zone(1, 285.0)
+continuous, discrete = check(policy, obs)
+valid = meta["zone_action_indices"]["VAV_1"]
+assert discrete[-1] == 1
+assert continuous[valid["reheat_valve_percentage_command"]] > -1.0
+
+# The nominal residual must subtract cooling and reheat effects, not just use
+# a raw temperature derivative.
+sample = {
+    "temperature": 295.0,
+    "outdoor": 300.0,
+    "supply": 290.0,
+    "damper": 0.5,
+    "valve": 0.5,
+}
+expected_k = (0.003 * 5.0 + 0.006 * 0.5 * (-5.0) + 0.06 * 0.5)
+assert abs(policy._predict_nominal_change_k(sample) - expected_k) < 1e-12
+
+# 6. Reset matches a fresh policy, including all state and current actions;
 # observer state must not leak between independent building episodes.
 policy.reset()
 assert policy.previous_zone == {} and policy.disturbance_k_per_step == {}
@@ -200,7 +256,7 @@ a, d = check(policy, obs)
 a0, d0 = check(fresh, obs)
 assert np.array_equal(a, a0) and np.array_equal(d, d0)
 
-# Invalid sensor samples remove stale previous action/observer state.
+# 7. Invalid sensors remove stale previous action/observer state.
 set_zone(0, float("nan"))
 check(policy, obs)
 assert policy.previous_zone == {} and policy.disturbance_k_per_step == {}
@@ -208,7 +264,7 @@ set_zone(0, 295.0)
 check(policy, obs)
 assert policy.disturbance_k_per_step == {}
 
-# AHU isolation: only the disturbed zone receives an observer correction.
+# 8. AHU isolation: only the disturbed zone receives an observer correction.
 meta, obs, set_zone, _ = scenario(2, 1, temp=296.8, outdoor=296.8)
 policy = Policy(meta, None)
 check(policy, obs)
@@ -220,7 +276,7 @@ assert disc[0] == 1 and disc[1] == 0
 assert len(policy.previous_zone) == 2
 assert len(policy.disturbance_k_per_step) <= 2
 
-# Outdoor air is field-normalized in the official data; the sensor reader
+# 9. Outdoor air is field-normalized in the official data; the sensor reader
 # must not treat a z-score as Kelvin or convert with zone temperature stats.
 meta, obs, set_zone, set_outside = scenario(1, 2, temp=305., outdoor=295.)
 meta["observation_normalization_metadata"]["outside_air_temperature_sensor"] = {
@@ -232,7 +288,7 @@ check(policy, obs)
 set_outside(float("nan"))
 check(policy, obs)
 
-# Runtime stays linear in topology and the notebook entrypoint is official.
+# 10. Runtime remains bounded and the notebook entrypoint is official.
 meta, obs, set_zone, _ = scenario(4, 8)
 policy = Policy(meta, None)
 start = time.perf_counter()
