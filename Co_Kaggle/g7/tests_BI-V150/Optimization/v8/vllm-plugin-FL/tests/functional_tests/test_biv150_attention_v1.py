@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Regression checks for automatically selected BI-V150 v1 attention.
+"""Regression checks for BI-V150 v1 prefill with v5 pure-decode dispatch.
 
 GPU tests compare outputs from pinned vLLM 0.24.0 and the tuned launcher;
 they do NOT replace MATH-500 accuracy evaluation.
@@ -12,9 +12,9 @@ import torch
 
 
 BASELINE = "vllm.v1.attention.backends.triton_attn.TritonAttentionBackend"
-V1 = (
+STACK = (
     "vllm_fl.dispatch.backends.vendor.iluvatar.impl."
-    "attention_biv150.BIV150TritonAttentionBackend"
+    "attention_biv150_v1_v5.BIV150V1V5AttentionBackend"
 )
 FLAGGEMS = "vllm_fl.dispatch.backends.flaggems.impl.attention.AttentionFLBackend"
 
@@ -28,13 +28,13 @@ def _mock_platform(monkeypatch, vendor_name):
     )
 
 
-def test_selects_v1_automatically_on_iluvatar(monkeypatch):
+def test_selects_v1_v5_automatically_on_iluvatar(monkeypatch):
     from vllm_fl.dispatch.backends.flaggems.flaggems import FlagGemsBackend
 
     _mock_platform(monkeypatch, "iluvatar")
     monkeypatch.delenv("VLLM_FL_USE_FLAGGEMS_ATTN", raising=False)
     monkeypatch.delenv("VLLM_FL_BIV150_ATTN_V1", raising=False)
-    assert FlagGemsBackend().attention_backend() == V1
+    assert FlagGemsBackend().attention_backend() == STACK
 
 
 def test_other_platform_preserves_triton_fallback(monkeypatch):
