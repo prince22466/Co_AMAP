@@ -14,6 +14,7 @@ import yaml
 
 G6 = Path(__file__).resolve().parents[2]
 SOURCE = G6 / "submission_nb/submission_35"
+REFERENCE34 = G6 / "submission_nb/submission_34"
 ARTIFACT_DIR = G6 / "submission_nb/artifacts"
 MODEL = "gemma-4-e4b-it-qat-w4a16-ct"
 TOOLS = ("run_command", "read_file", "edit_file", "get_status", "submit_patch")
@@ -77,7 +78,17 @@ def validate(variant: str, payload: dict[str, bytes]) -> None:
         require(len(payload[name]) < 100_000, "Excessive packaged file size")
 
     agent = yaml.load(payload["agent.yaml"], Loader=IncludeLoader)
+    reference34 = yaml.load(
+        (REFERENCE34 / "agent.yaml").read_bytes(), Loader=IncludeLoader
+    )
     require(isinstance(agent, dict), "Invalid agent.yaml")
+    require(agent.get("model") == reference34["model"] == MODEL,
+            "S35 model must equal S34 E4B")
+    require(agent.get("generate_content_config")
+            == reference34["generate_content_config"],
+            "S35 generation settings must equal S34")
+    require(tuple(t for t in reference34["tools"] if t != "write_file") == TOOLS,
+            "S35 tools must equal S34 minus write_file")
     require(set(agent) == {"name", "model", "include_contents", "instruction",
                             "skills", "tools", "generate_content_config"}
             if VARIANTS[variant][2]
@@ -98,6 +109,9 @@ def validate(variant: str, payload: dict[str, bytes]) -> None:
     }, "Unexpected sampling config")
     require(yaml.safe_load(payload["eval_config.yaml"]) == {
         "evaluation": EVAL_BUDGET}, "Evaluation limits changed")
+    require(payload["eval_config.yaml"]
+            == (REFERENCE34 / "eval_config.yaml").read_bytes(),
+            "S35 evaluation budget must match S34 byte for byte")
 
     with_skill = VARIANTS[variant][2]
     if with_skill:
