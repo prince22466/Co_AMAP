@@ -2,10 +2,10 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """Phase-aware v1 prefill + v5 pure-decode Triton attention on BI-V150.
 
-Retains the existing vLLM Triton backend interface, metadata, cache writes,
-and operator priorities. The v1 and v5 launchers remain intact and separate.
-The decision depends only on the invocation's query-length metadata; mixed
-prefill/decode always takes v1, not the v5-only decode specialization.
+Retains the vLLM Triton backend interface, metadata and operator priorities.
+The v1/v5 attention launchers remain intact; compatible paged KV writes use
+the existing v6 optimized kernel, with inherited fallback for other layouts.
+Only pure decode uses the v5 attention launcher; mixed batches use v1.
 """
 
 import torch
@@ -17,10 +17,35 @@ from vllm.v1.attention.backends.triton_attn import (
 
 from .attention_biv150 import BIV150TritonAttentionImpl
 from .attention_decode_v5 import BIV150DecodeAttentionImpl
+from .kv_cache_v6 import try_write_kv_cache_v6
 
 
 class BIV150V1V5AttentionImpl(BIV150TritonAttentionImpl):
-    """Route pure decode to v5 and all other calls to unchanged v1."""
+    """Route pure decode to v5, prefill to v1, and eligible KV writes to v6."""
+
+    def do_kv_cache_update(
+        self,
+        layer,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        kv_cache: torch.Tensor,
+        slot_mapping: torch.Tensor,
+    ):
+        # Keep vLLM's encoder, per-token-head quant, HND, FP8 and small
+        # write behavior. v6 specializes only an existing Triton KV write.
+        from vllm.v1.attention.backend import AttentionType
+
+        if (
+            self.attn_type not in (AttentionType.ENCODER_ONLY, AttentionType.ENCODER)
+            and not self._is_per_token_head_quant
+            and try_write_kv_cache_v6(
+                key, value, kv_cache, slot_mapping, self.kv_cache_dtype
+            )
+        ):
+            return
+        return super().do_kv_cache_update(
+            layer, key, value, kv_cache, slot_mapping
+        )
 
     def forward(
         self,
@@ -61,7 +86,7 @@ class BIV150V1V5AttentionImpl(BIV150TritonAttentionImpl):
 
 
 class BIV150V1V5AttentionBackend(TritonAttentionBackend):
-    """Reuse vLLM Triton attention metadata and KV-cache update behavior."""
+    """Reuse vLLM metadata; specialize only eligible paged KV-cache writes."""
 
     @staticmethod
     def get_impl_cls() -> type[BIV150V1V5AttentionImpl]:
