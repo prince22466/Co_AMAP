@@ -120,7 +120,7 @@ def validate(variant: str, payload: dict[str, bytes]) -> None:
     require(1600 <= len(prompt) <= 4200, "Root prompt length unexpected")
     for token in ("{problem_description}", "{hints?}",
                   "old_string", "new_string", "allow_multiple=false",
-                  "missing", "FileEditError", "git diff --check",
+                  "Missing", "FileEditError", "git diff --check",
                   "submit_patch", "tool-recovery"):
         require(token in prompt, "Missing execution contract: " + token)
     for forbidden in ("run_skill_script(", "write_file(", "rich_3518",
