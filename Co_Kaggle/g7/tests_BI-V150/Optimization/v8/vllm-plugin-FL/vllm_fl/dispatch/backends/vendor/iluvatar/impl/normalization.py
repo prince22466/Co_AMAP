@@ -27,14 +27,6 @@ def rms_norm_iluvatar(
     Returns:
         Normalized tensor, or tuple of (normalized, residual) if residual is provided
     """
-    # The vendor backend retains its out-of-place contract.
-    from vllm.platforms import current_platform
-
-    if getattr(current_platform, "vendor_name", None) == "iluvatar":
-        from .normalization_biv150_v3 import fused_rms_norm, is_eligible
-        if is_eligible(x, residual, obj.weight):
-            return fused_rms_norm(x, residual, obj.weight, obj.variance_epsilon)
-
     # Get weight and epsilon from obj
     weight = obj.weight
     epsilon = obj.variance_epsilon
