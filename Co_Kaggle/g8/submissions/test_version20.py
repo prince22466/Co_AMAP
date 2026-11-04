@@ -107,7 +107,7 @@ class Version20Tests(unittest.TestCase):
     def test_idle_zone_stays_off(self):
         action = self.policy.get_action(observation(295.0))
         self.assertEqual(action["discrete_action"].tolist(), [0, 0])
-        self.assertEqual(float(action["continuous_action"][5]), -0.8)
+        self.assertAlmostEqual(float(action["continuous_action"][5]), -0.8, places=6)
         self.assertEqual(float(action["continuous_action"][4]), -1.0)
 
     def test_cooling_commands_airflow_without_reheat(self):
