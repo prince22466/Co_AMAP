@@ -160,6 +160,49 @@ class ESCUnitTests(unittest.TestCase):
         self.assertEqual(seeker.cycles_completed, 0)
 
 
+    def test_abba_cancels_linear_drift_in_the_measured_objective(self):
+        """A linear occupancy/weather drift must not bias ABBA demodulation."""
+        def run_cycle(drift_per_step):
+            seeker = PressureESC(block_steps=4, settling_steps=1)
+            for step in range(17):
+                # Report the measured outcome after the preceding action.
+                loss = 0.7 + drift_per_step * step
+                seeker.choose_pressure(
+                    1000.0, loss, ((294.0, 296.0),), True
+                )
+            self.assertEqual(seeker.cycles_completed, 1)
+            return seeker.center_pa
+
+        stationary_trim = run_cycle(0.0)
+        drifting_trim = run_cycle(0.07)
+        self.assertAlmostEqual(stationary_trim, drifting_trim, places=7)
+
+    def test_discards_cycle_when_baseline_load_moves(self):
+        """Changing V7 fan demand must not be mistaken for an ESC signal."""
+        seeker = PressureESC(block_steps=4, settling_steps=1)
+        for _ in range(6):
+            seeker.choose_pressure(1000, 0.5, ("stable",), True)
+        self.assertGreater(seeker.steps + seeker.block, 0)
+
+        # Changing the baseline by more than 60 Pa restarts the experiment.
+        command = seeker.choose_pressure(1100, 0.5, ("stable",), True)
+        self.assertEqual(command, 1180.0)
+        self.assertEqual(seeker.steps, 0)
+        self.assertEqual(seeker.block, 0)
+        self.assertEqual(seeker.reference_baseline_pa, 1100.0)
+        self.assertEqual(seeker.cycles_completed, 0)
+
+    def test_learned_trim_and_all_probes_remain_bounded(self):
+        seeker = PressureESC(block_steps=4, settling_steps=1)
+        for _ in range(1000):
+            command = seeker.choose_pressure(1000.0, 0.4, ("stable",), True)
+            self.assertGreaterEqual(command, seeker.MIN_PRESSURE_PA)
+            self.assertLessEqual(command, seeker.MAX_PRESSURE_PA)
+            self.assertLessEqual(abs(seeker.center_pa),
+                                 seeker.MAX_ABS_CENTER_PA)
+        self.assertGreater(seeker.cycles_completed, 20)
+
+
 class PolicyTests(unittest.TestCase):
     def test_contract_across_multi_ahu_topologies(self):
         for layout in [(1,), (3,), (1, 2), (2, 3, 1)]:
@@ -211,6 +254,41 @@ class PolicyTests(unittest.TestCase):
                            reference["continuous_action"][idx])
         self.assertIsNotNone(esc.seekers[0].pending_pressure_pa)
         self.assertIsNone(fixed.seekers[0].pending_pressure_pa)
+
+    def test_invalid_zone_does_not_reset_other_ahu_learning(self):
+        """A sensor failure on one AHU must not poison other AHU states."""
+        metadata, obs = make_case((1, 1))
+        policy = TransferPolicy(metadata, {})
+        for _ in range(8):
+            check_contract(self, policy, obs)
+
+        broken = obs.copy()
+        broken[policy.ahus[0]["zones"][0]["temperature"]] = float("nan")
+        previous_other_progress = (
+            policy.seekers[1].steps,
+            policy.seekers[1].block,
+        )
+        check_contract(self, policy, broken)
+        self.assertIsNone(policy.seekers[0].pending_pressure_pa)
+        self.assertIsNotNone(policy.seekers[1].pending_pressure_pa)
+        self.assertNotEqual(
+            (policy.seekers[1].steps, policy.seekers[1].block),
+            previous_other_progress,
+        )
+
+    def test_public_ablation_switch_matches_fixed_fan_actions(self):
+        """With ESC disabled, no probe or learned trim can affect commands."""
+        metadata, obs = make_case((2, 2))
+        policy = TransferPolicy(metadata, {})
+        policy.ENABLE_ESC = False
+        first = check_contract(self, policy, obs)
+        for _ in range(200):
+            next_action = check_contract(self, policy, obs)
+            np.testing.assert_array_equal(
+                first["continuous_action"], next_action["continuous_action"]
+            )
+        self.assertTrue(all(s.cycles_completed == 0 for s in policy.seekers))
+
 
     def test_reset_and_missing_sensor_recovery(self):
         metadata, obs = make_case((1, 2))
