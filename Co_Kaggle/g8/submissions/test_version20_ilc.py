@@ -16,10 +16,11 @@ NOTEBOOK = Path(__file__).with_name("submission-nb - Version 20.ipynb")
 
 
 def policy_classes():
-    """Run the *entire* Kaggle submission cell in a fresh mocked kernel.
+    """Execute notebook code cells in order using a mocked Kaggle gateway.
 
-    This fails if TransferPolicy is in an unexecuted earlier cell or if the
-    official gateway gets called before the class exists.
+    Kaggle runs notebook cells in one shared Python namespace. The controller
+    may be defined in one cell and the gateway launched in a later cell.
+    We verify both the execution order and exactly one gateway invocation.
     """
     gateway_calls = []
     server = types.ModuleType("smart_buildings_inference_server")
@@ -48,13 +49,25 @@ def policy_classes():
         code_cells = [
             cell for cell in notebook["cells"] if cell["cell_type"] == "code"
         ]
-        # Standalone Kaggle execution: all imports, policies and gateway must
-        # be in the same cell. Running the last cell alone must be sufficient.
-        assert len(code_cells) == 1, "V19 must have exactly one runnable code cell"
-        source = "".join(code_cells[0]["source"])
-        assert source.count("SmartBuildingsInferenceServer(TransferPolicy).run()") == 1
-        namespace = {}
-        exec(compile(source, str(NOTEBOOK), "exec"), namespace)
+        # Kaggle executes all code cells sequentially in a shared namespace.
+        # Do not require a single cell: the official gateway may be last.
+        assert code_cells, "Notebook must contain executable code"
+        gateway_expression = (
+            "SmartBuildingsInferenceServer(TransferPolicy).run()"
+        )
+        namespace = {"__name__": "__main__"}
+        gateway_count = 0
+        for cell_number, cell in enumerate(code_cells, start=1):
+            source = cell["source"]
+            if isinstance(source, list):
+                source = "".join(source)
+            gateway_count += source.count(gateway_expression)
+            exec(
+                compile(source, f"{NOTEBOOK}:cell-{cell_number}", "exec"),
+                namespace,
+            )
+
+        assert gateway_count == 1, "Official gateway must run exactly once"
         assert gateway_calls == [namespace["TransferPolicy"]]
     finally:
         if original is None:
