@@ -1,0 +1,51 @@
+name: G6 Submission 35 CPU Contract
+
+on:
+  pull_request:
+    paths:
+      - 'Co_Kaggle/g6/submission_nb/submission_35/**'
+      - 'Co_Kaggle/g6/submission_nb/artifacts/submission_35*.zip'
+      - 'Co_Kaggle/g6/tests_on_tasks/tools/*submission35*.py'
+      - '.github/workflows/g6-submission35.yml'
+  workflow_dispatch:
+
+jobs:
+  submission35-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install CPU packaging dependency
+        run: python -m pip install 'pyyaml>=6,<7'
+      - name: Compile S35 source and tests
+        run: |
+          python -m py_compile Co_Kaggle/g6/tests_on_tasks/tools/build_submission35.py
+          python -m py_compile Co_Kaggle/g6/tests_on_tasks/tools/test_submission35.py
+          python -m py_compile Co_Kaggle/g6/tests_on_tasks/tools/gate_submission35.py
+          python -m py_compile Co_Kaggle/g6/tests_on_tasks/tools/test_gate_submission35.py
+          python -m py_compile Co_Kaggle/g6/tests_on_tasks/tools/run_submission35_eval.py
+          python -m py_compile Co_Kaggle/g6/tests_on_tasks/tools/test_run_submission35.py
+      - name: Verify model parity and diagnostic checks
+        working-directory: Co_Kaggle/g6/tests_on_tasks/tools
+        run: |
+          python -m unittest -v test_submission35.py test_gate_submission35.py test_run_submission35.py
+      - name: Regenerate S35 archives from reviewed source
+        working-directory: Co_Kaggle/g6/tests_on_tasks/tools
+        run: python build_submission35.py
+      - name: Assert primary and control ZIP parity with committed artifacts
+        run: |
+          git diff --exit-code -- Co_Kaggle/g6/submission_nb/artifacts/submission_35.zip
+          git diff --exit-code -- Co_Kaggle/g6/submission_nb/artifacts/submission_35_control.zip
+      - name: Upload unscored packages and manifests
+        uses: actions/upload-artifact@v4
+        with:
+          name: submission35-cpu-artifacts
+          if-no-files-found: error
+          path: |
+            Co_Kaggle/g6/submission_nb/artifacts/submission_35.zip
+            Co_Kaggle/g6/submission_nb/artifacts/submission_35_control.zip
+            Co_Kaggle/g6/submission_nb/artifacts/submission_35.manifest.json
+            Co_Kaggle/g6/submission_nb/artifacts/submission_35_control.manifest.json
