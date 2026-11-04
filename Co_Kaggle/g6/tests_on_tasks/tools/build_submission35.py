@@ -135,7 +135,7 @@ def validate(variant: str, payload: dict[str, bytes]) -> None:
     for token in ("{problem_description}", "{hints?}",
                   "old_string", "new_string", "allow_multiple=false",
                   "Missing", "FileEditError", "git diff --check",
-                  "submit_patch", "tool-recovery"):
+                  "submit_patch", 'load_skill(skill_name="tool-recovery")'):
         require(token in prompt, "Missing execution contract: " + token)
     for forbidden in ("run_skill_script(", "write_file(", "rich_3518",
                       "rich_4076", "requests_7315"):
