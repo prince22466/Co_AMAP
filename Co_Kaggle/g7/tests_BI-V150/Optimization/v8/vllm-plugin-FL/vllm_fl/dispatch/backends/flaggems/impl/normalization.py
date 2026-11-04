@@ -27,6 +27,22 @@ def rms_norm_flaggems(
     Returns:
         Normalized tensor, or tuple of (normalized, residual) if residual is provided
     """
+    # The v3 RMSNorm kernel is automatically used for eligible Iluvatar
+    # inference shapes. Otherwise retain the original FlagGems operator.
+    from vllm.platforms import current_platform
+
+    if getattr(current_platform, "vendor_name", None) == "iluvatar":
+        from vllm_fl.dispatch.backends.vendor.iluvatar.impl.normalization_biv150_v3 import (
+            fused_rms_norm,
+            is_eligible,
+        )
+        weight = obj.weight
+        if is_eligible(x, residual, weight):
+            return fused_rms_norm(
+                x, residual, weight, obj.variance_epsilon,
+                inplace=residual is not None,
+            )
+
     from flag_gems.modules.normalization import gems_rms_forward
 
     # Get weight and epsilon from obj
