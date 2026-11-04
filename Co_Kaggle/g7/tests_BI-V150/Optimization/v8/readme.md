@@ -21,24 +21,3 @@ Start v8 with its `FlagGems/src` and `vllm-plugin-FL` on
 The selector tests check automatic selection, platform fallback, and the
 explicit FlagGems override. GPU correctness and official throughput/accuracy
 benchmarks must be run on BI-V150 before accepting this candidate.
-
-## Stack v3 — automatic fused RMSNorm (BI-V150)
-
-v8 integrates the v3 fused RMSNorm kernel without a per-run activation
-variable. On `current_platform.vendor_name == "iluvatar"`, the existing
-FlagGems RMSNorm selects the specialized kernel only for eligible dense
-inference inputs (contiguous FP16/BF16/FP32, hidden size 128–4096). The
-original FlagGems `gems_rms_forward` remains the automatic fallback for
-ineligible shapes, devices, shared-storage residuals, and autograd.
-
-The kernel retains FlagGems' **in-place residual-add contract** and
-FP32 accumulation/dtype rounding. Iluvatar vendor RMSNorm uses the same
-kernel for eligible inputs but remains **out of place**. The v1 optimized
-attention backend, framework operator-selection priority, model settings,
-and official benchmarks are unchanged.
-
-To test on BI-V150, from `v8/vllm-plugin-FL` run:
-`python3 -m pytest -q --noconftest tests/functional_tests/test_biv150_rmsnorm_v3.py`
-
-Verify a production OOT trace, unchanged official 4K/16K throughput, and
-MATH-500 accuracy before accepting the stack. No speedup is claimed yet.
