@@ -192,7 +192,7 @@ def compare(primary: list[dict], control: list[dict], *, stage: str,
     if a["resolved"] < min_resolved:
         blockers.append("insufficient_resolved")
     if a["resolved"] <= b["resolved"]:
-        blockers.append("no_gain_over_31b_control")
+        blockers.append("no_gain_over_e4b_control")
     if len(a["empty_patch_ids"]) > max_empty:
         blockers.append("too_many_empty_patches")
     if a["unsafe_or_unknown_patches"]:
@@ -231,7 +231,7 @@ def compare(primary: list[dict], control: list[dict], *, stage: str,
         "limitations": [
             "Single run does not prove improvement; repeat paired real-model tasks.",
             "Printed telemetry cannot recover exact tool arguments, read ranges or patch semantics.",
-            "31B model cannot be compared causally to historical E4B runs.",
+            "S34 is an historical E4B run, not a same-seed matched S35 control.",
             "Skill availability is not evidence the model loaded or followed it.",
             "Review full ATIF and actual final source diffs before promotion.",
         ],
