@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 
 from analyze_submission34 import compare, parse
 from compare_submission24 import S1_IDS
@@ -71,6 +72,18 @@ class Submission34Telemetry(unittest.TestCase):
         result = parse(raw)
         self.assertEqual(result["traces"][S1_IDS[0]]["successful_edits"], 1)
         self.assertTrue(result["traces"][S1_IDS[0]]["first_edit_success"])
+
+    def test_real_historical_printouts_parse(self):
+        diagnostics = Path(__file__).resolve().parents[1] / "diagnostics"
+        base = diagnostics / "submission-29-zip_s1TasksPrintouts.txt"
+        candidate = diagnostics / "submission-33-zip_s1TasksPrintouts.txt"
+        if not base.exists() or not candidate.exists():
+            self.skipTest("Historical printed diagnostics not mounted")
+        report = compare(base.read_text(encoding="utf-8"),
+                         candidate.read_text(encoding="utf-8"))
+        self.assertEqual(report["baseline"]["resolved"], 3)
+        self.assertEqual(report["candidate"]["resolved"], 2)
+        self.assertFalse(report["promotion_approved"])
 
     def test_reject_incomplete_and_duplicate_logs(self):
         good = fake({"rich_3905"})
