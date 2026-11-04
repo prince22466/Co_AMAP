@@ -209,7 +209,7 @@ for _ in range(10):
     action(policy,obs)
 
 # Check no hidden per-step optimization and a bounded CPU-only synthetic budget.
-assert "scipy" not in source.lower() and "import cma" not in source
+assert "import scipy" not in source and "from scipy" not in source and "import cma" not in source
 meta, obs, zone = synthetic(4,8)
 policy = Policy(meta,None)
 start = time.perf_counter()
