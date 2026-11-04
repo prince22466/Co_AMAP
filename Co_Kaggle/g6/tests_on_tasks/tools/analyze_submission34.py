@@ -37,6 +37,7 @@ def parse(raw: str) -> dict:
 
     metrics = {}
     current = None
+    pending_tool = None
     for line in raw.splitlines():
         task = TASK.match(line)
         if task:
@@ -52,6 +53,7 @@ def parse(raw: str) -> dict:
                 "output_tokens_reported": None, "first_edit_success": None,
             }
             current = name
+            pending_tool = None
             continue
         if current is None:
             continue
@@ -62,6 +64,7 @@ def parse(raw: str) -> dict:
             result["input_tokens_reported"] = int(m[5])
             result["output_tokens_reported"] = int(m[6])
             current = None
+            pending_tool = None
             continue
         event = EVENT.match(line)
         if not event:
@@ -69,8 +72,10 @@ def parse(raw: str) -> dict:
         msg = event[1]
         t = metrics[current]
         if "📖 read_file " in msg:
+            pending_tool = "read_file"
             t["reads"] += 1
         elif "🔧 run_command " in msg:
+            pending_tool = "run_command"
             t["commands"] += 1
             command = msg.split("🔧 run_command ", 1)[1].strip()
             if re.fullmatch(r"(?:python -m )?pytest", command):
@@ -80,22 +85,29 @@ def parse(raw: str) -> dict:
             if "git diff" in command:
                 t["diff_checks"] += 1
         elif "✏️ edit_file " in msg:
+            pending_tool = "edit_file"
             t["edits"] += 1
         elif "🤖 submit_patch" in msg:
+            pending_tool = "submit_patch"
             t["submits"] += 1
         elif "📝 write_file " in msg:
+            pending_tool = "write_file"
             t["writes"] += 1
-        if ("FileEditError" in msg or "mandatory input parameters" in msg
+        if pending_tool == "edit_file" and (
+                "FileEditError" in msg or "mandatory input parameters" in msg
                 or "BudgetExceeded" in msg or "No changes to apply" in msg):
             t["failed_edits"] += 1
             if "mandatory input parameters" in msg:
                 t["missing_edit_arguments"] += 1
             if t["first_edit_success"] is None and t["edits"] == 1:
                 t["first_edit_success"] = False
-        if "✓ {'status': 'ok', 'filepath':" in msg and t["edits"]:
+            pending_tool = None
+        if pending_tool == "edit_file" and (
+                "✓ {'status': 'ok', 'filepath':" in msg):
             t["successful_edits"] += 1
             if t["first_edit_success"] is None and t["edits"] == 1:
                 t["first_edit_success"] = True
+            pending_tool = None
         if "reached the token limit" in msg:
             t["token_limit_nudges"] += 1
     if set(metrics) != set(S1_IDS) or any(
