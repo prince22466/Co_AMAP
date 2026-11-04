@@ -1,9 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Regression checks for the BI-V150 v1 GQA prefill-kernel experiment.
+"""Regression checks for automatically selected BI-V150 v1 attention.
 
-GPU tests compare numerical outputs from the pinned vLLM 0.24.0 baseline
-launcher and the plugin-owned tuned launcher; they do NOT replace MATH-500.
+GPU tests compare outputs from pinned vLLM 0.24.0 and the tuned launcher;
+they do NOT replace MATH-500 accuracy evaluation.
 """
+
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -14,33 +16,48 @@ V1 = (
     "vllm_fl.dispatch.backends.vendor.iluvatar.impl."
     "attention_biv150.BIV150TritonAttentionBackend"
 )
+FLAGGEMS = "vllm_fl.dispatch.backends.flaggems.impl.attention.AttentionFLBackend"
 
 
-def test_opt_in_preserves_original_default(monkeypatch):
-    from vllm_fl.dispatch.backends.flaggems.flaggems import FlagGemsBackend
+def _mock_platform(monkeypatch, vendor_name):
+    import vllm.platforms
 
     monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(
+        vllm.platforms, "current_platform", SimpleNamespace(vendor_name=vendor_name)
+    )
+
+
+def test_selects_v1_automatically_on_iluvatar(monkeypatch):
+    from vllm_fl.dispatch.backends.flaggems.flaggems import FlagGemsBackend
+
+    _mock_platform(monkeypatch, "iluvatar")
     monkeypatch.delenv("VLLM_FL_USE_FLAGGEMS_ATTN", raising=False)
     monkeypatch.delenv("VLLM_FL_BIV150_ATTN_V1", raising=False)
-    assert FlagGemsBackend().attention_backend() == BASELINE
-
-
-def test_opt_in_selects_v1_on_biv150(monkeypatch):
-    from vllm_fl.dispatch.backends.flaggems.flaggems import FlagGemsBackend
-
-    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
-    monkeypatch.delenv("VLLM_FL_USE_FLAGGEMS_ATTN", raising=False)
-    monkeypatch.setenv("VLLM_FL_BIV150_ATTN_V1", "1")
     assert FlagGemsBackend().attention_backend() == V1
 
 
-def test_opt_in_rejects_conflicting_attention_flags(monkeypatch):
+def test_other_platform_preserves_triton_fallback(monkeypatch):
     from vllm_fl.dispatch.backends.flaggems.flaggems import FlagGemsBackend
 
-    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    _mock_platform(monkeypatch, "nvidia")
+    monkeypatch.delenv("VLLM_FL_USE_FLAGGEMS_ATTN", raising=False)
+    assert FlagGemsBackend().attention_backend() == BASELINE
+
+
+def test_explicit_flaggems_override_still_takes_precedence(monkeypatch):
+    from vllm_fl.dispatch.backends.flaggems.flaggems import FlagGemsBackend
+
+    _mock_platform(monkeypatch, "iluvatar")
     monkeypatch.setenv("VLLM_FL_USE_FLAGGEMS_ATTN", "1")
-    monkeypatch.setenv("VLLM_FL_BIV150_ATTN_V1", "1")
-    with pytest.raises(RuntimeError, match="cannot both be enabled"):
+    assert FlagGemsBackend().attention_backend() == FLAGGEMS
+
+
+def test_no_gpu_still_raises(monkeypatch):
+    from vllm_fl.dispatch.backends.flaggems.flaggems import FlagGemsBackend
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    with pytest.raises(RuntimeError, match="CUDA"):
         FlagGemsBackend().attention_backend()
 
 
