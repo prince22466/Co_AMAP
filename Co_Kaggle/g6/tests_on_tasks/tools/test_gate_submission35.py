@@ -92,6 +92,19 @@ class S35GateTests(unittest.TestCase):
         self.assertIn("partial_tool_trace", out["single_run_blockers"])
         self.assertIn("repeated_edit_failure_loop", out["single_run_blockers"])
 
+    def test_rereading_same_file_does_not_clear_edit_failure_streak(self):
+        txt = printout(PILOT_IDS, failures=4)
+        txt = txt.replace(
+            "  [ 2.2s] ✏️ edit_file (pkg/module.py)",
+            "  [ 2.15s] 📖 read_file (pkg/module.py)\n"
+            "  [ 2.2s] ✏️ edit_file (pkg/module.py)",
+            1,
+        )
+        telemetry = tool_events(txt, stage="pilot")
+        self.assertGreaterEqual(
+            telemetry["by_task"][PILOT_IDS[0]]["max_failed_edit_streak"], 4
+        )
+
     def test_missing_arguments_detected_without_claiming_tool_enforcement(self):
         txt = printout(PILOT_IDS)
         txt = txt.replace(
