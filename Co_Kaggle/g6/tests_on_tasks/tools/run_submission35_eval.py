@@ -1,4 +1,4 @@
-"""Paired S35 31B official-harness evaluation; no new benchmark or scorer.
+"""Paired S35 E4B official-harness evaluation; no new benchmark or scorer.
 
 Uses the same official evaluator as earlier g6 runs. The only variant
 difference is the optional instruction-only recovery skill. The global
