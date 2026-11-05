@@ -220,8 +220,10 @@ class Version22Tests(unittest.TestCase):
         time would incorrectly choose "off" instead of a running mode.
         """
         two_zones = [
-            {"temp": 295.0, "low": 293.0, "high": 297.0},
-            {"temp": 295.0, "low": 293.0, "high": 297.0},
+            {"temp": 295.0, "low": 293.0, "high": 297.0,
+             "outdoor": 290.0},
+            {"temp": 295.0, "low": 293.0, "high": 297.0,
+             "outdoor": 290.0},
         ]
         self.p._economic_energy_score = (
             lambda electric_kw, gas_kw, ctx: 0.12 if electric_kw > 0 else 0.0)
