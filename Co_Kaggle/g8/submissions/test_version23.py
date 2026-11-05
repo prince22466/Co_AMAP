@@ -235,6 +235,66 @@ class Version23Tests(unittest.TestCase):
         self.assertTrue(np.isfinite(result["continuous_action"]).all())
         self.assertEqual(result["discrete_action"].tolist(), [0, 0])
 
+    def test_reheat_capacity_depends_on_installed_equipment(self):
+        """Boiler capacity must not grow when an extra zone asks for heat."""
+        meta, obs = fixture(2, 3)
+        policy = Policy(meta, None)
+        expected = (policy.WATER_CAPACITY_FIRST +
+                    5 * policy.WATER_CAPACITY_ADDITIONAL)
+        self.assertEqual(policy.zone_count, 6)
+        self.assertAlmostEqual(policy._water_capacity(), expected)
+
+        # The priority/projection cap stays fixed for different request sets.
+        cold = set_zones(meta, obs.copy(), [291.0] * 6)
+        all_states = [
+            state for i in range(2)
+            for state in zone_states(policy, cold, i)]
+        requests = [(state, 0.95, 1.0) for state in all_states]
+        action, switches = policy._make_idle_actions()
+        policy._dispatch_water(requests, [290.0], action, switches)
+        full_load = sum(
+            0.95 * ((action[state["actions"]["valve"]] + 1) / 2)
+            for state in all_states)
+        self.assertLessEqual(full_load, expected + 1e-6)
+        self.assertAlmostEqual(policy._water_capacity(), expected)
+
+        # Passing a smaller request set cannot alter installed capacity.
+        action, switches = policy._make_idle_actions()
+        policy._dispatch_water(requests[:2], [290.0], action, switches)
+        self.assertAlmostEqual(policy._water_capacity(), expected)
+
+    def test_absent_boiler_does_not_repurpose_last_ahu_switch(self):
+        """A missing boiler must not toggle or overwrite an AHU switch."""
+        meta, obs = fixture(2, 2)
+        meta["water_indices"] = []
+        meta["n_discrete_action"] = 2  # Exactly one run switch per AHU.
+        meta["pressure_indices"].pop()  # No hot-water pump pressure.
+        obs = set_zones(meta, obs, [290.0, 289.0, 291.0, 290.0])
+        policy = Policy(meta, None)
+        self.assertIsNone(policy.water_run)
+        self.assertIsNone(policy._plan_ahu(
+            zone_states(policy, obs, 0), 290.0))
+        action = policy.get_action(obs)
+        self.assertEqual(action["discrete_action"].tolist(), [0, 0])
+        for zone in meta["zone_action_indices"].values():
+            self.assertEqual(action["continuous_action"][
+                zone["reheat_valve_percentage_command"]], -1.0)
+
+    def test_broken_zone_observation_and_missing_damper(self):
+        """A missing damper is not a source of fictitious cooling capacity."""
+        meta, obs = fixture(1, 2)
+        meta["zone_action_indices"]["VAV_0"].pop(
+            "supply_air_damper_percentage_command")
+        obs = set_zones(meta, obs, [301.0, 295.0])
+        policy = Policy(meta, None)
+        self.assertIsNone(policy._plan_ahu(
+            zone_states(policy, obs), 290.0))
+        self.assertEqual(policy.get_action(obs)["discrete_action"].tolist(),
+                         [0, 0])
+        obs[:] = float("nan")
+        self.assertTrue(np.isfinite(
+            policy.get_action(obs)["continuous_action"]).all())
+
     def test_large_building_bounded_runtime(self):
         meta, obs = fixture(4, 12, outdoors=287.0)
         obs = set_zones(meta, obs, [289.0, 302.0, 295.0] * 16)
