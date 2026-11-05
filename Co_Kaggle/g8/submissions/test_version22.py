@@ -282,6 +282,27 @@ class Version22Tests(unittest.TestCase):
         self.assertTrue(self.p._candidate_allowed(
             configs["mixed"], worst_hot=5.0, worst_cold=5.0))
 
+    def test_severe_zones_issue_corrective_vav_commands(self):
+        """The selected AHU mode must lead to useful local damper/valve action."""
+        ctx = self.p._reward_context(observation())
+        zone = self.p.ahus[0]["zones"][0]
+        cold = {
+            "zone": zone, "temp": 285.0, "low": 293.0,
+            "high": 297.0, "outdoor": 280.0,
+        }
+        hot = {
+            "zone": zone, "temp": 309.0, "low": 293.0,
+            "high": 297.0, "outdoor": 304.0,
+        }
+        heat = self.p.OPERATING_POINTS[4]
+        mixed = self.p.OPERATING_POINTS[5]
+        _, cold_damper, cold_valve = self.p._best_vav(cold, heat, ctx)
+        _, hot_damper, hot_valve = self.p._best_vav(hot, mixed, ctx)
+        self.assertGreater(cold_damper, 0.0)
+        self.assertGreater(cold_valve, 0.0)
+        self.assertGreaterEqual(hot_damper, 0.55)
+        self.assertEqual(hot_valve, 0.0)
+
     def test_without_recirculation_mapping_uses_fixed_mix(self):
         m = metadata()
         m["recirculation_indices"] = []
