@@ -184,7 +184,8 @@ class Version24Tests(unittest.TestCase):
             self.assertLessEqual(
                 p._state[0][2], p.MAX_INTEGRAL_ERROR_K_STEPS)
         p._gain_scheduled_status(self.status(295.0), 308.0)
-        self.assertEqual(p._state[0][2:], (0.0, 0.0))
+        self.assertEqual(p._state[0][2], 0.0)
+        self.assertEqual(p._state[0][3], 0)
         p.reset()
         self.assertEqual(p._state, {})
 
