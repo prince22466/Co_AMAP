@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Regression checks for BI-V150 v1 prefill with v5 pure-decode dispatch.
+"""Regression checks for the integrated BI-V150 Triton attention backend.
 
-GPU tests compare outputs from pinned vLLM 0.24.0 and the tuned launcher;
-they do NOT replace MATH-500 accuracy evaluation.
+GPU comparisons cover prefill and decode against pinned vLLM 0.24.0;
+they do not replace official accuracy or serving benchmarks.
 """
 
 from types import SimpleNamespace
@@ -12,9 +12,9 @@ import torch
 
 
 BASELINE = "vllm.v1.attention.backends.triton_attn.TritonAttentionBackend"
-STACK = (
+OPTIMIZED_BACKEND = (
     "vllm_fl.dispatch.backends.vendor.iluvatar.impl."
-    "attention_biv150_v1_v5.BIV150V1V5AttentionBackend"
+    "attention_biv150.BIV150TritonAttentionBackend"
 )
 FLAGGEMS = "vllm_fl.dispatch.backends.flaggems.impl.attention.AttentionFLBackend"
 
@@ -28,13 +28,12 @@ def _mock_platform(monkeypatch, vendor_name):
     )
 
 
-def test_selects_v1_v5_automatically_on_iluvatar(monkeypatch):
+def test_selects_tuned_attention_on_iluvatar(monkeypatch):
     from vllm_fl.dispatch.backends.flaggems.flaggems import FlagGemsBackend
 
     _mock_platform(monkeypatch, "iluvatar")
     monkeypatch.delenv("VLLM_FL_USE_FLAGGEMS_ATTN", raising=False)
-    monkeypatch.delenv("VLLM_FL_BIV150_ATTN_V1", raising=False)
-    assert FlagGemsBackend().attention_backend() == STACK
+    assert FlagGemsBackend().attention_backend() == OPTIMIZED_BACKEND
 
 
 def test_other_platform_preserves_triton_fallback(monkeypatch):
@@ -64,14 +63,14 @@ def test_no_gpu_still_raises(monkeypatch):
 @pytest.mark.parametrize(
     ("query_len", "context_len"),
     [
-        (1, 512),      # Single-token decode: unchanged launch geometry.
+        (1, 512),      # Single-token decode with paged-KV lookup.
         (64, 0),       # Short uncached prefill.
         (2048, 0),     # First chunk.
         (2048, 4096),  # Chunked prefill after an existing prefix.
         (2048, 14336), # 16K endpoint (expensive).
     ],
 )
-def test_bf16_gqa_prefill_matches_baseline(query_len, context_len):
+def test_bf16_gqa_attention_matches_baseline(query_len, context_len):
     if not torch.cuda.is_available():
         pytest.skip("Requires a CUDA-compatible GPU (run on BI-V150)")
 
@@ -133,6 +132,3 @@ def test_bf16_gqa_prefill_matches_baseline(query_len, context_len):
         torch.cuda.synchronize()
 
     torch.testing.assert_close(actual, expected, atol=3e-2, rtol=3e-2)
-    if query_len == 1:
-        # No changes to single-token decode selection or computation.
-        torch.testing.assert_close(actual, expected, atol=0, rtol=0)

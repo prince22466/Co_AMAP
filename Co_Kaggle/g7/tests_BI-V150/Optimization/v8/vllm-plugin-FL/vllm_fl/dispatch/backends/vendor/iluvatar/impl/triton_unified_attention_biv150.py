@@ -274,6 +274,7 @@ def kernel_unified_attention(
     USE_TD: tl.constexpr = False,
     USE_TD_QO: tl.constexpr = False,
     Q_IS_FP8: tl.constexpr = False,
+    DECODE_PAGE_LOOKUP: tl.constexpr = False,
 ):
     USE_PER_TOKEN_HEAD_SCALES: tl.constexpr = KV_QUANT_MODE >= 2
     USE_FP8_Q_DESCALE: tl.constexpr = KV_QUANT_MODE == 1 and Q_IS_FP8
@@ -403,9 +404,43 @@ def kernel_unified_attention(
         seq_offset = j * TILE_SIZE + offs_t
         tile_mask = seq_offset < max_seq_prefix_len
 
-        physical_block_idx = tl.load(
-            block_tables_ptr + block_table_offset + seq_offset // BLOCK_SIZE
-        ).to(tl.int64)
+        if DECODE_PAGE_LOOKUP:
+            # Decode-only optimization: look up each physical page once
+            # per KV tile, then reuse it for all token lanes in that page.
+            # The 2D (32-token) and 3D (16-token) decode paths both benefit
+            # with the standard 16-token vLLM KV cache pages.
+            if BLOCK_SIZE >= TILE_SIZE:
+                # The tile fits entirely in a single aligned KV page.
+                physical_block_scalar = tl.load(
+                    block_tables_ptr
+                    + block_table_offset
+                    + (j * TILE_SIZE) // BLOCK_SIZE
+                ).to(tl.int64)
+                # The K/V pointer expressions below index this as a
+                # vector ([:, None] / [None, :]). A scalar cannot be
+                # indexed in Triton; broadcast it across all tile lanes.
+                physical_block_idx = tl.broadcast_to(
+                    physical_block_scalar, (TILE_SIZE,)
+                )
+            else:
+                # KV tile comprises whole pages (e.g. 32 tokens / 16 per page).
+                page_start = (j * TILE_SIZE) // BLOCK_SIZE
+                page_offs = tl.arange(0, TILE_SIZE // BLOCK_SIZE)
+                physical_pages = tl.load(
+                    block_tables_ptr + block_table_offset + page_start + page_offs,
+                    # Last tile can contain fewer valid pages than TILE_SIZE.
+                    mask=page_start + page_offs < tl.cdiv(seq_len, BLOCK_SIZE),
+                    other=0,
+                ).to(tl.int64)
+                physical_block_idx = tl.gather(
+                    physical_pages, offs_t // BLOCK_SIZE, axis=0
+                )
+        else:
+            # Keep the stock per-token address path for prefill and
+            # unsupported decode shapes.
+            physical_block_idx = tl.load(
+                block_tables_ptr + block_table_offset + seq_offset // BLOCK_SIZE
+            ).to(tl.int64)
 
         if USE_TD:
             # All TILE_SIZE slots within a single KV tile map to one
@@ -885,10 +920,10 @@ def unified_attention(
     # Resolve sliding-window mode before evaluating the specialization gate.
     sliding_window_val = 1 + window_size[0] if window_size[0] >= 0 else 0
 
-    # BI-V150 v1 experiment: increase query/KV tile reuse in BF16 GQA prefill.
+    # BI-V150 prefill optimization: increase query/KV tile reuse in BF16 GQA prefill.
     # All unsupported shapes/features, including single-token decode, retain
     # the exact vLLM 0.24.0 launch geometry.
-    biv150_prefill_gqa = (
+    optimize_prefill_gqa = (
         max_seqlen_q > 1
         and num_query_heads == 16
         and num_kv_heads == 2
@@ -909,7 +944,7 @@ def unified_attention(
         and softcap == 0
         and output_scale is None
     )
-    if biv150_prefill_gqa:
+    if optimize_prefill_gqa:
         BLOCK_M = 32
         BLOCK_Q = BLOCK_M // num_queries_per_kv
 
@@ -1045,6 +1080,24 @@ def unified_attention(
     if launch_num_stages is not None:
         launch_kwargs["num_stages"] = launch_num_stages
 
+    # The selected operator remains Triton unified attention. This constexpr
+    # specializes only its paged-KV address-generation instructions, not
+    # the Q/KV tile geometry or the attention backend.
+    decode_page_lookup = (
+        max_seqlen_q == 1
+        and num_query_heads == 16
+        and num_kv_heads == 2
+        and head_size == 128
+        and block_size > 0
+        and (block_size & (block_size - 1)) == 0
+        and (block_size % tile_size == 0 or tile_size % block_size == 0)
+        and q.dtype == torch.bfloat16
+        and k.dtype == torch.bfloat16
+        and v.dtype == torch.bfloat16
+        and kv_quant_mode == KVQuantMode.NONE
+        and not use_td
+    )
+
     kernel_unified_attention[grid](
         output_ptr=out,
         segm_output_ptr=segm_output_ptr,
@@ -1117,6 +1170,7 @@ def unified_attention(
         CHUNK_SIZE=chunk_size,
         USE_TD=use_td,
         USE_TD_QO=use_td_qo,
+        DECODE_PAGE_LOOKUP=decode_page_lookup,
         **launch_kwargs,
     )
 
