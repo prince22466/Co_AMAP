@@ -235,6 +235,53 @@ class Version23Tests(unittest.TestCase):
         self.assertTrue(np.isfinite(result["continuous_action"]).all())
         self.assertEqual(result["discrete_action"].tolist(), [0, 0])
 
+    def test_shared_boiler_price_changes_upstream_ahu_plan(self):
+        """When hot water is scarce, change SAT before clipping zone valves."""
+        meta, _ = fixture(2, 1)
+        policy = Policy(meta, None)
+        self.assertAlmostEqual(policy._water_capacity(), 1.22)
+
+        # Higher-temperature SAT consumes less reheat but has a slightly
+        # higher comfort/energy objective in each independent AHU.
+        candidate_sets = [
+            [
+                {"coil_k": 285.0, "objective": 0.0, "water_load": 0.90},
+                {"coil_k": 301.0, "objective": 0.75, "water_load": 0.05},
+            ],
+            [
+                {"coil_k": 285.0, "objective": 0.0, "water_load": 0.90},
+                {"coil_k": 301.0, "objective": 1.20, "water_load": 0.10},
+            ],
+        ]
+        plans = policy._coordinate_shared_water(candidate_sets)
+        self.assertEqual([p["coil_k"] for p in plans], [301.0, 285.0])
+        self.assertLessEqual(
+            sum(p["water_load"] for p in plans), policy._water_capacity())
+
+    def test_no_scarcity_preserves_best_independent_ahu_plans(self):
+        meta, _ = fixture(2, 1)
+        policy = Policy(meta, None)
+        candidates = [
+            [{"objective": 0.0, "water_load": 0.1},
+             {"objective": 0.9, "water_load": 0.0}],
+            [],  # An AHU with no active demand remains off.
+        ]
+        plans = policy._coordinate_shared_water(candidates)
+        self.assertIs(plans[0], candidates[0][0])
+        self.assertIsNone(plans[1])
+
+    def test_infeasible_shared_boiler_uses_least_water_plan(self):
+        meta, _ = fixture(2, 1)
+        policy = Policy(meta, None)
+        candidates = [
+            [{"objective": 0.0, "water_load": 2.0},
+             {"objective": 0.5, "water_load": 1.7}],
+            [{"objective": 0.0, "water_load": 1.9},
+             {"objective": 0.5, "water_load": 1.6}],
+        ]
+        plans = policy._coordinate_shared_water(candidates)
+        self.assertEqual([p["water_load"] for p in plans], [1.7, 1.6])
+
     def test_reheat_capacity_depends_on_installed_equipment(self):
         """Boiler capacity must not grow when an extra zone asks for heat."""
         meta, obs = fixture(2, 3)
