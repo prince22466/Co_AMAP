@@ -1,7 +1,8 @@
-"""Offline tests for V26 uncertainty-aware scenario MPC.
+"""Offline contract, regression and ablation tests for Version 26.
 
-Executes the actual Kaggle policy cell against a stub inference gateway.
-It does NOT run the organizer's 30-day simulator or verify leaderboard score.
+Executes the actual V26/V12 notebook policy cells with a stub Kaggle gateway.
+Includes behavioral coverage for invalid state recovery, missing weather and
+one-sided safety risks; does NOT measure official simulator performance.
 """
 import ast
 import json
@@ -19,8 +20,9 @@ import numpy as np
 NOTEBOOK = Path(__file__).with_name("submission-nb - Version 26.ipynb")
 
 
-def load_policy():
-    notebook = json.loads(NOTEBOOK.read_text(encoding="utf-8"))
+def load_policy(notebook_path=NOTEBOOK):
+    """Load a real notebook policy while replacing only the Kaggle gateway."""
+    notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
     code_cells = [cell for cell in notebook["cells"]
                   if cell["cell_type"] == "code"]
     assert len(code_cells) == 2, "One policy cell + one gateway cell required"
@@ -37,11 +39,15 @@ def load_policy():
     kaggle.smart_buildings_inference_server = server
     with patch.dict(sys.modules, {"kaggle_evaluation": kaggle}):
         namespace = {}
-        exec(compile(policy_source, str(NOTEBOOK), "exec"), namespace)
+        exec(compile(policy_source, str(notebook_path), "exec"), namespace)
     return namespace["TransferPolicy"], namespace["ZoneResponseModel"]
 
 
 TransferPolicy, ZoneResponseModel = load_policy()
+# Independent reference: nominal V26 must reproduce V12's issued actions.
+Version12Policy, _ = load_policy(
+    NOTEBOOK.with_name("submission-nb - Version 12.ipynb")
+)
 
 
 def metadata(two_ahus=False):
@@ -180,15 +186,93 @@ class RobustMPCTests(unittest.TestCase):
         self.assertGreater(noisy.forecast_sigma(x, 10),
                            stable.forecast_sigma(x, 10))
 
-    def test_discontinuities_do_not_poison_uncertainty(self):
+    def test_discontinuities_clear_stale_action_features(self):
         model = ZoneResponseModel()
-        x = np.array([0.0, 0.0, 0.0, 1.0])
-        before = model.innovation_variance
-        model.remember(295.0, x)
+        features = np.array([0.0, 0.0, 0.0, 1.0])
+        initial_variance = model.innovation_variance
+
+        model.remember(295.0, features)
         model.observe(310.0)  # impossible five-minute temperature jump
         self.assertEqual(model.samples, 0)
-        self.assertEqual(model.innovation_variance, before)
-        self.assertTrue(np.isfinite(model.forecast_sigma(x, 10)))
+        self.assertEqual(model.innovation_variance, initial_variance)
+        self.assertIsNone(model.last_temperature)
+        self.assertIsNone(model.last_features)
+
+        # Without a fresh issued action, there must be no retroactive fit.
+        model.observe(310.1)
+        self.assertEqual(model.samples, 0)
+        model.remember(310.0, features)
+        model.observe(310.1)
+        self.assertEqual(model.samples, 1)
+        self.assertTrue(np.isfinite(model.forecast_sigma(features, 10)))
+
+    def test_invalid_rls_state_clears_pending_action(self):
+        model = ZoneResponseModel()
+        features = np.array([0.0, 0.0, 0.0, 1.0])
+        model.remember(295.0, features)
+        model.covariance.fill(float("nan"))
+        model.observe(295.1)
+        self.assertIsNone(model.last_features)
+        self.assertEqual(model.samples, 0)
+        self.assertTrue(np.isfinite(model.covariance).all())
+
+    def test_unknown_weather_expands_scenario_envelope(self):
+        known = self.state(296.0, 290.0)
+        unknown = dict(known, outdoor=float("nan"))
+        features = (0.0, 0.0, 0.0, 1.0)
+        for horizon in self.policy.PLAN_STEPS:
+            self.assertGreater(
+                self.policy._scenario_radius(unknown, features, horizon),
+                self.policy._scenario_radius(known, features, horizon),
+            )
+        action = self.policy.get_action(observation(
+            296.0, outdoor_k=float("nan")))
+        self.assertTrue(np.isfinite(action["continuous_action"]).all())
+
+    def test_directional_safety_rejects_counterproductive_modes(self):
+        p = self.policy
+        model = p.ahus[0]["zones"][0]["model"]
+        model.innovation_variance = model.MAX_INNOVATION_VARIANCE
+
+        # Strong hot-only risk: heat-only should not be allowed.
+        model.weights[3] = 0.5
+        hot_state = self.state(296.8)
+        hot, cold = p._off_tail_violations(hot_state)
+        self.assertGreaterEqual(hot, p.MAX_OFF_FORECAST_VIOLATION_K)
+        self.assertLess(cold, p.MAX_OFF_FORECAST_VIOLATION_K)
+        hot_config, _ = p._select_operating_point([hot_state])
+        self.assertNotIn(hot_config.mode, ("off", "heat"))
+
+        # Strong cold-only risk: cool-only should not be allowed.
+        model.weights[3] = -0.5
+        cold_state = self.state(293.2)
+        hot, cold = p._off_tail_violations(cold_state)
+        self.assertGreaterEqual(cold, p.MAX_OFF_FORECAST_VIOLATION_K)
+        self.assertLess(hot, p.MAX_OFF_FORECAST_VIOLATION_K)
+        cold_config, _ = p._select_operating_point([cold_state])
+        self.assertNotIn(cold_config.mode, ("off", "cool"))
+
+    def test_nominal_v26_matches_independent_v12_actions(self):
+        """Compare full issued actions, not just one forecast expression."""
+        v12 = Version12Policy(metadata(), None)
+        v26 = TransferPolicy(metadata(), None)
+        v26.USE_UNCERTAINTY = False
+
+        for i in range(50):
+            temperature = (
+                295.0 + 4.0 * math.sin(i / 9.0)
+            )
+            observed = observation(
+                temperature, outdoor_k=290.0 + 10.0 * math.cos(i / 13.0),
+            )
+            baseline = v12.get_action(observed)
+            ablation = v26.get_action(observed)
+            np.testing.assert_array_equal(
+                ablation["continuous_action"], baseline["continuous_action"]
+            )
+            np.testing.assert_array_equal(
+                ablation["discrete_action"], baseline["discrete_action"]
+            )
 
     def test_symmetric_scenario_cost_penalizes_risk(self):
         state = self.state(296.9)
