@@ -178,7 +178,8 @@ class Version25Tests(unittest.TestCase):
         filtered = self.filtered.get_action(obs)
         self.assertEqual(filtered["discrete_action"].tolist(), [1, 1])
         self.assertGreater(fraction(filtered, 4), fraction(original, 4))
-        self.assertGreaterEqual(fraction(filtered, 5), fraction(original, 5))
+        # Airflow increases are not guaranteed to heat a cold room.
+        self.assertEqual(fraction(filtered, 5), fraction(original, 5))
         self.assertEqual(float(filtered["continuous_action"][1]),
                          float(original["continuous_action"][1]))
         self.assertLessEqual(fraction(filtered, 4) - fraction(original, 4),
@@ -191,6 +192,114 @@ class Version25Tests(unittest.TestCase):
         self.assertLessEqual(fraction(filtered, 5), 1.0)
         self.assertGreaterEqual(fraction(filtered, 5), fraction(original, 5))
         self.assertTrue(np.isfinite(filtered["continuous_action"]).all())
+
+
+    def test_no_cooling_authority_leaves_v7_commands_unchanged(self):
+        """Do not assume increased damper/fan always provides cooling."""
+        obs = observation(301.0)
+        original = self.nominal.get_action(obs)
+        with patch.object(self.filtered, "_cooling_headroom",
+                          return_value=0.0):
+            filtered = self.filtered.get_action(obs)
+        np.testing.assert_array_equal(
+            filtered["continuous_action"], original["continuous_action"]
+        )
+        np.testing.assert_array_equal(
+            filtered["discrete_action"], original["discrete_action"]
+        )
+
+    def test_fan_boost_only_for_saturated_hot_zone(self):
+        """A severe unsatisfied cooling zone can trigger a fan boost."""
+        # At 298 K, V7's damper is not fully open; do not spend fan power.
+        mild_hot = observation(298.0)
+        v7_mild = self.nominal.get_action(mild_hot)
+        v25_mild = self.filtered.get_action(mild_hot)
+        self.assertEqual(
+            float(v25_mild["continuous_action"][1]),
+            float(v7_mild["continuous_action"][1]),
+        )
+
+        # At 310 K the V7 damper is saturated; additional pressure is
+        # permitted when the nominal coil setpoint provides cooling.
+        self.filtered.reset()
+        severe_hot = observation(310.0)
+        v7_severe = self.nominal.get_action(severe_hot)
+        v25_severe = self.filtered.get_action(severe_hot)
+        self.assertGreater(
+            float(v25_severe["continuous_action"][1]),
+            float(v7_severe["continuous_action"][1]),
+        )
+        self.assertLessEqual(
+            float(v25_severe["continuous_action"][1])
+            - float(v7_severe["continuous_action"][1]),
+            V25.MAX_FAN_ACTION_CORRECTION + 1e-6,
+        )
+
+    def test_heating_does_not_open_damper(self):
+        """With a cooling-only AHU, heating should increase only reheat."""
+        obs = observation(291.0)
+        original = self.nominal.get_action(obs)
+        filtered = self.filtered.get_action(obs)
+        self.assertEqual(
+            float(filtered["continuous_action"][5]),
+            float(original["continuous_action"][5]),
+        )
+        self.assertGreater(fraction(filtered, 4), fraction(original, 4))
+
+    def test_multizone_conflicting_loads(self):
+        """The QPs must respect independent valves/dampers on one AHU."""
+        meta = metadata()
+        meta["n_continuous_action"] = 8
+        meta["ahu_zone_assignments"]["0"] = ["room_0", "room_1"]
+        meta["zone_action_indices"]["VAV_1"] = {
+            "reheat_valve_percentage_command": 6,
+            "supply_air_damper_percentage_command": 7,
+        }
+        meta["observation_field_names"] = [
+            "VAV_0_zone_air_temperature_sensor",
+            "VAV_0_zone_air_heating_temperature_setpoint_sensor",
+            "VAV_0_zone_air_cooling_temperature_setpoint_sensor",
+            "VAV_1_zone_air_temperature_sensor",
+            "VAV_1_zone_air_heating_temperature_setpoint_sensor",
+            "VAV_1_zone_air_cooling_temperature_setpoint_sensor",
+            "ahs_0_outside_air_temperature_sensor",
+        ]
+        obs = np.array([
+            (291.0 - 295.0) / 2.0, 293.0, 297.0,
+            (299.0 - 295.0) / 2.0, 293.0, 297.0,
+            0.0,
+        ])
+        nominal = V7(meta, None).get_action(obs)
+        filtered = V25(meta, None).get_action(obs)
+        self.assertEqual(filtered["discrete_action"].tolist(), [1, 1])
+        self.assertEqual(float(filtered["continuous_action"][5]),
+                         float(nominal["continuous_action"][5]))
+        self.assertGreater(float(filtered["continuous_action"][4]),
+                           float(nominal["continuous_action"][4]))
+        self.assertGreater(float(filtered["continuous_action"][7]),
+                           float(nominal["continuous_action"][7]))
+        self.assertEqual(float(filtered["continuous_action"][6]),
+                         float(nominal["continuous_action"][6]))
+
+    def test_soft_qp_matches_analytic_unconstrained_solution(self):
+        """Verify the dual solver's objective optimum, not just bounds."""
+        deficit = 0.03
+        gains, weights, penalty = [1.0, 2.0], [2.0, 1.0], 10.0
+        expected_dual = deficit / (
+            1.0 / penalty
+            + sum(g * g / w for g, w in zip(gains, weights))
+        )
+        expected = [expected_dual * g / w
+                    for g, w in zip(gains, weights)]
+        values, slack = V25._solve_soft_cbf_qp(
+            deficit, gains, [0.3, 0.3], weights, penalty
+        )
+        np.testing.assert_allclose(values, expected, atol=1e-8, rtol=1e-5)
+        self.assertAlmostEqual(slack, expected_dual / penalty, places=7)
+        self.assertGreaterEqual(
+            sum(g * x for g, x in zip(gains, values)) + slack,
+            deficit - 1e-7,
+        )
 
     def test_soft_qp_primal_feasibility_and_saturation(self):
         delta, slack = V25._solve_soft_cbf_qp(
