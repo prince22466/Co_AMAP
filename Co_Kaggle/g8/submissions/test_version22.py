@@ -228,8 +228,9 @@ class Version22Tests(unittest.TestCase):
         self.p._economic_energy_score = (
             lambda electric_kw, gas_kw, ctx: 0.12 if electric_kw > 0 else 0.0)
         self.p._best_vav = (
-            lambda state, config, ctx, recirculation: (
-                0.02 if config.running else 0.09, 0.1, 0.0))
+            lambda state, config, ctx, recirculation:
+            types.SimpleNamespace(loss=0.02 if config.running else 0.09,
+                                  damper=0.1, valve=0.0))
         chosen, profiles = self.p._select_operating_point(
             two_zones, (0.16, 0.09, 1.0))
         self.assertEqual(chosen.mode, "vent")
