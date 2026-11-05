@@ -62,8 +62,6 @@ def _to_tl_type(ty):
 @triton.heuristics(
     {
         "EVEN_K": lambda args: args["K"] % (args["BLOCK_K"] * args["SPLIT_K"]) == 0,
-        "EVEN_M": lambda args: args["M"] % args["BLOCK_M"] == 0,
-        "EVEN_N": lambda args: args["N"] % args["BLOCK_N"] == 0,
         "UPGRADE": lambda args: math.ceil(
             (args["M"] * args["N"]) / (args["BLOCK_M"] * args["BLOCK_N"])
         ).bit_length()
@@ -99,8 +97,6 @@ def mm_kernel(
     GROUP_M: tl.constexpr,
     SPLIT_K: tl.constexpr,
     EVEN_K: tl.constexpr,
-    EVEN_M: tl.constexpr,
-    EVEN_N: tl.constexpr,
     AB_DTYPE: tl.constexpr,
     UPGRADE: tl.constexpr,
     UPGRADE_A_OFFS: tl.constexpr,
@@ -114,32 +110,29 @@ def mm_kernel(
     else:
         pid = tl.program_id(0)
         pid_z = tl.program_id(1)
-    # Process groups of M tiles for each N tile to reuse matrix blocks in L2.
-    grid_m = tl.cdiv(M, BLOCK_M)
+    # grid_m = tl.cdiv(M, BLOCK_M)
     grid_n = tl.cdiv(N, BLOCK_N)
-    if GROUP_M == 1:
-        # Decode-sized GEMMs: avoid unnecessary grouped-ID division.
-        pid_m = pid // grid_n
-        pid_n = pid % grid_n
-    else:
-        group_width = GROUP_M * grid_n
-        group_id = pid // group_width
-        group_size_m = min(grid_m - group_id * GROUP_M, GROUP_M)
-        pid_m = group_id * GROUP_M + (pid % group_size_m)
-        pid_n = (pid % group_width) // group_size_m
+    # # re-order program ID for better L2 performance
+    # width = GROUP_M * grid_n
+    # group_id = pid // width
+    # group_size = min(grid_m - group_id * GROUP_M, GROUP_M)
+    # pid_m = group_id * GROUP_M + (pid % group_size)
+    # pid_n = (pid % width) // (group_size)
+    pid_m = pid // grid_n
+    pid_n = pid % grid_n
     # do matrix multiplication
     if UPGRADE_A_OFFS:
         rm = (pid_m * BLOCK_M + tl.arange(0, BLOCK_M)).to(tl.int64)
-        ram = tl.max_contiguous(tl.multiple_of(rm, BLOCK_M), BLOCK_M)
+        ram = (tl.max_contiguous(tl.multiple_of(rm % M, BLOCK_M), BLOCK_M)).to(tl.int64)
     else:
         rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
-        ram = tl.max_contiguous(tl.multiple_of(rm, BLOCK_M), BLOCK_M)
+        ram = tl.max_contiguous(tl.multiple_of(rm % M, BLOCK_M), BLOCK_M)
     if UPGRADE_B_OFFS:
         rn = (pid_n * BLOCK_N + tl.arange(0, BLOCK_N)).to(tl.int64)
-        rbn = tl.max_contiguous(tl.multiple_of(rn, BLOCK_N), BLOCK_N)
+        rbn = (tl.max_contiguous(tl.multiple_of(rn % N, BLOCK_N), BLOCK_N)).to(tl.int64)
     else:
         rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
-        rbn = tl.max_contiguous(tl.multiple_of(rn, BLOCK_N), BLOCK_N)
+        rbn = tl.max_contiguous(tl.multiple_of(rn % N, BLOCK_N), BLOCK_N)
     rk = pid_z * BLOCK_K + tl.arange(0, BLOCK_K)
     # pointers
     A = A + (ram[:, None] * stride_am + rk[None, :] * stride_ak)
@@ -147,14 +140,8 @@ def mm_kernel(
     acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=acc_dtype)
     if EVEN_K:
         for k in range(0, tl.cdiv(K, BLOCK_K * SPLIT_K)):
-            if EVEN_M:
-                a = tl.load(A)
-            else:
-                a = tl.load(A, mask=rm[:, None] < M, other=0)
-            if EVEN_N:
-                b = tl.load(B)
-            else:
-                b = tl.load(B, mask=rn[None, :] < N, other=0)
+            a = tl.load(A)
+            b = tl.load(B)
             if AB_DTYPE is not None:
                 a = a.to(AB_DTYPE)
                 b = b.to(AB_DTYPE)
@@ -171,14 +158,8 @@ def mm_kernel(
     else:
         loop_num = tl.cdiv(K, BLOCK_K * SPLIT_K) - 1
         for k in range(0, loop_num):
-            if EVEN_M:
-                a = tl.load(A)
-            else:
-                a = tl.load(A, mask=rm[:, None] < M, other=0)
-            if EVEN_N:
-                b = tl.load(B)
-            else:
-                b = tl.load(B, mask=rn[None, :] < N, other=0)
+            a = tl.load(A)
+            b = tl.load(B)
             if AB_DTYPE is not None:
                 a = a.to(AB_DTYPE)
                 b = b.to(AB_DTYPE)
@@ -195,22 +176,8 @@ def mm_kernel(
 
         _0 = tl.zeros((1, 1), dtype=C.dtype.element_ty)
         k_remaining = K - loop_num * (BLOCK_K * SPLIT_K)
-        if EVEN_M:
-            a = tl.load(A, mask=rk[None, :] < k_remaining, other=_0)
-        else:
-            a = tl.load(
-                A,
-                mask=(rm[:, None] < M) & (rk[None, :] < k_remaining),
-                other=_0,
-            )
-        if EVEN_N:
-            b = tl.load(B, mask=rk[:, None] < k_remaining, other=_0)
-        else:
-            b = tl.load(
-                B,
-                mask=(rn[None, :] < N) & (rk[:, None] < k_remaining),
-                other=_0,
-            )
+        a = tl.load(A, mask=rk[None, :] < k_remaining, other=_0)
+        b = tl.load(B, mask=rk[:, None] < k_remaining, other=_0)
         if fp8_fast_accum:
             acc = tl.dot(
                 a, b, acc, out_dtype=acc_dtype, input_precision=input_precision
@@ -264,7 +231,7 @@ def _launch_mm(a, b, c, M, N, K):
             acc_dtype=acc_dtype_tl,
             input_precision=None,
             fp8_fast_accum=True,
-            GROUP_M=1 if M <= 128 else 8,
+            GROUP_M=8,
             AB_DTYPE=ab_dtype_tl,
         )
     return c
