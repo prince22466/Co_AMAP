@@ -153,6 +153,11 @@ class Version22Tests(unittest.TestCase):
         self.assertNotEqual(weekday[1], early[1])
 
     def test_unambiguously_empty_occupancy_suppresses_comfort_only(self):
+        # The total count is normalized using (count-k)/(k+1), and k can
+        # differ by scenario. An explicitly known k=125 identifies zero.
+        known = metadata()
+        known["occupancy_normalization_constant"] = 125.0
+        self.p = TransferPolicy(known, None)
         occupied = self.p._reward_context(observation(occupancy=0.0))
         empty = self.p._reward_context(observation(occupancy=-125.0 / 126))
         self.assertEqual(occupied[2], 1.0)
@@ -164,6 +169,18 @@ class Version22Tests(unittest.TestCase):
         off = self.p.OPERATING_POINTS[0]
         self.assertGreater(self.p._best_vav(state, off, occupied)[0], 0.0)
         self.assertAlmostEqual(self.p._best_vav(state, off, empty)[0], 0.0)
+
+        # The public simulator's default k=0 has a different empty signal.
+        known["occupancy_normalization_constant"] = 0.0
+        self.p = TransferPolicy(known, None)
+        self.assertEqual(
+            self.p._reward_context(observation(occupancy=0.0))[2], 0.0)
+        self.assertEqual(
+            self.p._reward_context(observation(occupancy=1.0))[2], 1.0)
+        # Do not infer absence from a magic -125/126 without metadata.
+        self.p = TransferPolicy(metadata(), None)
+        self.assertEqual(
+            self.p._reward_context(observation(occupancy=-125.0/126.0))[2], 1.0)
 
     def test_cost_model_monotonic_and_zero_when_off(self):
         state = {"temp": 300.0, "outdoor": 305.0}
@@ -209,12 +226,112 @@ class Version22Tests(unittest.TestCase):
         self.p._economic_energy_score = (
             lambda electric_kw, gas_kw, ctx: 0.12 if electric_kw > 0 else 0.0)
         self.p._best_vav = (
-            lambda state, config, ctx: (
+            lambda state, config, ctx, recirculation: (
                 0.02 if config.running else 0.09, 0.1, 0.0))
         chosen, profiles = self.p._select_operating_point(
             two_zones, (0.16, 0.09, 1.0))
         self.assertEqual(chosen.mode, "vent")
         self.assertEqual(len(profiles), 2)
+
+    def test_recirculation_forecast_matches_issued_ahu_action(self):
+        """Free cooling must reduce forecast chiller work and be commanded."""
+        config = self.p.OPERATING_POINTS[3]  # 289 K cooling mode
+        state = {
+            "zone": self.p.ahus[0]["zones"][0],
+            "temp": 300.0, "low": 293.0, "high": 297.0, "outdoor": 280.0,
+        }
+        fraction = self.p._planned_recirculation(config, [state])
+        self.assertGreater(fraction, 0.0)
+        self.assertLess(fraction, 0.7)
+        electric_economizer, gas = self.p._zone_power_kw(
+            state, config, 1.0, 0.0, fraction)
+        electric_fixed, _ = self.p._zone_power_kw(
+            state, config, 1.0, 0.0, 0.7)
+        self.assertLess(electric_economizer, electric_fixed)
+        self.assertEqual(gas, 0.0)
+
+        continuous, discrete = self.p._initial_actions()
+        self.p._apply_ahu_action(
+            self.p.ahus[0], config, fraction, continuous, discrete)
+        self.assertAlmostEqual(continuous[2], 2 * fraction - 1.0, places=5)
+
+        # RLS must remember the *issued* recirculation, not fixed 70%.
+        pending = []
+        self.p._apply_vav_actions(
+            [state], config, [(0.0, 1.0, 0.0)], fraction,
+            continuous, [], pending)
+        self.p._remember_issued_actions(pending, None)
+        expected = state["zone"]["model"].features(
+            300.0, 280.0, 1.0, config.supply_k,
+            1.0, 0.0, 0.0, config.water_k, fraction)
+        np.testing.assert_allclose(
+            state["zone"]["model"].last_features, expected)
+
+    def test_severe_excursion_requires_corrective_mode(self):
+        configs = {point.mode: point for point in self.p.OPERATING_POINTS}
+        for name in ("off", "vent", "mild_cool", "cool"):
+            with self.subTest(cold=name):
+                self.assertFalse(self.p._candidate_allowed(
+                    configs[name], worst_hot=0.0, worst_cold=5.0))
+        for name in ("off", "vent", "heat"):
+            with self.subTest(hot=name):
+                self.assertFalse(self.p._candidate_allowed(
+                    configs[name], worst_hot=5.0, worst_cold=0.0))
+        self.assertTrue(self.p._candidate_allowed(
+            configs["mixed"], worst_hot=5.0, worst_cold=5.0))
+
+    def test_without_recirculation_mapping_uses_fixed_mix(self):
+        m = metadata()
+        m["recirculation_indices"] = []
+        p = TransferPolicy(m, None)
+        state = {
+            "zone": p.ahus[0]["zones"][0],
+            "temp": 300.0, "low": 293.0, "high": 297.0, "outdoor": 280.0,
+        }
+        self.assertEqual(
+            p._planned_recirculation(p.OPERATING_POINTS[3], [state], False),
+            0.7)
+        a = p.get_action(observation(300.0, outside_k=280.0))
+        self.assertTrue(np.isfinite(a["continuous_action"]).all())
+
+    def test_multiple_ahus_share_one_water_system(self):
+        m = metadata()
+        m.update({
+            "n_continuous_action": 12,
+            "n_discrete_action": 3,
+            "temp_indices": [0, 3],
+            "pressure_indices": [1, 4, 7],
+            "recirculation_indices": [2, 5],
+            "water_indices": [6],
+            "ahu_zone_assignments": {
+                "0": ["room_0"], "1": ["room_1"]},
+            "zone_action_indices": {
+                "VAV_0": {
+                    "reheat_valve_percentage_command": 8,
+                    "supply_air_damper_percentage_command": 9},
+                "VAV_1": {
+                    "reheat_valve_percentage_command": 10,
+                    "supply_air_damper_percentage_command": 11},
+            },
+        })
+        m["observation_field_names"] = (
+            m["observation_field_names"] + [
+                "VAV_1_zone_air_temperature_sensor",
+                "VAV_1_zone_air_heating_temperature_setpoint_sensor",
+                "VAV_1_zone_air_cooling_temperature_setpoint_sensor",
+                "ahs_1_outside_air_temperature_sensor",
+            ]
+        )
+        p = TransferPolicy(m, None)
+        obs = np.concatenate((
+            observation(kelvin=285.0),
+            np.array([(305.0-295.0)/2.0, 293.0, 297.0, 1.0])))
+        a = p.get_action(obs)
+        self.assertEqual(a["continuous_action"].shape, (12,))
+        self.assertEqual(a["discrete_action"].shape, (3,))
+        self.assertEqual(a["discrete_action"][:2].tolist(), [1, 1])
+        self.assertEqual(int(a["discrete_action"][-1]), 1)
+        self.assertTrue(np.all(np.isfinite(a["continuous_action"])))
 
     def test_surrogate_ablation_is_runnable(self):
         self.p.USE_ECONOMIC_OBJECTIVE = False
