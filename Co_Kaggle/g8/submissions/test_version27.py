@@ -1,7 +1,7 @@
 """Offline Version 27 Smith-predictor and Kaggle interface regressions.
 
 Uses exact notebook code with a fake gateway; no official simulator is run.
-The fixed-delay thermal plant below is an engineering surrogate, not Kaggle.
+The tests use controlled synthetic observations, not the Kaggle simulator.
 """
 import ast
 import json
@@ -125,8 +125,6 @@ def check(policy, obs):
     return c, d
 
 
-
-
 # 1. Robust hybrid action contract on varying topologies.
 for shape in [(1, 1), (2, 4), (4, 7)]:
     meta, obs, set_zone, set_outside = scenario(*shape)
@@ -209,15 +207,26 @@ for _ in range(10):
     assert np.array_equal(ca, cb) and np.array_equal(da, db)
 assert all(abs(v) < 1e-9 for v in zero.last_smith_correction_k.values())
 
-# 6. Severe measured comfort violations cannot be hidden by the predictor.
-meta, obs, _, _ = scenario(1, 1, temp=307., outdoor=307.)
-policy = Policy(meta, None)
-for _ in range(16):
-    _, discrete = check(policy, obs)
-    assert discrete[0] == 1
-assert all(abs(v) <= policy.MAX_CORRECTION_K + 1e-9
-           for v in policy.last_smith_correction_k.values())
-assert max(len(v["queue"]) for v in policy.smith_states.values()) <= 3
+# 6. Severe *measured* violations must retain their FULL demand.
+# Merely requiring the AHU to remain ON misses a dangerous failure mode:
+# a 10 K hot error can otherwise be reduced to an almost-idle 0.18 K request.
+for severe_k in (307.0, 285.0):
+    meta, obs, _, _ = scenario(1, 1, temp=severe_k, outdoor=severe_k)
+    policy, baseline = Policy(meta, None), Policy(meta, None)
+    baseline.ENABLE_SMITH = False
+    for _ in range(16):
+        corrected, running = check(policy, obs)
+        reference, reference_run = check(baseline, obs)
+        assert np.array_equal(running, reference_run), (
+            "Model-based compensation must not disable emergency equipment"
+        )
+        assert np.array_equal(corrected, reference), (
+            "Severe measured comfort error must never lose cooling/reheat "
+            "intensity, even with significant pending actuator input"
+        )
+    assert all(abs(v) <= policy.MAX_CORRECTION_K + 1e-9
+               for v in policy.last_smith_correction_k.values())
+    assert max(len(v["queue"]) for v in policy.smith_states.values()) <= 3
 
 # 7. Outlier, invalid sample, reset, and fresh-instance equivalence.
 meta, obs, set_zone, _ = scenario(1, 1, temp=298., outdoor=298.)
@@ -266,7 +275,20 @@ check(policy, obs)
 set_outside(float("nan"))
 check(policy, obs)
 
-# 10. No-leak cross-AHU memory, bounded runtime and episode reset.
+# 10. AHU isolation: correcting one hot zone must not activate an
+# unrelated neutral AHU or create a Smith offset for that other zone.
+meta, obs, set_zone, _ = scenario(2, 1, temp=295.0, outdoor=295.0)
+set_zone(0, 298.0)
+policy = Policy(meta, None)
+for _ in range(5):
+    _, running = check(policy, obs)
+    assert running[0] == 1 and running[1] == 0
+first_key = policy.ahus[0]["zones"][0]["temperature"]
+second_key = policy.ahus[1]["zones"][0]["temperature"]
+assert policy.last_smith_correction_k[first_key] < 0.0
+assert abs(policy.last_smith_correction_k[second_key]) < 1e-9
+
+# 11. No-leak cross-AHU memory, bounded runtime and episode reset.
 meta, obs, set_zone, _ = scenario(4, 8)
 policy = Policy(meta, None)
 start = time.perf_counter()
