@@ -60,6 +60,18 @@ def test_no_gpu_still_raises(monkeypatch):
         FlagGemsBackend().attention_backend()
 
 
+def test_unified_backend_binds_integrated_kernel():
+    from vllm_fl.dispatch.backends.vendor.iluvatar.impl import (
+        attention_biv150 as adapter,
+        triton_unified_attention_biv150 as kernel,
+    )
+
+    assert adapter.BIV150TritonAttentionBackend.get_impl_cls() is (
+        adapter.BIV150TritonAttentionImpl
+    )
+    assert adapter.unified_attention is kernel.unified_attention
+
+
 @pytest.mark.parametrize(
     ("query_len", "context_len"),
     [
@@ -70,16 +82,34 @@ def test_no_gpu_still_raises(monkeypatch):
         (2048, 14336), # 16K endpoint (expensive).
     ],
 )
-def test_bf16_gqa_attention_matches_baseline(query_len, context_len):
+def test_bf16_gqa_attention_matches_baseline(query_len, context_len, monkeypatch):
     if not torch.cuda.is_available():
         pytest.skip("Requires a CUDA-compatible GPU (run on BI-V150)")
 
     from vllm.v1.attention.ops.triton_unified_attention import (
         unified_attention as baseline_unified_attention,
     )
-    from vllm_fl.dispatch.backends.vendor.iluvatar.impl.triton_unified_attention_biv150 import (
-        unified_attention as optimized_unified_attention,
+    from vllm_fl.dispatch.backends.vendor.iluvatar.impl import (
+        triton_unified_attention_biv150 as optimized_module,
     )
+
+    # Assert kernel selection as well as numerical equivalence. Otherwise
+    # accidentally disabling prefill tiling can pass a pure output test.
+    launches = []
+    original_kernel = optimized_module.kernel_unified_attention
+
+    class KernelSpy:
+        def __getitem__(self, grid):
+            launcher = original_kernel[grid]
+
+            def capture(**kwargs):
+                launches.append((kwargs["BLOCK_M"], kwargs["DECODE_PAGE_LOOKUP"]))
+                return launcher(**kwargs)
+
+            return capture
+
+    monkeypatch.setattr(optimized_module, "kernel_unified_attention", KernelSpy())
+    optimized_unified_attention = optimized_module.unified_attention
 
     device = "cuda"
     torch.manual_seed(2026)
@@ -132,3 +162,4 @@ def test_bf16_gqa_attention_matches_baseline(query_len, context_len):
         torch.cuda.synchronize()
 
     torch.testing.assert_close(actual, expected, atol=3e-2, rtol=3e-2)
+    assert launches == [(32 if query_len > 1 else 16, query_len == 1)]
