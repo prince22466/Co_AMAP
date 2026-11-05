@@ -164,7 +164,7 @@ class Version25Tests(unittest.TestCase):
         self.assertEqual(float(filtered["continuous_action"][4]), -1.0)
         self.assertLessEqual(
             fraction(filtered, 5) - fraction(original, 5),
-            V25.MAX_DAMPER_CORRECTION + 1e-6,
+            V25.SEVERE_FRACTION_CAP + 1e-6,
         )
         self.assertLessEqual(
             float(filtered["continuous_action"][1])
@@ -183,7 +183,7 @@ class Version25Tests(unittest.TestCase):
         self.assertEqual(float(filtered["continuous_action"][1]),
                          float(original["continuous_action"][1]))
         self.assertLessEqual(fraction(filtered, 4) - fraction(original, 4),
-                             V25.MAX_VALVE_CORRECTION + 1e-6)
+                             V25.SEVERE_FRACTION_CAP + 1e-6)
 
     def test_saturated_cooling_actuator_stays_bounded(self):
         obs = observation(310.0)
