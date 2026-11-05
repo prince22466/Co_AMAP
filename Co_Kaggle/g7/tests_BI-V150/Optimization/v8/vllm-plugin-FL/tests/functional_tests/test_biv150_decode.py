@@ -1,92 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
-"""v8 stacked v1-prefill + v5-decode dispatch and v5 kernel regressions.
+"""Paged-KV decode specialization and fallback regression tests.
 
-GPU comparisons exercise 2D/3D paged-KV decoding against pinned vLLM.
-These tests do not replace official MATH-500 or served-throughput validation.
+GPU checks compare 2D/3D attention against pinned vLLM, and verify
+that optimized page lookup is disabled for unsupported shapes.
 """
-
-from types import SimpleNamespace
 
 import pytest
 import torch
-
-BASELINE = "vllm.v1.attention.backends.triton_attn.TritonAttentionBackend"
-STACK = (
-    "vllm_fl.dispatch.backends.vendor.iluvatar.impl."
-    "attention_biv150_v1_v5.BIV150V1V5AttentionBackend"
-)
-FLAGGEMS = "vllm_fl.dispatch.backends.flaggems.impl.attention.AttentionFLBackend"
-
-
-def _mock_platform(monkeypatch, vendor_name):
-    import vllm.platforms
-
-    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
-    monkeypatch.setattr(
-        vllm.platforms, "current_platform", SimpleNamespace(vendor_name=vendor_name)
-    )
-
-
-def test_default_iluvatar_uses_v1_v5_without_enable_flag(monkeypatch):
-    from vllm_fl.dispatch.backends.flaggems.flaggems import FlagGemsBackend
-
-    _mock_platform(monkeypatch, "iluvatar")
-    monkeypatch.delenv("VLLM_FL_USE_FLAGGEMS_ATTN", raising=False)
-    assert FlagGemsBackend().attention_backend() == STACK
-
-
-def test_other_vendors_keep_original_triton_backend(monkeypatch):
-    from vllm_fl.dispatch.backends.flaggems.flaggems import FlagGemsBackend
-
-    _mock_platform(monkeypatch, "nvidia")
-    monkeypatch.delenv("VLLM_FL_USE_FLAGGEMS_ATTN", raising=False)
-    assert FlagGemsBackend().attention_backend() == BASELINE
-
-
-def test_existing_explicit_flaggems_override_is_respected(monkeypatch):
-    from vllm_fl.dispatch.backends.flaggems.flaggems import FlagGemsBackend
-
-    _mock_platform(monkeypatch, "iluvatar")
-    monkeypatch.setenv("VLLM_FL_USE_FLAGGEMS_ATTN", "1")
-    assert FlagGemsBackend().attention_backend() == FLAGGEMS
-
-
-def test_combined_adapter_selects_v5_only_for_pure_decode(monkeypatch):
-    from vllm_fl.dispatch.backends.vendor.iluvatar.impl.attention_biv150 import (
-        BIV150TritonAttentionImpl,
-    )
-    from vllm_fl.dispatch.backends.vendor.iluvatar.impl.attention_decode_v5 import (
-        BIV150DecodeAttentionImpl,
-    )
-    from vllm_fl.dispatch.backends.vendor.iluvatar.impl.attention_biv150_v1_v5 import (
-        BIV150V1V5AttentionBackend,
-        BIV150V1V5AttentionImpl,
-    )
-
-    calls = []
-
-    def v1_forward(self, *args, **kwargs):
-        calls.append("v1")
-        return "v1"
-
-    def v5_forward(self, *args, **kwargs):
-        calls.append("v5")
-        return "v5"
-
-    monkeypatch.setattr(BIV150TritonAttentionImpl, "forward", v1_forward)
-    monkeypatch.setattr(BIV150DecodeAttentionImpl, "forward", v5_forward)
-
-    assert BIV150V1V5AttentionBackend.get_impl_cls() is BIV150V1V5AttentionImpl
-    impl = object.__new__(BIV150V1V5AttentionImpl)
-
-    for max_query_len, expected in [(1, "v5"), (2, "v1"), (2048, "v1")]:
-        metadata = SimpleNamespace(max_query_len=max_query_len)
-        result = impl.forward(None, None, None, None, None, metadata, None)
-        assert result == expected
-    # Profiling metadata remains owned by the v1 adapter.
-    assert impl.forward(None, None, None, None, None, None, None) == "v1"
-    assert calls == ["v5", "v1", "v1", "v1"]
-
 
 @pytest.mark.parametrize(
     ("query_len", "kv_len", "num_q_heads", "num_kv_heads", "num_segments"),
@@ -98,7 +18,7 @@ def test_combined_adapter_selects_v5_only_for_pure_decode(monkeypatch):
         (32, 4097, 16, 2, 0),  # prefill fallback: Q len > 1
     ],
 )
-def test_v5_matches_vllm_unified_attention(
+def test_decode_matches_vllm_unified_attention(
     query_len, kv_len, num_q_heads, num_kv_heads, num_segments, monkeypatch
 ):
     if not torch.cuda.is_available():
@@ -106,7 +26,7 @@ def test_v5_matches_vllm_unified_attention(
 
     from vllm.v1.attention.ops import triton_unified_attention as baseline_module
     from vllm_fl.dispatch.backends.vendor.iluvatar.impl import (
-        triton_unified_attention_decode_v5 as optimized_module,
+        triton_unified_attention_biv150 as optimized_module,
     )
 
     # Make the 3D test deterministic even if the surrounding test
@@ -216,11 +136,11 @@ def test_v5_matches_vllm_unified_attention(
 
 
 def test_decode_paged_lookup_is_not_enabled_for_prefill(monkeypatch):
-    """No prefill tiling or non-decode page-lookup specialization."""
+    """Decode-only page lookup must remain disabled during prefill."""
     if not torch.cuda.is_available():
         pytest.skip("Requires BI-V150 or another CUDA-compatible GPU")
     from vllm_fl.dispatch.backends.vendor.iluvatar.impl import (
-        triton_unified_attention_decode_v5 as optimized,
+        triton_unified_attention_biv150 as optimized,
     )
 
     # Catch the *compile-time* gate as well as numerical equivalence.

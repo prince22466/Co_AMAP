@@ -1,78 +1,40 @@
-# v8 — new start point for further optimization
+# BI-V150 attention optimization (v8)
 
-**Goal:** v8 first copy everything of v1, and stack other applicable optimization efforts from v2 to v7.  
-v2 will be skipped, because it is same direction of v1 but with different parameters and less performative.
+This folder contains one production attention backend and one unified Triton
+attention launcher, with phase-aware kernel specializations integrated into
+their original modules. There are no separate version-specific adapters or
+duplicate Triton kernel implementations.
 
-## Automatic v1 + v5 attention activation
+## Implementation
 
-On Iluvatar, `FlagGemsBackend.attention_backend()` now automatically
-selects `BIV150V1V5AttentionBackend` (the combined Triton adapter).
-Within its `forward` method, **v1 handles prefill and mixed batches**,
-and **v5 handles invocation-wide pure decode**. The original tuned v1
-attention kernel is unchanged; v5's page lookup optimization is a
-separate, shape-gated Triton kernel.
+- `vllm-plugin-FL/vllm_fl/dispatch/backends/vendor/iluvatar/impl/attention_biv150.py`:
+  `BIV150TritonAttentionBackend` reuses vLLM's metadata, KV-cache updates,
+  and backend interface. Its `forward` method invokes the single launcher.
+- `vllm-plugin-FL/vllm_fl/dispatch/backends/vendor/iluvatar/impl/triton_unified_attention_biv150.py`:
+  contains the original attention kernel, tuned BF16 GQA prefill tiles, and
+  a compile-time `DECODE_PAGE_LOOKUP` specialization for eligible pure decode.
+- `vllm-plugin-FL/vllm_fl/dispatch/backends/flaggems/flaggems.py`:
+  automatically selects the BI-V150 backend on Iluvatar. Other vendors keep
+  the Triton fallback. `VLLM_FL_USE_FLAGGEMS_ATTN=1` retains priority.
 
-Neither `VLLM_FL_BIV150_ATTN_V1` nor a new v5 enable flag is needed.
-No model or official benchmark changes are made, and the original
-framework operator-priority policy is preserved. Non-Iluvatar devices
-retain `TRITON_ATTN`, and the explicit
-`VLLM_FL_USE_FLAGGEMS_ATTN=1` override remains available.
+Pure decode is identified by `max_seqlen_q == 1`. Paged-KV lookup reuse is
+restricted to supported BF16 head/shape/quantization configurations and
+otherwise uses the original per-token lookup path. Prefill (including mixed
+batches) retains the tuned tile configuration when eligible; unsupported
+prefill shapes retain the original kernel settings. The two compile-time
+optimizations are independent and never active for the same invocation.
 
-Start v8 with its `FlagGems/src` and `vllm-plugin-FL` on
-`PYTHONPATH` and `VLLM_PLUGINS=fl`, without an attention-specific
-toggle. Kernel correctness and official throughput/accuracy must be
-validated on BI-V150 before promotion.
-
-## v5 pure-decode stack (experimental; source only)
-
-v8 now **combines v1 prefill with v5 decode** through
-`attention_biv150_v1_v5.BIV150V1V5AttentionBackend` on Iluvatar.
-This is automatic; do not set `VLLM_FL_BIV150_V8_DECODE` or other new
-activation environment variables.
-
-- `attn_metadata.max_query_len == 1`: use the original v5 Triton
-  unified-attention launcher and its kernel-level paged-KV page-index
-  reuse, for eligible BF16 16Q/2KV GQA / head-size-128 decode only.
-  v5 itself guards tensor descriptors, quantization, unsupported layouts,
-  and incompatible page/tile geometries, falling back to per-token lookup.
-- `max_query_len > 1` (including mixed prefill/decode): keep the
-  unchanged v1 attention adapter and tuned prefill kernel.
-- The unchanged explicit FlagGems override, CUDA/MLA/sparse guards and
-  non-Iluvatar `TRITON_ATTN` fallback retain priority. No benchmark,
-  model, FlagGems, v1-v7, or framework operator-selection edits.
-
-We preserve separate original v1 and v5 kernels/adapter files as a
-source-comparable A/B baseline. The only new selection is inside the
-existing vLLM Triton attention operator's forward method.
-
-### BI-V150 validation required before merging
+## Validation
 
 ```bash
 cd /root/Optimization/v8
 export PYTHONPATH="$PWD/FlagGems/src:$PWD/vllm-plugin-FL:${PYTHONPATH:-}"
 export VLLM_PLUGINS=fl
 python3 -m pytest -q -s --noconftest \
-  vllm-plugin-FL/tests/functional_tests/test_biv150_attention_v1.py \
-  vllm-plugin-FL/tests/functional_tests/test_biv150_v1_v5_stack.py
+  vllm-plugin-FL/tests/functional_tests/test_biv150_attention.py \
+  vllm-plugin-FL/tests/functional_tests/test_biv150_decode.py
 ```
 
-Verify production workers load this v8 adapter and trace which kernel
-actually runs for pure decode versus mixed/prefill. With identical model,
-server startup, prefix-cache conditions and fresh restarts, A/B against
-the previous v8=v1 baseline using the **unchanged** official benchmark:
-
-```bash
-cd /workspace
-python3 /workspace/vllm-plugin-FL/benchmarks/benchmark_throughput_serve.py \
-  --model /workspace/MiniCPM5-2B \
-  --served-model-name minicpm --port 9031 \
-  --test-cases '[[4096,1024,64,256],[16384,1024,64,128]]'
-```
-
-Compare total/output tok/s, TTFT, TPOT, GPU decode/prefill split,
-GPU idle gaps, KV-cache occupancy, waiting and preemptions; repeat
-`math_500`. Historical v5 microbenchmarks improved isolated decode
-calls by roughly 10–24% across tested cases, but 16K serving remained
-capacity/queueing-constrained, and those tests do not validate this stack.
-**No BI-V150 combined-kernel test, matched serving A/B, or accuracy
-score for v8+v5 is claimed. Do not merge on source inspection alone.**
+On BI-V150, verify actual kernel selection, correctness, throughput, and
+accuracy with the unchanged official 4K/16K benchmark and MATH-500 cases.
+Source inspection and CPU-only checks do not establish hardware performance.
