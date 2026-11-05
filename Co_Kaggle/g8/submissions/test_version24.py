@@ -203,6 +203,122 @@ class Version24Tests(unittest.TestCase):
         p.get_action(bad)
         self.assertEqual(p._state, {})
 
+    def test_setpoint_change_discards_old_integral(self):
+        """Past integral error must not survive a new comfort-band target."""
+        p = self.policy
+        for _ in range(24):
+            p._gain_scheduled_status(self.status(297.12), 294.0)
+        self.assertGreater(p._state[0][2], 0.5)
+
+        changed_band = {**self.status(297.12), "high": 297.10}
+        result = p._gain_scheduled_status(changed_band, 294.0)
+        self.assertAlmostEqual(p._state[0][2], 0.02, places=6)
+        self.assertGreater(result["lpv_cooling"], 0.0)
+        self.assertEqual(p._state[0][3], 1)
+
+    def test_saturation_does_not_wind_up_integral(self):
+        """Large disturbances should not accumulate saturated PI error."""
+        p = self.policy
+        for _ in range(50):
+            result = p._gain_scheduled_status(self.status(301.0), 308.0)
+            self.assertEqual(result["lpv_cooling"], 1.0)
+        self.assertEqual(p._state[0][2], 0.0)
+
+    def test_missing_actuators_cannot_activate_hvac(self):
+        """A heating request without a reheat valve cannot heat the zone."""
+        metadata = building_metadata()
+        del metadata["zone_action_indices"]["VAV_0"][
+            "reheat_valve_percentage_command"
+        ]
+        policy = TransferPolicy(metadata, None)
+        output = policy.get_action(observation(290.0))
+        self.assertEqual(output["discrete_action"].tolist(), [0, 0])
+
+        # A cooling request without a damper is also unserviceable.
+        metadata = building_metadata()
+        del metadata["zone_action_indices"]["VAV_0"][
+            "supply_air_damper_percentage_command"
+        ]
+        policy = TransferPolicy(metadata, None)
+        output = policy.get_action(observation(300.0))
+        self.assertEqual(output["discrete_action"].tolist(), [0, 0])
+
+    def test_low_demand_zone_remains_idle_when_neighbor_heats(self):
+        """Shared AHU load must not amplify an insignificant zone error."""
+        metadata = building_metadata()
+        metadata["n_continuous_action"] = 8
+        metadata["ahu_zone_assignments"]["0"].append("room_1")
+        metadata["zone_action_indices"]["VAV_1"] = {
+            "reheat_valve_percentage_command": 6,
+            "supply_air_damper_percentage_command": 7,
+        }
+        metadata["observation_field_names"] += [
+            "VAV_1_zone_air_temperature_sensor",
+            "VAV_1_zone_air_heating_temperature_setpoint_sensor",
+            "VAV_1_zone_air_cooling_temperature_setpoint_sensor",
+        ]
+        obs = np.array(
+            [(297.03 - 295.0) / 2.0, 293.0, 297.0, 0.0,
+             (290.0 - 295.0) / 2.0, 293.0, 297.0]
+        )
+        policy = TransferPolicy(metadata, None)
+        action = policy.get_action(obs)
+        self.assertEqual(action["discrete_action"].tolist(), [1, 1])
+        # Minimum VAV opening of 10% maps to -0.8.
+        self.assertAlmostEqual(float(action["continuous_action"][5]), -0.8, places=6)
+        self.assertGreater(float(action["continuous_action"][6]), -1.0)
+
+    def test_two_ahus_dispatch_independently_and_share_hot_water(self):
+        """No hard-coded single-AHU indexes or cross-zone controller states."""
+        meta = building_metadata()
+        meta["n_continuous_action"] = 12
+        meta["n_discrete_action"] = 3
+        meta["temp_indices"] = [0, 1]
+        meta["pressure_indices"] = [2, 3, 4]
+        meta["recirculation_indices"] = [5, 6]
+        meta["water_indices"] = [7]
+        meta["ahu_zone_assignments"] = {
+            "1": ["room_1"],
+            "0": ["room_0"],
+        }
+        meta["zone_action_indices"] = {
+            "VAV_0": {
+                "reheat_valve_percentage_command": 8,
+                "supply_air_damper_percentage_command": 9,
+            },
+            "VAV_1": {
+                "reheat_valve_percentage_command": 10,
+                "supply_air_damper_percentage_command": 11,
+            },
+        }
+        meta["observation_field_names"] += [
+            "VAV_1_zone_air_temperature_sensor",
+            "VAV_1_zone_air_heating_temperature_setpoint_sensor",
+            "VAV_1_zone_air_cooling_temperature_setpoint_sensor",
+            "ahs_1_outside_air_temperature_sensor",
+        ]
+        obs = np.array([
+            (300.0 - 295.0) / 2.0, 293.0, 297.0, 0.0,
+            (290.0 - 295.0) / 2.0, 293.0, 297.0, 0.0,
+        ])
+        policy = TransferPolicy(meta, None)
+        result = policy.get_action(obs)
+        self.assertEqual(result["continuous_action"].shape, (12,))
+        self.assertEqual(result["discrete_action"].tolist(), [1, 1, 1])
+        self.assertEqual(float(result["continuous_action"][8]), -1.0)
+        self.assertGreater(float(result["continuous_action"][9]), -1.0)
+        self.assertGreater(float(result["continuous_action"][10]), -1.0)
+        self.assertGreater(float(result["continuous_action"][11]), -1.0)
+        self.assertEqual(len(policy._state), 2)
+
+    def test_missing_outdoor_sensor_falls_back_to_mild_gains(self):
+        """Weather failures must not propagate NaNs into actuator actions."""
+        p = self.policy
+        bad = observation(297.7, float("nan"))
+        result = p.get_action(bad)
+        self.assertTrue(np.isfinite(result["continuous_action"]).all())
+        self.assertEqual(result["discrete_action"].tolist(), [1, 0])
+
     def test_denormalize_outdoor_reading(self):
         p = self.policy
         self.assertEqual(p._outside_temperature(observation(295.0), 3), 290.0)
