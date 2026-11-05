@@ -1,0 +1,231 @@
+"""Unit/contract tests for Version 22 economic MPC (no simulator needed).
+
+These tests validate the policy code and *modeled* reward terms. They do
+not demonstrate that the proxy power model predicts official energy draw.
+"""
+import ast
+import json
+import math
+import sys
+import time
+import types
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+import numpy as np
+
+
+NOTEBOOK = Path(__file__).with_name("submission-nb - Version 22.ipynb")
+
+
+def load_controller():
+    notebook = json.loads(NOTEBOOK.read_text(encoding="utf-8"))
+    code_cells = [c for c in notebook["cells"] if c["cell_type"] == "code"]
+    assert len(code_cells) == 2, "Keep one policy cell and one Kaggle gateway cell"
+    policy_source = "".join(code_cells[0]["source"])
+    gateway_source = "".join(code_cells[1]["source"])
+    ast.parse(policy_source)
+    ast.parse(gateway_source)
+    assert "SmartBuildingsInferenceServer(TransferPolicy).run()" in gateway_source
+
+    kaggle = types.ModuleType("kaggle_evaluation")
+    server = types.ModuleType("smart_buildings_inference_server")
+    server.Policy = type("Policy", (), {"__init__": lambda self, *args: None})
+    kaggle.smart_buildings_inference_server = server
+
+    with patch.dict(sys.modules, {"kaggle_evaluation": kaggle}):
+        ns = {}
+        exec(compile(policy_source, str(NOTEBOOK), "exec"), ns)
+    return ns["TransferPolicy"]
+
+
+TransferPolicy = load_controller()
+
+
+def metadata():
+    return {
+        "n_continuous_action": 7,
+        "n_discrete_action": 2,
+        "observation_field_names": [
+            "VAV_0_zone_air_temperature_sensor",
+            "VAV_0_zone_air_heating_temperature_setpoint_sensor",
+            "VAV_0_zone_air_cooling_temperature_setpoint_sensor",
+            "ahs_0_outside_air_temperature_sensor",
+            "num_occupants", "hod_sin_000", "hod_cos_000",
+            "dow_sin_000", "dow_cos_000",
+        ],
+        "temp_indices": [0],
+        "pressure_indices": [1, 4],
+        "recirculation_indices": [2],
+        "water_indices": [3],
+        "comfort_temp_window": [293.0, 297.0],
+        "eco_temp_window": [289.0, 301.0],
+        "morning_start_hour": 8,
+        "evening_start_hour": 18,
+        "ahu_zone_assignments": {"0": ["room_0"]},
+        "zone_action_indices": {
+            "VAV_0": {
+                "reheat_valve_percentage_command": 5,
+                "supply_air_damper_percentage_command": 6,
+            },
+        },
+        "observation_normalization_metadata": {
+            "zone_air_temperature_sensor": {
+                "sample_mean": 295.0, "sample_std": 2.0,
+            },
+            "outside_air_temperature_sensor": {
+                "sample_mean": 290.0, "sample_std": 10.0,
+            },
+        },
+    }
+
+
+def observation(kelvin=295.0, outside_k=290.0, occupancy=0.0,
+                hour=13.0, weekday=2.0):
+    return np.array([
+        (kelvin - 295.0) / 2.0, 293.0, 297.0,
+        (outside_k - 290.0) / 10.0, occupancy,
+        math.sin(2 * math.pi * hour / 24),
+        math.cos(2 * math.pi * hour / 24),
+        math.sin(2 * math.pi * weekday / 7),
+        math.cos(2 * math.pi * weekday / 7),
+    ], dtype=np.float64)
+
+
+class Version22Tests(unittest.TestCase):
+    def setUp(self):
+        self.p = TransferPolicy(metadata(), None)
+
+    def test_output_contract_and_idle_state(self):
+        for kelvin in (285.0, 290.0, 295.0, 300.0, 307.0):
+            with self.subTest(kelvin=kelvin):
+                action = self.p.get_action(observation(kelvin))
+                continuous, discrete = action["continuous_action"], action["discrete_action"]
+                self.assertEqual(continuous.shape, (7,))
+                self.assertEqual(discrete.shape, (2,))
+                self.assertEqual(continuous.dtype, np.float32)
+                self.assertEqual(discrete.dtype, np.int32)
+                self.assertTrue(np.all(np.isfinite(continuous)))
+                self.assertTrue(np.all((-1 <= continuous) & (continuous <= 1)))
+                self.assertTrue(np.all(np.isin(discrete, [0, 1])))
+
+        self.p.reset()
+        idle = self.p.get_action(observation(295.0))
+        self.assertEqual(idle["discrete_action"].tolist(), [0, 0])
+        self.assertEqual(float(idle["continuous_action"][6]), -1.0)
+
+    def test_severe_heat_and_cold_guardrails(self):
+        for kelvin in (286.0, 305.0):
+            with self.subTest(kelvin=kelvin):
+                self.p.reset()
+                action = self.p.get_action(observation(kelvin))
+                self.assertEqual(int(action["discrete_action"][0]), 1)
+
+    def test_official_piecewise_comfort_regret(self):
+        penalty = self.p._violation
+        self.assertEqual(penalty(295.0, 293.0, 297.0), 0.0)
+        self.assertAlmostEqual(penalty(298.0, 293.0, 297.0), 0.2)
+        self.assertEqual(penalty(302.0, 293.0, 297.0), 1.0)
+        self.assertEqual(penalty(307.0, 293.0, 297.0), 2.0)
+        self.assertEqual(penalty(283.0, 293.0, 297.0), 2.0)
+
+    def test_economic_terms_and_separate_normalizers(self):
+        ctx = self.p._reward_context(observation())
+        # At nominal 80 kW electricity + 205 kW gas, both official normalized
+        # energy and carbon terms equal one -> 0.2 + 0.2.
+        self.assertAlmostEqual(self.p._economic_energy_score(80.0, 205.0, ctx), 0.4)
+        self.assertAlmostEqual(self.p._economic_energy_score(0.0, 0.0, ctx), 0.0)
+        self.assertGreater(self.p._economic_energy_score(1.0, 1.0, ctx), 0.0)
+        self.assertAlmostEqual(
+            self.p._economic_energy_score(2.0, 3.0, ctx),
+            self.p._economic_energy_score(2.0, 0.0, ctx)
+            + self.p._economic_energy_score(0.0, 3.0, ctx),
+        )
+
+    def test_tariffs_and_carbon_vary_with_time(self):
+        weekday = self.p._reward_context(observation(hour=13, weekday=2))
+        weekend = self.p._reward_context(observation(hour=13, weekday=6))
+        early = self.p._reward_context(observation(hour=3, weekday=2))
+        self.assertAlmostEqual(weekday[0], 0.20)
+        self.assertAlmostEqual(weekend[0], 0.16)
+        self.assertAlmostEqual(early[0], 0.16)
+        self.assertNotEqual(weekday[1], early[1])
+
+    def test_unambiguously_empty_occupancy_suppresses_comfort_only(self):
+        occupied = self.p._reward_context(observation(occupancy=0.0))
+        empty = self.p._reward_context(observation(occupancy=-125.0 / 126))
+        self.assertEqual(occupied[2], 1.0)
+        self.assertEqual(empty[2], 0.0)
+        state = {
+            "zone": self.p.ahus[0]["zones"][0],
+            "temp": 298.0, "low": 293.0, "high": 297.0, "outdoor": 290.0,
+        }
+        off = self.p.OPERATING_POINTS[0]
+        self.assertGreater(self.p._best_vav(state, off, occupied)[0], 0.0)
+        self.assertAlmostEqual(self.p._best_vav(state, off, empty)[0], 0.0)
+
+    def test_cost_model_monotonic_and_zero_when_off(self):
+        state = {"temp": 300.0, "outdoor": 305.0}
+        off, cool, heat = (self.p.OPERATING_POINTS[i] for i in (0, 3, 4))
+        self.assertEqual(self.p._zone_power_kw(state, off, 1.0, 1.0), (0.0, 0.0))
+        e_min, gas_min = self.p._zone_power_kw(state, cool, 0.1, 0.0)
+        e_max, gas_max = self.p._zone_power_kw(state, cool, 1.0, 0.0)
+        self.assertGreater(e_max, e_min)
+        self.assertEqual(gas_min, 0.0)
+        self.assertEqual(gas_max, 0.0)
+        _, gas_heat = self.p._zone_power_kw(state, heat, 1.0, 1.0)
+        self.assertGreater(gas_heat, 0.0)
+
+    def test_reward_objective_matches_weighted_components(self):
+        state = {
+            "zone": self.p.ahus[0]["zones"][0],
+            "temp": 298.0, "low": 293.0, "high": 297.0, "outdoor": 290.0,
+        }
+        ctx = self.p._reward_context(observation())
+        off = self.p.OPERATING_POINTS[0]
+        rate = state["zone"]["model"].predict_delta(
+            state["zone"]["model"].features(
+                state["temp"], state["outdoor"], 0.0,
+                off.supply_k, 0.0, 0.0, 0.0, off.water_k))
+        expected = (self.p.REWARD_COMFORT /
+                    self.p.total_zones *
+                    sum(self.p._violation(
+                        state["temp"] + rate * steps, state["low"], state["high"])
+                        for steps in self.p.PLAN_STEPS) /
+                    len(self.p.PLAN_STEPS))
+        self.assertAlmostEqual(self.p._best_vav(state, off, ctx)[0], expected)
+
+    def test_surrogate_ablation_is_runnable(self):
+        self.p.USE_ECONOMIC_OBJECTIVE = False
+        for t in (295.0, 298.0, 290.0):
+            a = self.p.get_action(observation(t))
+            self.assertTrue(np.isfinite(a["continuous_action"]).all())
+
+    def test_model_updates_and_reset(self):
+        zone = self.p.ahus[0]["zones"][0]
+        self.p.get_action(observation(300.0))
+        self.p.get_action(observation(299.8))
+        self.assertEqual(zone["model"].samples, 1)
+        self.p.reset()
+        self.assertEqual(zone["model"].samples, 0)
+        self.assertIsNone(zone["model"].last_features)
+
+    def test_invalid_sensor_and_long_run(self):
+        for _ in range(60):
+            action = self.p.get_action(observation(296.0, outside_k=-30.0 + 273.15))
+            self.assertTrue(np.isfinite(action["continuous_action"]).all())
+        bad = observation()
+        bad[0] = float("nan")
+        self.p.get_action(bad)
+        self.assertIsNone(self.p.ahus[0]["zones"][0]["model"].last_features)
+
+    def test_bounded_compute(self):
+        start = time.monotonic()
+        for i in range(120):
+            self.p.get_action(observation(295.0 + math.sin(i / 10)))
+        self.assertLess(time.monotonic() - start, 12.0)
+
+
+if __name__ == "__main__":
+    unittest.main()
