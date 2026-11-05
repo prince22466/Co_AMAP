@@ -196,6 +196,26 @@ class Version22Tests(unittest.TestCase):
                     len(self.p.PLAN_STEPS))
         self.assertAlmostEqual(self.p._best_vav(state, off, ctx)[0], expected)
 
+    def test_building_reward_not_divided_twice_by_ahu_zone_count(self):
+        """Aggregate every zone's normalized contribution exactly once.
+
+        Construct a tradeoff where averaging two zone scores for a second
+        time would incorrectly choose "off" instead of a running mode.
+        """
+        two_zones = [
+            {"temp": 295.0, "low": 293.0, "high": 297.0},
+            {"temp": 295.0, "low": 293.0, "high": 297.0},
+        ]
+        self.p._economic_energy_score = (
+            lambda electric_kw, gas_kw, ctx: 0.12 if electric_kw > 0 else 0.0)
+        self.p._best_vav = (
+            lambda state, config, ctx: (
+                0.02 if config.running else 0.09, 0.1, 0.0))
+        chosen, profiles = self.p._select_operating_point(
+            two_zones, (0.16, 0.09, 1.0))
+        self.assertEqual(chosen.mode, "vent")
+        self.assertEqual(len(profiles), 2)
+
     def test_surrogate_ablation_is_runnable(self):
         self.p.USE_ECONOMIC_OBJECTIVE = False
         for t in (295.0, 298.0, 290.0):
