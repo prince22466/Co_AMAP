@@ -170,10 +170,38 @@ def stop() -> None:
     print(f"Sent SIGTERM to owned v9 server group {pid}")
 
 
-def git_sha() -> str:
-    return subprocess.check_output(
-        ["git", "-C", str(V9), "rev-parse", "HEAD"], text=True
-    ).strip()
+def git_sha() -> str | None:
+    """Remote v9 may be a standalone code copy, not a Git worktree."""
+    try:
+        return subprocess.check_output(
+            ["git", "-C", str(V9), "rev-parse", "HEAD"],
+            text=True, stderr=subprocess.DEVNULL,
+        ).strip()
+    except (subprocess.CalledProcessError, OSError):
+        return None
+
+
+def git_dirty() -> bool | None:
+    try:
+        return bool(subprocess.check_output(
+            ["git", "-C", str(V9), "status", "--porcelain", "--", str(V9)],
+            text=True, stderr=subprocess.DEVNULL,
+        ).strip())
+    except (subprocess.CalledProcessError, OSError):
+        return None
+
+
+def source_hashes() -> dict[str, str]:
+    paths = (
+        "vllm-plugin-FL/vllm_fl/dispatch/backends/vendor/iluvatar/impl/triton_unified_attention_biv150.py",
+        "vllm-plugin-FL/vllm_fl/dispatch/backends/vendor/iluvatar/impl/attention_biv150.py",
+        "FlagGems/src/flag_gems/runtime/backend/_iluvatar/ops/mm.py",
+        "FlagGems/src/flag_gems/runtime/backend/_iluvatar/ops/linear.py",
+    )
+    return {
+        name: hashlib.sha256((V9 / name).read_bytes()).hexdigest()
+        for name in paths if (V9 / name).is_file()
+    }
 
 
 def run_tests() -> None:
@@ -211,10 +239,8 @@ def benchmark() -> None:
         "kind": "development_half_run",
         "remote_v9": str(V9),
         "v9_commit_sha": git_sha(),
-        "v9_dirty": bool(subprocess.check_output(
-            ["git", "-C", str(V9), "status", "--porcelain"],
-            text=True,
-        ).strip()),
+        "v9_dirty": git_dirty(),
+        "v9_kernel_file_sha256": source_hashes(),
         "server_owner_pid": owner(),
         "benchmark_path": str(BENCH),
         "benchmark_sha256_before": benchmark_hash,
