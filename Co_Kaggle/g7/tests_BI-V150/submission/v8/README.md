@@ -6,12 +6,13 @@ This directory stages the submission for **MiniCPM5-2B inference throughput opti
 
 ## Files in this draft
 
-- [`report.md`](report.md): technical-report source for the required `report.pdf`.
+- [`report.md`](report.md): editable source for the required PDF technical report.
+- [`report.pdf`](report.pdf): generated review draft of the technical report; regenerate after any report edits.
 - [`readme.md`](readme.md): submission-root reproduction guide, intended to become the final archive's `readme.md`.
 - [`build_submission.sh`](build_submission.sh): stage the existing v8 code and create `<team-name>.zip`; requires the PDF to have been rendered.
-- **Not included in this PR:** the large, duplicated v8 source tree, the generated PDF, benchmark output, model weights, and unpublished machine-side logs. The packaging script reads the already-versioned v8 tree.
+- **Not included in this PR:** a duplicate v8 source tree, benchmark output, model weights, and unpublished machine-side logs. The packaging script reads the already-versioned v8 tree.
 
-**Authoritative source:** [Optimization/v8](../../Optimization/v8). This PR does **not** modify any serving parameters, kernels, operator selection, weights, dataset, or official benchmark code.
+**Authoritative source:** [Optimization/v8](../../Optimization/v8). This PR does **not** modify any serving parameters, kernels, operator selection, weights, dataset, or official benchmark code. The committed PDF is a **generated draft** and must be regenerated and checked if its Markdown source changes.
 
 ## Official ZIP layout
 
@@ -28,7 +29,7 @@ The event page requires source code, a technical report (PDF), and a reproducibl
 
 ## Build the ZIP (after reviewing this draft)
 
-From a checkout containing `Optimization/v8`, render the Markdown technical report to PDF using your preferred publishing workflow. One option, if Pandoc and XeLaTeX are installed:
+From a checkout containing `Optimization/v8`, use the checked-in `report.pdf` as a draft or regenerate the Markdown technical report to PDF after review. One option, if Pandoc and XeLaTeX are installed:
 
 ```bash
 cd Co_Kaggle/g7/tests_BI-V150/submission/v8
