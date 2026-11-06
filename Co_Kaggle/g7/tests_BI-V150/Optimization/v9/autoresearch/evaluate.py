@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Read-only numeric gate for original BI-V150 4K/16K half-run CSVs.
+"""Compare original 4K/16K half-run CSVs; numeric results are NOT a win gate.
 
-Half-run RUNS=2 SKIP_FIRST=0; no MATH-500 check (user runs later).
-This does not prove repeatability, correctness, kernel invocation, or provenance.
+Uses unmodified benchmark_throughput_serve_half.py (RUNS=2, SKIP_FIRST=0).
+No MATH-500, repeatability or production-kernel verification is performed.
 """
 from __future__ import annotations
 
@@ -14,115 +14,82 @@ from pathlib import Path
 
 CASES = {4096: (1024, 64, 256), 16384: (1024, 64, 128)}
 TARGETS = {"4K": 2450.0, "16K": 1450.0}
-RUNS = 2
-SKIP_FIRST = 0
 
 
-def positive_float(value: str, label: str) -> float:
-    number = float(value)
-    if not math.isfinite(number) or number <= 0:
-        raise ValueError(f"{label} must be positive and finite: {value!r}")
-    return number
+def positive(value: str, label: str) -> float:
+    result = float(value)
+    if not math.isfinite(result) or result <= 0:
+        raise ValueError(f"Invalid {label}: {value!r}")
+    return result
 
 
-def rows(path: Path) -> list[dict[str, str]]:
-    if not path.is_file():
-        raise ValueError(f"Missing CSV: {path}")
+def read_csv(path: Path, raw: bool) -> dict[int, list[dict]]:
+    grouped: dict[int, list[dict]] = {size: [] for size in CASES}
     with path.open(newline="", encoding="utf-8-sig") as stream:
         reader = csv.DictReader(stream)
         if not reader.fieldnames:
             raise ValueError(f"Empty CSV: {path}")
-        return list(reader)
+        for row in reader:
+            size = int(row["Prefill"])
+            if size not in CASES:
+                raise ValueError(f"{path}: unexpected workload {size}")
+            shape = tuple(int(row[col]) for col in ("Decode", "Conc", "Num Prompts"))
+            if shape != CASES[size]:
+                raise ValueError(f"{path}: {size} invalid workload shape {shape}")
+            if raw:
+                if row["Run Status"] != "SUCCESS":
+                    raise ValueError(f"{path}: {size} failed run")
+                if positive(row["Successful Requests"], "successful requests") != CASES[size][2]:
+                    raise ValueError(f"{path}: {size} missing requests")
+            grouped[size].append({
+                "tok": positive(row["Total tok/s"], "Total tok/s"),
+                "ttft": positive(row["Mean TTFT (ms)"], "Mean TTFT"),
+            })
+    required = 2 if raw else 1
+    for size, rows in grouped.items():
+        if len(rows) != required:
+            raise ValueError(f"{path}: {size} needs exactly {required} {'raw runs' if raw else 'summary row'}")
+    return grouped
 
 
-def case_key(row: dict[str, str]) -> int:
-    size = int(row["Prefill"])
-    if size not in CASES:
-        raise ValueError(f"Unexpected workload length: {size}")
-    decode, concurrency, prompts = CASES[size]
-    actual = (int(row["Decode"]), int(row["Conc"]), int(row["Num Prompts"]))
-    if actual != (decode, concurrency, prompts):
-        raise ValueError(f"Invalid benchmark case: {size}, {actual}")
-    return size
-
-
-def summary(path: Path) -> dict[int, dict[str, float]]:
-    result = {}
-    for row in rows(path):
-        size = case_key(row)
-        if size in result:
-            raise ValueError(f"Duplicate summary case {size} in {path}")
-        result[size] = {
-            "tokens_per_s": positive_float(row["Total tok/s"], "Total tok/s"),
-            "ttft_ms": positive_float(row["Mean TTFT (ms)"], "Mean TTFT (ms)"),
-        }
-    if set(result) != set(CASES):
-        raise ValueError(f"Summary must contain BOTH half-run cases: {path}")
-    return result
-
-
-def validate_raw(path: Path) -> None:
-    grouped = {size: [] for size in CASES}
-    for row in rows(path):
-        grouped[case_key(row)].append(row)
-    for size, case_rows in grouped.items():
-        if len(case_rows) != RUNS:
-            raise ValueError(f"{path}: {size} requires exactly {RUNS} raw runs, got {len(case_rows)}")
-        for row in case_rows:
-            if row["Run Status"] != "SUCCESS":
-                raise ValueError(f"{path}: {size} contains a failed run")
-            successes = positive_float(row["Successful Requests"], "Successful Requests")
-            if successes != CASES[size][2]:
-                raise ValueError(f"{path}: {size} has missing requests: {successes}")
-            positive_float(row["Total tok/s"], "raw Total tok/s")
+def load_pair(summary_path: Path, raw_path: Path) -> dict[int, dict]:
+    summary = read_csv(summary_path, raw=False)
+    raw = read_csv(raw_path, raw=True)
+    for size in CASES:
+        for metric in ("tok", "ttft"):
+            average = sum(row[metric] for row in raw[size]) / 2
+            if abs(summary[size][0][metric] - average) > 0.05:
+                raise ValueError(f"{size} {metric}: summary disagrees with raw half-runs")
+    return {size: summary[size][0] for size in CASES}
 
 
 def evaluate(args: argparse.Namespace) -> dict:
-    baseline = summary(args.baseline_summary)
-    candidate = summary(args.candidate_summary)
-    validate_raw(args.baseline_raw)
-    validate_raw(args.candidate_raw)
-
-    comparisons = {}
+    baseline = load_pair(args.baseline_summary, args.baseline_raw)
+    candidate = load_pair(args.candidate_summary, args.candidate_raw)
+    comparison = {}
     for size in CASES:
-        name = f"{size // 1024}K"
-        original = baseline[size]
-        new = candidate[size]
-        gain = 100 * (new["tokens_per_s"] / original["tokens_per_s"] - 1)
-        comparisons[name] = {
-            "baseline_tokens_per_s": original["tokens_per_s"],
-            "candidate_tokens_per_s": new["tokens_per_s"],
-            "throughput_change_pct": round(gain, 4),
-            "baseline_ttft_ms": original["ttft_ms"],
-            "candidate_ttft_ms": new["ttft_ms"],
-            "ttft_change_pct": round(100 * (new["ttft_ms"] / original["ttft_ms"] - 1), 4),
-            "numeric_gain": gain > 0,
-            "milestone_met": new["tokens_per_s"] >= TARGETS[name],
+        label = f"{size // 1024}K"
+        a, b = baseline[size], candidate[size]
+        comparison[label] = {
+            "baseline_total_tok_s": a["tok"],
+            "candidate_total_tok_s": b["tok"],
+            "throughput_change_pct": round(100 * (b["tok"] / a["tok"] - 1), 4),
+            "baseline_mean_ttft_ms": a["ttft"],
+            "candidate_mean_ttft_ms": b["ttft"],
+            "ttft_change_pct": round(100 * (b["ttft"] / a["ttft"] - 1), 4),
+            "numeric_target_observed": b["tok"] >= TARGETS[label],
         }
-
-    improved_numerically = any(c["numeric_gain"] for c in comparisons.values())
-    target_met = any(c["milestone_met"] for c in comparisons.values())
     return {
-        "passed": improved_numerically,
-        "target_met": target_met,
-        "any_numeric_gain": improved_numerically,
-        "all_half_raw_runs_valid": True,
-        "benchmark_type": "development_half_run",
-        "runs_per_case": RUNS,
-        "skip_first": SKIP_FIRST,
-        "accuracy_evaluation": "deferred_to_user",
-        "comparison": comparisons,
-        "source_paths": {
-            "baseline_summary": str(args.baseline_summary),
-            "baseline_raw": str(args.baseline_raw),
-            "candidate_summary": str(args.candidate_summary),
-            "candidate_raw": str(args.candidate_raw),
-        },
-        "provenance_warning": (
-            "Numeric gate only. Confirm code SHA, benchmark hash, same serving args "
-            "and GPU conditions, production kernel invocation, functional tests and "
-            "repeatable paired A/B before committing a performance PR or stopping."
+        "valid_half_run_csvs": True,
+        "numeric_gain_observed": any(
+            item["candidate_total_tok_s"] > item["baseline_total_tok_s"]
+            for item in comparison.values()
         ),
+        "numeric_target_observed": any(item["numeric_target_observed"] for item in comparison.values()),
+        "reproducibility_verified": False,
+        "accuracy": "deferred_to_user",
+        "comparison": comparison,
+        "note": "CSV comparison only; repeat matched A/B and verify kernel tests/production trace before PR or stopping.",
     }
 
 
@@ -134,13 +101,14 @@ def main() -> int:
     args = parser.parse_args()
     try:
         report = evaluate(args)
-    except (ValueError, KeyError, TypeError, OSError, OverflowError) as exc:
-        report = {"passed": False, "target_met": False, "error": str(exc)}
+    except (ValueError, KeyError, TypeError, OSError) as exc:
+        report = {"valid_half_run_csvs": False, "error": str(exc)}
+    output = json.dumps(report, indent=2, sort_keys=True) + "\n"
     if args.json_out:
         args.json_out.parent.mkdir(parents=True, exist_ok=True)
-        args.json_out.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
-    print(json.dumps(report, indent=2, sort_keys=True))
-    return 0 if report.get("passed") else 1
+        args.json_out.write_text(output)
+    print(output, end="")
+    return 0 if report["valid_half_run_csvs"] else 1
 
 
 if __name__ == "__main__":
