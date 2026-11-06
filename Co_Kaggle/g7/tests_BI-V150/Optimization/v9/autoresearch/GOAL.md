@@ -14,7 +14,15 @@ Use the unchanged READ-ONLY script /workspace/vllm-plugin-FL/benchmarks/benchmar
 
 Priority: (1) 16K attention memory dependencies/shared-memory/tiles/occupancy; (2) mixed prefill-decode interference and kernel causality; (3) 4K attention and prefill GEMM locality/tiling.
 
-CYCLE: FRESH BASELINE -> PROFILE -> ONE KERNEL PATCH -> GPU TEST -> RESTART OWN v9 SERVER -> HALF-RUN BOTH -> SCORE -> REPEAT A/B AS NEEDED -> ACCEPT+COMMIT+PR OR REJECT+REVERT EXPERIMENT -> NEXT.
+## GPU-time control: expensive half-run only after fast gates
+
+Observed duration of ONE unchanged 4K+16K half-run: **1.5–2 hours**. A fresh baseline AND candidate can require **3–4 hours** before any confirmation. Write an explicit deadline/time-remaining log. **Never start a half-run if <150 minutes remain**; reserve more (approximately 300 minutes or greater) if a baseline or repeat comparison is required. Do not spend the GPU budget repeatedly collecting full half-runs of weak hypotheses.
+
+For EACH candidate, do this order **before** a half-run: (1) causal production profiler and bottleneck share; (2) v9 functional GPU/fallback correctness and relevant 4K/16K/mixed attention or GEMM edge cases; (3) warmed-up repeated A/B kernel microbench with timings, variance, registers/SMEM/occupancy/spills/memory traffic; (4) serving trace proving edited kernel was used; (5) short repeated identical serving A/B probes using direct diagnostic commands in program.md, ensuring successful requests and no obvious TTFT/TPOT regression. Cap initial screening effort to roughly **20–30 minutes per candidate** unless new evidence justifies deeper profiling. Use Amdahl reasoning to decide whether a >=5% end-to-end gain is even plausible. Reject bad, unproven or marginal candidates before the 2-hour benchmark. Screened tests DO NOT replace official half-run numbers.
+
+Reuse a documented matching v9 half-run baseline only if original logs/CSVs, exact code SHA or hashes, benchmark hash, machine and serving config are comparable; otherwise budget to remeasure. Never claim confirmed repeatability based on a single candidate half-run if workload noise or changed conditions demand another run. If insufficient time for credible evidence, preserve best verified result and stop without inventing a PR or accuracy claim.
+
+CYCLE: VERIFY/MEASURE MATCHED BASELINE -> PROFILE -> ONE KERNEL PATCH -> CORRECTNESS -> KERNEL A/B -> SHORT SERVING A/B -> GO/NO-GO + TIME CHECK -> HALF-RUN BOTH -> REPEAT IF NEEDED -> ACCEPT+PR OR REJECT -> NEXT.
 
 Stop on reproducible goal, concrete user deadline or blocker. **Checkpoint progress requires a repeatable >=5% Total tok/s gain in at least one case relative to the last accepted best**, tested under comparable A/B conditions. Log smaller positive changes without an immediate progress PR; cumulative gains can qualify once they cross 5%. Open an evidence-backed PR for each verified 5% checkpoint even short of the target; always open a final PR for a reproducible 2450/1450 goal even when the last incremental step is smaller. Continue after progress checkpoints. Do not auto-merge. Never accept switching operators, hyperparameter/benchmark tuning, quantization, speculative decoding, or merging new upstream FlagOS as the optimization. For failures, preserve findings and baseline; avoid restoring unrelated user changes.
 

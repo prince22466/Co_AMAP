@@ -39,9 +39,45 @@ python3 -m pytest -q -s --noconftest \
   vllm-plugin-FL/tests/functional_tests/test_biv150_decode.py
 ~~~
 
+## Time planning and fast verification before the expensive half-run
+
+One 4K+16K half-run may take **1.5–2 hours**; a baseline plus one candidate could take **3–4 hours**, and repeat confirmations add more. Do NOT run the 2-hour half benchmark for every small kernel tweak. Start by recording the exact session deadline, monotonic elapsed time, remaining GPU allocation and any already-valid v9 baseline evidence. Avoid rerunning a matching baseline merely out of habit, but never compare to unverified historical values.
+
+**Candidate screening checklist (all required before expensive half-run):** (a) actual production bottleneck and plausible >=5% end-to-end opportunity; (b) original v9 attention/decode and modified-operator GPU correctness/fallback tests for 4K/16K paging and masks; (c) paired, warmed-up, repeated baseline/candidate kernel microbench with medians/variance, occupancy/register/shared-memory/spill and memory evidence; (d) proof the changed kernel is invoked in production; (e) paired short serving A/B smoke under identical diagnostic inputs, request completion and no obvious TTFT/TPOT regression; (f) written go/no-go justification and remaining-time check. Allocate roughly **20–30 minutes to quick screening** per idea, stopping bad candidates early. Diagnostic tests are not half-run scores.
+
+Never start a new complete two-workload half-run with **less than 150 minutes left** (2h observed upper end + 30-minute results buffer); when a fresh control and confirmatory repeat are needed, plan for **~300 minutes or more**. These are planning safeguards, not promises about runtime. If the time left cannot support reliable evaluation, profile further or stop and report best verified result rather than starting an incomplete expensive run.
+
+### Optional small serving A/B diagnostic — not an official benchmark
+
+Use the same running v9 server and identical arguments for baseline and candidate. These commands call the installed vLLM CLI directly, do NOT edit or invoke a modified competition benchmark, and use deliberately fewer requests/tokens to give fast direction only. Save outputs under v9/.autoresearch-work. The diagnostic shape/concurrency differs from the scored benchmark: **NEVER report these tok/s as 4K/16K half-run throughput**.
+
+~~~bash
+cd /root/Optimization/v9
+mkdir -p .autoresearch-work/quick
+set -o pipefail
+
+# 4K short prefill+decode diagnostic (not a 4K half-run).
+vllm bench serve --backend vllm --model minicpm \
+  --tokenizer /workspace/MiniCPM5-2B --endpoint /v1/completions \
+  --host localhost --port 9031 --dataset-name random --ignore-eos \
+  --random-input-len 4096 --random-output-len 128 \
+  --max-concurrency 8 --num-prompts 16 \
+  2>&1 | tee .autoresearch-work/quick/smoke_4k.log
+
+# 16K long-context diagnostic (not a 16K half-run).
+vllm bench serve --backend vllm --model minicpm \
+  --tokenizer /workspace/MiniCPM5-2B --endpoint /v1/completions \
+  --host localhost --port 9031 --dataset-name random --ignore-eos \
+  --random-input-len 16384 --random-output-len 128 \
+  --max-concurrency 8 --num-prompts 8 \
+  2>&1 | tee .autoresearch-work/quick/smoke_16k.log
+~~~
+
+Use distinct log names/directories for **each** baseline/candidate diagnostic repetition; do not overwrite the evidence by reusing the example filenames. Reduced requests may not reproduce mixed prefill/decode at 64 concurrency, so add isolated/mixed attention kernel probes as needed before choosing an expensive serving experiment. Microbenchmarks and short smoke tests are screening filters, not proof of overall throughput or regression absence.
+
 ## Terminal B: unchanged 4K/16K half-run
 
-Run separately for each baseline and candidate. Each run writes its original CSVs and log in a unique v9-ignored directory.
+**Expensive final-stage measurement; run ONLY after passing quick screening and verifying >=150 minutes remain.** Run separately for a needed baseline and a promising candidate. Each run writes its original CSVs and log in a unique v9-ignored directory.
 
 ~~~bash
 cd /root/Optimization/v9
@@ -82,8 +118,12 @@ The checker exits 0 for valid CSVs, NOT for a verified gain. A one-off positive 
     Work only in /root/Optimization/v9. Read AGENTS.md, program.md and
     autoresearch/GOAL.md. Profile and improve BI-V150 attention/GEMM kernels
     with one causal hypothesis at a time. Establish a fresh v9 half-run
-    baseline with the fixed v9 vLLM command and unchanged /workspace half
-    benchmark above. Run both 4K and 16K each time. Reach >=2450 4K OR
+    baseline only if existing matched CSVs cannot be verified. Spend ~20–30
+    minutes per hypothesis on correctness, profiled paired kernel A/B,
+    production invocation proof and short serving diagnostics. Do not run
+    an expensive 1.5–2h half-run without strong causal evidence and at least
+    150 minutes remaining. Run BOTH workloads in the official half-run.
+    Reach >=2450 4K OR
     >=1450 16K Total tok/s, verified by repeat tests. Run focused GPU
     correctness tests and prove the optimized kernel executes in serving.
     At EVERY repeatable >=5% Total tok/s gain relative to the last
