@@ -48,22 +48,45 @@ class HalfRunTests(unittest.TestCase):
     def test_4k_threshold_is_numeric_only(self):
         report = evaluate(self.args())
         self.assertTrue(report["numeric_target_observed"])
-        self.assertTrue(report["numeric_gain_observed"])
+        self.assertTrue(report["numeric_positive_change_observed"])
         self.assertFalse(report["reproducibility_verified"])
+        self.assertTrue(report["numeric_checkpoint_candidate"])  # goal exception despite <5% gain
+        self.assertFalse(report["numeric_5pct_gain_observed"])
         self.assertNotIn("passed", report)
+
+    def test_exact_5pct_progress_in_4k_under_goal(self):
+        report = evaluate(self.args(base4=2130, base16=1240, cand4=2236.5, cand16=1240))
+        self.assertTrue(report["numeric_5pct_gain_observed"])
+        self.assertTrue(report["comparison"]["4K"]["numeric_5pct_gain_observed"])
+        self.assertFalse(report["numeric_target_observed"])
+        self.assertTrue(report["numeric_checkpoint_candidate"])
+        self.assertFalse(report["reproducibility_verified"])
+
+    def test_exact_5pct_progress_in_16k_under_goal(self):
+        report = evaluate(self.args(base4=2130, base16=1240, cand4=2130, cand16=1302))
+        self.assertTrue(report["comparison"]["16K"]["numeric_5pct_gain_observed"])
+        self.assertTrue(report["numeric_checkpoint_candidate"])
+
+    def test_below_5pct_not_checkpoint(self):
+        report = evaluate(self.args(base4=2130, base16=1240, cand4=2236.49, cand16=1240))
+        self.assertTrue(report["numeric_positive_change_observed"])
+        self.assertFalse(report["numeric_5pct_gain_observed"])
+        self.assertFalse(report["numeric_checkpoint_candidate"])
 
     def test_16k_threshold(self):
         self.assertTrue(evaluate(self.args(cand4=2350, cand16=1450))["comparison"]["16K"]["numeric_target_observed"])
 
     def test_gain_below_threshold(self):
         report = evaluate(self.args(cand4=2380))
-        self.assertTrue(report["numeric_gain_observed"])
+        self.assertTrue(report["numeric_positive_change_observed"])
         self.assertFalse(report["numeric_target_observed"])
+        self.assertFalse(report["numeric_checkpoint_candidate"])
 
     def test_no_gain_csv_is_still_valid(self):
         report = evaluate(self.args(cand4=2350))
         self.assertTrue(report["valid_half_run_csvs"])
-        self.assertFalse(report["numeric_gain_observed"])
+        self.assertFalse(report["numeric_positive_change_observed"])
+        self.assertFalse(report["numeric_checkpoint_candidate"])
 
     def test_regression_and_ttft_disclosed(self):
         report = evaluate(self.args(cand16=1200, ttft_scale=1.2))

@@ -2,7 +2,7 @@
 
 **Open /root/Optimization/v9 in the existing Remote-SSH Codex IDE extension.** It is the ONLY remote source workspace. Local repository mirror: Co_Kaggle/g7/tests_BI-V150/Optimization/v9 (Windows suffix: g7\tests_BI-V150\Optimization\v9).
 
-Development **half-run** objective: **4K [4096,1024,64,256] >=2450** OR **16K [16384,1024,64,128] >=1450** Total tok/s. Test BOTH. The provided read-only benchmark is /workspace/vllm-plugin-FL/benchmarks/benchmark_throughput_serve_half.py (RUNS=2, SKIP_FIRST=0). Do not run MATH-500; the user will perform it later.
+Development **half-run** objective: **4K [4096,1024,64,256] >=2450** OR **16K [16384,1024,64,128] >=1450** Total tok/s. Test BOTH. Initial user-reported v9 half-run references: **4K 2130**, **16K 1240 tok/s** (second label assumed 16K; check CSV). **Observable progress = repeatable >=5% gain vs the last accepted best matched half-run**, initially corresponding to 4K >=2236.5 or 16K >=1302 if these reference values are confirmed. Do not confuse a baseline reference with fresh A/B evidence. The provided read-only benchmark is /workspace/vllm-plugin-FL/benchmarks/benchmark_throughput_serve_half.py (RUNS=2, SKIP_FIRST=0). Do not run MATH-500; the user will perform it later.
 
 Read AGENTS.md and autoresearch/GOAL.md before beginning. No SSH bridge, rsync mirror, local Codex CLI, or bench.py wrapper.
 
@@ -75,7 +75,7 @@ python3 autoresearch/evaluate.py \
   --json-out .autoresearch-work/comparison.json
 ~~~
 
-The checker exits 0 for valid CSVs, NOT for a verified gain. A one-off positive delta or a numerically crossed threshold is not a reproducible victory. Repeat paired/interleaved A/B, verify GPU kernel correctness and real production invocation, report TTFT and both throughputs. A repeatable true gain warrants an evidence-backed PR even below goal.
+The checker exits 0 for valid CSVs, NOT for a verified gain. A one-off positive delta or a numerically crossed threshold is not a reproducible victory. Repeat paired/interleaved A/B, verify GPU kernel correctness and real production invocation, report TTFT and both throughputs. An observed positive change below 5% is diagnostic and should be logged, not filed as a progress PR. A **repeatable >=5% gain versus the last accepted best** in either workload warrants an evidence-backed progress PR even below goal. A reproducible final goal (4K >=2450 OR 16K >=1450) warrants a final PR even if its last incremental gain is below 5%.
 
 ## Codex IDE task
 
@@ -86,8 +86,11 @@ The checker exits 0 for valid CSVs, NOT for a verified gain. A one-off positive 
     benchmark above. Run both 4K and 16K each time. Reach >=2450 4K OR
     >=1450 16K Total tok/s, verified by repeat tests. Run focused GPU
     correctness tests and prove the optimized kernel executes in serving.
-    At EVERY repeatable serving gain, even below goal, commit only v9
-    changes and open a PR recording measured evidence, then continue.
+    At EVERY repeatable >=5% Total tok/s gain relative to the last
+    accepted best half-run in either workload, commit only v9 changes
+    and open an evidence-backed PR, then continue. Log smaller gains
+    until cumulative >=5% is proven. If a reproducible end goal is
+    reached, open the final PR even for a smaller last step.
     Stop at a reproducible target, explicit deadline or hard blocker.
     Do not alter benchmark scripts, evaluation data, hyperparameters,
     non-v9 sources or normal dispatch. Do not run MATH-500; the user will.

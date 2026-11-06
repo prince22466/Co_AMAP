@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Compare original 4K/16K half-run CSVs; numeric results are NOT a win gate.
 
+Progress checkpoint threshold: +5% relative to the last accepted best
+in either workload. Crossing an end goal may also trigger a final PR.
+
 Uses unmodified benchmark_throughput_serve_half.py (RUNS=2, SKIP_FIRST=0).
 No MATH-500, repeatability or production-kernel verification is performed.
 """
@@ -14,6 +17,7 @@ from pathlib import Path
 
 CASES = {4096: (1024, 64, 256), 16384: (1024, 64, 128)}
 TARGETS = {"4K": 2450.0, "16K": 1450.0}
+PROGRESS_GAIN = 0.05  # A checkpoint requires >=5% over the last accepted best.
 
 
 def positive(value: str, label: str) -> float:
@@ -70,26 +74,32 @@ def evaluate(args: argparse.Namespace) -> dict:
     for size in CASES:
         label = f"{size // 1024}K"
         a, b = baseline[size], candidate[size]
+        checkpoint_gain = b["tok"] + 1e-9 >= a["tok"] * (1 + PROGRESS_GAIN)
         comparison[label] = {
             "baseline_total_tok_s": a["tok"],
             "candidate_total_tok_s": b["tok"],
             "throughput_change_pct": round(100 * (b["tok"] / a["tok"] - 1), 4),
+            "numeric_5pct_gain_observed": checkpoint_gain,
             "baseline_mean_ttft_ms": a["ttft"],
             "candidate_mean_ttft_ms": b["ttft"],
             "ttft_change_pct": round(100 * (b["ttft"] / a["ttft"] - 1), 4),
             "numeric_target_observed": b["tok"] >= TARGETS[label],
         }
+    five_pct = any(item["numeric_5pct_gain_observed"] for item in comparison.values())
+    goal = any(item["numeric_target_observed"] for item in comparison.values())
     return {
         "valid_half_run_csvs": True,
-        "numeric_gain_observed": any(
+        "numeric_positive_change_observed": any(
             item["candidate_total_tok_s"] > item["baseline_total_tok_s"]
             for item in comparison.values()
         ),
-        "numeric_target_observed": any(item["numeric_target_observed"] for item in comparison.values()),
+        "numeric_5pct_gain_observed": five_pct,
+        "numeric_target_observed": goal,
+        "numeric_checkpoint_candidate": five_pct or goal,
         "reproducibility_verified": False,
         "accuracy": "deferred_to_user",
         "comparison": comparison,
-        "note": "CSV comparison only; repeat matched A/B and verify kernel tests/production trace before PR or stopping.",
+        "note": "CSV comparison only. Progress PR threshold: repeatable >=5% vs last accepted best in either case, or independently verified goal. Repeat matched A/B and verify kernel tests/production trace.",
     }
 
 
