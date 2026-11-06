@@ -78,8 +78,19 @@ echo "Expected archive root: $TEAM_NAME/"
 echo "SHA-256:"
 sha256sum "$archive" "$REPORT_PDF"
 
-# Display only the mandatory root entries, not the entire source tree.
-unzip -Z -1 "$archive" | grep -E "^$TEAM_NAME/(FlagGems/|vllm-plugin-FL/|readme.md$|report.pdf$)" | head -n 10
+# Validate the four mandatory ZIP entries without a pipe-to-head SIGPIPE.
+unzip -Z -1 "$archive" > "$tmp/contents.txt"
+for entry in \
+  "$TEAM_NAME/FlagGems/" \
+  "$TEAM_NAME/vllm-plugin-FL/" \
+  "$TEAM_NAME/readme.md" \
+  "$TEAM_NAME/report.pdf"; do
+  if ! grep -Fxq -- "$entry" "$tmp/contents.txt"; then
+    echo "Missing required ZIP entry: $entry" >&2
+    exit 1
+  fi
+  printf '%s\n' "$entry"
+done
 
 echo "Packaging completed. Reproduce deployment, accuracy and both benchmark cases"
 echo "from this ZIP before uploading it to the competition platform."
