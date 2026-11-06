@@ -45,7 +45,7 @@ One 4K+16K half-run may take **1.5–2 hours**; a baseline plus one candidate co
 
 **Candidate screening checklist (all required before expensive half-run):** (a) actual production bottleneck and plausible >=5% end-to-end opportunity; (b) original v9 attention/decode and modified-operator GPU correctness/fallback tests for 4K/16K paging and masks; (c) paired, warmed-up, repeated baseline/candidate kernel microbench with medians/variance, occupancy/register/shared-memory/spill and memory evidence; (d) proof the changed kernel is invoked in production; (e) paired short serving A/B smoke under identical diagnostic inputs, request completion and no obvious TTFT/TPOT regression; (f) written go/no-go justification and remaining-time check. Allocate roughly **20–30 minutes to quick screening** per idea, stopping bad candidates early. Diagnostic tests are not half-run scores.
 
-Never start a new complete two-workload half-run with **less than 150 minutes left** (2h observed upper end + 30-minute results buffer); when a fresh control and confirmatory repeat are needed, plan for **~300 minutes or more**. These are planning safeguards, not promises about runtime. If the time left cannot support reliable evaluation, profile further or stop and report best verified result rather than starting an incomplete expensive run.
+Never start a new complete two-workload half-run with **less than 90 minutes left** (operator-selected minimum; a run may still require up to ~120 minutes and overrun the remaining budget); when a fresh control and confirmatory repeat are needed, plan for **~300 minutes or more**. This 90-minute minimum is a permission threshold, not a promise a 1.5–2h run will finish. With only 90–119 minutes remaining a full run may be interrupted; record that risk and avoid unsupported success claims. If the time left cannot support reliable evaluation, profile further or stop and report best verified result rather than starting an incomplete expensive run.
 
 ### Optional small serving A/B diagnostic — not an official benchmark
 
@@ -77,7 +77,7 @@ Use distinct log names/directories for **each** baseline/candidate diagnostic re
 
 ## Terminal B: unchanged 4K/16K half-run
 
-**Expensive final-stage measurement; run ONLY after passing quick screening and verifying >=150 minutes remain.** Run separately for a needed baseline and a promising candidate. Each run writes its original CSVs and log in a unique v9-ignored directory.
+**Expensive final-stage measurement; run ONLY after passing quick screening and verifying >=90 minutes remain.** Run separately for a needed baseline and a promising candidate. Each run writes its original CSVs and log in a unique v9-ignored directory.
 
 ~~~bash
 cd /root/Optimization/v9
@@ -122,7 +122,7 @@ The checker exits 0 for valid CSVs, NOT for a verified gain. A one-off positive 
     minutes per hypothesis on correctness, profiled paired kernel A/B,
     production invocation proof and short serving diagnostics. Do not run
     an expensive 1.5–2h half-run without strong causal evidence and at least
-    150 minutes remaining. Run BOTH workloads in the official half-run.
+    90 minutes remaining. Run BOTH workloads in the official half-run.
     Reach >=2450 4K OR
     >=1450 16K Total tok/s, verified by repeat tests. Run focused GPU
     correctness tests and prove the optimized kernel executes in serving.
