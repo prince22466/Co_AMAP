@@ -86,10 +86,11 @@ benchmark, accuracy and regression gates is NOT success.
 
 ## Remote safety and reporting
 
-Only use preapproved V9_SSH_HOST and verified known_hosts. Remote writes
-must stay in V9_REMOTE_ROOT (a dedicated /root/Optimization/v9_autoresearch
-scratch directory), never /root/Optimization/v8, original /v9, or /workspace
-source. Stop only agent-owned PID. Never expose private keys, force-push main,
+Only use preapproved V9_SSH_HOST and verified known_hosts. Remote source
+edits/syncs must stay in V9_REMOTE_ROOT, the dedicated agent-owned scratch.
+The untouched benchmark may write to its official
+/workspace/benchmark_results output directory only. Never edit v8, original
+v9, model weights or /workspace vendor source files. Stop only agent-owned PID. Never expose private keys, force-push main,
 kill unrelated services, or bypass host-key checking.
 
 Update autoresearch/EXPERIMENTS.md every round. Also write
