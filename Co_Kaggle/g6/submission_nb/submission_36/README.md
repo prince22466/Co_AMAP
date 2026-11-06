@@ -9,13 +9,13 @@ model will follow an example.
 
 The exact S29 E4B agent is the control. The primary appends only
 [parser_aware_addendum.md](parser_aware_addendum.md) to S29's instruction.
-Both archives contain the same **byte-identical** S29 \`agent.yaml\` and
-\`eval_config.yaml\`. The original S29 prompt is unchanged in the control.
+Both archives contain the same **byte-identical** S29 `agent.yaml` and
+`eval_config.yaml`. The original S29 prompt is unchanged in the control.
 There are no new skills, agents, graph tools, adapters, or runtime callbacks.
 
 | Dimension | S36 control | S36 primary |
 | --- | --- | --- |
-| Model | \`gemma-4-e4b-it-qat-w4a16-ct\` | **same** |
+| Model | `gemma-4-e4b-it-qat-w4a16-ct` | **same** |
 | Native tools | run_command, read_file, edit_file, write_file, get_status, submit_patch | **same** |
 | Temperature / top-p | 0.0 / 0.95 | **same** |
 | Thinking budget / include_thoughts | 512 / false | **same** |
@@ -23,7 +23,7 @@ There are no new skills, agents, graph tools, adapters, or runtime callbacks.
 | Limit | 4 min / 40 tool calls / 48 turns | **same** |
 | S29 instruction | unchanged | unchanged + delimiter example |
 
-The additive note shows \`<|"|>\` delimiters for string-valued tool parameters.
+The additive note shows `<|"|>` delimiters for string-valued tool parameters.
 The legacy vLLM Gemma 4 API parser can mishandle ordinary quote characters,
 commas and brackets in arguments. Upstream evidence:
 [vLLM #51284](https://github.com/vllm-project/vllm/issues/51284)
@@ -33,28 +33,28 @@ that parser. The current Kaggle wheelhouse may differ. Literal special tokens
 in prompts may themselves impair model behavior: this is why the matched
 control is mandatory.
 
-**Safety caveat:** \`write_file\` remains present for strict S29 parity and
+**Safety caveat:** `write_file` remains present for strict S29 parity and
 is therefore an **existing-file overwrite risk**. The model's no-overwrite
 instruction is NOT enforced. Do not promote a candidate with destructive
 diffs. Shell commands also remain unrestricted.
 
 ## Build and CPU validation
 
-From \`Co_Kaggle/g6/tests_on_tasks/tools\`:
+From `Co_Kaggle/g6/tests_on_tasks/tools`:
 
-\`\`\`bash
+```bash
 python -m pip install 'pyyaml>=6,<7'
 python build_submission36.py
 python -m unittest -v test_submission36.py
-\`\`\`
+```
 
-Generates two deterministic ZIP archives in \`submission_nb/artifacts\`:
+Generates two deterministic ZIP archives in `submission_nb/artifacts`:
 
-- \`submission_36_control.zip\` — exact S29 package semantics/bytes
-- \`submission_36.zip\` — parser-aware primary
+- `submission_36_control.zip` — exact S29 package semantics/bytes
+- `submission_36.zip` — parser-aware primary
 
-Each ZIP has exactly three root files: \`agent.yaml\`,
-\`eval_config.yaml\`, and \`instruction.md\`. The builder also emits
+Each ZIP has exactly three root files: `agent.yaml`,
+`eval_config.yaml`, and `instruction.md`. The builder also emits
 SHA-256 manifests adjacent to each ZIP. CI builds and uploads both ZIPs;
 the binaries are generated artifacts, not checked into Git. CPU checks verify
 package/configuration determinism, **not model tool-call correctness**.
@@ -66,11 +66,11 @@ compaction configuration, and Python environment for both variants. Capture
 the actual vLLM version and wheelhouse hashes. Keep the evaluation scorer
 unchanged.
 
-The existing \`run_submission24_eval.py\` runner handles the official
+The existing `run_submission24_eval.py` runner handles the official
 baseline preflight, evaluation and raw ATIF/JSONL recording. First build
 packages as above. For the known five-task pilot:
 
-\`\`\`bash
+```bash
 python run_submission24_eval.py --stage pilot --repeats 2 --time-limit 4 \
   --tasks /path/tasks.jsonl --snapshots /path/snapshots --wheels /path/wheels \
   --archive ../../submission_nb/artifacts/submission_36_control.zip \
@@ -80,38 +80,38 @@ python run_submission24_eval.py --stage pilot --repeats 2 --time-limit 4 \
   --tasks /path/tasks.jsonl --snapshots /path/snapshots --wheels /path/wheels \
   --archive ../../submission_nb/artifacts/submission_36.zip \
   --output /path/s36_primary_pilot
-\`\`\`
+```
 
-If the baseline-only preflight reports \`baseline_blocked\`, **stop**:
+If the baseline-only preflight reports `baseline_blocked`, **stop**:
 investigate missing fixtures, dependency mismatches, wrong imports, or task
 provenance. Do not edit graders or silently count an invalid baseline as an
 agent failure. If the pilot establishes tool-call reliability, repeat the
-same two commands using \`--stage s1\`, and use distinct, unused output dirs.
-Also run separately with \`--time-limit 0\` to compare against historical
+same two commands using `--stage s1`, and use distinct, unused output dirs.
+Also run separately with `--time-limit 0` to compare against historical
 unlimited-time diagnostics; never combine timed and untimed scores.
 
 For each full 15-task repeat, compare complete paired JSONL results:
 
-\`\`\`bash
+```bash
 python analyze_submission34.py \
   /path/s36_control_s1/candidate_1 /path/s36_primary_s1/candidate_1 \
   --format jsonl
-\`\`\`
+```
 
-For printed 15-task traces, use the same analyzer's \`--format printout\`
+For printed 15-task traces, use the same analyzer's `--format printout`
 to report malformed edit calls, edit failures, first-edit validity, excess
 submissions, duration, and retained resolved IDs. Printed diagnostics may
 elide actual arguments, so inspect raw ATIF events / server traces as well.
 
 ## What to measure
 
-- **First edit-call validity**, and valid parsed keys \`filepath\`,
-  \`old_string\`, \`new_string\`. Separately count parser rejection,
+- **First edit-call validity**, and valid parsed keys `filepath`,
+  `old_string`, `new_string`. Separately count parser rejection,
   missing fields, and exact-anchor-not-found failures.
 - **First effective edit rate**, distinct from a dispatched but rejected
   or no-op call. Record repeated unchanged operations after errors.
-- **Task resolution and retention**: S29 resolved \`rich_3905\`,
-  \`rich_3518\`, and \`rich_3454\` in one untimed diagnostic run.
+- **Task resolution and retention**: S29 resolved `rich_3905`,
+  `rich_3518`, and `rich_3454` in one untimed diagnostic run.
 - **Safety and time**: empty/oversized patches, unrelated modified files,
   destructive overwrites, repeated submit calls, and four-minute failures.
 
@@ -127,7 +127,7 @@ Rich, Requests and FastAPI. A single successful run is not sufficient.
 ## Following experiments — deliberately not mixed into S36
 
 After the parser experiment, perform separate matched ablations for
-\`thinking_budget: 0\` versus 512, then sampling temperature 0.0 versus
+`thinking_budget: 0` versus 512, then sampling temperature 0.0 versus
 0.5. Each must keep the previous experiment's model, tool surface, task
 set, and other generation options fixed. Do **not** vary these parameters
 inside S36's parser experiment.
