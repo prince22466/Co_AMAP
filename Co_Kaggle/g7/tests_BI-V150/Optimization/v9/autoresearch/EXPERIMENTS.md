@@ -2,7 +2,7 @@
 
 Remote only: /root/Optimization/v9. Input benchmark: /workspace/vllm-plugin-FL/benchmarks/benchmark_throughput_serve_half.py (unchanged). Development goal: 4K >=2450 OR 16K >=1450 Total tok/s. MATH-500 is deferred to the user.
 
-All raw logs, traces, repeated A/B outputs and manifests live in v9/.autoresearch-work/. Record the exact commit, test and production-trace evidence for every change.
+All raw logs, traces and repeated A/B outputs live in v9/.autoresearch-work/. Record exact source commit or file hashes, benchmark hash, tests and production-trace evidence for every change. Use the direct commands in program.md; no benchmark wrapper.
 
 | ID | Base SHA | Kernel hypothesis / edit | Correctness tests | Half-run 4K A -> B tok/s | Half-run 16K A -> B tok/s | Repeatability / decision / PR |
 | --- | --- | --- | --- | --- | --- | --- |

@@ -16,7 +16,7 @@ CYCLE: FRESH BASELINE -> PROFILE -> ONE KERNEL PATCH -> GPU TEST -> RESTART OWN 
 
 Stop on reproducible goal, concrete user deadline or blocker. Record every observable, repeatable serving improvement with a distinct evidence-backed PR even if short of 2450/1450, and continue. Do not auto-merge. Never accept switching operators, hyperparameter/benchmark tuning, quantization, speculative decoding, or merging new upstream FlagOS as the optimization. For failures, preserve findings and baseline; avoid restoring unrelated user changes.
 
-Run commands documented in README.md; all results under v9/.autoresearch-work. A prior v8 full-run throughput value is not a valid half-run baseline. Numerical evaluator accepts valid two-run half CSVs, reports candidate values, goal status and percentage deltas; it does NOT prove causal repeatability. For PRs attach actual raw, paired repetitions, trace and SHAs (logs stay untracked).
+Run commands documented in README.md; all results under v9/.autoresearch-work. A prior v8 full-run throughput value is not a valid half-run baseline. Optional numeric comparator checks two-run half CSVs, reports candidate values, threshold observations and percentage deltas; exit 0 confirms valid CSVs only. It does NOT prove a speedup, goal reproducibility, kernel invocation or accuracy. For PRs attach actual raw, paired repetitions, trace and SHAs (logs stay untracked).
 
 ## Session report (in .autoresearch-work/session-report.json)
 

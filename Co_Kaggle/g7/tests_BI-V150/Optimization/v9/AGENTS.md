@@ -54,12 +54,12 @@ Prior unsuccessful v4 grouped lookup, v6 KV tiling, v7 GEMM stacking are negativ
 ## Continuous IDE-agent cycle
 
 1. In /root/Optimization/v9, inspect Git status and current best commit. Preserve user changes; do not blindly reset.
-2. Start the v9-owned vLLM server with autoresearch/bench.py. First collect a FRESH half-run v9 baseline for BOTH workloads. Record SHA, exact commands and CSV/log paths.
+2. Start vLLM directly from v9 using the fixed foreground command in program.md (dedicated terminal). First collect a FRESH v9 half-run baseline for BOTH workloads with the unchanged /workspace benchmark. Record source SHA/hash, benchmark hash, commands and CSV/log paths in v9/.autoresearch-work.
 3. Profile a bottleneck, write one precise kernel hypothesis in autoresearch/EXPERIMENTS.md, make the smallest genuine operator-level change.
-4. Run focused GPU/correctness tests; restart only the server owned by autoresearch/bench.py; run BOTH unchanged half workloads. Capture trace showing candidate kernel reached production.
-5. Validate paired CSVs with autoresearch/evaluate.py; if differences are small/noisy, run interleaved baseline/candidate repetitions under comparable GPU load. Always disclose request failures, TTFT, the other workload's change and uncertainty; avoid falsely declaring a noisy improvement.
+4. Run focused GPU/correctness tests; restart only your dedicated v9 foreground server (Ctrl+C in its own terminal), and run BOTH half workloads. Capture a trace showing the candidate kernel executes in serving.
+5. Optionally compare paired CSVs with read-only autoresearch/evaluate.py: exit code 0 means only valid CSVs, never an accepted improvement. Re-run interleaved baseline/candidate measurements to establish repeatability; inspect request failures, both TTFTs, other workload and uncertainty. Never claim a noisy numeric observation as a confirmed win.
 6. If repeatably improved, commit ONLY v9 kernel/tests/notes (never benchmark scripts or raw logs), push, open an evidence-backed GitHub PR immediately, and continue on the accepted best. If rejected, record failure and restore only the experimental edits without losing unrelated work.
 7. On reaching >=2450 4K OR >=1450 16K in repeatable half-runs with all requests successful and kernel tests passing, stop and report best SHA/PR, both numbers and evidence. Do NOT run MATH-500.
 8. If stopped by deadline/blocker, report best verified result and PRs rather than speculate. Codex IDE extension is the agent: no extra SSH orchestration, CLI installation, or detached long-running service is presumed.
 
-Numeric gate is not proof of causal improvement; PR must link raw evidence and corresponding code SHA. Never claim a PR exists unless GitHub confirms it.
+Numeric comparison is not proof of causal improvement; PR must link raw evidence and corresponding code SHA. Never claim a PR exists unless GitHub confirms it.
