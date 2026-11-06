@@ -86,7 +86,7 @@ class GateTests(unittest.TestCase):
 
     def test_post_warmup_failure_rejects(self):
         args = self.make_args(failure=True)
-        with self.assertRaisesRegex(ValueError, "failed post-warmup"):
+        with self.assertRaisesRegex(ValueError, "failed run"):
             evaluate(args)
 
     def test_missing_official_shape_rejects(self):

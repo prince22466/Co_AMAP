@@ -30,7 +30,7 @@ To start (after obtaining user-authorized SSH/GitHub/Codex access):
 cd Co_Kaggle/g7/tests_BI-V150/Optimization/v9
 export V9_SSH_HOST=bi-v150  # replace with your approved ~/.ssh/config alias
 python3 autoresearch/remote.py check
-python3 autoresearch/run.py --hours 8 --round-minutes 90
+python3 autoresearch/run.py --hours 12 --round-minutes 360
 ~~~
 
 This PR sets up the program; it does not claim a fresh v9 GPU result.

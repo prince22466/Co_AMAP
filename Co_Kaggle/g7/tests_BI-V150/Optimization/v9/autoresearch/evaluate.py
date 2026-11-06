@@ -69,9 +69,9 @@ def validate_raw(path: Path) -> None:
     for size, case_rows in grouped.items():
         if len(case_rows) != RUNS:
             raise ValueError(f"{path}: {size} requires exactly {RUNS} raw runs, got {len(case_rows)}")
-        for row in case_rows[SKIP_FIRST:]:
+        for row in case_rows:
             if row["Run Status"] != "SUCCESS":
-                raise ValueError(f"{path}: {size} has a failed post-warmup run")
+                raise ValueError(f"{path}: {size} has a failed run")
             success = positive_float(row["Successful Requests"], "Successful Requests")
             if success != CASES[size][2]:
                 raise ValueError(f"{path}: {size} has missing requests: {success}")

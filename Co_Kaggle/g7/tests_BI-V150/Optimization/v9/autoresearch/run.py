@@ -107,7 +107,18 @@ def check_report(round_id: int) -> str:
             raise ValueError("Improvement claimed without passing evidence gate")
         if status == "goal_reached" and evidence.get("target_met") is not True:
             raise ValueError("Goal claimed but official target not met")
-        print("Checkpoint PR:", pr, flush=True)
+        try:
+            observed = subprocess.check_output(
+                ["gh", "pr", "view", pr, "--json", "url,state"], text=True, timeout=30,
+            )
+            observed_pr = json.loads(observed)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, ValueError) as exc:
+            raise ValueError(f"GitHub cannot verify checkpoint PR: {exc}") from exc
+        if observed_pr.get("url") != pr or observed_pr.get("state") not in ("OPEN", "MERGED"):
+            raise ValueError("PR URL/state did not match the claimed checkpoint")
+        print("Verified checkpoint PR:", pr, flush=True)
+        if evidence.get("target_met") is True:
+            status = "goal_reached"
     print(f"Round {round_id}: {status} — {obj.get('notes', '')}", flush=True)
     return status
 

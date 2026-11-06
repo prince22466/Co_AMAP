@@ -96,8 +96,8 @@ python3 autoresearch/evaluate.py \
 ~~~
 
 This numerical gate requires:
-- BOTH exact official shapes, four raw runs each, with all post-warmup
-  requests successful;
+- BOTH exact official shapes, four raw runs each, with ALL four
+  rounds' requests successful;
 - >=1% throughput increase in at least one workload and no >1% throughput
   loss in either workload;
 - no >1% mean TTFT regression for either workload;
