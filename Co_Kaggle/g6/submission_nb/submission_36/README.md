@@ -50,7 +50,7 @@ python -m unittest -v test_submission36.py
 
 Generates two deterministic ZIP archives in `submission_nb/artifacts`:
 
-- `submission_36_control.zip` — exact S29 package semantics/bytes
+- `submission_36_control.zip` — exact S29 member contents (ZIP metadata may differ from the archived S29 ZIP)
 - `submission_36.zip` — parser-aware primary
 
 Each ZIP has exactly three root files: `agent.yaml`,
