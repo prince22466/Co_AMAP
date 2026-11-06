@@ -1,0 +1,43 @@
+name: G6 Submission 36 CPU Contract
+
+on:
+  pull_request:
+    paths:
+      - 'Co_Kaggle/g6/submission_nb/submission_36/**'
+      - 'Co_Kaggle/g6/submission_nb/submission_29/**'
+      - 'Co_Kaggle/g6/tests_on_tasks/tools/build_submission36.py'
+      - 'Co_Kaggle/g6/tests_on_tasks/tools/test_submission36.py'
+      - '.github/workflows/g6-submission36.yml'
+  workflow_dispatch:
+
+jobs:
+  submission36-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install CPU-only YAML dependency
+        run: python -m pip install 'pyyaml>=6,<7'
+      - name: Compile scripts
+        run: |
+          python -m py_compile Co_Kaggle/g6/tests_on_tasks/tools/build_submission36.py
+          python -m py_compile Co_Kaggle/g6/tests_on_tasks/tools/test_submission36.py
+      - name: Generate S36 primary and exact baseline ZIPs
+        working-directory: Co_Kaggle/g6/tests_on_tasks/tools
+        run: python build_submission36.py
+      - name: Validate single-variable control and deterministic archives
+        working-directory: Co_Kaggle/g6/tests_on_tasks/tools
+        run: python -m unittest -v test_submission36.py
+      - name: Upload unscored E4B packages and SHA manifests
+        uses: actions/upload-artifact@v4
+        with:
+          name: submission36-cpu-packages
+          if-no-files-found: error
+          path: |
+            Co_Kaggle/g6/submission_nb/artifacts/submission_36.zip
+            Co_Kaggle/g6/submission_nb/artifacts/submission_36_control.zip
+            Co_Kaggle/g6/submission_nb/artifacts/submission_36.manifest.json
+            Co_Kaggle/g6/submission_nb/artifacts/submission_36_control.manifest.json
