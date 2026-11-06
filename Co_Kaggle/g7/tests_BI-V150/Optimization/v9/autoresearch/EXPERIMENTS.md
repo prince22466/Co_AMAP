@@ -1,15 +1,11 @@
-# v9 autoresearch experiment log
+# v9 Codex IDE half-run experiment log
 
-Keep this tracked summary concise. Store raw benchmark logs, profiler traces,
-and outputs under the excluded .autoresearch-work/ folder locally and in
-the dedicated SSH scratch directory. Record SHA and path to each artifact.
+Remote only: /root/Optimization/v9. Input benchmark: /workspace/vllm-plugin-FL/benchmarks/benchmark_throughput_serve_half.py (unchanged). Development goal: 4K >=2450 OR 16K >=1450 Total tok/s. MATH-500 is deferred to the user.
 
-| ID | Best-base SHA | Hypothesis / code change | GPU tests | 4K tok/s A to B | 16K tok/s A to B | Math-500 | Decision / PR |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| 000 | historical v8 | untouched v9 copy: fresh A/B pending | not run in v9 | 2331.29 historical only | 1251.22 historical only | 0.981 historical only | pending |
+All raw logs, traces, repeated A/B outputs and manifests live in v9/.autoresearch-work/. Record the exact commit, test and production-trace evidence for every change.
 
-Every experiment must record time, actual device, exact Git SHA(s), tested
-operator/kernel path, trace evidence, all official commands/CSV identifiers,
-MATH-500 evaluation command and output, percent changes, reason for
-acceptance or rejection, and PR URL when accepted. Record negative results
-to prevent repeating ineffective experiments.
+| ID | Base SHA | Kernel hypothesis / edit | Correctness tests | Half-run 4K A -> B tok/s | Half-run 16K A -> B tok/s | Repeatability / decision / PR |
+| --- | --- | --- | --- | --- | --- | --- |
+| 000 | v9 starting point | Establish fresh v9 half-run baseline; do not substitute historical v8 full-run values | Pending | Pending | Pending | Pending |
+
+For each experiment note date/time, server SHA, source paths, benchmark SHA, exact commands, raw and summary CSVs, both TTFTs, any failed requests, observed kernel invocation and profiler evidence. Document rejected experiments to avoid repeating unsupported hypotheses. File a PR for each reproducible serving-level gain, even below the goal, and continue until goal/deadline/blocker. No MATH-500 gate or claim.

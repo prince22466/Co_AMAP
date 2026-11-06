@@ -1,39 +1,23 @@
-# v9 Codex autoresearch contract
+# v9 autoresearch contract — remote Codex IDE, half-run
 
-Keep trying genuine BI-V150 kernel/operator optimizations until one verified
-milestone is met: 4K total tokens/s >= 2700 or 16K >= 1500, OR a declared
-wall-clock time budget is exhausted, OR remote access/evidence is blocked.
+**ONLY source workspace:** /root/Optimization/v9 (mirrored locally at Co_Kaggle/g7/tests_BI-V150/Optimization/v9). No other Optimization version or framework installation may be modified.
 
-A milestone is verified only with unmodified full official workloads,
-MATH-500 >= 0.95, all requests successful, other workload loss <= 1%,
-and mean TTFT loss <= 1% in both workloads. Benchmark pairing, hardware
-and server settings must match; rerun interleaved A/B near the noise floor.
-The competition scores two workloads: the OR threshold is a research stop
-condition, not license to regress the other.
+**Performance objective (logical OR):**
+- Half-run 4K [4096,1024,64,256]: Total tok/s >= 2450
+- Half-run 16K [16384,1024,64,128]: Total tok/s >= 1450
 
-Priority 1 — 16K attention: memory dependency chains, shared-memory footprint,
-paged-KV address load, Q/K/V tile reuse, spills and occupancy (strong evidence).
-Priority 2 — mixed prefill/decode interference: isolated/mixed phase causal
-profiling, then kernel-level correction (moderate evidence).
-Priority 3 — 4K attention and prefill GEMM: locality, tl.dot reuse, grouped
-scheduling in existing operators (strong kernel-time evidence).
+Use the unchanged READ-ONLY script /workspace/vllm-plugin-FL/benchmarks/benchmark_throughput_serve_half.py: RUNS=2, SKIP_FIRST=0, both shapes in every measurement. It is NOT the official full-run. Do not change its code, run counts, parsing or input parameters.
 
-Use ONE coherent hypothesis at a time:
-BASELINE -> PROFILE -> PATCH -> GPU TEST -> FULL A/B -> MATH500 -> SCORE ->
-ACCEPT+CHECKPOINT PR or REJECT+ROLLBACK -> NEXT.
-Do not modify benchmark scripts. Microbenchmarks are only diagnostic.
-Prior v4/v6/v7 stack results are negative evidence, not reusable wins.
+**Defer MATH-500 completely.** The human runs it after the research goal. Passing a half-run is not passing official performance or accuracy evaluation. Still require kernel functional tests, no missing/failed benchmark requests, and production invocation evidence. Always record the other workload and TTFT; these are disclosures, not extra hard gates imposed over the user's OR target. For any small gain, repeat paired A/B beyond one half-run to exclude measurement noise.
 
-After each round write .autoresearch-work/round-report.json with fields:
-- round: integer matching the supervisor iteration
-- status: improved | goal_reached | no_gain | blocked
-- gate_report: path to the evaluate.py JSON, or null
-- pr_url: real newly opened GitHub PR URL, or null
-- notes: concise evidence, next hypothesis or blocker
+Priority: (1) 16K attention memory dependencies/shared-memory/tiles/occupancy; (2) mixed prefill-decode interference and kernel causality; (3) 4K attention and prefill GEMM locality/tiling.
 
-Only use status improved/goal_reached if gate JSON has passed=true and
-the matching goal status, and pr_url is a real PR you opened. Report
-blocked rather than fabricate a result or quietly lower gate criteria.
-Each accepted result gets a separate PR immediately, even below targets.
-Build later changes atop last accepted best and leave earlier checkpoint
-PR open for independent review. Never merge without human review.
+CYCLE: FRESH BASELINE -> PROFILE -> ONE KERNEL PATCH -> GPU TEST -> RESTART OWN v9 SERVER -> HALF-RUN BOTH -> SCORE -> REPEAT A/B AS NEEDED -> ACCEPT+COMMIT+PR OR REJECT+REVERT EXPERIMENT -> NEXT.
+
+Stop on reproducible goal, concrete user deadline or blocker. Record every observable, repeatable serving improvement with a distinct evidence-backed PR even if short of 2450/1450, and continue. Do not auto-merge. Never accept switching operators, hyperparameter/benchmark tuning, quantization, speculative decoding, or merging new upstream FlagOS as the optimization. For failures, preserve findings and baseline; avoid restoring unrelated user changes.
+
+Run commands documented in README.md; all results under v9/.autoresearch-work. A prior v8 full-run throughput value is not a valid half-run baseline. Numerical evaluator accepts valid two-run half CSVs, reports candidate values, goal status and percentage deltas; it does NOT prove causal repeatability. For PRs attach actual raw, paired repetitions, trace and SHAs (logs stay untracked).
+
+## Session report (in .autoresearch-work/session-report.json)
+
+Record best_commit, best_pr_urls, baseline_csvs, candidate_csvs, four_k_total_tok_s, sixteen_k_total_tok_s, goal_reached, tests_passed, kernel_trace_path, research_log, outstanding_accuracy_check=true, and notes. Never claim MATH-500 was run or accepted.
