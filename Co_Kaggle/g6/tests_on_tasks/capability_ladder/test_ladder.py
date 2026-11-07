@@ -274,6 +274,7 @@ class ReportTests(unittest.TestCase):
             (base / "run_manifest.json").write_text(json.dumps({
                 "tasks_sha256": "same", "served_model": attrs["served_model"],
                 "sandbox": "docker",
+                "runtime_versions": attrs["versions"],
             }))
             with self.assertRaisesRegex(IncompleteEvidence, "seed differs"):
                 require_matching_environment(
@@ -283,6 +284,14 @@ class ReportTests(unittest.TestCase):
             matched = require_matching_environment(
                 l1 / "verified.jsonl", l2 / "verified.jsonl", candidate1)
             self.assertEqual(matched["generator_seed"], 1)
+            (base / "run_manifest.json").write_text(json.dumps({
+                "tasks_sha256": "same", "served_model": attrs["served_model"],
+                "sandbox": "docker",
+                "runtime_versions": {"swegemma": "wrong"},
+            }))
+            with self.assertRaisesRegex(IncompleteEvidence, "wheel mismatch"):
+                require_matching_environment(
+                    l1 / "verified.jsonl", l2 / "verified.jsonl", candidate1)
             (base / "run_manifest.json").write_text(json.dumps({
                 "tasks_sha256": "same", "served_model": attrs["served_model"],
                 "sandbox": "subprocess",
