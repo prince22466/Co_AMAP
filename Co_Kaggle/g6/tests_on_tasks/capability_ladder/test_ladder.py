@@ -163,6 +163,21 @@ class ProbeTests(unittest.TestCase):
         with self.assertRaisesRegex(ProbeError, "outside original source"):
             make_case({**TASK, "patch": far}, self.root)
 
+    def test_all_blocked_snapshots_fail_before_model_server_access(self):
+        missing_snapshots = self.root / "empty_snapshots"
+        missing_snapshots.mkdir()
+        args = Namespace(
+            level="reasoning", tasks=self.tasks, snapshots=missing_snapshots,
+            model_url="http://localhost:8000/v1",
+            served_model="gemma-4-e4b-it-qat-w4a16-ct", api_key="EMPTY",
+            stage="pilot", task_ids=["rich_123"], seed=1,
+            output=self.root / "should_not_be_created")
+        with patch("probe.verify_server") as check:
+            with self.assertRaisesRegex(ProbeError, "Every selected task"):
+                run_probe(args)
+            check.assert_not_called()
+        self.assertFalse(args.output.exists())
+
     def test_task_loader_rejects_duplicates(self):
         self.assertEqual(read_tasks(self.tasks)["rich_123"]["repo"], "Textualize/rich")
         self.tasks.write_text(json.dumps(TASK) + "\n" + json.dumps(TASK) + "\n")
