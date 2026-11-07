@@ -1,0 +1,323 @@
+%PDF-1.4
+% v8 submission draft report
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [6 0 R 8 0 R 10 0 R 12 0 R 14 0 R] /Count 5 >>
+endobj
+3 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+4 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>
+endobj
+6 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R >> >> /Contents 7 0 R >>
+endobj
+7 0 obj
+<< /Length 4689 >>
+stream
+0.1 0.2 0.32 rg
+BT /F2 9 Tf 48 765 Td (FlagOS S2 - MiniCPM5-2B BI-V150 - v8 draft technical report) Tj ET
+0.8 0.82 0.84 RG 0.6 w 48 755 m 564 755 l S
+0 0 0 rg
+BT /F2 18 Tf 48 720 Td (FlagOS Open Computing Global Challenge S2 - Track 2) Tj ET
+BT /F2 14 Tf 48 687 Td (MiniCPM5-2B inference throughput optimization on Iluvatar BI-V150) Tj ET
+BT /F2 14 Tf 48 668 Td (\(v8\)) Tj ET
+BT /F1 9.2 Tf 48 641 Td (Technical report - working draft, 2026-11-06) Tj ET
+BT /F1 9.2 Tf 48 623 Td (Registered team: [TO FILL - registered name]) Tj ET
+BT /F1 9.2 Tf 48 611 Td (Authors: [TO FILL - confirm attribution before submission]) Tj ET
+BT /F1 9.2 Tf 48 599 Td (Target hardware: 1 x Iluvatar BI-V150 \(32 GiB\)) Tj ET
+BT /F1 9.2 Tf 48 587 Td (Target model: MiniCPM5-2B) Tj ET
+BT /F1 9.2 Tf 48 575 Td (Implementation: v8, the consolidated v1 prefill + v5 decode optimization) Tj ET
+BT /F1 9.2 Tf 48 563 Td (Evaluation status: Self-run development results, not certified by the organizer.) Tj ET
+BT /F2 11 Tf 48 537 Td (Abstract) Tj ET
+BT /F1 9.2 Tf 48 513 Td (We optimize MiniCPM5-2B inference throughput on the organizer-specified FlagOS / vLLM-FL stack by) Tj ET
+BT /F1 9.2 Tf 48 501 Td (improving the existing Triton unified attention operator on BI-V150. The final selected v8 implementation) Tj ET
+BT /F1 9.2 Tf 48 489 Td (combines \(1\) a guarded BF16 grouped-query-attention \(GQA\) prefill tiling change and \(2\) guarded) Tj ET
+BT /F1 9.2 Tf 48 477 Td (physical-page lookup reuse in paged-KV pure decode. It preserves vLLM's attention metadata, KV-cache) Tj ET
+BT /F1 9.2 Tf 48 465 Td (updates, backend interface, supported fallback configurations and official serving arguments. In the) Tj ET
+BT /F1 9.2 Tf 48 453 Td (archived internal summary, v8 reached 2,331.29 total tokens/s in the 4K workload and 1,251.22 total) Tj ET
+BT /F1 9.2 Tf 48 441 Td (tokens/s in the 16K workload, respectively +23.88% and +45.17% against our historical self-run baseline) Tj ET
+BT /F1 9.2 Tf 48 429 Td (summaries. These results are preliminary until the raw final-v8 runs and full Level 3 accuracy evaluation) Tj ET
+BT /F1 9.2 Tf 48 417 Td (are archived and reproduced.) Tj ET
+BT /F2 11 Tf 48 391 Td (1. Rules, goals and scope) Tj ET
+BT /F1 9.2 Tf 48 367 Td (The competition evaluates total tokens/s at two fixed scenarios and requires the same launch parameters as) Tj ET
+BT /F1 9.2 Tf 48 355 Td (the baseline, accuracy >=0.95 on MATH-500 Level 3 \(baseline 0.962\), and latency safeguards \(the) Tj ET
+BT /F1 9.2 Tf 48 343 Td (competition describes a 1% tolerance around the baseline TTFT\). The organizer also requires the specified) Tj ET
+BT /F1 9.2 Tf 48 331 Td (vllm-plugin-FL branch \(flagos-2026-s2\) and FlagGems tag v5.3.5, submission of code/technical) Tj ET
+BT /F1 9.2 Tf 48 319 Td (PDF/reproduction guide and a reproducible environment. The performance contribution is assessed on both) Tj ET
+BT /F1 9.2 Tf 48 307 Td (the 4K and 16K workloads.) Tj ET
+BT /F1 9.2 Tf 48 289 Td (This implementation does not use hyperparameter-enabled quantization, speculative decoding,) Tj ET
+BT /F1 9.2 Tf 48 277 Td (benchmark-script modifications, model changes, replacement of a major operator without optimizing it,) Tj ET
+BT /F1 9.2 Tf 48 265 Td (deletion of the framework's operator-selection logic or bulk merge from a newer inference-framework) Tj ET
+BT /F1 9.2 Tf 48 253 Td (branch. Improvements are in the optimized operator source, not request manipulation.) Tj ET
+BT /F1 9.2 Tf 48 235 Td (The project targets BI-V150 only. We do not claim results on MuXi C500, any other model, or untested) Tj ET
+BT /F1 9.2 Tf 48 223 Td (device combinations.) Tj ET
+BT /F2 11 Tf 48 197 Td (2. Hardware and software) Tj ET
+BT /F1 9.2 Tf 48 173 Td (The inspected development environment snapshot from 2026-10-25 records BI-V150 with 32 GiB GPU memory,) Tj ET
+BT /F1 9.2 Tf 48 161 Td (Ubuntu 24.04.2 LTS, Python 3.12.11, vLLM 0.24.0+empty, vllm-plugin-fl 0.3.0rc0+g13eb9be69, FlagGems 5.3.5,) Tj ET
+BT /F1 9.2 Tf 48 149 Td (PyTorch 2.10.0+corex.4.5.0, flagtree 0.6.2a3+iluvatar3.6 and driver 4.5.0. Final source commit SHAs and) Tj ET
+BT /F1 9.2 Tf 48 137 Td (software versions need to be recorded from the release host and matched to organizer pinning.) Tj ET
+BT /F1 9.2 Tf 48 119 Td (The model and dataset paths in the provided environment are /workspace/MiniCPM5-2B and) Tj ET
+BT /F1 9.2 Tf 48 107 Td (/workspace/evalscope-datasets/math_500. No other model is involved.) Tj ET
+BT /F2 11 Tf 48 81 Td (3. Architecture and implementation) Tj ET
+0.8 0.82 0.84 RG 0.5 w 48 45 m 564 45 l S
+0.3 0.3 0.3 rg
+BT /F1 8 Tf 48 31 Td (Internal draft - 2026-11-06 - not organizer-certified) Tj ET
+BT /F1 8 Tf 525 31 Td (Page 1/5) Tj ET
+endstream
+endobj
+8 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R >> >> /Contents 9 0 R >>
+endobj
+9 0 obj
+<< /Length 5391 >>
+stream
+0.1 0.2 0.32 rg
+BT /F2 9 Tf 48 765 Td (FlagOS S2 - MiniCPM5-2B BI-V150 - v8 draft technical report) Tj ET
+0.8 0.82 0.84 RG 0.6 w 48 755 m 564 755 l S
+0 0 0 rg
+BT /F3 7.3 Tf 53 730 Td (vllm serve -- fixed organizer flags) Tj ET
+BT /F3 7.3 Tf 53 720 Td (             |) Tj ET
+BT /F3 7.3 Tf 53 710 Td (     vllm-plugin-FL dispatch / FlagGems backend) Tj ET
+BT /F3 7.3 Tf 53 700 Td (             |  \(preserve existing priority and fallback chain\)) Tj ET
+BT /F3 7.3 Tf 53 690 Td (   Iluvatar BI-V150 selected attention backend) Tj ET
+BT /F3 7.3 Tf 53 680 Td (             |) Tj ET
+BT /F3 7.3 Tf 53 670 Td (     attention_biv150.py) Tj ET
+BT /F3 7.3 Tf 53 660 Td (     - inherited vLLM Triton attention metadata) Tj ET
+BT /F3 7.3 Tf 53 650 Td (     - inherited KV-cache update / attention interface) Tj ET
+BT /F3 7.3 Tf 53 640 Td (             |) Tj ET
+BT /F3 7.3 Tf 53 630 Td (     triton_unified_attention_biv150.py) Tj ET
+BT /F3 7.3 Tf 53 620 Td (             |) Tj ET
+BT /F3 7.3 Tf 53 610 Td (     +-------------------+----------------------+) Tj ET
+BT /F3 7.3 Tf 53 600 Td (     | eligible prefill  | eligible pure decode |) Tj ET
+BT /F3 7.3 Tf 53 590 Td (     |  BF16 GQA tiles   | paged-KV lookup reuse|) Tj ET
+BT /F3 7.3 Tf 53 580 Td (     +-------------------+----------------------+) Tj ET
+BT /F3 7.3 Tf 53 570 Td (             |) Tj ET
+BT /F3 7.3 Tf 53 560 Td (        original unified Triton operator with) Tj ET
+BT /F3 7.3 Tf 53 550 Td (        shape-gated compile-time specialization) Tj ET
+BT /F3 7.3 Tf 53 540 Td (             |) Tj ET
+BT /F3 7.3 Tf 53 530 Td (      normal fallback for unsupported shapes/features) Tj ET
+BT /F1 9.2 Tf 48 511 Td (Source entry points in the v8 tree:) Tj ET
+BT /F1 9.15 Tf 54 493 Td (- `vllm-plugin-FL/vllm_fl/dispatch/backends/flaggems/flaggems.py`: chooses the BI-V150 specialized) Tj ET
+BT /F1 9.15 Tf 54 481 Td (  attention backend on Iluvatar, retains explicit FlagGems-attention priority when requested, and) Tj ET
+BT /F1 9.15 Tf 54 469 Td (  retains the other-vendor Triton fallback.) Tj ET
+BT /F1 9.15 Tf 54 457 Td (- `vllm-plugin-FL/vllm_fl/dispatch/backends/vendor/iluvatar/impl/attention_biv150.py`:) Tj ET
+BT /F1 9.15 Tf 54 445 Td (  `BIV150TritonAttentionBackend` and `BIV150TritonAttentionImpl` reuse vLLM attention metadata and call) Tj ET
+BT /F1 9.15 Tf 54 433 Td (  the single unified attention launcher.) Tj ET
+BT /F1 9.15 Tf 54 421 Td (- `vllm-plugin-FL/vllm_fl/dispatch/backends/vendor/iluvatar/impl/triton_unified_attention_biv150.py`:) Tj ET
+BT /F1 9.15 Tf 54 409 Td (  contains the actual existing-operator kernel improvements, including `optimize_prefill_gqa` and) Tj ET
+BT /F1 9.15 Tf 54 397 Td (  compile-time `DECODE_PAGE_LOOKUP`.) Tj ET
+BT /F1 9.2 Tf 48 379 Td (No secondary v4/v6/v7 kernel is part of this selected v8 implementation.) Tj ET
+BT /F2 11 Tf 48 353 Td (4. Prefill: BF16 GQA tile reuse \(v1 contribution\)) Tj ET
+BT /F1 9.2 Tf 48 329 Td (MiniCPM5-2B's eligible attention configuration uses 16 query heads, 2 KV heads and head dimension 128, so) Tj ET
+BT /F1 9.2 Tf 48 317 Td (each KV head feeds 8 query heads. In the original launcher the corresponding initial BLOCK_M value is 16,) Tj ET
+BT /F1 9.2 Tf 48 305 Td (giving BLOCK_Q = 16/8 = 2 query positions per KV group. The v8 optimize_prefill_gqa specialization sets) Tj ET
+BT /F1 9.2 Tf 48 293 Td (BLOCK_M = 32 and BLOCK_Q = 32/8 = 4, allowing more query positions to reuse the same KV tile inside an) Tj ET
+BT /F1 9.2 Tf 48 281 Td (attention block. This changes the query-side tiling strategy of the existing operator rather than) Tj ET
+BT /F1 9.2 Tf 48 269 Td (substituting an unoptimized operator.) Tj ET
+BT /F1 9.2 Tf 48 251 Td (The gate requires max_seqlen_q > 1, 16 Q heads, 2 KV heads, head dimension 128, BF16 Q/K/V, no KV) Tj ET
+BT /F1 9.2 Tf 48 239 Td (quantization, causal attention, and excludes incompatible features such as tensor descriptors, sliding) Tj ET
+BT /F1 9.2 Tf 48 227 Td (window, alternative masking/bias, sink tokens, soft cap and output quantization. Noneligible cases retain) Tj ET
+BT /F1 9.2 Tf 48 215 Td (original kernel launch geometry. The optimizer does not modify the number of output tokens or change) Tj ET
+BT /F1 9.2 Tf 48 203 Td (model-level inference settings.) Tj ET
+BT /F2 11 Tf 48 177 Td (5. Decode: paged-KV physical-page lookup reuse \(v5 contribution\)) Tj ET
+BT /F1 9.2 Tf 48 153 Td (Decode repeatedly accesses the paged KV cache. A naive per-token lane address calculation can repeat) Tj ET
+BT /F1 9.2 Tf 48 141 Td (identical block-table lookups for tokens residing on the same physical page. The v8 kernel's compile-time) Tj ET
+BT /F1 9.2 Tf 48 129 Td (DECODE_PAGE_LOOKUP branch indexes the physical page once per relevant KV tile/page and reuses that mapping) Tj ET
+BT /F1 9.2 Tf 48 117 Td (across its token lanes while maintaining correct intra-page offsets and masking. The change is local to) Tj ET
+BT /F1 9.2 Tf 48 105 Td (the address-generation operations inside the existing unified attention kernel, with no altered model) Tj ET
+BT /F1 9.2 Tf 48 93 Td (attention semantics.) Tj ET
+BT /F1 9.2 Tf 48 75 Td (It is enabled only for pure decode \(max_seqlen_q == 1\), supported BF16 16Q/2KV/128D geometry, a positive) Tj ET
+0.8 0.82 0.84 RG 0.5 w 48 45 m 564 45 l S
+0.3 0.3 0.3 rg
+BT /F1 8 Tf 48 31 Td (Internal draft - 2026-11-06 - not organizer-certified) Tj ET
+BT /F1 8 Tf 525 31 Td (Page 2/5) Tj ET
+endstream
+endobj
+10 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R >> >> /Contents 11 0 R >>
+endobj
+11 0 obj
+<< /Length 5401 >>
+stream
+0.1 0.2 0.32 rg
+BT /F2 9 Tf 48 765 Td (FlagOS S2 - MiniCPM5-2B BI-V150 - v8 draft technical report) Tj ET
+0.8 0.82 0.84 RG 0.6 w 48 755 m 564 755 l S
+0 0 0 rg
+BT /F1 9.2 Tf 48 730 Td (power-of-two block size aligned with the tile, nonquantized KV cache and compatible descriptor mode. All) Tj ET
+BT /F1 9.2 Tf 48 718 Td (other cases use the original lookup path. Both the 2D and 3D softmax paths are considered through the) Tj ET
+BT /F1 9.2 Tf 48 706 Td (existing runtime scheduling decisions; v8 does not force a 3D or 2D operator selection.) Tj ET
+BT /F1 9.2 Tf 48 688 Td (Independence: prefill requires max_seqlen_q > 1; decode lookup requires max_seqlen_q == 1. Both) Tj ET
+BT /F1 9.2 Tf 48 676 Td (specializations cannot activate in the same invocation. This matters for mixed prefill/decode serving and) Tj ET
+BT /F1 9.2 Tf 48 664 Td (protects unsupported shapes.) Tj ET
+BT /F2 11 Tf 48 638 Td (6. Experimental design) Tj ET
+BT /F1 9.2 Tf 48 614 Td (All throughput comparisons refer to the supplied benchmark's two scenarios:) Tj ET
+BT /F3 7.05 Tf 52 596 Td ( Scenario   Prompt tokens   Generated tokens   Concurrency   Prompts ) Tj ET
+BT /F3 7.05 Tf 52 586 Td ( 4K   4,096   1,024   64   256 ) Tj ET
+BT /F3 7.05 Tf 52 576 Td ( 16K   16,384   1,024   64   128 ) Tj ET
+BT /F1 9.2 Tf 48 560 Td (The official benchmark command is the unchanged benchmark_throughput_serve.py with --test-cases) Tj ET
+BT /F1 9.2 Tf 48 548 Td ('[[4096,1024,64,256],[16384,1024,64,128]]'. The prescribed serving flags include) Tj ET
+BT /F1 9.2 Tf 48 536 Td (cudagraph_mode=FULL_DECODE_ONLY, GPU memory utilization 0.85, model alias minicpm and maximum model length) Tj ET
+BT /F1 9.2 Tf 48 524 Td (131072. Accuracy is tested by the official EvalScope command on MATH-500 Level 3 \(105 items\) with) Tj ET
+BT /F1 9.2 Tf 48 512 Td (temperature 1.0, top_p 0.95 and max_tokens 32768.) Tj ET
+BT /F1 9.2 Tf 48 494 Td (For valid comparisons, pair full successful workloads on the same image, driver, model weights, GPU and) Tj ET
+BT /F1 9.2 Tf 48 482 Td (server parameters, and record background load, KV pressure, prefix-cache state and any request failures.) Tj ET
+BT /F1 9.2 Tf 48 470 Td (The archived baseline averages and v8 summary came from development sessions; they have not yet been) Tj ET
+BT /F1 9.2 Tf 48 458 Td (assembled as a matched, reproducible final-run evidence bundle.) Tj ET
+BT /F2 11 Tf 48 432 Td (7. Preliminary throughput results) Tj ET
+BT /F3 7.05 Tf 52 408 Td ( Workload   Internal baseline total tok/s   v8 total tok/s   Absolute gain   Relative gain ) Tj ET
+BT /F3 7.05 Tf 52 398 Td ( 4K   1,881.95   2,331.29   +449.34   **+23.88%** ) Tj ET
+BT /F3 7.05 Tf 52 388 Td ( 16K   861.88   1,251.22   +389.34   **+45.17%** ) Tj ET
+BT /F1 9.2 Tf 48 372 Td (Calculation: gain = \(v8_total_tok_s / baseline_total_tok_s - 1\) * 100%, rounded to 2 decimal places. These) Tj ET
+BT /F1 9.2 Tf 48 360 Td (historical baseline values are the summary averages reported in 4k16K_summary_benchmark.csv \(first) Tj ET
+BT /F1 9.2 Tf 48 348 Td (archived baseline series\); v8 is the full-run value in profiling/v8/summary. Neither is a substitute for) Tj ET
+BT /F1 9.2 Tf 48 336 Td (organizer verification.) Tj ET
+BT /F3 7.05 Tf 52 318 Td ( Workload   Internal baseline mean TTFT \(ms\)   v8 mean TTFT \(ms\)   Direction ) Tj ET
+BT /F3 7.05 Tf 52 308 Td ( 4K   12,309.34   8,738.76   lower in this comparison ) Tj ET
+BT /F3 7.05 Tf 52 298 Td ( 16K   636,512.47   428,970.85   lower in this comparison ) Tj ET
+BT /F1 9.2 Tf 48 282 Td (The preliminary TTFT comparison points in the right direction, but should not be interpreted as proof of) Tj ET
+BT /F1 9.2 Tf 48 270 Td (meeting the event's latency guardrail without a same-conditions final baseline. The 16K values are large) Tj ET
+BT /F1 9.2 Tf 48 258 Td (because high-concurrency long-context serving stresses the memory and scheduler; see Section 9.) Tj ET
+BT /F1 9.2 Tf 48 240 Td (Evidence limits: the repository archives the historical baseline raw runs and a written final-v8 summary,) Tj ET
+BT /F1 9.2 Tf 48 228 Td (but does not yet archive the original final-v8 raw full-run CSV and server trace. It would be incorrect to) Tj ET
+BT /F1 9.2 Tf 48 216 Td (claim confirmed organizer throughput or per-run statistical significance. The displayed gains are self-run) Tj ET
+BT /F1 9.2 Tf 48 204 Td (estimates only.) Tj ET
+BT /F2 11 Tf 48 178 Td (8. Accuracy and functionality) Tj ET
+BT /F1 9.2 Tf 48 154 Td (The competition's formal accuracy threshold is 0.95, against a baseline of 0.962. The v8 profiling summary) Tj ET
+BT /F1 9.2 Tf 48 142 Td (reports 98.1% accuracy, and an older v1 Level 3 run documents 98.1% on 105 samples. The original) Tj ET
+BT /F1 9.2 Tf 48 130 Td (v8-matched complete EvalScope report is not currently attached to the draft; a separate earlier baseline) Tj ET
+BT /F1 9.2 Tf 48 118 Td (log also records a 97.1% run. Therefore 98.1% is a reported development result, not independently) Tj ET
+BT /F1 9.2 Tf 48 106 Td (substantiated here for final v8.) Tj ET
+BT /F1 9.2 Tf 48 88 Td (The v8 repository contains targeted functional tests:) Tj ET
+BT /F1 9.15 Tf 54 70 Td (- `tests/functional_tests/test_biv150_attention.py`: prefill/backend and fallback tests.) Tj ET
+0.8 0.82 0.84 RG 0.5 w 48 45 m 564 45 l S
+0.3 0.3 0.3 rg
+BT /F1 8 Tf 48 31 Td (Internal draft - 2026-11-06 - not organizer-certified) Tj ET
+BT /F1 8 Tf 525 31 Td (Page 3/5) Tj ET
+endstream
+endobj
+12 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R >> >> /Contents 13 0 R >>
+endobj
+13 0 obj
+<< /Length 5103 >>
+stream
+0.1 0.2 0.32 rg
+BT /F2 9 Tf 48 765 Td (FlagOS S2 - MiniCPM5-2B BI-V150 - v8 draft technical report) Tj ET
+0.8 0.82 0.84 RG 0.6 w 48 755 m 564 755 l S
+0 0 0 rg
+BT /F1 9.15 Tf 54 730 Td (- `tests/functional_tests/test_biv150_decode.py`: decode/page-table specialization tests.) Tj ET
+BT /F1 9.2 Tf 48 712 Td (Development logs show these suites have run successfully in the project history. The final submission must) Tj ET
+BT /F1 9.2 Tf 48 700 Td (include fresh exit statuses, complete logs, successful 105/105 EvalScope outcomes and result JSON, plus) Tj ET
+BT /F1 9.2 Tf 48 688 Td (proof that the serving process imported the intended implementation. Functional unit passes alone do not) Tj ET
+BT /F1 9.2 Tf 48 676 Td (prove MATH-500 accuracy.) Tj ET
+BT /F2 11 Tf 48 650 Td (9. Bottlenecks, alternative experiments and lessons) Tj ET
+BT /F1 9.2 Tf 48 626 Td (Long-context throughput is not only a function of kernel computation time. Previous v5 diagnostics) Tj ET
+BT /F1 9.2 Tf 48 614 Td (estimated a 42 KiB per-token KV state for the model, reported a server KV budget around 522,960 tokens) Tj ET
+BT /F1 9.2 Tf 48 602 Td (\(~20.95 GiB\), and observed near-saturated cache usage, queued requests and preemptions. Holding 64) Tj ET
+BT /F1 9.2 Tf 48 590 Td (independent 16,384-token prefixes requires 1,048,576 cache tokens, more than that observed budget.) Tj ET
+BT /F1 9.2 Tf 48 578 Td (Consequently, scheduler waiting, cache residency and prefix reuse can dominate mean TTFT. Optimizing) Tj ET
+BT /F1 9.2 Tf 48 566 Td (decode page lookup reduces per-kernel address work but does not eliminate the KV-capacity constraint.) Tj ET
+BT /F1 9.2 Tf 48 548 Td (The project tested other stack candidates in half-run development comparisons. The surviving v8) Tj ET
+BT /F1 9.2 Tf 48 536 Td (combination v1 + v5 yielded a recorded 4K/16K half-run of 2,128.76/1,238.72 total tok/s; the exploratory) Tj ET
+BT /F1 9.2 Tf 48 524 Td (v1+v3 and v1+v4 versions did not show consistent 16K gains, and additions of v6 KV tiling or v7 grouped) Tj ET
+BT /F1 9.2 Tf 48 512 Td (GEMM did not give clear serving-level benefits over v1+v5. These were screening experiments, not) Tj ET
+BT /F1 9.2 Tf 48 500 Td (equivalent full official benchmarks. They are excluded from the final solution to avoid complexity without) Tj ET
+BT /F1 9.2 Tf 48 488 Td (supported benefit.) Tj ET
+BT /F1 9.2 Tf 48 470 Td (The wider performance analysis also identified potential CPU/GPU launch gaps, preemption and KV data) Tj ET
+BT /F1 9.2 Tf 48 458 Td (movement, as well as differing cache behavior between 4K and 16K. No new scheduler policy or benchmark) Tj ET
+BT /F1 9.2 Tf 48 446 Td (modification is claimed as part of v8.) Tj ET
+BT /F2 11 Tf 48 420 Td (10. Reproduction and compliance) Tj ET
+BT /F1 9.2 Tf 48 396 Td (Follow the submitted readme.md to install the two supplied source trees from the archive into the official) Tj ET
+BT /F1 9.2 Tf 48 384 Td (environment, run the functional tests, launch vllm serve with exact required parameters, execute the) Tj ET
+BT /F1 9.2 Tf 48 372 Td (MATH-500 Level 3 EvalScope command, and run the unmodified official 4K/16K benchmark.) Tj ET
+BT /F1 9.2 Tf 48 354 Td (The delivered ZIP must contain:) Tj ET
+BT /F3 7.3 Tf 53 333 Td (<registered-team-name>/) Tj ET
+BT /F3 7.3 Tf 53 323 Td (  FlagGems/) Tj ET
+BT /F3 7.3 Tf 53 313 Td (  vllm-plugin-FL/) Tj ET
+BT /F3 7.3 Tf 53 303 Td (  readme.md) Tj ET
+BT /F3 7.3 Tf 53 293 Td (  report.pdf) Tj ET
+BT /F1 9.2 Tf 48 274 Td (Any final result table should identify source Git SHAs, software versions, exact log filenames, benchmark) Tj ET
+BT /F1 9.2 Tf 48 262 Td (success counts and all error/timeout events. The judging score is based on organizer reproduction, not the) Tj ET
+BT /F1 9.2 Tf 48 250 Td (internal measurements above.) Tj ET
+BT /F2 11 Tf 48 224 Td (11. Innovation and generality) Tj ET
+BT /F1 9.2 Tf 48 200 Td (The primary technical contribution is a phase-aware and shape-safe improvement to one production attention) Tj ET
+BT /F1 9.2 Tf 48 188 Td (operator: query-side reuse in supported GQA prefill, and page-table reuse within tiles during supported) Tj ET
+BT /F1 9.2 Tf 48 176 Td (paged-KV decode. Both changes are compile-time gated, independently measurable, and retain baseline) Tj ET
+BT /F1 9.2 Tf 48 164 Td (behavior outside their validity region. The implementation reuses vLLM's metadata and KV-cache life cycle) Tj ET
+BT /F1 9.2 Tf 48 152 Td (instead of introducing duplicate attention APIs or deleting dispatch logic. This separation of prefill and) Tj ET
+BT /F1 9.2 Tf 48 140 Td (decode bottlenecks is broadly applicable to paged-attention workloads, although speedups on other models) Tj ET
+BT /F1 9.2 Tf 48 128 Td (or chips are not asserted.) Tj ET
+BT /F2 11 Tf 48 102 Td (12. Open items before final submission) Tj ET
+BT /F1 9.15 Tf 54 78 Td (1. Record and verify the exact framework branch and FlagGems source revisions in the packaged v8) Tj ET
+0.8 0.82 0.84 RG 0.5 w 48 45 m 564 45 l S
+0.3 0.3 0.3 rg
+BT /F1 8 Tf 48 31 Td (Internal draft - 2026-11-06 - not organizer-certified) Tj ET
+BT /F1 8 Tf 525 31 Td (Page 4/5) Tj ET
+endstream
+endobj
+14 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R >> >> /Contents 15 0 R >>
+endobj
+15 0 obj
+<< /Length 2316 >>
+stream
+0.1 0.2 0.32 rg
+BT /F2 9 Tf 48 765 Td (FlagOS S2 - MiniCPM5-2B BI-V150 - v8 draft technical report) Tj ET
+0.8 0.82 0.84 RG 0.6 w 48 755 m 564 755 l S
+0 0 0 rg
+BT /F1 9.15 Tf 54 730 Td (  snapshots.) Tj ET
+BT /F1 9.15 Tf 54 718 Td (2. Attach original full v8 benchmark raw CSVs, serving logs, test command transcript, GPU metrics and) Tj ET
+BT /F1 9.15 Tf 54 706 Td (  success counts; perform a matched baseline rerun if possible.) Tj ET
+BT /F1 9.15 Tf 54 694 Td (3. Archive the final v8 MATH-500 Level 3 105-sample report and error inspection, and verify accuracy) Tj ET
+BT /F1 9.15 Tf 54 682 Td (  >=0.95.) Tj ET
+BT /F1 9.15 Tf 54 670 Td (4. Verify actual engine-process kernel selection, and check TTFT against official guardrails.) Tj ET
+BT /F1 9.15 Tf 54 658 Td (5. Replace author/team placeholders, add reviewed figures/plots generated from the raw run files, and) Tj ET
+BT /F1 9.15 Tf 54 646 Td (  proofread the exported PDF.) Tj ET
+BT /F1 9.15 Tf 54 634 Td (6. Reproduce the complete archive in a clean official image and submit by the deadline.) Tj ET
+BT /F2 11 Tf 48 608 Td (Sources and traceability) Tj ET
+BT /F1 9.15 Tf 54 584 Td (- Competition rules: https://flagos.io/race-detail-season2?id=539vlt2p&lang=cn) Tj ET
+BT /F1 9.15 Tf 54 572 Td (- v8 implementation: `Co_Kaggle/g7/tests_BI-V150/Optimization/v8/`) Tj ET
+BT /F1 9.15 Tf 54 560 Td (- v8 source description: `Optimization/v8/readme.md`) Tj ET
+BT /F1 9.15 Tf 54 548 Td (- Internal v8 results: `profiling/v8/summary`) Tj ET
+BT /F1 9.15 Tf 54 536 Td (- Internal baseline: `4k16K_rawrun_benchmark.csv` and `4k16K_summary_benchmark.csv`) Tj ET
+BT /F1 9.15 Tf 54 524 Td (- v1 Level 3 EvalScope evidence: `profiling/v1/summary.txt`) Tj ET
+BT /F1 9.15 Tf 54 512 Td (- v5 bottleneck analysis: `profiling/v5/v5_decode_16k_bottleneck_findings.md`) Tj ET
+BT /F1 9.15 Tf 54 500 Td (- Environment snapshots: `HW_SW_info.txt` and `FlagOS_Env.txt`) Tj ET
+BT /F1 9.2 Tf 48 482 Td (Disclosure: This report is a draft for transparent technical review, not an assertion that the official) Tj ET
+BT /F1 9.2 Tf 48 470 Td (submission has been created, tested, uploaded or accepted.) Tj ET
+0.8 0.82 0.84 RG 0.5 w 48 45 m 564 45 l S
+0.3 0.3 0.3 rg
+BT /F1 8 Tf 48 31 Td (Internal draft - 2026-11-06 - not organizer-certified) Tj ET
+BT /F1 8 Tf 525 31 Td (Page 5/5) Tj ET
+endstream
+endobj
+xref
+0 16
+0000000000 65535 f 
+0000000038 00000 n 
+0000000087 00000 n 
+0000000171 00000 n 
+0000000241 00000 n 
+0000000316 00000 n 
+0000000384 00000 n 
+0000000530 00000 n 
+0000005270 00000 n 
+0000005416 00000 n 
+0000010858 00000 n 
+0000011006 00000 n 
+0000016459 00000 n 
+0000016607 00000 n 
+0000021762 00000 n 
+0000021910 00000 n 
+trailer
+<< /Size 16 /Root 1 0 R >>
+startxref
+24278
+%%EOF
