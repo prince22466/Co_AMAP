@@ -135,6 +135,11 @@ def require_matching_environment(reasoning: Path, tool: Path,
             raise IncompleteEvidence("L3 model or tasks differ from assisted arms")
         if c.get("sandbox") != "docker":
             raise IncompleteEvidence("L3 must use Docker to match assisted verifier")
+        runtime_versions = c.get("runtime_versions") or {}
+        for package_name, version in a["versions"].items():
+            if runtime_versions.get(package_name) != version:
+                raise IncompleteEvidence(
+                    "L3 verifier/runtime wheel mismatch: " + package_name)
         # Candidate runs are seeded 1, 2, ... by the unchanged S29 runner.
         # Reject a cross-repeat comparison even when task/model files match.
         match = re.fullmatch(r"candidate_(\d+)", folder.name)
