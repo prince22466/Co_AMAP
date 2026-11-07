@@ -24,7 +24,7 @@ S1 = (
     "rich_3905", "rich_3518", "rich_3454", "rich_3938", "rich_3676",
     "rich_3052",
 )
-PILOT = ("rich_3905", "rich_3454", "rich_3518", "rich_4077", "requests_7315")
+PILOT = ("rich_4077", "rich_3905", "rich_3518", "rich_3454", "rich_3882")
 FILE = re.compile(r"^diff --git a/(\S+) b/(\S+)\s*$")
 HUNK = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+\d+(?:,\d+)? @@")
 MAX_INPUT_CHARS = 18000
