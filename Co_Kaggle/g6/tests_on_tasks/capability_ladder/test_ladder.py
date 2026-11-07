@@ -158,6 +158,11 @@ class ProbeTests(unittest.TestCase):
         with self.assertRaises(ProbeError):
             run_probe(args)
 
+    def test_out_of_range_reference_hunk_cannot_produce_empty_or_wrong_window(self):
+        far = REF.replace("@@ -2,1 +2,1 @@", "@@ -9999,1 +9999,1 @@")
+        with self.assertRaisesRegex(ProbeError, "outside original source"):
+            make_case({**TASK, "patch": far}, self.root)
+
     def test_task_loader_rejects_duplicates(self):
         self.assertEqual(read_tasks(self.tasks)["rich_123"]["repo"], "Textualize/rich")
         self.tasks.write_text(json.dumps(TASK) + "\n" + json.dumps(TASK) + "\n")
@@ -250,6 +255,41 @@ class ReportTests(unittest.TestCase):
             with self.assertRaises(IncompleteEvidence):
                 require_matching_environment(
                     left / "verified.jsonl", right / "verified.jsonl", None)
+
+    def test_autonomous_seed_manifest_matches_paired_probe(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            l1, l2, autonomous = base / "l1", base / "l2", base / "candidate_2"
+            for folder in (l1, l2, autonomous):
+                folder.mkdir()
+            attrs = {
+                "tasks_sha256": "same", "source_verifier_sha256": "code",
+                "generator_seed": 1, "served_model": "gemma-4-e4b-it-qat-w4a16-ct",
+                "versions": {"swegemma": "0.2.11"},
+            }
+            (l1 / "manifest.json").write_text(
+                json.dumps({**attrs, "generator_level": "reasoning"}))
+            (l2 / "manifest.json").write_text(
+                json.dumps({**attrs, "generator_level": "tool"}))
+            (base / "run_manifest.json").write_text(json.dumps({
+                "tasks_sha256": "same", "served_model": attrs["served_model"],
+                "sandbox": "docker",
+            }))
+            with self.assertRaisesRegex(IncompleteEvidence, "seed differs"):
+                require_matching_environment(
+                    l1 / "verified.jsonl", l2 / "verified.jsonl", autonomous)
+            candidate1 = base / "candidate_1"
+            candidate1.mkdir()
+            matched = require_matching_environment(
+                l1 / "verified.jsonl", l2 / "verified.jsonl", candidate1)
+            self.assertEqual(matched["generator_seed"], 1)
+            (base / "run_manifest.json").write_text(json.dumps({
+                "tasks_sha256": "same", "served_model": attrs["served_model"],
+                "sandbox": "subprocess",
+            }))
+            with self.assertRaisesRegex(IncompleteEvidence, "Docker"):
+                require_matching_environment(
+                    l1 / "verified.jsonl", l2 / "verified.jsonl", candidate1)
 
     def test_duplicate_autonomous_results_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
