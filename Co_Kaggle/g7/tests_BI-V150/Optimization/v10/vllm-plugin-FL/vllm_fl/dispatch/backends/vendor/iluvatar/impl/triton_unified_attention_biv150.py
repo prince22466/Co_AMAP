@@ -945,7 +945,8 @@ def unified_attention(
         and output_scale is None
     )
     if optimize_prefill_gqa:
-        BLOCK_M = 32
+        # More query rows share each paged KV tile during long prefill.
+        BLOCK_M = 64
         BLOCK_Q = BLOCK_M // num_queries_per_kv
         launch_num_stages = 2
 

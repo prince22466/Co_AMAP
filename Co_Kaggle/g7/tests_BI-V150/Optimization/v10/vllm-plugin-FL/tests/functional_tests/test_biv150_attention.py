@@ -76,7 +76,10 @@ def test_unified_backend_binds_integrated_kernel():
     ("query_len", "context_len"),
     [
         (1, 512),      # Single-token decode with paged-KV lookup.
+        (7, 17),       # Partial query tile and non-page-aligned context.
+        (9, 15),       # One row beyond the eight-query specialization tile.
         (64, 0),       # Short uncached prefill.
+        (65, 33),      # Query tail and partial KV-cache page.
         (2048, 0),     # First chunk.
         (2048, 4096),  # Chunked prefill after an existing prefix.
         (2048, 14336), # 16K endpoint (expensive).
@@ -162,4 +165,4 @@ def test_bf16_gqa_attention_matches_baseline(query_len, context_len, monkeypatch
         torch.cuda.synchronize()
 
     torch.testing.assert_close(actual, expected, atol=3e-2, rtol=3e-2)
-    assert launches == [(32 if query_len > 1 else 16, query_len == 1)]
+    assert launches == [(64 if query_len > 1 else 16, query_len == 1)]
