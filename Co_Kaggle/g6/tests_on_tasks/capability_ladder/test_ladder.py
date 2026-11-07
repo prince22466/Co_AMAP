@@ -296,9 +296,24 @@ class ReportTests(unittest.TestCase):
                     l1 / "verified.jsonl", l2 / "verified.jsonl", autonomous)
             candidate1 = base / "candidate_1"
             candidate1.mkdir()
+            (base / "capability_l3_summary.json").write_text(json.dumps({
+                "submission": "submission_29_unmodified",
+                "verifier_source_sha256": "code",
+            }))
             matched = require_matching_environment(
                 l1 / "verified.jsonl", l2 / "verified.jsonl", candidate1)
             self.assertEqual(matched["generator_seed"], 1)
+            (base / "capability_l3_summary.json").write_text(json.dumps({
+                "submission": "submission_29_unmodified",
+                "verifier_source_sha256": "different",
+            }))
+            with self.assertRaisesRegex(IncompleteEvidence, "source/S29"):
+                require_matching_environment(
+                    l1 / "verified.jsonl", l2 / "verified.jsonl", candidate1)
+            (base / "capability_l3_summary.json").write_text(json.dumps({
+                "submission": "submission_29_unmodified",
+                "verifier_source_sha256": "code",
+            }))
             (base / "run_manifest.json").write_text(json.dumps({
                 "tasks_sha256": "same", "served_model": attrs["served_model"],
                 "sandbox": "docker",
