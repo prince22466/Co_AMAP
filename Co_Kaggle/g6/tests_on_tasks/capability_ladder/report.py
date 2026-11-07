@@ -134,6 +134,13 @@ def require_matching_environment(reasoning: Path, tool: Path,
             raise IncompleteEvidence("L3 model or tasks differ from assisted arms")
         if c.get("sandbox") != "docker":
             raise IncompleteEvidence("L3 must use Docker to match assisted verifier")
+        # Candidate runs are seeded 1, 2, ... by the unchanged S29 runner.
+        # Reject a cross-repeat comparison even when task/model files match.
+        match = __import__("re").fullmatch(r"candidate_(\\d+)", folder.name)
+        if match is None:
+            raise IncompleteEvidence("L3 path must select a candidate_N run")
+        if int(match.group(1)) != a["generator_seed"]:
+            raise IncompleteEvidence("L3 candidate seed differs from assisted arms")
         alignment["autonomous_manifest"] = str(l3)
     return alignment
 
