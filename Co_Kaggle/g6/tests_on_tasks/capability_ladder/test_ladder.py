@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+from argparse import Namespace
 import io
 import json
 from pathlib import Path
@@ -13,8 +14,8 @@ from unittest.mock import patch
 
 from probe import (EDIT_SCHEMA, ProbeError, make_case, model_probe, oracle_locations,
                    parse_json_edit, parse_tool_edit, pristine_source, read_tasks,
-                   safe_path, validate_edit)
-from report import IncompleteEvidence, compare, read_rows
+                   safe_path, validate_edit, run as run_probe)
+from report import IncompleteEvidence, compare, read_rows, require_matching_environment
 from verify import VerificationBlocked, load_probes, preflight_result, reference_control
 
 REF = (
@@ -131,6 +132,32 @@ class ProbeTests(unittest.TestCase):
                 self.assertNotIn("SOLUTION_CANARY", json.dumps(params))
                 self.assertEqual(bool(params.get("tools")), level == "tool")
 
+    def test_end_to_end_generation_writes_unscored_evidence(self):
+        output = self.root / "probe_out"
+        response = {"choices": [{"message": {"content": json.dumps({
+            "filepath": "pkg/mod.py", "old_string": "x = 1",
+            "new_string": "x = 2"})},
+            "finish_reason": "stop"}], "usage": {}}
+        args = Namespace(
+            level="reasoning", tasks=self.tasks, snapshots=self.root,
+            model_url="http://localhost:8000/v1",
+            served_model="gemma-4-e4b-it-qat-w4a16-ct", api_key="EMPTY",
+            stage="pilot", task_ids=["rich_123"], seed=1, output=output)
+        with patch("probe.verify_server"), patch("probe.post_json", return_value=response):
+            run_probe(args)
+        rows = [json.loads(x) for x in (output / "probes.jsonl").read_text().splitlines()]
+        self.assertEqual(len(rows), 1)
+        self.assertTrue(rows[0]["edit_valid"])
+        self.assertEqual(rows[0]["status"], "edit_applied_to_pristine")
+        self.assertIsNone(rows[0]["resolved"])
+        self.assertNotIn("SOLUTION_CANARY", rows[0]["patch"])
+        self.assertTrue((output / "raw_model" / "rich_123.json").is_file())
+        manifest = json.loads((output / "manifest.json").read_text())
+        self.assertFalse(manifest["reference_patch_sent_to_model"])
+        self.assertEqual(manifest["task_ids"], ["rich_123"])
+        with self.assertRaises(ProbeError):
+            run_probe(args)
+
     def test_task_loader_rejects_duplicates(self):
         self.assertEqual(read_tasks(self.tasks)["rich_123"]["repo"], "Textualize/rich")
         self.tasks.write_text(json.dumps(TASK) + "\n" + json.dumps(TASK) + "\n")
@@ -200,6 +227,29 @@ class ReportTests(unittest.TestCase):
             compare(a, {"rich_1": b["rich_1"]}, auto)
         with self.assertRaises(IncompleteEvidence):
             compare(a, {**b, "rich_1": {**b["rich_1"], "level": "reasoning"}}, auto)
+
+    def test_manifest_pairing_rejects_seed_or_dataset_drift(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            left, right = base / "l1", base / "l2"
+            left.mkdir(); right.mkdir()
+            a = {
+                "tasks_sha256": "identical", "source_verifier_sha256": "verifier",
+                "generator_seed": 1, "served_model": "gemma-4-e4b-it-qat-w4a16-ct",
+                "versions": {"swegemma": "0.2.11"},
+                "generator_level": "reasoning",
+            }
+            b = {**a, "generator_level": "tool"}
+            (left / "manifest.json").write_text(json.dumps(a))
+            (right / "manifest.json").write_text(json.dumps(b))
+            report = require_matching_environment(
+                left / "verified.jsonl", right / "verified.jsonl", None)
+            self.assertEqual(report["generator_seed"], 1)
+            (right / "manifest.json").write_text(
+                json.dumps({**b, "generator_seed": 2}))
+            with self.assertRaises(IncompleteEvidence):
+                require_matching_environment(
+                    left / "verified.jsonl", right / "verified.jsonl", None)
 
     def test_duplicate_autonomous_results_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
