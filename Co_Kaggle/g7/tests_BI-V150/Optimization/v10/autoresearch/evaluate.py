@@ -80,6 +80,9 @@ def evaluate(args: argparse.Namespace) -> dict:
         a, b = baseline[size], candidate[size]
         checkpoint = b["tok"] + 1e-9 >= a["tok"] * (1 + PROGRESS_GAIN)
         final_goal = b["tok"] + 1e-9 >= TARGETS[label]
+        matched_uplift = b["tok"] > a["tok"] + 1e-9
+        # The static v9 target may be crossed solely because of baseline drift.
+        goal_with_uplift = final_goal and matched_uplift
         comparison[label] = {
             "matched_v10_control_total_tok_s": a["tok"],
             "candidate_total_tok_s": b["tok"],
@@ -93,6 +96,8 @@ def evaluate(args: argparse.Namespace) -> dict:
             ),
             "numeric_5pct_gain_observed": checkpoint,
             "numeric_6pct_vs_v9_goal_observed": final_goal,
+            "numeric_matched_uplift_observed": matched_uplift,
+            "numeric_goal_with_matched_uplift_candidate": goal_with_uplift,
             "baseline_mean_ttft_ms": a["ttft"],
             "candidate_mean_ttft_ms": b["ttft"],
             "ttft_change_pct": round(100 * (b["ttft"] / a["ttft"] - 1), 4),
@@ -100,6 +105,9 @@ def evaluate(args: argparse.Namespace) -> dict:
 
     five_pct = any(item["numeric_5pct_gain_observed"] for item in comparison.values())
     goal = any(item["numeric_6pct_vs_v9_goal_observed"] for item in comparison.values())
+    goal_with_uplift = any(
+        item["numeric_goal_with_matched_uplift_candidate"] for item in comparison.values()
+    )
     return {
         "valid_half_run_csvs": True,
         "numeric_positive_change_observed": any(
@@ -108,7 +116,8 @@ def evaluate(args: argparse.Namespace) -> dict:
         ),
         "numeric_5pct_gain_observed": five_pct,
         "numeric_6pct_vs_v9_goal_observed": goal,
-        "numeric_checkpoint_candidate": five_pct or goal,
+        "numeric_goal_with_matched_uplift_candidate": goal_with_uplift,
+        "numeric_checkpoint_candidate": five_pct or goal_with_uplift,
         "reproducibility_verified": False,
         "production_kernel_verified": False,
         "accuracy": "deferred_to_user",
@@ -117,7 +126,11 @@ def evaluate(args: argparse.Namespace) -> dict:
             "CSV validation/numeric observation ONLY. The v9 anchor is reported; "
             "prove actual gain with matched, repeated v10 control A/B, GPU correctness "
             "and production invocation. 5% checkpoint vs current v10 control; "
-            "6% final goal vs frozen reported v9. Exit 0 is not success."
+            "6% final threshold vs frozen reported v9; crossing it without "
+            "positive matched-v10 uplift is NOT a checkpoint candidate. "
+            "Numeric indicators do not establish causal gain, repeatability, "
+            "model accuracy or acceptable combined competition scoring. "
+            "Exit 0 is not success."
         ),
     }
 

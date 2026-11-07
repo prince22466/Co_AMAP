@@ -6,4 +6,4 @@
 
 **Research order:** fresh v10 4K decode GEMM/Linear profile, mixed prefill/decode attention, 16K attention data movement; KV-cache/idle only if fresh evidence warrants. No model/config/benchmark changes, backend/dispatch-only switching, quantization, speculative sampling, or latest FlagOS merges. MATH-500 deferred for human evaluation.
 
-**Remote:** `/root/Optimization/v10` (Codex in existing Remote-SSH IDE). See [AGENTS.md](AGENTS.md), [program.md](program.md), and [autoresearch](autoresearch/README.md). Logs/CSV/traces remain in ignored `.autoresearch-work`; only evidence-backed v10 kernel changes and tests should be proposed in future PRs.
+**Remote:** `/root/Optimization/v10` (Codex in existing Remote-SSH IDE). See [AGENTS.md](AGENTS.md) for the research contract, [program.md](program.md) for commands, and [experiment log](autoresearch/EXPERIMENTS.md) for results. Logs/CSV/traces remain in ignored `.autoresearch-work`; only evidence-backed v10 kernel changes and tests should be proposed in future PRs.

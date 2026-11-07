@@ -87,6 +87,20 @@ class HalfRunTests(unittest.TestCase):
         self.assertTrue(report["numeric_6pct_vs_v9_goal_observed"])
         self.assertFalse(report["comparison"]["4K"]["numeric_5pct_gain_observed"])
 
+    def test_unchanged_control_above_goal_is_not_a_checkpoint(self):
+        report = evaluate(self.args(base4=2400, cand4=2400))
+        self.assertTrue(report["numeric_6pct_vs_v9_goal_observed"])
+        self.assertFalse(report["comparison"]["4K"]["numeric_matched_uplift_observed"])
+        self.assertFalse(report["numeric_goal_with_matched_uplift_candidate"])
+        self.assertFalse(report["numeric_checkpoint_candidate"])
+
+    def test_regression_above_goal_is_not_a_checkpoint(self):
+        report = evaluate(self.args(base4=2450, cand4=2400))
+        self.assertTrue(report["numeric_6pct_vs_v9_goal_observed"])
+        self.assertFalse(report["comparison"]["4K"]["numeric_matched_uplift_observed"])
+        self.assertFalse(report["numeric_goal_with_matched_uplift_candidate"])
+        self.assertFalse(report["numeric_checkpoint_candidate"])
+
     def test_no_gain_valid_but_not_win(self):
         report = evaluate(self.args())
         self.assertTrue(report["valid_half_run_csvs"])
