@@ -148,6 +148,10 @@ python report.py \
 ~~~
 
 The report rejects missing/duplicate IDs. It counts blocked cases separately.
+It also checks the exact SHA-256 of the official verifier source file across
+all three arms, not just the `swegemma` version string. The L3 evidence must
+come from `run_autonomy.py` (which writes `capability_l3_summary.json`);
+historical S29 printouts alone do **not** meet this provenance contract.
 Interpretation of *candidate* bottlenecks:
 
 - L1 verified success but L2 failure: likely tool-expression/dispatch issue;
