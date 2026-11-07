@@ -147,7 +147,16 @@ def require_matching_environment(reasoning: Path, tool: Path,
             raise IncompleteEvidence("L3 path must select a candidate_N run")
         if int(match.group(1)) != a["generator_seed"]:
             raise IncompleteEvidence("L3 candidate seed differs from assisted arms")
+        l3_summary = folder.parent / "capability_l3_summary.json"
+        if not l3_summary.is_file():
+            raise IncompleteEvidence("Missing L3 verifier provenance; rerun run_autonomy.py")
+        summary = json.loads(l3_summary.read_text(encoding="utf-8"))
+        if (summary.get("submission") != "submission_29_unmodified"
+                or summary.get("verifier_source_sha256")
+                != a["source_verifier_sha256"]):
+            raise IncompleteEvidence("L3 verifier source/S29 identity mismatch")
         alignment["autonomous_manifest"] = str(l3)
+        alignment["autonomous_verifier_sha256"] = summary["verifier_source_sha256"]
     return alignment
 
 
