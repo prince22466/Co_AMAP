@@ -70,6 +70,16 @@ The direct request uses temperature 0, top-p 0.95, max_tokens 4096, and a
 fixed seed. **It does not reproduce ADK thinking-budget/compaction settings**:
 this is a purposefully isolated API probe, not a strict model-config ablation.
 
+**Snapshot prerequisite:** L1/L2 currently read complete
+`snapshots/<instance_id>.tgz` (or the equivalent per-task .tar.gz/.tar)
+directly. They do **not** reconstruct deduplicated base-snapshot + binary-delta
+pairs using the harness's separate resolver. If a selected archive is missing,
+deduplicated, or lacks pristine source files, the task is `blocked_input`.
+When **all** selected cases are blocked, generation stops *before* contacting
+the model server. Resolve snapshot materialization separately with the
+organizer's reconstruction code; never fall back to a reference-patched tree,
+a later checkout, or grade against the wrong source.
+
 ### 2. Verify assisted patches independently (CPU/Docker; no GPU model calls)
 
 Install the same organizer wheelhouse and provision a working official
