@@ -286,10 +286,7 @@ def model_probe(case: dict, level: str, api: str, served: str, token: str,
         "raw": response, "duration_seconds": round(elapsed, 3),
         "finish_reason": choice.get("finish_reason"),
         "usage": response.get("usage"),
-        "edit": (
-            parse_json_edit(answer.get("content"))
-            if level == "reasoning" else parse_tool_edit(choice)
-        ),
+        "choice": choice,
     }
 
 
@@ -360,13 +357,18 @@ def run(args: argparse.Namespace) -> None:
                         "usage": resp["usage"],
                         "status": "invalid_edit",
                     })
-                    path, patch = validate_edit(resp["edit"], case["sources"])
+                    parsed = (parse_json_edit(
+                        (resp["choice"].get("message") or {}).get("content"))
+                        if args.level == "reasoning"
+                        else parse_tool_edit(resp["choice"]))
+                    path, patch = validate_edit(parsed, case["sources"])
                     row.update({
                         "edit_valid": True, "status": "edit_applied_to_pristine",
                         "edited_file": path, "patch": patch,
                         "patch_sha256": digest(patch.encode()),
                     })
                 except (ProbeError, ValueError, TypeError, KeyError) as exc:
+                    row["status"] = "invalid_response_or_edit"
                     row["error"] = f"{type(exc).__name__}: {exc}"
                 except Exception as exc:
                     row["status"] = "model_or_transport_error"
