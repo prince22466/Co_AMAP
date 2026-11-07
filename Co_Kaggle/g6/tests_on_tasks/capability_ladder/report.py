@@ -104,6 +104,38 @@ def compare(a: dict[str, dict], b: dict[str, dict],
     return report
 
 
+def require_matching_environment(reasoning: Path, tool: Path,
+                                 autonomous: Path | None) -> dict:
+    """Reject incomparable input/model/verifier builds before interpreting gaps."""
+    left = reasoning.parent / "manifest.json"
+    right = tool.parent / "manifest.json"
+    if not left.is_file() or not right.is_file():
+        raise IncompleteEvidence("Missing paired verifier manifests")
+    a, b = (json.loads(p.read_text(encoding="utf-8")) for p in (left, right))
+    for field in ("tasks_sha256", "source_verifier_sha256",
+                  "generator_seed", "served_model", "versions"):
+        if a.get(field) is None or a.get(field) != b.get(field):
+            raise IncompleteEvidence("Mismatch in paired verifier " + field)
+    if (a.get("generator_level") != "reasoning"
+            or b.get("generator_level") != "tool"):
+        raise IncompleteEvidence("Wrong verifier generation levels")
+    alignment = {"task_sha256": a["tasks_sha256"],
+                 "served_model": a["served_model"],
+                 "generator_seed": a["generator_seed"],
+                 "verifier_sha256": a["source_verifier_sha256"]}
+    if autonomous is not None:
+        folder = autonomous if autonomous.is_dir() else autonomous.parent
+        l3 = folder.parent / "run_manifest.json"
+        if not l3.is_file():
+            raise IncompleteEvidence("Missing official L3 runtime manifest")
+        c = json.loads(l3.read_text(encoding="utf-8"))
+        if (c.get("tasks_sha256") != a["tasks_sha256"]
+                or c.get("served_model") != a["served_model"]):
+            raise IncompleteEvidence("L3 model or tasks differ from assisted arms")
+        alignment["autonomous_manifest"] = str(l3)
+    return alignment
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--reasoning", type=Path, required=True,
@@ -116,9 +148,12 @@ def main() -> None:
     args = parser.parse_args()
     if args.output.exists():
         raise IncompleteEvidence("Output exists; never overwrite experiment")
+    alignment = require_matching_environment(
+        args.reasoning, args.tool, args.autonomous)
     result = compare(
         read_rows(args.reasoning), read_rows(args.tool),
         read_rows(args.autonomous) if args.autonomous else None)
+    result["manifest_alignment"] = alignment
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(
         json.dumps(result, indent=2) + "\n", encoding="utf-8")
