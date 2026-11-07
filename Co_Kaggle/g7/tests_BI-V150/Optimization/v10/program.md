@@ -10,7 +10,8 @@ Confirm port 9031 is free; do not stop another person's server. Run the server o
 
 ~~~bash
 cd /root/Optimization/v10
-mkdir -p .autoresearch-work
+mkdir -p .autoresearch-work/serve_runs
+serve_log=$(mktemp "$PWD/.autoresearch-work/serve_runs/serve_XXXXXXXX.log")
 export PYTHONPATH="$PWD/FlagGems/src:$PWD/vllm-plugin-FL:${PYTHONPATH:-}"
 export VLLM_PLUGINS=fl
 unset VLLM_FL_USE_FLAGGEMS_ATTN VLLM_ATTENTION_BACKEND VLLM_BATCH_INVARIANT
@@ -21,7 +22,7 @@ vllm serve /workspace/MiniCPM5-2B \
   --served-model-name minicpm \
   --gpu-memory-utilization 0.85 \
   --max-model-len 131072 \
-  2>&1 | tee .autoresearch-work/serve-start.log
+  2>&1 | tee "$serve_log"
 ~~~
 
 The server must import v10 `FlagGems/src` and `vllm-plugin-FL` (verify actual import paths and GPU trace). The external `/workspace/vllm-plugin-FL` tree is **not** the serving source. Restart only YOUR owned server with Ctrl+C; never `pkill` unrelated processes.
@@ -54,20 +55,21 @@ Optional diagnostic examples (run with a healthy v10 server; preserve distinct o
 ~~~bash
 cd /root/Optimization/v10
 mkdir -p .autoresearch-work/quick
+quick_dir=$(mktemp -d "$PWD/.autoresearch-work/quick/probe_XXXXXXXX")
 
 vllm bench serve --backend vllm --model minicpm \
   --tokenizer /workspace/MiniCPM5-2B --endpoint /v1/completions \
   --host localhost --port 9031 --dataset-name random --ignore-eos \
   --random-input-len 4096 --random-output-len 128 \
   --max-concurrency 8 --num-prompts 16 \
-  2>&1 | tee .autoresearch-work/quick/smoke_4k.log
+  2>&1 | tee "$quick_dir/smoke_4k.log"
 
 vllm bench serve --backend vllm --model minicpm \
   --tokenizer /workspace/MiniCPM5-2B --endpoint /v1/completions \
   --host localhost --port 9031 --dataset-name random --ignore-eos \
   --random-input-len 16384 --random-output-len 128 \
   --max-concurrency 8 --num-prompts 8 \
-  2>&1 | tee .autoresearch-work/quick/smoke_16k.log
+  2>&1 | tee "$quick_dir/smoke_16k.log"
 ~~~
 
 These reduced samples do NOT match 64-concurrency full-length decode, can be distorted by prefix caching, and must never be reported as scored 4K/16K half-run tok/s. Use fresh named logs per repeat, preserve matched order and server restarts, and create targeted mixed-batch probes if needed.
