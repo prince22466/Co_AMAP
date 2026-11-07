@@ -93,6 +93,17 @@ async def run(args: argparse.Namespace) -> None:
         raise VerificationBlocked("Output directory exists; do not overwrite")
     task_rows = read_tasks(args.tasks)
     probes = load_probes(args.probes, task_rows)
+    # The model input task set must match exactly the verification dataset.
+    model_manifest_path = args.probes.parent / "manifest.json"
+    if not model_manifest_path.is_file():
+        raise VerificationBlocked("Missing generator manifest; task parity unknown")
+    model_manifest = json.loads(model_manifest_path.read_text(encoding="utf-8"))
+    if (model_manifest.get("tasks_sha256") != sha(args.tasks)
+            or model_manifest.get("task_ids")
+            != [row["instance_id"] for row in probes]
+            or model_manifest.get("model") != "gemma-4-e4b-it-qat-w4a16-ct"
+            or model_manifest.get("level") != probes[0]["level"]):
+        raise VerificationBlocked("Probe task/model manifest mismatch")
     # Import only at verification time so synthetic CPU tests need no official wheels.
     from adk_submission import ModelRegistry
     from swegemma.config import EvalConfig
@@ -119,6 +130,10 @@ async def run(args: argparse.Namespace) -> None:
     manifest = {
         "scope": "official phase-2 verifier; no model inference",
         "probe_input_sha256": sha(args.probes),
+        "generator_manifest_sha256": sha(model_manifest_path),
+        "generator_level": model_manifest["level"],
+        "generator_seed": model_manifest.get("seed"),
+        "served_model": model_manifest.get("served_model"),
         "tasks_sha256": sha(args.tasks),
         "source_verifier_sha256": sha(method_file),
         "versions": versions,
@@ -144,9 +159,13 @@ async def run(args: argparse.Namespace) -> None:
                     "resolved": None, "baseline_resolved": None,
                     "reference_resolved": None, "error": None,
                 }
-                if not (isinstance(task.patch, str) and task.patch.strip()
-                        and isinstance(task.test_patch, str)
-                        and task.test_patch.strip()):
+                if probe["status"] in ("blocked_input", "model_or_transport_error",
+                                       "not_started"):
+                    row["status"] = "blocked_generation"
+                    row["error"] = probe.get("error") or "Generation unavailable"
+                elif not (isinstance(task.patch, str) and task.patch.strip()
+                          and isinstance(task.test_patch, str)
+                          and task.test_patch.strip()):
                     row["error"] = "Missing reference or test patch for verifier control"
                 else:
                     try:
