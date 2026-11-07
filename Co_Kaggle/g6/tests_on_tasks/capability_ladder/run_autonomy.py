@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import hashlib
 from pathlib import Path
 import sys
 
@@ -37,6 +38,12 @@ async def evaluate(args: argparse.Namespace) -> dict:
         result = await official.evaluate(args)
     finally:
         official.PILOT_IDS, official.S1_IDS = old_pilot, old_s1
+    # Record source bytes, not just package version: organizer wheel builds
+    # have changed without version bumps in previous local evaluations.
+    from swegemma.harness.verification import verify_task
+    verifier_source = Path(verify_task.__code__.co_filename)
+    result["verifier_source_sha256"] = hashlib.sha256(
+        verifier_source.read_bytes()).hexdigest()
     result["diagnostic_level"] = "autonomous"
     result["submission"] = "submission_29_unmodified"
     result["task_ids"] = list(task_ids)
