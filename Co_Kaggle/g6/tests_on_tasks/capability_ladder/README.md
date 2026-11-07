@@ -111,7 +111,7 @@ Official verification may take substantially longer than generation.
 ### 3. Run true autonomous S29 (existing official harness)
 
 ~~~bash
-python run_autonomy.py --stage pilot --repeats 2 --time-limit 4 \
+python run_autonomy.py --stage pilot --repeats 2 --time-limit 4 --sandbox docker \
   --tasks /data/tasks.jsonl --snapshots /data/snapshots \
   --wheels /data/wheels --output /work/cap_l3
 ~~~
