@@ -54,7 +54,7 @@ def main() -> None:
     parser.add_argument("--model-url", default="http://localhost:8000/v1")
     parser.add_argument("--served-model", default=MODEL)
     parser.add_argument("--sandbox", choices=("docker", "subprocess"),
-                        default="subprocess")
+                        default="docker")
     parser.add_argument("--stage", choices=("pilot", "s1"), default="pilot")
     parser.add_argument("--task-ids", nargs="+")
     parser.add_argument("--repeats", type=int, choices=(1, 2, 3), default=2)
