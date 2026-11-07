@@ -155,8 +155,22 @@ def make_case(task: dict, snapshots: Path) -> dict:
             continue
         source = pristine_source(archive, file)
         lines = source.splitlines(keepends=True)
+        if line < 1 or line > len(lines):
+            raise ProbeError("Reference location outside original source: " + file)
         begin, end = max(0, line - 31), min(len(lines), line + 70)
-        window = "".join(lines[begin:end])[:6500]
+        # Do not silently mislabel line bounds after character truncation.
+        # Truncate on whole lines only, retaining the referenced line.
+        chunk = []
+        size = 0
+        for source_line in lines[begin:end]:
+            if size + len(source_line) > 6500:
+                break
+            chunk.append(source_line)
+            size += len(source_line)
+        if not chunk or line > begin + len(chunk):
+            raise ProbeError("Referenced line does not fit source excerpt: " + file)
+        window = "".join(chunk)
+        end = begin + len(chunk)
         sections.append({
             "filepath": file, "line_from": begin + 1, "line_to": end,
             "excerpt": window,
