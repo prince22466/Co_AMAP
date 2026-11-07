@@ -132,6 +132,8 @@ def require_matching_environment(reasoning: Path, tool: Path,
         if (c.get("tasks_sha256") != a["tasks_sha256"]
                 or c.get("served_model") != a["served_model"]):
             raise IncompleteEvidence("L3 model or tasks differ from assisted arms")
+        if c.get("sandbox") != "docker":
+            raise IncompleteEvidence("L3 must use Docker to match assisted verifier")
         alignment["autonomous_manifest"] = str(l3)
     return alignment
 
