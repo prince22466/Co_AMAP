@@ -48,6 +48,7 @@ All bulk artifacts are stored in `v10/.autoresearch-work/`, never checked in. On
 - Completed control half-run: all four raw rows SUCCESS with 256/256 requests for each 4K run and 128/128 for each 16K run. 16K repetitions 1523.20 and 1537.20, mean **1530.20** total tok/s; 4K reported summary mean **2132.28**. The self-comparison through `autoresearch/evaluate.py` validates CSV structure and completion only, not a speedup. Both CSVs are preserved locally in `.autoresearch-work/bench_control/` and remotely in the run directory above. A candidate half-run remains necessary for any threshold claim.
 - Expanded candidate GPU suite, including 7-, 9- and 65-token query/page-boundary cases: **21 passed**; log `.autoresearch-work/tests/candidate_block64_boundaries.log` on the remote.
 - Higher-concurrency 4K diagnostic (4096 input, 128 output, concurrency 64, 64 prompts, separate matched server restarts): control 1906.50 total tok/s, mean TTFT 30059.43 ms and TPOT 700.67 ms; candidate 2026.42 total tok/s, mean TTFT 25559.75 ms and TPOT 670.15 ms; both 64/64 successful. This single short diagnostic is not a half-run or proof of a repeatable 4K gain. Logs: remote `.autoresearch-work/quick/highconc_control_PCvz5kbr/` and `highconc_candidate_ytn2Yps6/`.
+- Draft PR requested by the user: https://github.com/prince22466/Co_AMAP/pull/229. The candidate has not met the matched half-run promotion gate; keep the PR in draft pending that evidence.
 
 ## Results template
 
