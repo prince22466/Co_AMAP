@@ -189,15 +189,15 @@ async def run(args: argparse.Namespace) -> None:
                             candidate = await verify_one(
                                 sandbox, cfg, task, snapshot, base, snap_patch,
                                 probe["patch"], verify_task)
-                            if getattr(candidate, "error", None):
-                                raise VerificationBlocked(
-                                    "Candidate verifier error: "
-                                    + str(getattr(candidate, "error"))[:160])
                             if not isinstance(candidate.resolved, bool):
                                 raise VerificationBlocked("Missing candidate verdict")
+                            # A candidate patch rejected by git apply or tests is
+                            # an agent failure, not a broken verifier. The empty
+                            # and reference controls already proved the harness.
                             row["resolved"] = candidate.resolved
                             row["status"] = "resolved" if candidate.resolved else "unresolved"
                             row["test_exit_code"] = getattr(candidate, "test_exit_code", None)
+                            row["candidate_error"] = getattr(candidate, "error", None)
                         else:
                             row["resolved"] = False
                             row["status"] = "invalid_edit"
