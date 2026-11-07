@@ -947,6 +947,7 @@ def unified_attention(
     if optimize_prefill_gqa:
         BLOCK_M = 32
         BLOCK_Q = BLOCK_M // num_queries_per_kv
+        launch_num_stages = 2
 
     # Ideally we would launch with kernel with:
     # \sum_i[ceil(query_len[i] / BLOCK_Q)] blocks.
