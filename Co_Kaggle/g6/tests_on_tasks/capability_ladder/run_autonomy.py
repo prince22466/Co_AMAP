@@ -9,6 +9,10 @@ import argparse
 import asyncio
 import json
 from pathlib import Path
+import sys
+
+TOOLS = Path(__file__).resolve().parents[1] / "tools"
+sys.path.insert(0, str(TOOLS))
 
 from probe import MODEL, PILOT, S1
 from build_submission29 import ARTIFACT, build
