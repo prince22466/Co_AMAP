@@ -325,13 +325,18 @@ def run(args: argparse.Namespace) -> None:
         raise ProbeError("Duplicate or missing requested tasks")
     if args.seed < 0:
         raise ProbeError("Seed must be >=0")
-    verify_server(args.model_url, args.served_model, args.api_key)
+    # Snapshot/source preflight before model-server access: do not start a
+    # GPU-dependent run if the selected data format is entirely unsupported.
     cases = []
     for task_id in ids:
         try:
             cases.append((task_id, make_case(tasks[task_id], args.snapshots), None))
         except (ProbeError, UnicodeError, tarfile.TarError) as exc:
             cases.append((task_id, None, str(exc)))
+    if not any(case is not None for _, case, _ in cases):
+        raise ProbeError("Every selected task lacks usable pristine source; "
+                         "check snapshot layout/deduplication before inference")
+    verify_server(args.model_url, args.served_model, args.api_key)
     args.output.mkdir(parents=True)
     raw_dir = args.output / "raw_model"; raw_dir.mkdir()
     manifest = {
