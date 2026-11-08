@@ -29,6 +29,19 @@ def arguments_digest(name: str, arguments: dict[str, Any]) -> str | None:
     return hashlib.sha256(data.encode("utf-8")).hexdigest()
 
 
+def nonmutating_edit_error(message: str) -> bool:
+    """Only errors raised during source matching, before any file upload."""
+    lower = message.lower()
+    return (
+        "failed to replace: old_string not found" in lower
+        or ("target string occurs " in lower and " times" in lower)
+        or ("target string flexibly matches " in lower
+            and " locations" in lower)
+        or "old_string cannot be empty" in lower
+        or (" is empty. use write_file" in lower)
+    )
+
+
 def error_kind(value: Any) -> str | None:
     """Classify deterministic exact-edit failures; all uncertainty fails open."""
     if isinstance(value, dict):
@@ -42,7 +55,7 @@ def error_kind(value: Any) -> str | None:
                 return inner
         error_type = str(value.get("error_type") or "")
         message = str(value.get("error_message") or "")
-        if error_type == "FileEditError":
+        if error_type == "FileEditError" and nonmutating_edit_error(message):
             return "FileEditError"
         # Broken parser/tool args are not always dispatched via callback.
         if "mandatory input parameters" in message.lower():
@@ -54,8 +67,7 @@ def error_kind(value: Any) -> str | None:
         except (ValueError, TypeError):
             # Some tool wrappers return plain error text.
             lower = value.lower()
-            if "fileediterror" in lower and ("not found" in lower or
-                                             "occurs" in lower):
+            if "fileediterror" in lower and nonmutating_edit_error(lower):
                 return "FileEditError"
             if "mandatory input parameters" in lower:
                 return "MissingArguments"
@@ -197,7 +209,9 @@ class RepetitionGuard:
         if name in ("run_command", "write_file"):
             # before() already invalidated even if this callback is skipped.
             return
-        if name == "edit_file" and type(error).__name__ == "FileEditError":
+        if (name == "edit_file"
+                and type(error).__name__ == "FileEditError"
+                and nonmutating_edit_error(str(error))):
             key = arguments_digest(name, args)
             if key:
                 self._failures.setdefault(session, set()).add(
