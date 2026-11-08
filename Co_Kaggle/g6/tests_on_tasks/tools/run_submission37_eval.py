@@ -61,9 +61,10 @@ async def evaluate(args: argparse.Namespace) -> dict:
         from google.adk.apps import App
         from google.adk.plugins.base_plugin import BasePlugin
         if (not hasattr(App, "__init__")
-                or not hasattr(BasePlugin, "before_tool_callback")
                 or "tool_args" not in inspect.signature(
-                    BasePlugin.before_tool_callback).parameters):
+                    BasePlugin.before_tool_callback).parameters
+                or "result" not in inspect.signature(
+                    BasePlugin.after_tool_callback).parameters):
             raise RuntimeError("Unsupported ADK tool callback version")
         original_init = App.__init__
         init = patch_app_initializer(
