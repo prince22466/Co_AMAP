@@ -1,0 +1,45 @@
+name: G6 S37 Repetition Guard Research CPU
+
+on:
+  pull_request:
+    paths:
+      - 'Co_Kaggle/g6/tests_on_tasks/tools/submission37_repetition_guard.py'
+      - 'Co_Kaggle/g6/tests_on_tasks/tools/run_submission37_eval.py'
+      - 'Co_Kaggle/g6/tests_on_tasks/tools/compare_submission37.py'
+      - 'Co_Kaggle/g6/tests_on_tasks/tools/test_submission37_*.py'
+      - 'Co_Kaggle/g6/submission_nb/submission_37/**'
+      - '.github/workflows/g6-submission37-research.yml'
+  workflow_dispatch:
+
+jobs:
+  research-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install CPU-only packaging dependency
+        run: python -m pip install 'pyyaml>=6,<7'
+      - name: Compile S37 research scripts
+        working-directory: Co_Kaggle/g6/tests_on_tasks/tools
+        run: |
+          python -m py_compile submission37_repetition_guard.py \
+            run_submission37_eval.py compare_submission37.py \
+            test_submission37_guard.py test_submission37_runner.py
+      - name: Run S36 parity and S37 guard integration tests
+        working-directory: Co_Kaggle/g6/tests_on_tasks/tools
+        run: |
+          python -m unittest -v test_submission36.py \
+            test_submission37_guard.py test_submission37_runner.py
+      - name: Ensure established S36 prompt/model/package source is unchanged
+        run: |
+          git diff --exit-code origin/main...HEAD -- \
+            Co_Kaggle/g6/submission_nb/submission_36/ \
+            Co_Kaggle/g6/submission_nb/submission_29/ \
+            Co_Kaggle/g6/tests_on_tasks/tools/build_submission36.py
+      - name: Check patch whitespace
+        run: git diff --check origin/main...HEAD
