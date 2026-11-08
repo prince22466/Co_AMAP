@@ -114,13 +114,25 @@ class CoreTests(unittest.TestCase):
         }), "MissingArguments")
         self.assertIsNone(error_kind({
             "status": "error", "error_type": "BudgetExceeded"}))
+        # Copy/transfer failures can occur after mutation: never cache.
+        self.assertIsNone(error_kind({
+            "status": "error", "error_type": "FileEditError",
+            "error_message": "copy_to failed after file write started"}))
+        self.assertIsNone(error_kind({
+            "status": "error", "error_type": "FileEditError",
+            "error_message": "unexpected filesystem exception"}))
+        self.assertEqual(error_kind({
+            "status": "error", "error_type": "FileEditError",
+            "error_message": "Target string occurs 2 times in rich/panel.py."}),
+            "FileEditError")
         self.assertTrue(was_synthetically_blocked({"result": json.dumps(BLOCK)}))
         self.assertFalse(was_synthetically_blocked(BAD))
 
     def test_exception_caching_only_for_file_edit_error(self):
         g = RepetitionGuard()
         FakeEditError = type("FileEditError", (Exception,), {})
-        g.on_error("s", "edit_file", EDIT, FakeEditError("not found"))
+        g.on_error("s", "edit_file", EDIT,
+                   FakeEditError("Failed to replace: old_string not found"))
         self.assertIsNotNone(g.before("s", "edit_file", EDIT))
         g.before("s", "run_command", {"command": "echo test"})
         g.on_error("s", "run_command", {"command": "echo test"},
