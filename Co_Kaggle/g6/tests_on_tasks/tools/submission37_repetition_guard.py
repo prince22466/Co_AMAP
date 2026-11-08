@@ -91,9 +91,11 @@ def session_id(tool_context: Any) -> str | None:
 class RepetitionGuard:
     """Tiny per-session failure ledger with conservative workspace epochs.
 
-    Any attempted run_command can mutate source and therefore invalidates all
-    failed anchors. A *successful* edit/write also invalidates; failed edits do
-    not. read_file/get_status never invalidate. No symbolic similarity guesses.
+    Every run_command or write_file attempt may mutate source and therefore
+    invalidates all failed anchors BEFORE dispatch, even if execution raises.
+    An edit with different arguments also invalidates before dispatch, as it
+    may change source without producing an after-tool callback. read_file and
+    get_status never invalidate. No symbolic similarity guesses.
     """
 
     def __init__(self):
@@ -124,15 +126,26 @@ class RepetitionGuard:
             self._record(None, "missing_session")
             return None
         self._record(session, "callback_tool_calls")
+        if name in ("run_command", "write_file"):
+            # Must run BEFORE execution: tools may mutate then raise, and an
+            # earlier plugin may handle the exception without an after hook.
+            self._advance(session, "potential_workspace_change")
+            return None
         if name != "edit_file":
             return None
         self._record(session, "edit_attempts")
         key = arguments_digest(name, args)
         if key is None:
-            self._record(session, "uncanonicalizable_arguments")
+            # Unknown arguments may still produce a mutating tool invocation.
+            self._advance(session, "uncanonicalizable_arguments")
             return None
         token = (self._epochs.get(session, 0), key)
-        if token not in self._failures.get(session, set()):
+        failures = self._failures.get(session, set())
+        if token not in failures:
+            if failures:
+                # A different edit may mutate before the after-hook executes,
+                # including on cancellation. Do not block a stale old anchor.
+                self._advance(session, "new_edit_attempt")
             return None
         counts = self._blocked_counts.setdefault(session, Counter())
         if counts[token] >= self.max_blocks_per_failed_edit:
@@ -158,13 +171,8 @@ class RepetitionGuard:
               args: dict[str, Any], response: Any) -> None:
         if not session:
             return
-        if name == "run_command":
-            # It may mutate any file, even if the command reports failure.
-            self._advance(session, "shell_invalidation")
-            return
-        if name == "write_file":
-            # No precise revision tracking; any write attempt invalidates.
-            self._advance(session, "write_invalidation")
+        if name in ("run_command", "write_file"):
+            # Already invalidated by before(); preserve that revision here.
             return
         if name != "edit_file":
             return
@@ -186,11 +194,10 @@ class RepetitionGuard:
                  args: dict[str, Any], error: BaseException) -> None:
         if not session:
             return
-        if name == "run_command":
-            self._advance(session, "shell_invalidation")
-        elif name == "write_file":
-            self._advance(session, "write_invalidation")
-        elif name == "edit_file" and type(error).__name__ == "FileEditError":
+        if name in ("run_command", "write_file"):
+            # before() already invalidated even if this callback is skipped.
+            return
+        if name == "edit_file" and type(error).__name__ == "FileEditError":
             key = arguments_digest(name, args)
             if key:
                 self._failures.setdefault(session, set()).add(
