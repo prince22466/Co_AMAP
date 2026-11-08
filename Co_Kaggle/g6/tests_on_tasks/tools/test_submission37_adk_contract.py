@@ -20,7 +20,7 @@ from submission37_repetition_guard import (
 ARGS = {"filepath": "rich/panel.py", "old_string": "x = 1",
         "new_string": "x = 2", "allow_multiple": False}
 FAILED = {"status": "error", "error_type": "FileEditError",
-          "error_message": "old_string not found"}
+          "error_message": "Failed to replace: old_string not found"}
 
 
 class PinnedADKIntegration(unittest.IsolatedAsyncioTestCase):
