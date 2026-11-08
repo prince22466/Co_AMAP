@@ -58,7 +58,8 @@ def target_file(root, name):
     if not name or "\\" in name or "\x00" in name:
         raise ValueError("invalid_filepath")
     p = PurePosixPath(name)
-    if p.is_absolute() or any(x in ("..", ".", "") for x in p.parts):
+    if (not p.parts or p.is_absolute()
+            or any(x in ("..", ".", "") for x in p.parts)):
         raise ValueError("invalid_filepath")
     if p.parts[0] == ".git":
         raise ValueError("protected_git_internal")
