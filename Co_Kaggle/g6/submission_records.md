@@ -2,7 +2,8 @@
 
 | Submission and Description | public score | comments |
 | --- | ---: | --- |
-| submission_37 (research A/B only, NO Kaggle ZIP yet) | not submitted | Deterministic host-side repeated-failed-edit gate, compared against byte-identical S36 primary; Python ADK callback exists only in local research evaluator, not a valid Kaggle package. See [research README](submission_nb/submission_37/README.md). |
+| submission_37.zip (Kaggle-loadable prompt-only) | not submitted | `submission_nb/artifacts/submission_37.zip` built by `tests_on_tasks/tools/build_submission37.py`: exact S36 primary plus one compact failure-memory instruction. **Not** the external deterministic callback from the separate S37 research harness; score untested. See [S37 README](submission_nb/submission_37/README.md). |
+| submission_37 (separate research A/B) | not submitted | Deterministic host-side repeated-failed-edit gate, compared against byte-identical S36 primary; Python ADK callback exists only in local research evaluator, not a valid Kaggle package. See [research README](submission_nb/submission_37/README.md). |
 | submission.zip - submission_36 | 0.06 | `submission_nb/submission_36/` — S29-identical E4B native tools, model and budget; parser-delimiter addendum only in primary, paired exact S29 control; CI-generated ZIP archives, CPU checks are unscored. |
 | submission.zip - submission_35 | not submitted | `submission_nb/artifacts/submission_35.zip` (same E4B model, sampling and budget as S34; single agent, five native tools, optional instruction-only recovery skill); `submission_35_control.zip` is matched no-skill E4B control. CPU checks unscored; real-model tests pending. |
 | submission.zip - submission_34 | not submitted | `submission_nb/artifacts/submission_34.zip`; S29 configuration and native tools unchanged, compact 1.7K-character prompt, bounded reads, S1 real-E4B result: 2/15 resolved; unsuccessful candidate |
