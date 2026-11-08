@@ -72,15 +72,23 @@ async def evaluate(args: argparse.Namespace) -> dict:
         with patch.object(App, "__init__", init):
             report = await official.evaluate(args)
         if report.get("stage") == "evaluation_complete":
-            if not injected_plugins:
+            task_ids = (official.S1_IDS if args.stage == "s1"
+                        else official.PILOT_IDS)
+            expected_apps = len(task_ids) * args.repeats
+            if len(injected_plugins) != expected_apps:
                 raise RuntimeError(
-                    "S37 guard did not attach to an ADK App. "
-                    "No valid guarded comparison can be claimed.")
+                    f"S37 guard attached to {len(injected_plugins)} App(s), "
+                    f"expected {expected_apps} for matched task coverage.")
             if not any(plugin.guard.stats["callback_tool_calls"]
                        for plugin in injected_plugins):
                 raise RuntimeError(
                     "S37 plugin was registered but no tool callbacks ran. "
                     "The intervention was not active.")
+            if any(plugin.guard.stats["missing_session"]
+                   for plugin in injected_plugins):
+                raise RuntimeError(
+                    "S37 tool callbacks lacked stable session IDs; "
+                    "duplicate tracking was not enforced consistently.")
     counts = {}
     events = []
     for plugin in injected_plugins:
@@ -94,6 +102,11 @@ async def evaluate(args: argparse.Namespace) -> dict:
         "archive_sha256": source_sha(args.archive),
         "guard_installed": bool(injected_plugins),
         "app_instances": len(injected_plugins),
+        "expected_app_instances": (
+            len(official.S1_IDS if args.stage == "s1" else official.PILOT_IDS)
+            * args.repeats if report.get("stage") == "evaluation_complete"
+            else 0
+        ),
         "guard_counts": counts,
         "guard_events": events[:1000],
         "research_only": True,
