@@ -26,6 +26,16 @@ def load_experiment(folder: Path, variant: str, stage: str) -> dict:
     task_ids = PILOT_IDS if stage == "pilot" else S1_IDS
     if manifest.get("task_ids") != list(task_ids):
         raise ValueError("Mismatched task set or ordering")
+    if variant == "guard":
+        expected = len(task_ids) * int(manifest["repeats"])
+        counts = telemetry.get("guard_counts") or {}
+        if (telemetry.get("app_instances") != expected
+                or telemetry.get("expected_app_instances") != expected
+                or not counts.get("callback_tool_calls")
+                or counts.get("missing_session", 0)):
+            raise ValueError("Guard coverage incomplete or missing session identity")
+    elif telemetry.get("app_instances") != 0:
+        raise ValueError("Control unexpectedly has guarded App instances")
     candidates = {}
     for number in range(1, int(manifest["repeats"]) + 1):
         name = f"candidate_{number}"
