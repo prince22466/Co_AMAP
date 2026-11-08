@@ -213,10 +213,10 @@ def new_adk_plugin():
                                      tool_args)
 
         async def after_tool_callback(
-            self, *, tool, tool_args, tool_context, tool_response
+            self, *, tool, tool_args, tool_context, result
         ):
             self.guard.after(session_id(tool_context), tool.name,
-                             tool_args, tool_response)
+                             tool_args, result)
             return None
 
         async def on_tool_error_callback(
