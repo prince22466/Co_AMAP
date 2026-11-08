@@ -1,15 +1,63 @@
-# Submission 37 — deterministic repetition-guard research experiment
+# Submission 37 — E4B S1 experiments
 
-**Status: research-only S37 A/B; NOT YET a new Kaggle submission package.**
-This experiment starts with the S36 *primary* config (public score 0.06)
-and asks whether blocking identical previously failed native edits helps E4B.
+## Kaggle-loadable submission_37.zip (prompt-only)
 
-**Do not upload a purported S37 ZIP yet.** The competition uses a
-declarative YAML/approved-tool/skill/weight compiler. Arbitrary Python ADK
-callbacks in the research harness cannot be added to a competitor ZIP.
-A ZIP built from S36 remains S36 behavior; it does not inherit this guard.
-We must validate the headroom and an approved deployment mechanism before
-creating a new competitive submission.
+**A real S1-testable ZIP is now generated**, using S36 primary plus a short
+failure-memory instruction. This is a *different experiment* from the
+deterministic research-only host interceptor described below.
+
+The ZIP contains exactly `agent.yaml`, `eval_config.yaml`, and
+`instruction.md` at its root. Its YAML files are **byte-identical to S36
+primary**. The instruction is the exact S36 primary instruction plus
+`failure_memory_addendum.md`. S36's parser delimiter guidance, E4B model,
+native tools, sampling, and 4-minute/40-call/48-turn limits are unchanged.
+
+The model is asked not to repeat a failed operation with identical arguments,
+to refresh source evidence after an anchor failure, and to keep only its latest
+failure in working context. **This prompt does not mechanically enforce
+repetition prevention or preserve durable external state.** No S1 score has
+yet been measured.
+
+### Build and run the 15 S1 tasks
+
+From `Co_Kaggle/g6/tests_on_tasks/tools`:
+
+```bash
+python -m pip install 'pyyaml>=6,<7'
+python build_submission36.py
+python build_submission37.py
+python -m unittest -v test_submission36.py test_submission37_package.py
+
+python run_submission24_eval.py --stage s1 --repeats 2 --time-limit 0 \
+  --archive ../../submission_nb/artifacts/submission_37.zip \
+  --tasks /path/tasks.jsonl --snapshots /path/snapshots \
+  --wheels /path/wheels --output /path/s37_s1
+
+# Matched S36 control: same task set, seeds, sandbox, and timing
+python run_submission24_eval.py --stage s1 --repeats 2 --time-limit 0 \
+  --archive ../../submission_nb/artifacts/submission_36.zip \
+  --tasks /path/tasks.jsonl --snapshots /path/snapshots \
+  --wheels /path/wheels --output /path/s36_s1_control
+```
+
+The output is `submission_nb/artifacts/submission_37.zip` and its SHA-256
+manifest; CI also uploads a downloadable artifact. For competition-style
+timing, use `--time-limit 4` in *both* runs and different output directories.
+Do not combine timed and untimed results. Evaluate retained wins, regressions,
+empty patches, malformed edit calls, and actual official task resolution.
+Do not promote on fewer failed calls alone.
+
+---
+
+## Separate research experiment: deterministic host-side repetition guard
+
+**Status: research-only A/B, not included in the S37 ZIP.** The original
+research implementation starts with S36 primary and asks whether an ADK
+callback can block identical failed edit calls before dispatch.
+
+The closed competition YAML interface cannot install arbitrary host-side
+Python callbacks. Therefore the Kaggle-loadable ZIP above runs *only the
+prompt-guided mechanism*; the following host research must be run separately.
 
 ## Experiment A/B
 
