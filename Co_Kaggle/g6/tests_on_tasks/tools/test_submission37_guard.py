@@ -144,7 +144,7 @@ class CoreTests(unittest.TestCase):
         obj = object.__new__(FakeApp)
         current = object()
         patched(obj, plugins=[current], name="test", root_agent="agent")
-        self.assertEqual(obj.kwargs["plugins"], [current, injected[0]])
+        self.assertEqual(obj.kwargs["plugins"], [injected[0], current])
         self.assertEqual(obj.kwargs["name"], "test")
         with self.assertRaises(RuntimeError):
             patched(obj, "positional")
