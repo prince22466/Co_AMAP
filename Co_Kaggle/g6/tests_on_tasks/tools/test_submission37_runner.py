@@ -187,7 +187,8 @@ class RunnerTests(unittest.TestCase):
                 await hook.after_tool_callback(
                     tool=tool, tool_args=edit, tool_context=context,
                     result={"status": "error",
-                            "error_type": "FileEditError"})
+                            "error_type": "FileEditError",
+                            "error_message": "Failed to replace: old_string not found"})
                 denial = await hook.before_tool_callback(
                     tool=tool, tool_args=edit, tool_context=context)
                 self.assertEqual(denial["error_type"], "RepeatedFailedEdit")
