@@ -25,6 +25,8 @@ CONTROL = ARTIFACT_DIR / "submission_39_control_s38.zip"
 S37_ORIGINAL_BLOB = "19f91644808bee28454131853f32ad74d377b60d"
 S38_SKILL_BLOB = "4d500774dea94dccf2b58e1b3ae190fbf8bb5cb9"
 S38_SCRIPT_BLOB = "ee70f7eb4ffefe929e88908c603cbc524fb7fe67"
+# Pin the S38 activation paragraph too, so neither arm silently changes.
+S38_ACTIVATION_BLOB = "e27899240a1c358baf11fd7019a519b25c1b4aa3"
 
 HEADER_S37_BEFORE = "S37 FAILURE MEMORY (model-guided; no new tools):"
 HEADER_S37_AFTER = (
@@ -34,7 +36,9 @@ HEADER_S37_AFTER = (
 LEDGER_BEFORE = "Do not spend tool calls\nwriting a ledger or narrating a plan."
 LEDGER_AFTER = (
     "Do not spend native-tool calls\n"
-    "manually writing a ledger or narrating a plan."
+    "manually writing a ledger or narrating a plan. Loading the skill is one\n"
+    "setup call; the two-call recovery limit covers only run_skill_script actions\n"
+    "(read current source, then one guarded edit), not load_skill itself."
 )
 
 
@@ -65,6 +69,9 @@ def payload(variant: str = "primary") -> dict[str, bytes]:
     if variant not in ("primary", "control"):
         raise ValueError("Unknown S39 variant")
     s38_base = s38.payload("primary")
+    note38 = s38.read_source(s38.NOTE)
+    if git_blob_sha(note38) != S38_ACTIVATION_BLOB:
+        raise ValueError("S38 reviewed skill-activation instruction drifted")
     expected_s38 = {
         "skills/state-guard/SKILL.md": S38_SKILL_BLOB,
         "skills/state-guard/scripts/state_guard.py": S38_SCRIPT_BLOB,
@@ -77,10 +84,9 @@ def payload(variant: str = "primary") -> dict[str, bytes]:
 
     original = s36_payload("primary")
     note37 = reconciled_memory()
-    note38 = s38.read_source(s38.NOTE)
     if s38_base["instruction.md"] != original["instruction.md"] + note38:
         raise ValueError("S38 original instruction is not S36 + S38 addendum")
-    if len(note37) > 1700 or len(note38) > 1200:
+    if len(note37) > 1800 or len(note38) > 1200:
         raise ValueError("Excessive agent instruction overhead")
     combined = original["instruction.md"] + note37 + note38
 
