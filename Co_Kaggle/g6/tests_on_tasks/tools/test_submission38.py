@@ -189,5 +189,77 @@ class RealADKSkillLoaderTests(unittest.TestCase):
         self.assertIsNotNone(skill.resources.get_script("state_guard.py"))
 
 
+class RealADKRunSkillScriptTests(unittest.IsolatedAsyncioTestCase):
+    async def test_actual_adk_script_tool_passes_args_and_persists_state(self):
+        from google.adk.code_executors.code_execution_utils import CodeExecutionResult
+        from google.adk.skills import load_skill_from_dir
+        from google.adk.tools.skill_toolset import SkillToolset
+        from types import SimpleNamespace
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "workspace"
+            (root / ".git").mkdir(parents=True)
+            (root / "pkg").mkdir()
+            (root / "pkg/module.py").write_text("alpha = 1\n", encoding="utf-8")
+
+            class LocalSandboxExecutor:
+                def execute_code(self, invocation_context, code_execution_input):
+                    env = os.environ.copy()
+                    env["S38_WORKSPACE"] = str(root)
+                    proc = subprocess.run(
+                        [sys.executable, "-c", code_execution_input.code],
+                        cwd=root, env=env, text=True, capture_output=True,
+                        timeout=10)
+                    return CodeExecutionResult(
+                        stdout=proc.stdout, stderr=proc.stderr)
+
+            skill = load_skill_from_dir(s38.SOURCE / "skills/state-guard")
+            toolset = SkillToolset(
+                skills=[skill], code_executor=LocalSandboxExecutor())
+            available = {tool.name: tool
+                         for tool in await toolset.get_tools()}
+            self.assertIn("run_skill_script", available)
+            tool = available["run_skill_script"]
+            context = SimpleNamespace(
+                invocation_id="test-invocation",
+                _invocation_context=object(),
+            )
+
+            async def invoke(action, **kwargs):
+                response = await tool.run_async(
+                    args={
+                        "skill_name": "state-guard",
+                        "file_path": "scripts/state_guard.py",
+                        "args": {"action": action, **kwargs},
+                    },
+                    tool_context=context)
+                self.assertEqual(response["status"], "success")
+                self.assertFalse(response["stderr"])
+                return json.loads(response["stdout"].strip())
+
+            # This is exactly the tool signature the small model sees.
+            args = {"file": "pkg/module.py", "old": "not_present",
+                    "new": "new_value"}
+            first = await invoke("edit", **args)
+            second = await invoke("edit", **args)
+            self.assertEqual(first["status"], "rejected")
+            self.assertEqual(second["status"], "blocked_duplicate")
+            self.assertEqual(
+                (root / "pkg/module.py").read_text(), "alpha = 1\n")
+
+            read_args = {"file": "pkg/module.py", "start": 1, "end": 1}
+            self.assertEqual((await invoke("read", **read_args))["status"],
+                             "ok")
+            self.assertEqual((await invoke("read", **read_args))["status"],
+                             "blocked_duplicate")
+
+            edited = await invoke(
+                "edit", file="pkg/module.py",
+                old="alpha = 1", new="alpha = 2")
+            self.assertEqual(edited["status"], "ok")
+            self.assertEqual(
+                (root / "pkg/module.py").read_text(), "alpha = 2\n")
+
+
 if __name__ == "__main__":
     unittest.main()
