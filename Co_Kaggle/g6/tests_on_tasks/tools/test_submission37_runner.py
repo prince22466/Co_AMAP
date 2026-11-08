@@ -133,8 +133,8 @@ class RunnerTests(unittest.TestCase):
                     tool=tool, tool_args=edit, tool_context=context))
                 await hook.after_tool_callback(
                     tool=tool, tool_args=edit, tool_context=context,
-                    tool_response={"status": "error",
-                                   "error_type": "FileEditError"})
+                    result={"status": "error",
+                            "error_type": "FileEditError"})
                 denial = await hook.before_tool_callback(
                     tool=tool, tool_args=edit, tool_context=context)
                 self.assertEqual(denial["error_type"], "RepeatedFailedEdit")
