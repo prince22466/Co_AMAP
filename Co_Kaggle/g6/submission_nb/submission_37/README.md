@@ -41,6 +41,9 @@ are identical; always disclose this confound.
    run_command **may** mutate source and invalidates it conservatively.
    All write_file attempts, successful/unknown edit results, or source
    changes requiring a new epoch likewise invalidate the memory.
+   A maximum of TWO synthetic denials per exact failed call protects
+   against an infinite loop of zero-charge rejections; subsequent repeats
+   execute natively and consume the ordinary tool-call budget.
 4. Different arguments, a different session, or a new workspace epoch are
    never blocked. The guard does not prevent malformed tool calls rejected
    before dispatch, incomplete generations, or repeated internal reasoning.
