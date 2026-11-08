@@ -39,9 +39,11 @@ def workspace():
     # /workspace is Docker's root; subprocess mode exposes it in PYTHONPATH.
     candidates = [
         os.environ.get("S38_WORKSPACE"),
-        "/workspace",
+        # In subprocess mode /workspace may exist on the *host* but is not
+        # necessarily the target repository. Prefer the sandbox's own paths.
         os.environ.get("PYTHONPATH", "").split(os.pathsep)[0],
         os.environ.get("PWD"),
+        "/workspace",
     ]
     for candidate in candidates:
         if not candidate:
@@ -61,7 +63,8 @@ def target_file(root, name):
     if (not p.parts or p.is_absolute()
             or any(x in ("..", ".", "") for x in p.parts)):
         raise ValueError("invalid_filepath")
-    if p.parts[0] == ".git":
+    if ".git" in p.parts:
+        # Nested repositories/submodules have their own internal metadata.
         raise ValueError("protected_git_internal")
     target = root.joinpath(*p.parts)
     if not target.is_relative_to(root):
@@ -218,8 +221,35 @@ def run(args):
              next_action="Verify requested behavior and inspect git diff.")
 
 
+def skill_argv(values):
+    """ADK supplies --key, value pairs even when source starts with '-'.
+
+    argparse misinterprets an old/new string beginning with '-' as an
+    option. Join only the three free-form field pairs using --key=value,
+    preserving the exact bytes of the original argument strings.
+    """
+    normalized = []
+    i = 0
+    while i < len(values):
+        token = values[i]
+        if token in ("--file", "--old", "--new") and i + 1 < len(values):
+            normalized.append(token + "=" + values[i + 1])
+            i += 2
+        else:
+            normalized.append(token)
+            i += 1
+    return normalized
+
+
+class JsonArgumentParser(argparse.ArgumentParser):
+    def error(self, message):
+        # A malformed model-generated tool call must produce structured
+        # feedback rather than a traceback/usage block on stderr.
+        raise ValueError("invalid_arguments: " + message)
+
+
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = JsonArgumentParser(description=__doc__)
     parser.add_argument("--action", choices=("status", "read", "edit"),
                         required=True)
     parser.add_argument("--file", default="")
@@ -228,7 +258,7 @@ def main():
     parser.add_argument("--start", type=int, default=0)
     parser.add_argument("--end", type=int, default=0)
     try:
-        run(parser.parse_args())
+        run(parser.parse_args(skill_argv(sys.argv[1:])))
     except (OSError, ValueError) as exc:
         emit("error", reason=str(exc)[:200])
 
