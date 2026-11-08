@@ -154,15 +154,18 @@ class RunnerTests(unittest.TestCase):
             }
             with patch.dict(sys.modules, overrides), patch.object(
                     runner, "canonical_s36_archive", return_value=archive), patch.object(
+                    runner.official, "PILOT_IDS", ("rich_3905",)), patch.object(
                     runner.official, "evaluate", side_effect=run_fake):
                 args = SimpleNamespace(
-                    variant="guard", archive=None, output=Path(tmp) / "guard")
+                    variant="guard", archive=None, output=Path(tmp) / "guard",
+                    stage="pilot", repeats=1)
                 result = asyncio.run(runner.evaluate(args))
             self.assertTrue(result["guard_installed"])
             self.assertEqual(result["guard_counts"]["duplicate_failures_blocked"], 1)
             telemetry = json.loads((
                 args.output / "submission37_research_telemetry.json").read_text())
             self.assertEqual(telemetry["app_instances"], 1)
+            self.assertEqual(telemetry["expected_app_instances"], 1)
 
     def test_unknown_variant_fails_closed(self):
         with self.assertRaisesRegex(ValueError, "Expected"):
