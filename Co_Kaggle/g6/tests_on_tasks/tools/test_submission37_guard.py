@@ -30,13 +30,15 @@ class CoreTests(unittest.TestCase):
         g.after("task-1", "edit_file", EDIT, BAD)
         denied = g.before("task-1", "edit_file", dict(reversed(list(EDIT.items()))))
         self.assertEqual(denied["error_type"], "RepeatedFailedEdit")
-        self.assertIsNone(g.before("task-1", "edit_file",
-                                   {**EDIT, "new_string": "x = 3"}))
         # Some ADK versions invoke after_tool_callback on intercepted results:
         # a synthetic denial MUST NOT erase the original failed anchor.
         g.after("task-1", "edit_file", EDIT, denied)
         self.assertIsNotNone(g.before("task-1", "edit_file", EDIT))
         self.assertEqual(g.stats["duplicate_failures_blocked"], 2)
+        # A different attempted edit invalidates stale anchors pre-execution.
+        self.assertIsNone(g.before("task-1", "edit_file",
+                                   {**EDIT, "new_string": "x = 3"}))
+        self.assertIsNone(g.before("task-1", "edit_file", EDIT))
         self.assertEqual(g.stats["deterministic_edit_failures"], 1)
         self.assertNotIn("x = 1", json.dumps(g.report()))
 
@@ -49,24 +51,41 @@ class CoreTests(unittest.TestCase):
         # so its usual charged call budget can stop further looping.
         self.assertIsNone(g.before("task", "edit_file", EDIT))
         self.assertEqual(g.stats["block_cap_reached"], 1)
+        g.before("task", "run_command", {"command": "git diff"})
         g.after("task", "run_command", {"command": "git diff"}, {"status": "ok"})
         g.after("task", "edit_file", EDIT, BAD)
         self.assertIsNotNone(g.before("task", "edit_file", EDIT))
+
+    def test_early_mutation_then_exception_cannot_leave_stale_failure(self):
+        g = RepetitionGuard()
+        g.after("s", "edit_file", EDIT, BAD)
+        self.assertIsNotNone(g.before("s", "edit_file", EDIT))
+        # No after() runs; the shell command changed source then threw.
+        g.before("s", "run_command", {"command": "change_source.py"})
+        g.on_error("s", "run_command", {"command": "change_source.py"},
+                   RuntimeError("failed after mutation"))
+        self.assertIsNone(g.before("s", "edit_file", EDIT))
+        g.after("s", "edit_file", EDIT, BAD)
+        g.before("s", "write_file", {"filepath": "rich/panel.py"})
+        self.assertIsNone(g.before("s", "edit_file", EDIT))
 
     def test_read_does_not_reset_but_any_shell_can_mutate(self):
         g = RepetitionGuard()
         g.after("s", "edit_file", EDIT, {"result": json.dumps(BAD)})
         g.after("s", "read_file", {"filepath": EDIT["filepath"]}, OK)
         self.assertIsNotNone(g.before("s", "edit_file", EDIT))
+        g.before("s", "run_command", {"command": "git status"})
         g.after("s", "run_command", {"command": "git status"}, {"status": "ok"})
         self.assertIsNone(g.before("s", "edit_file", EDIT))
 
     def test_success_and_write_invalidate_failed_anchors(self):
         g = RepetitionGuard()
         g.after("s", "edit_file", EDIT, BAD)
+        g.before("s", "edit_file", {**EDIT, "new_string": "x = 4"})
         g.after("s", "edit_file", {**EDIT, "new_string": "x = 4"}, OK)
         self.assertIsNone(g.before("s", "edit_file", EDIT))
         g.after("s", "edit_file", EDIT, BAD)
+        g.before("s", "write_file", {"filepath": "a.py"})
         g.after("s", "write_file", {"filepath": "a.py"}, {"status": "error"})
         self.assertIsNone(g.before("s", "edit_file", EDIT))
 
@@ -103,6 +122,7 @@ class CoreTests(unittest.TestCase):
         FakeEditError = type("FileEditError", (Exception,), {})
         g.on_error("s", "edit_file", EDIT, FakeEditError("not found"))
         self.assertIsNotNone(g.before("s", "edit_file", EDIT))
+        g.before("s", "run_command", {"command": "echo test"})
         g.on_error("s", "run_command", {"command": "echo test"},
                    RuntimeError("fail"))
         self.assertIsNone(g.before("s", "edit_file", EDIT))
