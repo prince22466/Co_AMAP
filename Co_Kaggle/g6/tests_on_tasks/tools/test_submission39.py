@@ -41,6 +41,7 @@ class Submission39StackTests(unittest.TestCase):
         base38 = s38.payload("primary")
         primary = s39.payload("primary")
         control = s39.payload("control")
+        skill_control = s39.payload("skill_enabled_control")
 
         self.assertEqual(set(primary), set(base38))
         self.assertEqual(control, base38)
@@ -51,18 +52,55 @@ class Submission39StackTests(unittest.TestCase):
         for name in base38:
             if name != "instruction.md":
                 self.assertEqual(primary[name], base38[name])
+        allowed_s36 = s39.allow_registered_skill(base36["instruction.md"])
         expected_instruction = (
-            base36["instruction.md"]
+            allowed_s36
             + s39.reconciled_memory()
             + s38.read_source(s38.NOTE)
         )
         self.assertEqual(primary["instruction.md"], expected_instruction)
+        self.assertEqual(
+            skill_control["instruction.md"],
+            allowed_s36 + s38.read_source(s38.NOTE)
+        )
+        for name in base38:
+            if name != "instruction.md":
+                self.assertEqual(skill_control[name], base38[name])
+        # The primary-vs-skill-enabled-control difference is JUST S37.
+        self.assertEqual(
+            primary["instruction.md"],
+            skill_control["instruction.md"].replace(
+                s38.read_source(s38.NOTE),
+                s39.reconciled_memory() + s38.read_source(s38.NOTE),
+                1,
+            )
+        )
+        self.assertIn(s39.S36_SKILL_BAN, control["instruction.md"])
+        self.assertNotIn(s39.S36_SKILL_BAN, primary["instruction.md"])
+        self.assertIn(b"state-guard skill", primary["instruction.md"])
+        self.assertNotIn(b"Never request a skill", primary["instruction.md"])
+        self.assertNotIn(s39.S36_SCRIPT_BAN, primary["instruction.md"])
         self.assertEqual(primary["agent.yaml"], base38["agent.yaml"])
         self.assertEqual(
             primary["eval_config.yaml"], base36["eval_config.yaml"]
         )
         self.assertIn(b"load_skill(skill_name=", primary["instruction.md"])
         self.assertIn(b"state-guard", primary["instruction.md"])
+
+    def test_only_registered_skill_is_allowlisted(self):
+        original = s36_payload("primary")["instruction.md"]
+        allowed = s39.allow_registered_skill(original)
+        self.assertEqual(original.count(s39.S36_SKILL_BAN), 1)
+        self.assertEqual(original.count(s39.S36_SCRIPT_BAN), 1)
+        restored = allowed.replace(s39.S39_SKILL_ALLOW, s39.S36_SKILL_BAN)
+        restored = restored.replace(s39.S39_SCRIPT_ALLOW, s39.S36_SCRIPT_BAN)
+        self.assertEqual(restored, original)
+        self.assertIn(b"Do not request unregistered skills", allowed)
+        self.assertIn(b"bounded exact edit", allowed)
+        with self.assertRaisesRegex(ValueError, "skill exclusion changed"):
+            s39.allow_registered_skill(
+                original.replace(s39.S36_SKILL_BAN, b"other instruction")
+            )
 
     def test_s38_skill_source_remains_pinned(self):
         parts = s39.payload()
@@ -96,7 +134,7 @@ class Submission39StackTests(unittest.TestCase):
             return data + b" " if name == s38.NOTE else data
 
         with patch.object(s38, "read_source", side_effect=mutated_read):
-            for variant in ("primary", "control"):
+            for variant in ("primary", "control", "skill_enabled_control"):
                 with self.subTest(variant=variant):
                     with self.assertRaisesRegex(
                         ValueError, "activation instruction drifted"
@@ -121,6 +159,10 @@ class Submission39StackTests(unittest.TestCase):
                     self.assertEqual(
                         manifest["s37_compatibility_edits"],
                         2 if variant == "primary" else 0,
+                    )
+                    self.assertEqual(
+                        manifest["s36_skill_exception_spans"],
+                        0 if variant == "control" else 2,
                     )
                     with zipfile.ZipFile(output) as archive:
                         self.assertEqual(
