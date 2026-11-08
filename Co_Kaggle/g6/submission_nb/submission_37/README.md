@@ -31,16 +31,21 @@ are identical; always disclose this confound.
 
 ### Exactly what is prevented
 
-1. After a native edit_file returns a deterministic FileEditError, store
-   a SHA-256 fingerprint of the exact tool-argument structure plus session
-   and workspace-change epoch. Raw source arguments are not logged.
+1. After a native edit_file returns a **non-mutating source-matching**
+   FileEditError (missing or ambiguous old_string, empty source/anchor),
+   store a SHA-256 fingerprint of its exact tool arguments, session and
+   workspace-change epoch. Other FileEditError results (e.g. copy/transfer
+   failures) may occur after mutation and are NOT cached. Raw source
+   arguments are never logged.
 2. If E4B retries the exact same edit in the same epoch, the before-tool
    hook returns a structured RepeatedFailedEdit message instead of
    dispatching another native call.
-3. read_file/get_status do not invalidate the failed-anchor memory. Every
-   run_command **may** mutate source and invalidates it conservatively.
-   All write_file attempts, successful/unknown edit results, or source
-   changes requiring a new epoch likewise invalidate the memory.
+3. read_file/get_status do not invalidate the failed-anchor memory.
+   Every run_command/write_file invalidates it **before dispatch**, even
+   when the tool later raises an exception; any different edit_file
+   arguments invalidate it for the same reason. Successful or uncertain
+   editing outcomes also invalidate memory. This fail-open design
+   prevents stale retries from being incorrectly blocked.
    A maximum of TWO synthetic denials per exact failed call protects
    against an infinite loop of zero-charge rejections; subsequent repeats
    execute natively and consume the ordinary tool-call budget.
