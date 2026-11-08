@@ -115,6 +115,15 @@ class ComparatorTests(unittest.TestCase):
                     "".join(json.dumps(row) + "\n" for row in rows[:-1]))
                 with self.assertRaises(ValueError):
                     load_experiment(folder, variant, "pilot")
+                # Returning zero for a missing duration would be misleading.
+                for invalid_duration in (None, -1, float("nan"), float("inf")):
+                    invalid_rows = [dict(row) for row in rows]
+                    invalid_rows[0]["duration_seconds"] = invalid_duration
+                    datafile.write_text(
+                        "".join(json.dumps(row) + "\n" for row in invalid_rows))
+                    with self.subTest(invalid_duration=invalid_duration):
+                        with self.assertRaisesRegex(ValueError, "duration"):
+                            load_experiment(folder, variant, "pilot")
 
 
 class RunnerTests(unittest.TestCase):
