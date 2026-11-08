@@ -33,6 +33,8 @@ class Submission39StackTests(unittest.TestCase):
         )
         self.assertIn("old_string not found", memo)
         self.assertIn("After two failed edits", memo)
+        self.assertIn("the two-call recovery limit covers only run_skill_script", memo)
+        self.assertIn("not load_skill itself", memo)
 
     def test_s39_exactly_stacks_s37_in_front_of_s38_recovery(self):
         base36 = s36_payload("primary")
@@ -42,6 +44,10 @@ class Submission39StackTests(unittest.TestCase):
 
         self.assertEqual(set(primary), set(base38))
         self.assertEqual(control, base38)
+        self.assertEqual(
+            s39.git_blob_sha(s38.read_source(s38.NOTE)),
+            s39.S38_ACTIVATION_BLOB,
+        )
         for name in base38:
             if name != "instruction.md":
                 self.assertEqual(primary[name], base38[name])
@@ -79,6 +85,23 @@ class Submission39StackTests(unittest.TestCase):
                     ValueError, "Unintended change"
                 ):
                     s39.payload("primary")
+
+    def test_changed_s38_activation_instructions_are_rejected(self):
+        # S38's own validator checks structure and consistency but doesn't
+        # pin the exact activation text. S39's A/B comparison must pin it.
+        read_original = s38.read_source
+
+        def mutated_read(name):
+            data = read_original(name)
+            return data + b" " if name == s38.NOTE else data
+
+        with patch.object(s38, "read_source", side_effect=mutated_read):
+            for variant in ("primary", "control"):
+                with self.subTest(variant=variant):
+                    with self.assertRaisesRegex(
+                        ValueError, "activation instruction drifted"
+                    ):
+                        s39.payload(variant)
 
     def test_build_reproducible_zips_and_manifests(self):
         with tempfile.TemporaryDirectory() as temp:
