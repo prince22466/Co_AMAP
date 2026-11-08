@@ -83,7 +83,7 @@ class RunnerTests(unittest.TestCase):
                                   runner.official, "evaluate", side_effect=run_fake):
                 args = SimpleNamespace(
                     variant="control", archive=None,
-                    output=Path(tmp) / "control")
+                    output=Path(tmp) / "control", stage="pilot", repeats=1)
                 result = asyncio.run(runner.evaluate(args))
             self.assertFalse(result["guard_installed"])
             telemetry = json.loads((
