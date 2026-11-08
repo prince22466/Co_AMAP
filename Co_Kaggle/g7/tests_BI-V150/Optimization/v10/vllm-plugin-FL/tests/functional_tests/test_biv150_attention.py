@@ -121,7 +121,12 @@ def test_bf16_gqa_attention_matches_baseline(query_len, context_len, monkeypatch
     num_kv_heads = 2
     kv_block_size = 16
     total_len = context_len + query_len
-    num_blocks = (total_len + kv_block_size - 1) // kv_block_size
+    num_used_blocks = (total_len + kv_block_size - 1) // kv_block_size
+    # The pinned reference loads page indices for a whole 32-token KV tile
+    # before masking token loads. With 16-token pages, its final tile may
+    # read one spare page-table entry (e.g. 98 tokens use seven pages).
+    # Match the padded page-table contract used by the decode/mixed tests.
+    num_blocks = num_used_blocks + 1
 
     query = torch.randn(
         (query_len, num_query_heads, head_size),

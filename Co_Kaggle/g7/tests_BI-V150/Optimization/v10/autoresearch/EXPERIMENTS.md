@@ -50,6 +50,13 @@ All bulk artifacts are stored in `v10/.autoresearch-work/`, never checked in. On
 - Higher-concurrency 4K diagnostic (4096 input, 128 output, concurrency 64, 64 prompts, separate matched server restarts): control 1906.50 total tok/s, mean TTFT 30059.43 ms and TPOT 700.67 ms; candidate 2026.42 total tok/s, mean TTFT 25559.75 ms and TPOT 670.15 ms; both 64/64 successful. This single short diagnostic is not a half-run or proof of a repeatable 4K gain. Logs: remote `.autoresearch-work/quick/highconc_control_PCvz5kbr/` and `highconc_candidate_ytn2Yps6/`.
 - Draft PR requested by the user: https://github.com/prince22466/Co_AMAP/pull/229. The candidate has not met the matched half-run promotion gate; keep the PR in draft pending that evidence.
 
+### 001 continued — 2026-11-08 validation
+
+- Review fix: pad the single-sequence GPU test's cache and page table with one spare 16-token page, matching the existing decode/mixed tests. The pinned reference performs an unmasked page-index load across each 32-token KV tile; the 98-token tail case previously allocated seven entries while the final tile could access entry seven. Inference code is unchanged by this test repair.
+- Corrected candidate suite: **21 passed**. Saved control with the same corrected inputs and original 32-row expectation: **21 passed**. Remote logs: `.autoresearch-work/validation_20261108/candidate_correctness.log` and `control_correctness.log`.
+- User reported 5.8 hours available around 16:03 UTC on 2026-11-08 (approximate expiry 21:51 UTC). Plan: fresh control A1, candidate B1, then independent A2/B2 repeats if time permits; never begin a half-run below the 90-minute start floor. The previous allocation's CSVs remain historical evidence, not a current paired control.
+- Remote machine remains `84d64a9dab4f`, with matching control/candidate attention and unchanged benchmark SHA-256 values recorded above. Model files and package versions are captured in remote `.autoresearch-work/validation_20261108/provenance.json`. First fresh control run: `.autoresearch-work/validation_20261108/A1_GXj1WMMX/`. Results pending.
+
 ## Results template
 
 ### NNN — title
