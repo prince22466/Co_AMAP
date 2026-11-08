@@ -38,8 +38,10 @@ The **sole S38-to-S39 change** is:
 
 The original S37 text is retained **except for exactly two compatibility
 edits**: (1) its header now allows S38's skill, and (2) "do not spend
-tool calls writing a ledger" now explicitly means no *manual native-tool*
-ledger; the skill's own automatic state persistence is permitted.
+tool calls writing a ledger" now prohibits only *manual native-tool*
+ledgers and clarifies that `load_skill` is a setup call outside the
+**two `run_skill_script` recovery actions** (one source read, one exact edit).
+The script's automatic state persistence remains permitted.
 The builder reconstructs and validates the original S37 Git blob after
 undoing these two edits. S38's activation paragraph is unchanged.
 
