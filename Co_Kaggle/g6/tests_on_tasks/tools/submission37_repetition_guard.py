@@ -259,7 +259,9 @@ def patch_app_initializer(original_init, plugin_factory, attached: list):
         if "plugins" in kwargs and not isinstance(kwargs["plugins"], (tuple, list)):
             raise RuntimeError("Unsupported ADK App.plugins type")
         plugin = plugin_factory()
-        kwargs["plugins"] = [*(kwargs.get("plugins") or []), plugin]
+        # The guard must inspect raw tool responses before another plugin
+        # can short-circuit callback dispatch with a non-None result.
+        kwargs["plugins"] = [plugin, *(kwargs.get("plugins") or [])]
         original_init(app, **kwargs)
         attached.append(plugin)
     return initialize
