@@ -129,14 +129,50 @@ class ScriptTests(unittest.TestCase):
         other = Path(self.tmp.name) / "elsewhere.py"
         other.write_text("old\n")
         (self.root / "pkg" / "link.py").symlink_to(other)
+        (self.root / "pkg" / ".git").mkdir()
+        (self.root / "pkg" / ".git" / "config").write_text("old\n")
         for file in (
-            "../elsewhere.py", ".git/s38_state_guard.json", "pkg/link.py",
+            "../elsewhere.py", ".git/s38_state_guard.json",
+            "pkg/.git/config", "pkg/link.py",
             ".", "",
         ):
             with self.subTest(file=file):
                 r = self.call("edit", file=file, old="old", new="new")
                 self.assertEqual(r["status"], "error")
         self.assertEqual(other.read_text(), "old\n")
+
+    def test_cli_accepts_source_text_starting_with_dashes(self):
+        self.source.write_text("--flag = False\n", encoding="utf-8")
+        reply = self.call("edit", file="pkg/module.py",
+                          old="--flag = False", new="- flag = True")
+        self.assertEqual(reply["status"], "ok")
+        self.assertEqual(self.source.read_text(), "- flag = True\n")
+
+        dash_file = self.root / "-special.py"
+        dash_file.write_text("before\n", encoding="utf-8")
+        reply = self.call("edit", file="-special.py",
+                          old="before", new="after")
+        self.assertEqual(reply["status"], "ok")
+        self.assertEqual(dash_file.read_text(), "after\n")
+
+    def test_malformed_cli_returns_structured_error(self):
+        bad = self.call("read", file="pkg/module.py", start="not-a-number")
+        self.assertEqual(bad["status"], "error")
+        self.assertIn("invalid_arguments", bad["reason"])
+
+    def test_workspace_discovery_without_test_only_override(self):
+        env = os.environ.copy()
+        env.pop("S38_WORKSPACE", None)
+        env["PYTHONPATH"] = str(self.root)
+        env["PWD"] = str(self.runner_cwd)
+        done = subprocess.run(
+            [sys.executable, str(SCRIPT), "--action", "read",
+             "--file", "pkg/module.py", "--start", "1", "--end", "1"],
+            cwd=self.runner_cwd, env=env, capture_output=True, text=True,
+            check=True, timeout=10)
+        reply = json.loads(done.stdout.strip())
+        self.assertEqual(reply["status"], "ok")
+        self.assertIn("1: first = 1", reply["content"])
 
     def test_bounded_edits_and_reads(self):
         r = self.call("edit", file="pkg/module.py", old="first = 1",
@@ -205,7 +241,12 @@ class RealADKRunSkillScriptTests(unittest.IsolatedAsyncioTestCase):
             class LocalSandboxExecutor:
                 def execute_code(self, invocation_context, code_execution_input):
                     env = os.environ.copy()
-                    env["S38_WORKSPACE"] = str(root)
+                    # Mirror the official subprocess sandbox: ADK's
+                    # wrapper changes cwd to a temporary skill directory,
+                    # while PYTHONPATH points at the task repository.
+                    env.pop("S38_WORKSPACE", None)
+                    env["PYTHONPATH"] = str(root)
+                    env["PWD"] = str(root)
                     proc = subprocess.run(
                         [sys.executable, "-c", code_execution_input.code],
                         cwd=root, env=env, text=True, capture_output=True,
@@ -259,6 +300,13 @@ class RealADKRunSkillScriptTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(edited["status"], "ok")
             self.assertEqual(
                 (root / "pkg/module.py").read_text(), "alpha = 2\n")
+            (root / "pkg/module.py").write_text("--flag = False\n")
+            edited_dash = await invoke(
+                "edit", file="pkg/module.py",
+                old="--flag = False", new="- flag = True")
+            self.assertEqual(edited_dash["status"], "ok")
+            self.assertEqual(
+                (root / "pkg/module.py").read_text(), "- flag = True\n")
 
 
 if __name__ == "__main__":
