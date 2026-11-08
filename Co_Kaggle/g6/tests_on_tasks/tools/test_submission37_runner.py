@@ -12,7 +12,8 @@ import unittest
 from unittest.mock import patch
 
 import run_submission37_eval as runner
-from compare_submission37 import compare
+from compare_submission37 import compare, load_experiment
+from compare_submission24 import PILOT_IDS
 from submission37_repetition_guard import RepetitionGuard
 
 
@@ -67,6 +68,53 @@ class ComparatorTests(unittest.TestCase):
         b["manifest"]["effective_limits"]["max_tool_calls"] = 50
         with self.assertRaisesRegex(ValueError, "matched"):
             compare(a, b)
+
+
+    def test_persisted_official_results_require_complete_task_and_hook_coverage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for variant in ("control", "guard"):
+                folder = root / variant
+                candidate = folder / "candidate_1"
+                candidate.mkdir(parents=True)
+                manifest = {
+                    **fake_experiment(variant, [])["manifest"],
+                    "task_ids": list(PILOT_IDS), "repeats": 1,
+                }
+                (folder / "run_manifest.json").write_text(json.dumps(manifest))
+                telemetry = {
+                    "variant": variant, "guard_installed": variant == "guard",
+                    "archive_sha256": "exactzip", "research_only": True,
+                    "app_instances": len(PILOT_IDS) if variant == "guard" else 0,
+                    "expected_app_instances": len(PILOT_IDS),
+                    "guard_counts": {"callback_tool_calls": 8,
+                                     "missing_session": 0},
+                }
+                (folder / "submission37_research_telemetry.json").write_text(
+                    json.dumps(telemetry))
+                rows = [
+                    {"instance_id": name, "resolved": False,
+                     "agent_patch": "", "duration_seconds": 1.0}
+                    for name in PILOT_IDS
+                ]
+                datafile = candidate / "notebook_task_results.jsonl"
+                datafile.write_text(
+                    "".join(json.dumps(row) + "\n" for row in rows))
+                self.assertEqual(
+                    len(load_experiment(folder, variant, "pilot")["candidates"]), 1)
+                if variant == "guard":
+                    telemetry["app_instances"] -= 1
+                    (folder / "submission37_research_telemetry.json").write_text(
+                        json.dumps(telemetry))
+                    with self.assertRaisesRegex(ValueError, "coverage"):
+                        load_experiment(folder, variant, "pilot")
+                    telemetry["app_instances"] += 1
+                    (folder / "submission37_research_telemetry.json").write_text(
+                        json.dumps(telemetry))
+                datafile.write_text(
+                    "".join(json.dumps(row) + "\n" for row in rows[:-1]))
+                with self.assertRaises(ValueError):
+                    load_experiment(folder, variant, "pilot")
 
 
 class RunnerTests(unittest.TestCase):
