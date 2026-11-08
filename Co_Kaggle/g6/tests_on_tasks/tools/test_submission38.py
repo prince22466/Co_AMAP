@@ -174,6 +174,26 @@ class ScriptTests(unittest.TestCase):
         self.assertEqual(reply["status"], "ok")
         self.assertIn("1: first = 1", reply["content"])
 
+    def test_corrupt_ledger_returns_error_instead_of_crashing(self):
+        state = self.root / ".git" / "s38_state_guard.json"
+        state.write_text(
+            json.dumps({"version": 1, "attempts": [42], "last": None}))
+        reply = self.call("read", file="pkg/module.py", start=1, end=1)
+        self.assertEqual(reply["status"], "error")
+        self.assertIn("invalid_state_records", reply["reason"])
+        self.assertEqual(self.source.read_text(), "first = 1\nsecond = 2\n")
+
+    def test_edit_keeps_temp_files_out_of_worktree(self):
+        reply = self.call("edit", file="pkg/module.py",
+                          old="first = 1", new="first = 42")
+        self.assertEqual(reply["status"], "ok")
+        self.assertEqual(self.source.read_text(),
+                         "first = 42\nsecond = 2\n")
+        self.assertEqual(
+            list(self.root.rglob(".s38_edit_*")), [])
+        # State and lock belong inside .git, not tracked source.
+        self.assertTrue((self.root / ".git" / "s38_state_guard.json").is_file())
+
     def test_bounded_edits_and_reads(self):
         r = self.call("edit", file="pkg/module.py", old="first = 1",
                       new="new\n" * 100)
