@@ -112,6 +112,11 @@ class RunnerTests(unittest.TestCase):
                 ):
                     return None
 
+                async def after_tool_callback(
+                    self, *, tool, tool_args, tool_context, result
+                ):
+                    return None
+
             class FakeApp:
                 def __init__(self, **kwargs):
                     self.plugins = kwargs["plugins"]
