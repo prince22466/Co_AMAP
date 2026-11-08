@@ -2,7 +2,7 @@
 
 **S1 candidate; no measured S39 task score yet.**
 
-## Single-variable hypothesis
+## Hypothesis and controlled comparison
 
 Does adding S37's observed lower-token, model-guided error memory to S38's
 competition-supported persistent skill improve task resolution or at least
@@ -10,8 +10,11 @@ trigger its previously unused skill? S37 solved **3/15** S1 tasks, S38
 **2/15**. S38's S1 trace had **zero visible load_skill/run_skill_script**
 calls. Merely registering a skill did not make E4B use it.
 
-This is deliberately a **prompt-only delta versus S38**, not a new
-agent graph, a different model, another tool, or an unapproved callback.
+This changes **instruction.md only**, not the agent graph, model, registered
+tools, S38 script, or execution limits. Review uncovered a key inherited
+contradiction: S36's prompt explicitly said "Never request a skill" even
+though S38 registered and requested state-guard. S39 repairs that contradiction,
+and the builder includes an extra control to isolate its effect.
 
 ## Exact composition
 
@@ -29,12 +32,20 @@ The model is still gemma-4-e4b-it-qat-w4a16-ct, using six familiar native
 tools with temperature 0.0, top_p 0.95, max_output_tokens 4096, thinking
 budget 512, and the S36/S38 4-minute/40-tool/48-turn limits.
 
-The **sole S38-to-S39 change** is:
+The S39 instruction is composed as:
 
     S39 instruction =
       S36 primary instruction (including parser-aware guidance)
+      - two generic prohibitions conflicting with the registered state-guard
+      + two narrowly scoped state-guard exceptions
       + S37 failure-memory instruction
-      + S38 stateful-skill activation instruction
+      + original S38 stateful-skill activation instruction
+
+The two S36 exceptions permit **only** the registered state-guard skill for
+recovery and its bounded exact-edit action. Prohibitions on other unregistered
+skills, arbitrary shell/source rewrites, and unapproved callbacks remain.
+The original S36/S38 files are NEVER modified; these changes appear solely
+in the generated S39 instruction.
 
 The original S37 text is retained **except for exactly two compatibility
 edits**: (1) its header now allows S38's skill, and (2) "do not spend
@@ -63,11 +74,18 @@ python -m unittest -v test_submission36.py test_submission38.py test_submission3
 
 The resulting files are:
 
-- submission_nb/artifacts/submission_39.zip
-- submission_nb/artifacts/submission_39_control_s38.zip
+- submission_nb/artifacts/submission_39.zip — combined S37 + permitted S38
+- submission_nb/artifacts/submission_39_control_s38.zip — exact historical S38
+- submission_nb/artifacts/submission_39_control_skill_enabled.zip — S38
+  with **only** the two S36 skill-prohibition exceptions (no S37 rules)
 - accompanying SHA-256 manifests
 
-The CI workflow separately compiles **both** extracted archives using the
+**Experimental comparisons:** S39 vs historical S38 measures the total change;
+S39 vs skill-enabled S38 isolates the incremental effect of S37's recovery
+rules. The latter is the cleaner causal ablation. The skill implementation
+itself remains byte-identical in all three ZIPs.
+
+The CI workflow separately compiles **all three** extracted archives using the
 pinned upstream restricted adk_submission compiler (revision
 528792a91d061d601830237543103ecd0432eb7b). Successful CPU/package
 checks do not prove E4B will actually use the stateful skill.
@@ -75,7 +93,7 @@ checks do not prove E4B will actually use the stateful skill.
 ## Real S1 test protocol
 
 Use identical E4B QAT model, task/snapshot data, evaluator wheels and
-session limits for both variants. From tests_on_tasks/tools:
+session limits for all variants. From tests_on_tasks/tools:
 
 ~~~bash
 # Historical unlimited-time S1 comparison (15 selected tasks):
@@ -85,12 +103,17 @@ python run_submission24_eval.py --stage s1 --repeats 2 --time-limit 0 \
   --wheels /data/wheels --output /results/s39_control
 
 python run_submission24_eval.py --stage s1 --repeats 2 --time-limit 0 \
+  --archive ../../submission_nb/artifacts/submission_39_control_skill_enabled.zip \
+  --tasks /data/tasks.jsonl --snapshots /data/snapshots \
+  --wheels /data/wheels --output /results/s39_skill_enabled_control
+
+python run_submission24_eval.py --stage s1 --repeats 2 --time-limit 0 \
   --archive ../../submission_nb/artifacts/submission_39.zip \
   --tasks /data/tasks.jsonl --snapshots /data/snapshots \
   --wheels /data/wheels --output /results/s39_stacked
 ~~~
 
-Also run a separate contest-style comparison with --time-limit 4 in BOTH
+Also run a separate contest-style comparison with --time-limit 4 in ALL
 arms. Previous S36/S37/S38 S1 diagnostics had disabled per-task time limits;
 a win requiring more than four minutes cannot be counted as timed success.
 
