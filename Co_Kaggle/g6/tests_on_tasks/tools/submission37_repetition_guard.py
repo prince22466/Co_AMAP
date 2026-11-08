@@ -209,15 +209,19 @@ class RepetitionGuard:
         if name in ("run_command", "write_file"):
             # before() already invalidated even if this callback is skipped.
             return
-        if (name == "edit_file"
-                and type(error).__name__ == "FileEditError"
-                and nonmutating_edit_error(str(error))):
-            key = arguments_digest(name, args)
-            if key:
-                self._failures.setdefault(session, set()).add(
-                    (self._epochs.get(session, 0), key))
-                self._record(session, "deterministic_edit_failures", key,
-                             "FileEditError")
+        if name == "edit_file":
+            if (type(error).__name__ == "FileEditError"
+                    and nonmutating_edit_error(str(error))):
+                key = arguments_digest(name, args)
+                if key:
+                    self._failures.setdefault(session, set()).add(
+                        (self._epochs.get(session, 0), key))
+                    self._record(session, "deterministic_edit_failures", key,
+                                 "FileEditError")
+                    return
+            # Unknown exceptions may occur AFTER source transfer started.
+            # Never preserve an old failed-anchor cache across one.
+            self._advance(session, "edit_exception_unknown")
 
     def _advance(self, session: str, reason: str) -> None:
         self._epochs[session] = self._epochs.get(session, 0) + 1
