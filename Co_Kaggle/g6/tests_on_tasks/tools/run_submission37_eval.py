@@ -71,11 +71,16 @@ async def evaluate(args: argparse.Namespace) -> dict:
             original_init, new_adk_plugin, injected_plugins)
         with patch.object(App, "__init__", init):
             report = await official.evaluate(args)
-        if (report.get("stage") == "evaluation_complete"
-                and not injected_plugins):
-            raise RuntimeError(
-                "S37 guard did not attach to an ADK App. "
-                "No valid guarded comparison can be claimed.")
+        if report.get("stage") == "evaluation_complete":
+            if not injected_plugins:
+                raise RuntimeError(
+                    "S37 guard did not attach to an ADK App. "
+                    "No valid guarded comparison can be claimed.")
+            if not any(plugin.guard.stats["callback_tool_calls"]
+                       for plugin in injected_plugins):
+                raise RuntimeError(
+                    "S37 plugin was registered but no tool callbacks ran. "
+                    "The intervention was not active.")
     counts = {}
     events = []
     for plugin in injected_plugins:
