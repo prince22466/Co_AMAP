@@ -1,0 +1,68 @@
+name: G6 S39 Stacked Recovery ZIP
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/g6-submission39-stacked-recovery.yml'
+      - 'Co_Kaggle/g6/submission_nb/submission_39/**'
+      - 'Co_Kaggle/g6/tests_on_tasks/tools/build_submission39.py'
+      - 'Co_Kaggle/g6/tests_on_tasks/tools/test_submission39.py'
+      - 'Co_Kaggle/g6/tests_on_tasks/tools/test_submission39_compiler.py'
+  workflow_dispatch:
+
+jobs:
+  build-validate-and-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install pinned ADK
+        run: python -m pip install 'pyyaml>=6,<7' 'google-adk==1.36.1'
+      - name: Validate code, stack parity and sandbox skill
+        working-directory: Co_Kaggle/g6/tests_on_tasks/tools
+        run: |
+          python -m py_compile build_submission39.py \
+            test_submission39.py test_submission39_compiler.py
+          python -m unittest -v \
+            test_submission36.py test_submission38.py test_submission39.py
+      - name: Build S39 and both S38 control ZIPs
+        working-directory: Co_Kaggle/g6/tests_on_tasks/tools
+        run: python build_submission39.py --variant all
+      - name: Checkout pinned official restricted compiler
+        uses: actions/checkout@v4
+        with:
+          repository: happyc0der/gemma-swe-agent
+          ref: 528792a91d061d601830237543103ecd0432eb7b
+          path: official-compiler
+          sparse-checkout: harness/official/adk_submission
+          persist-credentials: false
+      - name: Compile all three extracted archives through official compiler
+        working-directory: Co_Kaggle/g6/tests_on_tasks/tools
+        env:
+          PYTHONPATH: ${{ github.workspace }}/official-compiler/harness/official
+        run: python -m unittest -v test_submission39_compiler.py
+      - name: Confirm S36/S38 source and reviewed skill unchanged
+        run: |
+          git diff --exit-code origin/main...HEAD -- \
+            Co_Kaggle/g6/submission_nb/submission_36/ \
+            Co_Kaggle/g6/submission_nb/submission_38/ \
+            Co_Kaggle/g6/tests_on_tasks/tools/build_submission36.py \
+            Co_Kaggle/g6/tests_on_tasks/tools/build_submission38.py
+          git diff --check origin/main...HEAD
+      - name: Publish S39 and both S38 control ZIPs
+        uses: actions/upload-artifact@v4
+        with:
+          name: g6-submission-39-s1-zips
+          path: |
+            Co_Kaggle/g6/submission_nb/artifacts/submission_39.zip
+            Co_Kaggle/g6/submission_nb/artifacts/submission_39.manifest.json
+            Co_Kaggle/g6/submission_nb/artifacts/submission_39_control_s38.zip
+            Co_Kaggle/g6/submission_nb/artifacts/submission_39_control_s38.manifest.json
+            Co_Kaggle/g6/submission_nb/artifacts/submission_39_control_skill_enabled.zip
+            Co_Kaggle/g6/submission_nb/artifacts/submission_39_control_skill_enabled.manifest.json
+          if-no-files-found: error
