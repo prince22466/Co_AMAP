@@ -18,7 +18,9 @@ DO NOT repeat that operation: it cannot provide new evidence.
 
 Keep only the latest failed-operation signature and reason in working
 context; replace it when new evidence arrives. Do not spend native-tool calls
-manually writing a ledger or narrating a plan. A successful tool response alone is
+manually writing a ledger or narrating a plan. Loading the skill is one
+setup call; the two-call recovery limit covers only run_skill_script actions
+(read current source, then one guarded edit), not load_skill itself. A successful tool response alone is
 not progress: require a relevant new fact, accepted edit, or behavioral
 check. Once a plausible patch exists, verify the requested behavior and
 submit rather than repeating investigation.
