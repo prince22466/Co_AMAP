@@ -139,6 +139,19 @@ class CoreTests(unittest.TestCase):
                    RuntimeError("fail"))
         self.assertIsNone(g.before("s", "edit_file", EDIT))
 
+    def test_edit_transfer_error_invalidates_old_cached_failure(self):
+        guard = RepetitionGuard()
+        guard.after("s", "edit_file", EDIT, BAD)
+        self.assertIsNotNone(guard.before("s", "edit_file", EDIT))
+        # A later native retry may mutate source before a transfer failure.
+        guard.on_error("s", "edit_file", EDIT, RuntimeError("copy_to failed"))
+        self.assertIsNone(guard.before("s", "edit_file", EDIT))
+        guard.after("s", "edit_file", EDIT, BAD)
+        guard.after("s", "edit_file", EDIT, {
+            "status": "error", "error_type": "FileEditError",
+            "error_message": "copy_to failed after upload started"})
+        self.assertIsNone(guard.before("s", "edit_file", EDIT))
+
     def test_context_id_must_exist(self):
         ok = SimpleNamespace(_invocation_context=SimpleNamespace(
             session=SimpleNamespace(id="task-id")))
