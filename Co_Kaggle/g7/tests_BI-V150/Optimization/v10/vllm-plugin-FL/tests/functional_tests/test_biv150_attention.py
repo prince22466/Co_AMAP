@@ -76,7 +76,10 @@ def test_unified_backend_binds_integrated_kernel():
     ("query_len", "context_len"),
     [
         (1, 512),      # Single-token decode with paged-KV lookup.
+        (7, 17),       # Partial query tile and non-page-aligned context.
+        (9, 15),       # One row beyond the eight-query specialization tile.
         (64, 0),       # Short uncached prefill.
+        (65, 33),      # Query tail and partial KV-cache page.
         (2048, 0),     # First chunk.
         (2048, 4096),  # Chunked prefill after an existing prefix.
         (2048, 14336), # 16K endpoint (expensive).
@@ -118,7 +121,12 @@ def test_bf16_gqa_attention_matches_baseline(query_len, context_len, monkeypatch
     num_kv_heads = 2
     kv_block_size = 16
     total_len = context_len + query_len
-    num_blocks = (total_len + kv_block_size - 1) // kv_block_size
+    num_used_blocks = (total_len + kv_block_size - 1) // kv_block_size
+    # The pinned reference loads page indices for a whole 32-token KV tile
+    # before masking token loads. With 16-token pages, its final tile may
+    # read one spare page-table entry (e.g. 98 tokens use seven pages).
+    # Match the padded page-table contract used by the decode/mixed tests.
+    num_blocks = num_used_blocks + 1
 
     query = torch.randn(
         (query_len, num_query_heads, head_size),
@@ -162,4 +170,4 @@ def test_bf16_gqa_attention_matches_baseline(query_len, context_len, monkeypatch
         torch.cuda.synchronize()
 
     torch.testing.assert_close(actual, expected, atol=3e-2, rtol=3e-2)
-    assert launches == [(32 if query_len > 1 else 16, query_len == 1)]
+    assert launches == [(64 if query_len > 1 else 16, query_len == 1)]
