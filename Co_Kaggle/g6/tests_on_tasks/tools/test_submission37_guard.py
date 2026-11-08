@@ -40,6 +40,19 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(g.stats["deterministic_edit_failures"], 1)
         self.assertNotIn("x = 1", json.dumps(g.report()))
 
+    def test_block_cap_prevents_endless_uncharged_retry_loop(self):
+        g = RepetitionGuard()
+        g.after("task", "edit_file", EDIT, BAD)
+        self.assertIsNotNone(g.before("task", "edit_file", EDIT))
+        self.assertIsNotNone(g.before("task", "edit_file", EDIT))
+        # After two synthetic denials, return control to native edit_file
+        # so its usual charged call budget can stop further looping.
+        self.assertIsNone(g.before("task", "edit_file", EDIT))
+        self.assertEqual(g.stats["block_cap_reached"], 1)
+        g.after("task", "run_command", {"command": "git diff"}, {"status": "ok"})
+        g.after("task", "edit_file", EDIT, BAD)
+        self.assertIsNotNone(g.before("task", "edit_file", EDIT))
+
     def test_read_does_not_reset_but_any_shell_can_mutate(self):
         g = RepetitionGuard()
         g.after("s", "edit_file", EDIT, {"result": json.dumps(BAD)})
