@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 
 from compare_submission24 import PILOT_IDS, S1_IDS, load_rows, normalize
@@ -41,6 +42,14 @@ def load_experiment(folder: Path, variant: str, stage: str) -> dict:
         name = f"candidate_{number}"
         rows = normalize(
             load_rows(folder / name), expected=task_ids)
+        durations = []
+        for task_id, row in rows.items():
+            duration = row.get("duration_seconds")
+            if (not isinstance(duration, (int, float)) or
+                    isinstance(duration, bool) or
+                    not math.isfinite(duration) or duration < 0):
+                raise ValueError("Missing/invalid duration: " + task_id)
+            durations.append(float(duration))
         candidates[name] = {
             "resolved": sorted(i for i, row in rows.items() if row["resolved"]),
             "empty_patch_ids": sorted(
@@ -48,9 +57,7 @@ def load_experiment(folder: Path, variant: str, stage: str) -> dict:
             "agent_error_ids": sorted(
                 i for i, row in rows.items()
                 if row.get("error") or row.get("error_message")),
-            "duration_seconds": round(
-                sum(float(row.get("duration_seconds") or 0)
-                    for row in rows.values()), 2),
+            "duration_seconds": round(sum(durations), 2),
         }
     return {"manifest": manifest, "telemetry": telemetry,
             "candidates": candidates}
