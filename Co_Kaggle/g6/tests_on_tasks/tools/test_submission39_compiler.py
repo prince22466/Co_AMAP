@@ -40,7 +40,7 @@ class RestrictedCompilerSmokeTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
-            for variant in ("primary", "control"):
+            for variant in ("primary", "control", "skill_enabled_control"):
                 with self.subTest(variant=variant):
                     target = root / variant
                     target.mkdir()
@@ -76,6 +76,11 @@ class RestrictedCompilerSmokeTest(unittest.TestCase):
                         self.assertNotIn(
                             "S37 FAILURE MEMORY", agent.instruction
                         )
+                    if variant == "control":
+                        self.assertIn("Never request a skill", agent.instruction)
+                    else:
+                        self.assertNotIn("Never request a skill", agent.instruction)
+                        self.assertIn("registered state-guard skill", agent.instruction)
 
 
 if __name__ == "__main__":
