@@ -64,6 +64,20 @@ def error_kind(value: Any) -> str | None:
     return None
 
 
+def was_synthetically_blocked(value: Any) -> bool:
+    """Do not let ADK's after-tool hook erase the very failure we blocked."""
+    if isinstance(value, dict):
+        if value.get("error_type") == "RepeatedFailedEdit":
+            return True
+        return was_synthetically_blocked(value.get("result"))
+    if isinstance(value, str):
+        try:
+            return was_synthetically_blocked(json.loads(value))
+        except (ValueError, TypeError):
+            return False
+    return False
+
+
 def session_id(tool_context: Any) -> str | None:
     """Fail open if a stable task/session identity cannot be established."""
     ctx = getattr(tool_context, "_invocation_context", None)
@@ -143,6 +157,8 @@ class RepetitionGuard:
             self._advance(session, "write_invalidation")
             return
         if name != "edit_file":
+            return
+        if was_synthetically_blocked(response):
             return
         key = arguments_digest(name, args)
         kind = error_kind(response)
