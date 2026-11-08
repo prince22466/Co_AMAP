@@ -1,8 +1,10 @@
 """Build S39: S36 + reconciled S37 failure memory + exact S38 skill.
 
-The S39/S38-control ablation changes only the instruction string; agent.yaml,
-eval_config.yaml, E4B model, native tools, and packaged skill bytes are identical.
-The new instruction is S36 primary + S37 memory rules + S38 skill activation.
+S39 changes only the instruction string; agent.yaml, eval_config.yaml, E4B
+model, tools, and packaged skill bytes are identical to S38. To remove an
+inherited S36 contradiction, allowlist ONLY the registered state-guard skill.
+Build an additional skill-enabled S38 control so S37's contribution remains
+independently testable.
 """
 from __future__ import annotations
 
@@ -20,6 +22,7 @@ SOURCE = G6 / "submission_nb/submission_39"
 RECONCILED_S37 = SOURCE / "s37_failure_memory_reconciled.md"
 ARCHIVE = ARTIFACT_DIR / "submission_39.zip"
 CONTROL = ARTIFACT_DIR / "submission_39_control_s38.zip"
+SKILL_CONTROL = ARTIFACT_DIR / "submission_39_control_skill_enabled.zip"
 
 # These are the reviewed original Git blob hashes, NOT task-specific data.
 S37_ORIGINAL_BLOB = "19f91644808bee28454131853f32ad74d377b60d"
@@ -41,11 +44,46 @@ LEDGER_AFTER = (
     "(read current source, then one guarded edit), not load_skill itself."
 )
 
+# S36's otherwise-retained text forbids ALL skills and scripted edits, which
+# contradicts S38's explicitly registered skill. Fix these exact two spans
+# only inside the S39 payload, never in the S36/S38 baseline or repository.
+S36_SKILL_BAN = (
+    b"Never request a skill,\n"
+    b"wrapper, invented tool or another agent."
+)
+S39_SKILL_ALLOW = (
+    b"Do not request unregistered skills,\n"
+    b"wrappers, invented tools or another agent. The registered state-guard skill\n"
+    b"is allowed only for recovery after a failed native edit or read loop."
+)
+S36_SCRIPT_BAN = (
+    b"Python Path.write_text or scripted insertion. These uncontrolled fallbacks"
+)
+S39_SCRIPT_ALLOW = (
+    b"Python Path.write_text or unguarded scripted insertion. Only the registered\n"
+    b"  state-guard skill's bounded exact edit is permitted. Other fallbacks"
+)
+
 
 def git_blob_sha(data: bytes) -> str:
     """Compute Git's source blob hash to prove copy/parity without git history."""
     header = f"blob {len(data)}\0".encode("ascii")
     return hashlib.sha1(header + data).hexdigest()  # noqa: S324 (Git blob)
+
+
+def allow_registered_skill(s36_instruction: bytes) -> bytes:
+    """Preserve every S36 instruction except its two incompatible bans."""
+    updated = s36_instruction
+    for forbidden, exception in (
+        (S36_SKILL_BAN, S39_SKILL_ALLOW),
+        (S36_SCRIPT_BAN, S39_SCRIPT_ALLOW),
+    ):
+        if updated.count(forbidden) != 1:
+            raise ValueError("S36 skill exclusion changed; review the base prompt")
+        updated = updated.replace(forbidden, exception, 1)
+    if S36_SKILL_BAN in updated or S36_SCRIPT_BAN in updated:
+        raise ValueError("S36 skill exclusion remains after reconciliation")
+    return updated
 
 
 def reconciled_memory() -> bytes:
@@ -66,7 +104,7 @@ def reconciled_memory() -> bytes:
 
 
 def payload(variant: str = "primary") -> dict[str, bytes]:
-    if variant not in ("primary", "control"):
+    if variant not in ("primary", "control", "skill_enabled_control"):
         raise ValueError("Unknown S39 variant")
     s38_base = s38.payload("primary")
     note38 = s38.read_source(s38.NOTE)
@@ -83,12 +121,17 @@ def payload(variant: str = "primary") -> dict[str, bytes]:
         return s38_base
 
     original = s36_payload("primary")
-    note37 = reconciled_memory()
+    allowed_base = allow_registered_skill(original["instruction.md"])
     if s38_base["instruction.md"] != original["instruction.md"] + note38:
         raise ValueError("S38 original instruction is not S36 + S38 addendum")
+    if variant == "skill_enabled_control":
+        # Exactly S38 with the inherited skill ban repaired, no S37 rules.
+        return {**s38_base, "instruction.md": allowed_base + note38}
+
+    note37 = reconciled_memory()
     if len(note37) > 1800 or len(note38) > 1200:
         raise ValueError("Excessive agent instruction overhead")
-    combined = original["instruction.md"] + note37 + note38
+    combined = allowed_base + note37 + note38
 
     result = {**s38_base, "instruction.md": combined}
     if result["agent.yaml"] != s38_base["agent.yaml"]:
@@ -114,6 +157,8 @@ def path_for(variant: str) -> Path:
         return ARCHIVE
     if variant == "control":
         return CONTROL
+    if variant == "skill_enabled_control":
+        return SKILL_CONTROL
     raise ValueError("Unknown S39 variant")
 
 
@@ -141,10 +186,11 @@ def build(variant: str = "primary", output: Path | None = None) -> dict:
         "submission": 39,
         "variant": variant,
         "model": s38.MODEL,
-        "comparison": "S39 combined vs S38 skill-only",
+        "comparison": "S39 stack vs S38 original and S38 with skill permitted",
         "s36_primary_settings_unchanged": True,
         "s38_skill_bytes_unchanged": True,
         "s37_compatibility_edits": 2 if variant == "primary" else 0,
+        "s36_skill_exception_spans": 0 if variant == "control" else 2,
         "native_tool_interception": False,
         "enforcement_scope": "skill-mediated operations only",
         "score": "unscored; E4B S1 evaluation required",
@@ -163,10 +209,15 @@ def build(variant: str = "primary", output: Path | None = None) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--variant", choices=("primary", "control", "both"), default="both"
+        "--variant",
+        choices=("primary", "control", "skill_enabled_control", "all"),
+        default="all"
     )
     args = parser.parse_args()
-    variants = ("primary", "control") if args.variant == "both" else (args.variant,)
+    variants = (
+        ("primary", "control", "skill_enabled_control")
+        if args.variant == "all" else (args.variant,)
+    )
     print(json.dumps({v: build(v) for v in variants}, indent=2))
 
 
