@@ -1,0 +1,63 @@
+name: G6 S38 Stateful Skill ZIP
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/g6-submission38-stateful-skill.yml'
+      - 'Co_Kaggle/g6/submission_nb/submission_38/**'
+      - 'Co_Kaggle/g6/tests_on_tasks/tools/build_submission38.py'
+      - 'Co_Kaggle/g6/tests_on_tasks/tools/test_submission38.py'
+      - 'Co_Kaggle/g6/tests_on_tasks/tools/test_submission38_compiler.py'
+  workflow_dispatch:
+
+jobs:
+  package-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install pinned ADK and YAML
+        run: python -m pip install 'pyyaml>=6,<7' 'google-adk==1.36.1'
+      - name: Compile and test packaged stateful skill
+        working-directory: Co_Kaggle/g6/tests_on_tasks/tools
+        run: |
+          python -m py_compile build_submission38.py test_submission38.py \
+            ../../submission_nb/submission_38/skills/state-guard/scripts/state_guard.py
+          python -m unittest -v test_submission36.py test_submission38.py
+      - name: Build deterministic primary and control ZIPs
+        working-directory: Co_Kaggle/g6/tests_on_tasks/tools
+        run: python build_submission38.py
+      - name: Checkout pinned official restricted submission compiler
+        uses: actions/checkout@v4
+        with:
+          repository: happyc0der/gemma-swe-agent
+          ref: 528792a91d061d601830237543103ecd0432eb7b
+          path: official-compiler
+          sparse-checkout: harness/official/adk_submission
+          persist-credentials: false
+      - name: Compile BOTH ZIP variants using official restricted compiler
+        working-directory: Co_Kaggle/g6/tests_on_tasks/tools
+        env:
+          PYTHONPATH: ${{ github.workspace }}/official-compiler/harness/official
+        run: python -m unittest -v test_submission38_compiler.py
+      - name: Assert original S36 code and prompts untouched
+        run: |
+          git diff --exit-code origin/main...HEAD -- \
+            Co_Kaggle/g6/submission_nb/submission_36/ \
+            Co_Kaggle/g6/submission_nb/submission_29/ \
+            Co_Kaggle/g6/tests_on_tasks/tools/build_submission36.py
+          git diff --check origin/main...HEAD
+      - uses: actions/upload-artifact@v4
+        with:
+          name: g6-submission-38-s1-zips
+          path: |
+            Co_Kaggle/g6/submission_nb/artifacts/submission_38.zip
+            Co_Kaggle/g6/submission_nb/artifacts/submission_38.manifest.json
+            Co_Kaggle/g6/submission_nb/artifacts/submission_38_control_s36.zip
+            Co_Kaggle/g6/submission_nb/artifacts/submission_38_control_s36.manifest.json
+          if-no-files-found: error
