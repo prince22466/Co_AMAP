@@ -1,0 +1,45 @@
+name: G6 S37 Kaggle ZIP Package
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/g6-submission37-package.yml'
+      - 'Co_Kaggle/g6/tests_on_tasks/tools/build_submission37.py'
+      - 'Co_Kaggle/g6/tests_on_tasks/tools/test_submission37_package.py'
+      - 'Co_Kaggle/g6/submission_nb/submission_37/**'
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install packaging dependency
+        run: python -m pip install 'pyyaml>=6,<7'
+      - name: Build Kaggle-loadable submission_37.zip
+        working-directory: Co_Kaggle/g6/tests_on_tasks/tools
+        run: |
+          python build_submission37.py
+          python -m unittest -v test_submission36.py test_submission37_package.py
+          python -m py_compile build_submission37.py
+      - name: Ensure S36 baseline is untouched
+        run: |
+          git diff --exit-code origin/main...HEAD -- \
+            Co_Kaggle/g6/submission_nb/submission_36/ \
+            Co_Kaggle/g6/submission_nb/submission_29/ \
+            Co_Kaggle/g6/tests_on_tasks/tools/build_submission36.py
+          git diff --check origin/main...HEAD
+      - name: Upload S37 ZIP and inspectable manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: g6-submission-37-kaggle-zip
+          path: |
+            Co_Kaggle/g6/submission_nb/artifacts/submission_37.zip
+            Co_Kaggle/g6/submission_nb/artifacts/submission_37.manifest.json
+          if-no-files-found: error
