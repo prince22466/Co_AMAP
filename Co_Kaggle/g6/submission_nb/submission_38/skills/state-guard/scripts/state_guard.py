@@ -101,7 +101,14 @@ def ledger(root):
                 data = json.loads(path.read_text(encoding="utf-8"))
                 if not isinstance(data, dict) or data.get("version") != 1:
                     raise ValueError("invalid_state_version")
-                if not isinstance(data.get("attempts"), list):
+                attempts = data.get("attempts")
+                if (not isinstance(attempts, list)
+                        or not all(
+                            isinstance(entry, dict)
+                            and isinstance(entry.get("fingerprint"), str)
+                            and entry.get("action") in ("read", "edit")
+                            for entry in attempts
+                        )):
                     raise ValueError("invalid_state_records")
             except (json.JSONDecodeError, UnicodeError) as exc:
                 raise ValueError("corrupted_state_ledger") from exc
@@ -199,9 +206,12 @@ def run(args):
             emit("rejected", action="edit", file=args.file,
                  reason="source_changed_since_read")
             return
-        # Atomic replacement leaves tracked work as a normal git diff.
+        # Use a temp file within .git on the same filesystem. A hard kill
+        # must NOT leave an untracked temp file in the submitted patch.
+        # os.replace still atomically installs the finished source.
         info = path.stat()
-        fd, temporary = tempfile.mkstemp(prefix=".s38_edit_", dir=path.parent)
+        fd, temporary = tempfile.mkstemp(
+            prefix=".s38_edit_", dir=root / ".git")
         try:
             with os.fdopen(fd, "wb") as out:
                 out.write(modified)
