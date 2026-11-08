@@ -99,6 +99,8 @@ class RepetitionGuard:
     def __init__(self):
         self._epochs: dict[str, int] = {}
         self._failures: dict[str, set[tuple[int, str]]] = {}
+        self._blocked_counts: dict[str, Counter[tuple[int, str]]] = {}
+        self.max_blocks_per_failed_edit = 2
         self.stats: Counter[str] = Counter()
         self.events: list[dict[str, Any]] = []
 
@@ -121,6 +123,7 @@ class RepetitionGuard:
         if not session:
             self._record(None, "missing_session")
             return None
+        self._record(session, "callback_tool_calls")
         if name != "edit_file":
             return None
         self._record(session, "edit_attempts")
@@ -131,6 +134,13 @@ class RepetitionGuard:
         token = (self._epochs.get(session, 0), key)
         if token not in self._failures.get(session, set()):
             return None
+        counts = self._blocked_counts.setdefault(session, Counter())
+        if counts[token] >= self.max_blocks_per_failed_edit:
+            # Do not allow infinite, uncharged model/tool-call loops.
+            # Let the native tool budget eventually terminate repetition.
+            self._record(session, "block_cap_reached", key)
+            return None
+        counts[token] += 1
         self._record(session, "duplicate_failures_blocked", key)
         return {
             "status": "error",
@@ -191,6 +201,7 @@ class RepetitionGuard:
     def _advance(self, session: str, reason: str) -> None:
         self._epochs[session] = self._epochs.get(session, 0) + 1
         self._failures.pop(session, None)
+        self._blocked_counts.pop(session, None)
         self._record(session, reason)
 
     def report(self) -> dict:
