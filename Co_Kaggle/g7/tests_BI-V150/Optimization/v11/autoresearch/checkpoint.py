@@ -7,6 +7,8 @@ and need separate durable backup before the rented instance disappears.
 from __future__ import annotations
 
 import argparse
+import csv
+import io
 import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
@@ -53,6 +55,16 @@ def checkpoint(root: Path, summary: str, evidence: str, next_step: str,
                 or source_path.stat().st_size > 1_000_000):
             raise ValueError(f"Only raw_runs/summary CSV <=1 MB are allowed: {csv}")
         raw = source_path.read_bytes()
+        try:
+            header = next(csv.reader(io.StringIO(raw.decode("utf-8-sig"))))
+        except (UnicodeError, StopIteration, csv.Error) as exc:
+            raise ValueError(f"Unparseable benchmark CSV: {csv}") from exc
+        required = {"Prefill", "Decode", "Conc", "Num Prompts",
+                    "Total tok/s", "Mean TTFT (ms)"}
+        if source_path.name.startswith("raw_runs"):
+            required |= {"Run Status", "Successful Requests"}
+        if not required.issubset(set(header)):
+            raise ValueError(f"CSV lacks expected benchmark columns: {csv}")
         sha256 = hashlib.sha256(raw).hexdigest()
         stored = directory / "evidence" / (
             f"{source_path.parent.parent.name}_{sha256[:12]}_{source_path.name}"
