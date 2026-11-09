@@ -1,66 +1,68 @@
-# Codex instructions — MiniCPM5-2B BI-V150 v11
+# Codex Terra 6.1 autoresearch — MiniCPM5-2B BI-V150 v11
 
-Read `program.md` and `autoresearch/EXPERIMENTS.md` before touching inference code. This file is the authoritative research contract; `program.md` is the command runbook. Codex is operating in the existing Remote-SSH IDE on the authorized BI-V150 machine.
+**Authority:** read this contract, `program.md`, and `autoresearch/EXPERIMENTS.md` before touching inference code. `program.md` contains executable commands; this file defines acceptance gates. The user will run Codex in an existing, authorized Remote-SSH IDE; committing these files does **not** start GPU work or an autonomous agent.
 
-## Workspace boundary — v10 only
+## Workspace and starting code
 
-- Remote source, tests, profiler artifacts and serving workspace: **/root/Optimization/v10**.
-- Repository mirror: `Co_Kaggle/g7/tests_BI-V150/Optimization/v10`.
-- Do not edit, overwrite, copy changes into, or benchmark FROM v0–v9, `/workspace/vllm-plugin-FL`, `/workspace/FlagGems`, or any unrelated checkout. The supplied read-only half-run script under `/workspace/vllm-plugin-FL/benchmarks/` is the sole exception: invoke it in place, without modifying it.
-- All temporary logs, CSVs, native GPU traces and probes go inside `v10/.autoresearch-work/` (ignored by Git). Commit only accepted v10 code, regression tests, and concise reproducible findings.
-- No separate SSH bridge, local Codex CLI/daemon, or automated time allocation is assumed. Preserve user edits and owned services; never kill unrelated jobs.
+- Work **only** in `/root/Optimization/v11`, mirrored by `Co_Kaggle/g7/tests_BI-V150/Optimization/v11`. The initial `FlagGems` and `vllm-plugin-FL` source trees are byte-identical by Git tree SHA to v10 at v11 creation (2026-11-09). Preserve v10's two-stage BF16 GQA prefill optimization (`BLOCK_M=64`), decode page-lookup optimization, and functional tests.
+- Do **not** edit, serve from, or copy patches into v0–v10 or `/workspace/FlagGems` or `/workspace/vllm-plugin-FL`. Invoke the *unchanged* externally provided half-run benchmark at `/workspace/vllm-plugin-FL/benchmarks/benchmark_throughput_serve_half.py` in place, read-only. Do not modify/copy it for scoring.
+- Preserve all untracked work, user edits, and unrelated services. Only terminate your own server and benchmark. Record the remote source SHA/tree/hash before the first experiment. Confirm imported inference modules and kernels really come from v11, not the external benchmark checkout or stale v10.
+- Store full profiles, raw benchmark CSVs, hardware traces, intermediate probes, and scratch logs in `v11/.autoresearch-work/`, which is ignored. Commit only verified v11 operator changes, tests, and concise reproducibility/negative-result notes.
 
-## Exactly defined target: +6% over FIXED reported v9 half-run
+## Frozen performance objectives (development half-run only)
 
-The user supplied v9 development half-run averages (two runs per workload):
-- 4K `[4096,1024,64,256]`: **2256.31** Total tok/s.
-- 16K `[16384,1024,64,128]`: **1518.06** Total tok/s.
+Reported reference: `profiling/v10/summary.txt` (2026-11-08, not matched current-machine control):
+- 4K `[4096,1024,64,256]`: **2372.38** Total tok/s; **minimum +5% = 2490.999** (display 2491.00); **stretch +10% = 2609.618** (display 2609.62).
+- 16K `[16384,1024,64,128]`: **1872.70** Total tok/s; **minimum +5% = 1966.335** (display 1966.34); **stretch +10% = 2059.97**.
 
-The final goal is **logical OR**: candidate >= `2256.31 * 1.06 = 2391.6886` (display **2391.69**) for 4K, OR >= `1518.06 * 1.06 = 1609.1436` (display **1609.15**) for 16K. Achieving BOTH is better, not required. Test and disclose BOTH every time. The goal is always anchored to those FIXED v9 reference values, not to a moving v10 baseline. Do NOT accidentally use v9's old 2450/1450 thresholds, or interpret the old v9 16K target as already satisfying v10.
+**OR, not AND:** reaching the minimum in *either* case is the first goal; 10% or more in either is the desired stretch. Always measure and disclose *both*, and never accept a material overall regression or unapproved two-case tradeoff. Compare unrounded values when possible; a two-decimal printed result of 1966.33 does not cross the 16K minimum. Never silently re-anchor targets to a changing accepted baseline.
 
-These v9 numbers originate from `profiling/v9/summary.txt`, without original raw CSVs attached there. The reported 4K individual repetitions were 2044.14 and 2468.48 tok/s, a spread much larger than 6%; a single two-run average crossing the fixed goal is NOT proof of speedup. Treat them as **reported fixed goal anchors**, not as a substitute for provenance-verified, matched A/B controls. First verify v10 starts with the exact stage-2 optimized v9 prefill kernel and v9 mixed-paging tests; establish a fresh v10 starting-code half-run A when comparable raw reference data are unavailable. Compare each candidate B to the current accepted v10 control A with identical model, server, GPU, source and benchmark inputs. A fresh control is necessary but not sufficient: repeat matched A/B before attributing a causal gain. It does NOT change the fixed v9 goal. Any mismatch or drift must be disclosed and investigated.
+These v10 numbers are **reported anchors**, not evidence that any v11 code is faster. First acquire a fresh, unchanged-v11-control A half-run with original CSVs and immutable source/benchmark/model provenance. Perform full matched A/B with equivalent model, server configuration, GPU, dataset, temperature, benchmark, workload order, and restart/warmup conditions. Follow with independent A/B replication (prefer A1/B1/A2/B2 or balanced ordering). The 4K result is particularly cache/order-sensitive: earlier v10 4K individual repetitions spanned ~2100–2680 tok/s. No one-off mean, percentage, or fixed-target crossing proves a causal win.
 
-**Progress PR rule (distinct from final goal):** open a PR for a repeatable >=5% gain in EITHER workload compared to the last accepted matched v10 baseline, even if the fixed +6% v9 goal has not yet been reached. Smaller steps may accumulate until a repeatable >=5% checkpoint. A repeatable final +6% v9 goal with positive matched-v10 uplift deserves a final PR regardless of last incremental progress. Do not auto-merge. Numeric thresholds alone are neither reproducibility nor correctness. Disclose the other workload; do not automatically promote a material net-negative two-case competition tradeoff without user approval.
+**Promotion gates:**
+1. **Progress checkpoint:** a repeatable, independent **>=3% improvement over the last accepted matched v11 control** in at least one workload, positive overall tradeoff and full correctness -> commit and open a *draft* evidence-backed optimization PR even below the fixed +5% minimum. Small gains may accumulate; weak/noisy gains are hypotheses, not checkpoints. Do not auto-merge.
+2. **Minimum achieved:** candidate meets the frozen **+5% v10 threshold** AND demonstrates **>=5% uplift versus a fresh matched v11 starting-code control** for at least one workload, confirmed by independent matched half-runs, all requests and tests successful. Open a milestone PR and **continue toward +10%** if resource budget and a viable next hypothesis remain; do not abandon a verified minimum gain.
+3. **Stretch achieved:** candidate meets frozen **+10% v10 threshold** AND **>=10% matched uplift versus unchanged v11 starting code** in either workload, independently replicated, while other workload/accuracy remain acceptable. Open final evidence PR and stop optimization. Do not require both cases to improve by 10%.
+4. On allocation/deadline, stop and report the best verified candidate plus missing evidence. Never claim official benchmark scores, independent replication, or MATH-500 pass without those actual results. Human handles MATH-500; kernel-level numerical correctness is Codex's responsibility.
 
-Use the UNMODIFIED `/workspace/vllm-plugin-FL/benchmarks/benchmark_throughput_serve_half.py` with `RUNS=2`, `SKIP_FIRST=0`, and the exact two workloads. These are development half-run results, NOT official full-run scores. MATH-500 accuracy evaluation is reserved for the human operator; do not run or claim it was passed. Preserve functional correctness in every experimental candidate.
+Every required half-run uses unmodified `benchmark_throughput_serve_half.py`, `RUNS=2`, `SKIP_FIRST=0` and exact two workload arrays. These are development half-runs, not competition official full-runs. Preserve prompt success counts (4K 256/256 and 16K 128/128 *per repeat*). Capture TTFT, TPOT, output tokens/sec, total tokens/sec, error counts, GPU utilization and prefix-cache effects. The read-only `autoresearch/evaluate.py` checks CSV structure and numeric thresholds, *not* reproducibility, causal improvement or accuracy.
 
-## Prioritized hypothesis queue — REPROFILE v10 BEFORE selecting work
+## Hypothesis queue — profile v11 production before choosing
 
-1. **4K decode GEMM/Linear:** first profile actual v10 4K prefill/decode/mixed stages. If material, optimize small-M real production `mm`/`linear` projection shapes (M and active-batch distribution, K/N, A/B layout, tile utilization, output tail masks, weight reuse, memory transactions, accumulation dependencies). Prior v7 traces put Linear at ~64.5% of *isolated* 4K decode summed GPU kernel time; that is historical evidence, NOT v10 end-to-end time share. Do not simply stack the v7 grouped-MM code: it was not a proven serving win.
-2. **Mixed prefill/decode attention:** measure real serving frequency and time share first. Pure decode `DECODE_PAGE_LOOKUP` is gated on invocation-wide `max_seqlen_q == 1`; mixed calls may lose this optimization. Investigate operator-local data-movement/lookup/layout improvements *without replacing the framework's operator selection or silently bypassing fallbacks*. Distinguish GPU interference, scheduler overhead and KV-cache waiting through traces; historical correlation is not causation.
-3. **16K prefill attention memory pipeline:** preserve v9's two-stage BF16 GQA specialization; inspect emitted instructions, paged-KV dependency chain, K/V reuse, score/softmax accumulator layout, register/shared-memory footprint, and bank behavior. v9 achieved ~31% direct prefill kernel acceleration with near-unchanged occupancy, so occupancy alone is not a proven optimization lever. v4 grouped page lookups regressed in direct tests: do not repeat without a genuinely new, measured kernel hypothesis.
-4. **KV-cache waiting/preemption, GPU idle and launch gaps:** monitor live 4K/16K requests and investigate only if fresh v10 evidence identifies an addressable cause through legitimate operator or memory-path improvements. Never change scheduler policy, capacity, benchmarking inputs or serving flags merely to inflate score without an allowed kernel/operator optimization.
-5. RMSNorm/SiLU/other small kernels only when current trace plus Amdahl bound supports meaningful total-throughput improvement.
+1. **4K mixed prefill/decode paged attention:** the existing `DECODE_PAGE_LOOKUP` optimization is enabled only for invocation-wide `max_seqlen_q == 1`; mixed calls may lose page-index reuse. Measure frequency, runtime share and actual sequence/query distributions first. Try per-page KV address reuse and independent page-index-load reduction **inside the existing attention operator**. Preserve 2D/3D and all fallbacks. Earlier v4 grouped lookups regressed; measure real dependency chains, not instruction counts alone.
+2. **4K decode small-M GEMM/Linear:** inspect real MiniCPM QKV/out/MLP shapes and execution path, tile occupancy, K/N tails, warp mapping, memory coalescing, reuse and accumulator dependencies. The current `mm.py` retains commented grouped mapping while `linear.py` already uses `GROUP_M=8`. A naive grouped-MM port from v7 was *not* proven at serving level. Compare shape-specific operator computation/data movement, not dispatch-only switches.
+3. **16K long-prefill attention:** preserve v10's `BLOCK_M=64`, stage-2 specialization and verified page-table contracts. Try safer KV page-index reuse, pipeline overlap, score/softmax accumulator lifetime, and resource-efficient query tiling. The v10 wide tile reported 114 registers/thread, 32KB shared memory and ~13% estimated occupancy; it accelerated prefill despite lower occupancy. Do not blindly increase `BLOCK_M` to 128 without spill/SMEM/serving evidence.
+4. **CPU/GPU gaps, preemption/KV-cache memory behavior:** investigate only when fresh v11 traces attribute enough actual wall-clock delay. Look for an allowable operator/data-path correction, **not** capacity, scheduler or benchmark-setting manipulation.
+5. **RMSNorm, SiLU and small kernels:** only if fresh Amdahl estimate supports meaningful end-to-end uplift.
 
-Re-rank whenever fresh **v10** serving traces contradict the historic ordering. Report shares as GPU summed-kernel time versus true wall time accurately. Track GPU active/idle, memory counters and output tok/s/TPOT in addition to the official target metric Total tok/s.
+Historic v10 short profiled GPU summed-kernel time was 4K attention 55.64%, MM 34.93%; 16K attention 84.00%, MM 11.60%. Those were reduced diagnostics, **not** official wall-time shares; CUDA graph replay limited decode visibility. Reprofile and re-rank, rather than treating them as current v11 facts.
 
-Primary source candidates:
+Operator candidates:
 - `vllm-plugin-FL/vllm_fl/dispatch/backends/vendor/iluvatar/impl/triton_unified_attention_biv150.py`
 - `vllm-plugin-FL/vllm_fl/dispatch/backends/vendor/iluvatar/impl/attention_biv150.py`
 - `FlagGems/src/flag_gems/runtime/backend/_iluvatar/ops/mm.py`
 - `FlagGems/src/flag_gems/runtime/backend/_iluvatar/ops/linear.py`
 
-## Inviolable competition constraints
+## Hard competition constraints
 
-- No quantization or speculative sampling by changing hyperparameters. Do not change model, weights, generation config, concurrency, input/output lengths, prefill/decode counts, graph mode, vLLM serving flags or environment for score manipulation.
-- Do not modify or tune the provided half-run, official benchmark, accuracy evaluator, dataset, or their workload definitions. Local standalone *diagnostic* probes are allowed only to screen kernels, not to replace scored tests.
-- No operator-selection-only speedup, no removal of major dispatch/selection/fallback logic, no unsupported backend switch. Every optimization must improve real existing kernel/operator computation or data movement with equivalent semantics.
-- No merging latest upstream FlagOS inference framework code as an optimization shortcut.
-- No assertion weakening, test bypass, unverified accuracy claim or cherry-picked failed/incomplete benchmark result. Preserve the original 4K and 16K shape and request-success requirements.
-- Work only in the permitted v10 code and test files. Never modify the deployed external benchmark path.
-- Competition rules: https://flagos.io/race-detail-season2?id=539vlt2p&lang=cn
+- **禁止通过修改超参开启量化、投机采样。** No quantization, speculative sampling or generation/serving hyperparameter changes for score optimization.
+- **禁止benchmark脚本调优。** Do not alter the provided benchmark, accuracy evaluator, dataset, prompts, lengths, concurrency, scheduling of scored workloads, or success accounting.
+- **禁止没有算子优化的情况下切换算子，删掉框架主要算子选择逻辑等方式来进行模型性能优化。** No operator-selection-only or backend-switch speedup; no deletion of major dispatch/fallback logic. Every candidate must implement real equivalent-semantics kernel/operator compute or data-movement improvement.
+- **禁止通过直接merge FlagOS推理框架最新分支代码获得性能优化。** No wholesale latest FlagOS merge.
+- No weakening tests/tolerances, editing model weights, changing `FULL_DECODE_ONLY`, GPU memory fraction, max model length, or environmental policy for benchmark-score manipulation. Do not use a diagnostic probe as a replacement for the scored half-run.
+- Rules: https://flagos.io/race-detail-season2?id=539vlt2p&lang=cn
 
-## Required time-aware funnel
+## Time-aware autonomous iteration, within the interactive SSH session
 
-A complete unchanged 4K+16K half-run has historically taken **~1.5–2 hours**. Do not consume that for every hypothesis. Record GPU deadline/allocation (or explicitly mark unknown), elapsed time, remaining time, server/source/benchmark hashes, current best SHA and raw control data.
+A full 4K+16K half-run has historically taken **90–120 minutes**. Record actual GPU allocation/deadline or mark unknown. **Never launch a half-run if less than 90 minutes remain**; 90–119 minutes is not assurance of completion. Prefer ~300+ minutes when multiple full baseline/candidate confirmations are needed. No unattended GPU allocation, remote access, or self-relaunch is implied by this PR.
 
-For EACH hypothesis:
-1. **Production causal profiling:** isolate actual v10 operator execution, shapes and attributable critical-path/time share; estimate maximum plausible serving win via Amdahl. Reject tiny wins before editing.
-2. **Correctness first:** run the existing v10 attention, decode and mixed-paging tests plus appropriate changed-operator BF16/fallback GPU tests, paging boundaries, mixed batches, masks, shape tails, NaNs and numeric tolerances.
-3. **Paired kernel A/B:** warmup and repeat identical tensors/layout/dtype across control and candidate; report medians, variability, register/SMEM/spills/occupancy, bandwidth/bank/conflicts if available. Confirm changed operator executes in production.
-4. **Short paired serving A/B:** use the directly documented *diagnostic* probes for both 4K and 16K, matched restarts and ordering; check errors, TTFT, TPOT, output rate and cache effects. Short probes are NEVER scored half-runs.
-5. **Written go/no-go:** approximately 20–30 minutes initial screen per hypothesis; only launch costly both-workload half-run if causal kernel/serving evidence predicts an actual win, with at least **90 minutes** remaining. This is merely a start floor; 90–119 minutes may not cover a 120-minute run. Prefer **~300+ minutes** when a fresh baseline and independent repeats are needed. If deadline is unknown, never invent remaining time or claim guaranteed completion.
-6. **Repeated matched half-runs:** require both cases to have two complete SUCCESS repetitions with all requests; independently repeat/interleave baseline and candidate if noise warrants, especially 4K's historic warm/cache-driven variability. Use `autoresearch/evaluate.py` only as a read-only CSV validator: its exit 0 means syntactically valid inputs, not a demonstrated gain.
-7. **Promotion:** if repeatable >=5% versus last accepted best, commit only v10 operator/test/doc changes, push and open an evidence-backed PR, then continue. If repeatably >=6% relative to the FIXED v9 anchor in at least one case, with positive matched-v10 uplift and no unapproved material net-negative tradeoff, open a final PR and stop. Do not require the other case to beat its target, but disclose its result and any regression. If a candidate fails correctness, production invocation, or plausibility, reject and restore only experimental edits. Never auto-merge.
+For each hypothesis:
+1. Profile production shapes/stages, GPU *summed kernel* time vs serving wall time, idle/scheduler/KV behavior, and compute an Amdahl upper bound. Record source hashes and why this hypothesis ranks.
+2. Make **one** small v11 operator-level change. Run existing attention, decode, mixed-paging, BF16, shape-tail, mask, fallback and numerical tests; add focused coverage for altered paths. For MM/Linear add real-shape tests. Failed correctness -> revert *only* your experiment.
+3. Run paired warmed kernel A/B on identical inputs and actual pages; report medians/spread, resource usage, registers, SMEM, spills and bandwidth when available. Prove optimized kernel executes during production.
+4. Run matched short 4K and 16K serving diagnostics with restarts/order controls; measure errors, cache behavior, total/output tok/s, TTFT and TPOT. These are screening tests, never official scores.
+5. Write a go/no-go in `autoresearch/EXPERIMENTS.md`. Spend ~20–30 minutes on an initial kernel screen per hypothesis, unless strong profiling evidence justifies more. Commit a full half-run only for likely serving gains with enough GPU allocation.
+6. Run **both** unmodified workloads and preserve all four SUCCESS raw rows, summary CSV, source/benchmark/model hashes and full traces. Replicate control/candidate independently when considering promotion. A syntactically valid CSV is not proof.
+7. Record outcome and regressions. Keep accepted code; discard negative experiments without rewriting history. Open *draft* PRs for confirmed progress (>=3%), milestones (>=5%) and stretch (>=10%); link raw evidence locations. Never auto-merge; keep researching toward stretch while allocation permits.
 
-Log every hypothesis and rejected experiment in `autoresearch/EXPERIMENTS.md` with exact run provenance, raw CSV references, trace paths, negative evidence, resource metrics, and PR URL. Keep large logs under ignored `.autoresearch-work`. On deadline or blocker report the best verified result and unresolved questions. Codex works interactively in the connected Remote-SSH IDE; creating files does NOT launch unattended research.
+Stop cleanly at stretch success, exhausted budget, user instruction, or an unsolved blocker. Do not promise background progress or claim work occurred on the remote machine until actual SSH/hardware runs prove it.
