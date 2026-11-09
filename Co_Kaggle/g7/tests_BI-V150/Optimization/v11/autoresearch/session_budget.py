@@ -119,8 +119,20 @@ def execute_half(state: dict, state_path: Path, push: bool = False) -> int:
                f"Manifest: {run_dir / 'run.json'}; benchmark SHA256={sha}",
                "After run, validate all four SUCCESS rows and persist raw evidence",
                "provisional", verdict["remaining_minutes"], push)
-    hard_seconds = max(1, int(state["deadline_epoch"] - time.time()
-                              - 60 * state["preservation_reserve_minutes"]))
+    # A slow git push or stalled preflight may have consumed the allocation.
+    # Re-admit immediately before launch; never start inside the safety reserve.
+    refreshed = decision(state)
+    if not refreshed["admitted"]:
+        checkpoint(ROOT, "Benchmark cancelled after preflight deadline recheck",
+                   f"Run manifest: {run_dir / 'run.json'}; remaining={refreshed['remaining_minutes']}",
+                   "Preserve current evidence; do not start a half-run", "blocked",
+                   refreshed["remaining_minutes"], push)
+        print(json.dumps(refreshed, indent=2), file=sys.stderr)
+        return 2
+    hard_seconds = int(state["deadline_epoch"] - time.time()
+                       - 60 * state["preservation_reserve_minutes"])
+    if hard_seconds <= 0:
+        return 2
     timed_out = False
     with (run_dir / "benchmark.log").open("w", encoding="utf-8") as stream:
         process = subprocess.Popen(cmd, cwd=run_dir, stdout=stream,
