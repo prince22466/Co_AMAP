@@ -25,6 +25,32 @@ grep -n 'BLOCK_M = 64\|decode_page_lookup =' vllm-plugin-FL/vllm_fl/dispatch/bac
 
 Verify remote directories, tracked local edits, free port 9031, model files, GPU status, remaining allocation time or explicitly record unknown. Do not assume remote v11 matches GitHub simply because it exists. The benchmark path is *only* used for running the untouched benchmark. Do not run v10 accidentally.
 
+## 0a — Confirmed GPU deadline and continuous PR checkpoints
+
+This is an executable gate, not a reminder. The **operator** supplies the actual duration/deadline for each new GPU allocation; never invent remaining time. For a verified 5.5-hour session only:
+
+~~~bash
+cd /root/Optimization/v11
+python3 autoresearch/session_budget.py init --duration-minutes 330
+python3 autoresearch/session_budget.py status
+python3 autoresearch/session_budget.py admit --runs 2
+~~~
+
+Or use \`init --deadline-utc 2026-11-10T16:00:00Z\` with the real operator-confirmed expiry; do not combine both options. \`admit\` exits 2 if there is insufficient verified time, 1 on invalid state. The initial model is 105 minutes measured half-run + 20 minutes safety per run, and a protected 25-minute preservation reserve: require >=150 minutes for one and >=275 for two. \`record --elapsed-minutes N\` records a known historical run and increases future estimates when slower. A 330-minute session does **not** fit four independently replicated half-runs (A1/B1/A2/B2); mark an A/B-only result provisional. Never backdate, reset, or reinitialize the deadline during a session merely to admit a run.
+
+**Before experimenting and every <=30 minutes**, after every important failure/result, before each costly run, and immediately when time <=45 minutes or Codex credits might expire, publish an append-only, honestly labeled checkpoint:
+
+~~~bash
+python3 autoresearch/checkpoint.py \
+  --summary "Exact finding or failure; provisional unless replicated" \
+  --evidence "source SHA; matched metrics; raw filenames/checksums; errors" \
+  --next-step "Single highest-priority next action" \
+  --status provisional \
+  --push
+~~~
+
+\`--push\` commits **only** the tracked experiment ledger and handoff, then pushes the current non-main branch. Use it only on the reviewed branch backing the intended open PR, and verify that the PR shows the new commit. If GitHub push/auth fails, local files remain but **PR preservation is not complete**; fix access or report the blocker before consuming another long run. Codex cannot observe its remaining credit balance reliably; do not postpone the handoff until the end. Store raw CSVs/traces in ignored work directories, **and copy them to off-instance durable storage** before the rental expires. A GitHub note containing only ephemeral paths is not a backup.
+
 ## 1 — Start an owned v11 serving process (Terminal A)
 
 ```bash
@@ -91,26 +117,21 @@ vllm bench serve --backend vllm --model minicpm \
 
 Repeat with matched restarts, unchanged inputs and preferably balanced A/B order. These small short-output probes do *not* reproduce the scored workload or its concurrency/long decode; do not compare their tokens/sec directly with the target table. Escalate to half-run only on a documented causal go/no-go.
 
-## 5 — Unmodified official-format development half-run (Terminal B)
+## 5 — Deadline-gated, unchanged development half-run (Terminal B)
 
-A complete two-case half-run historically takes **90–120 minutes**. **Never start below 90 minutes remaining**; 90 minutes may be insufficient to complete. An independently confirmed **A1/B1/A2/B2** sequence requires approximately **360–480 minutes for four half-run benchmarks alone**, plus restarts, correctness and profiling; prefer **>=480 minutes** for full independent verification. A single A/B pair is provisional. If remaining GPU time cannot be verified, continue quick kernel/serving diagnostics and request a confirmed allocation; do **not** launch a costly full half-run blindly. The external benchmark must be unmodified with `RUNS=2`, `SKIP_FIRST=0`.
+**Do not invoke the benchmark directly** during autoresearch: use the guard, which checks the confirmed deadline, checks server health, snapshots pre-run evidence, executes the unchanged external benchmark, limits runtime to protect the preservation reserve, and checkpoints its exit state. It does **not** change benchmark code, inputs, repeat count, or server settings.
 
-```bash
-curl -f http://127.0.0.1:9031/health
+~~~bash
 cd /root/Optimization/v11
-mkdir -p .autoresearch-work/bench_runs
-run_dir=$(mktemp -d "$PWD/.autoresearch-work/bench_runs/run_XXXXXXXX")
-cd "$run_dir"
-sha256sum /workspace/vllm-plugin-FL/benchmarks/benchmark_throughput_serve_half.py > benchmark_sha256.txt
-set -o pipefail
-python3 /workspace/vllm-plugin-FL/benchmarks/benchmark_throughput_serve_half.py \
-  --model /workspace/MiniCPM5-2B \
-  --served-model-name minicpm \
-  --port 9031 \
-  --test-cases '[[4096,1024,64,256],[16384,1024,64,128]]' \
-  2>&1 | tee benchmark.log
-printf 'Outputs: %s\n' "$run_dir/benchmark_results"
-```
+python3 autoresearch/session_budget.py status
+python3 autoresearch/session_budget.py admit --runs 1
+
+# Requires Git authentication on the checked, non-main PR branch.
+# If PR push cannot succeed, preserve evidence first and do not gamble a long run.
+python3 autoresearch/session_budget.py run-half --push-checkpoint
+~~~
+
+The command uses the external, untouched \`benchmark_throughput_serve_half.py\` with fixed \`RUNS=2\`, \`SKIP_FIRST=0\`, and both workloads \`[[4096,1024,64,256],[16384,1024,64,128]]\`. Each run gets a new ignored \`.autoresearch-work/bench_runs/guard_*/\` directory with \`benchmark.log\`, \`run.json\` and the benchmark-generated CSVs. Inspect \`tail -f .../benchmark.log\` for progress. An exit code of zero or an automatically published checkpoint is **not** acceptance; raw CSVs still need explicit verification, matched A/B and independent reproduction.
 
 Use new run directories and fresh owned-server restarts for A1/B1/A2/B2. To switch control/candidate, first stop **only** the owned server, restore the exact saved source snapshot, confirm manifest/checksum, then restart with identical flags. Do not modify v10. Compare source SHA, model hash, benchmark checksum, installed packages and cache capacity; document any drift. For 4K, separately compare first-vs-first and second-vs-second repetitions, cache-hit/warmup conditions and reverse-order A/B controls where possible; a favorable second repetition alone is not enough.
 
@@ -134,4 +155,4 @@ Exit code 0 means only valid CSV structure, not confirmed improvement or accurac
 
 ## 7 — Copy/paste task to Codex Terra 6.1
 
-> Operate only in /root/Optimization/v11 on the authorized Remote-SSH BI-V150 machine. Read AGENTS.md, program.md and autoresearch/EXPERIMENTS.md. v11 FlagGems/vLLM operator code starts identical to optimized v10; retain its stage-2 BLOCK_M=64 prefill and decode page lookup. Fixed v10 development half-run: 4K 2372.38, 16K 1872.70 Total tok/s. Minimum OR target: +5% = 4K >=2490.999 or 16K >=1966.335. Stretch OR target: +10% = 4K >=2609.618 or 16K >=2059.970. Require both frozen thresholds AND independently repeatable matched-v11-starting-code uplift of the same magnitude. Profile real v11 production phases before selecting a kernel target (mixed paged attention, 4K small-M GEMM/Linear, residual 16K KV pipeline); make genuine compute/data-movement changes and preserve framework dispatch/fallback logic. Never alter provided benchmark, model, dataset, generation settings, concurrency or serving flags for score; no quantization, speculative sampling, or latest FlagOS merge. Funnel through operator numerical correctness, paired kernel A/B, production invocation, repeated matched quick serving tests, and only then full unchanged 4K+16K half-runs. Half-run start floor >=90min remaining (90–119min still risky); independent A1/B1/A2/B2 usually needs >=480min including overhead. Every run has RUNS=2, SKIP_FIRST=0, all requests successful. Compare fresh A/B and independent replications, record full raw provenance, TTFT/TPOT and regressions. Open draft PR for repeatable >=3% incremental progress; at >=5% confirmed open milestone PR and continue toward >=10% if budget/hypotheses permit; at independently confirmed >=10% open final PR and stop. Never auto-merge; human handles unchanged MATH-500 with project acceptance >=95%. Track all attempts, rejected experiments, deadlines, remaining budget and exact PR links. Do not pretend this instruction launches an unattended process; report verified work only.
+> Operate only in /root/Optimization/v11 on the authorized Remote-SSH BI-V150 machine. Read AGENTS.md, program.md and autoresearch/EXPERIMENTS.md. v11 FlagGems/vLLM operator code starts identical to optimized v10; retain its stage-2 BLOCK_M=64 prefill and decode page lookup. Fixed v10 development half-run: 4K 2372.38, 16K 1872.70 Total tok/s. Minimum OR target: +5% = 4K >=2490.999 or 16K >=1966.335. Stretch OR target: +10% = 4K >=2609.618 or 16K >=2059.970. Require both frozen thresholds AND independently repeatable matched-v11-starting-code uplift of the same magnitude. Profile real v11 production phases before selecting a kernel target (mixed paged attention, 4K small-M GEMM/Linear, residual 16K KV pipeline); make genuine compute/data-movement changes and preserve framework dispatch/fallback logic. Never alter provided benchmark, model, dataset, generation settings, concurrency or serving flags for score; no quantization, speculative sampling, or latest FlagOS merge. Funnel through operator numerical correctness, paired kernel A/B, production invocation, repeated matched quick serving tests, and only then full unchanged 4K+16K half-runs. Use an operator-confirmed deadline and session_budget.py for every half-run; initial minimum is 150min for one or 275min for two, with a 25min reserved handoff. A1/B1/A2/B2 cannot fit a 330min session. Every run has RUNS=2, SKIP_FIRST=0, all requests successful. Compare fresh A/B and independent replications, record full raw provenance, TTFT/TPOT and regressions. Open draft PR for repeatable >=3% incremental progress; at >=5% confirmed open milestone PR and continue toward >=10% if budget/hypotheses permit; at independently confirmed >=10% open final PR and stop. Never auto-merge; human handles unchanged MATH-500 with project acceptance >=95%. Use checkpoint.py --push at least every 30min, immediately after high-value positive/negative results and before an expensive half-run; include hashes, raw evidence paths, exact reproduction steps, honest verification state and the single next action. Back up ignored raw data off the GPU host. Codex credits are not directly observable, so checkpoint preemptively. Track all attempts, rejected experiments, deadlines, remaining budget and exact PR links. Do not pretend this instruction launches an unattended process; report verified work only.
