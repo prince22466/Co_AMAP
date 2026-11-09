@@ -98,6 +98,40 @@ class CheckpointTests(unittest.TestCase):
             self.assertIn("Restore baseline", handoff)
             self.assertIn("not verify accuracy", handoff)
 
+    def test_small_raw_csv_is_preserved_with_hash(self):
+        with TemporaryDirectory() as folder:
+            root = Path(folder)
+            raw_folder = root / ".autoresearch-work" / "bench_runs" / "guard_A" / "benchmark_results"
+            raw_folder.mkdir(parents=True)
+            raw = raw_folder / "raw_runs_001.csv"
+            raw.write_text(
+                "Prefill,Decode,Conc,Num Prompts,Total tok/s,Mean TTFT (ms),"
+                "Run Status,Successful Requests\n"
+                "4096,1024,64,256,2000,1000,SUCCESS,256\n"
+            )
+            checkpoints.checkpoint(
+                root, "Run completed but not replicated", str(raw), "Check results",
+                csv_paths=[raw],
+            )
+            evidence = list((root / "autoresearch" / "evidence").glob("*.csv"))
+            self.assertEqual(len(evidence), 1)
+            self.assertEqual(evidence[0].read_bytes(), raw.read_bytes())
+            self.assertIn("sha256", (root / "autoresearch" / "EXPERIMENTS.md").read_text())
+
+    def test_csv_outside_worktree_or_invalid_schema_refused(self):
+        with TemporaryDirectory() as folder:
+            root = Path(folder)
+            external = root / "unrelated" / "raw_runs.csv"
+            external.parent.mkdir()
+            external.write_text("a,b\n1,2\n")
+            with self.assertRaisesRegex(ValueError, "outside ignored work tree"):
+                checkpoints.checkpoint(root, "a", "b", "c", csv_paths=[external])
+            internal = root / ".autoresearch-work" / "raw_runs.csv"
+            internal.parent.mkdir()
+            internal.write_text("a,b\n1,2\n")
+            with self.assertRaisesRegex(ValueError, "lacks expected benchmark columns"):
+                checkpoints.checkpoint(root, "a", "b", "c", csv_paths=[internal])
+
     def test_missing_evidence_is_rejected(self):
         with TemporaryDirectory() as folder:
             with self.assertRaises(ValueError):
