@@ -160,11 +160,15 @@ def execute_half(state: dict, state_path: Path, push: bool = False) -> int:
     save(run_dir / "run.json", record)
     state.setdefault("observed_runs_minutes", []).append(elapsed)
     save(state_path, state)
+    csv_files = sorted(
+        p for p in run_dir.rglob("*.csv")
+        if p.name.startswith(("raw_runs", "summary"))
+    )
     checkpoint(ROOT, f"Half-run ended: {record['status']}",
                f"Elapsed={elapsed:.1f} min; rc={returncode}; raw/log: {run_dir}; SHA256={sha}",
-               "Validate raw CSV and independent A/B; back up raw artifacts off GPU host",
+               "Validate raw CSV and independent A/B; back up GPU traces off-instance",
                "provisional" if returncode == 0 else "blocked",
-               decision(state)["remaining_minutes"], push)
+               decision(state)["remaining_minutes"], push, csv_files)
     print(json.dumps(record, indent=2))
     return 0 if returncode == 0 else (124 if timed_out else 1)
 
