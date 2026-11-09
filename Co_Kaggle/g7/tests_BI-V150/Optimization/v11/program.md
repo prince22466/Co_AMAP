@@ -121,7 +121,7 @@ Each full run must have 4 raw `SUCCESS` rows: two 256/256 request 4K repetitions
 ```bash
 cd /root/Optimization/v11
 python3 autoresearch/evaluate.py \
-  --baseline-summary /actual/fresh_v11_control/benchmark_results/summary_DATE.csv \
+  --baseline-summary /actual/current_accepted_v11_control/benchmark_results/summary_DATE.csv \
   --baseline-raw /actual/current_accepted_v11_control/benchmark_results/raw_runs_DATE.csv \
   --starting-summary /actual/fresh_v11_starting_code_control/benchmark_results/summary_DATE.csv \
   --starting-raw /actual/fresh_v11_starting_code_control/benchmark_results/raw_runs_DATE.csv \
