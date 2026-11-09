@@ -16,11 +16,11 @@ The v10 source of the reported two-workload development half-run is `profiling/v
 
 ## Start-of-run provenance checklist
 
-- Authorized GPU owner, wall deadline/allocation (or unknown), observed clock/start time, remaining time. Half-run start floor >=90min; may need 120min. Independent four-run A1/B1/A2/B2 confirmation takes about 360–480min of benchmarks alone; prefer >=480min with overhead or mark a single matched pair provisional.
+- Authorized GPU owner, wall deadline/allocation (or unknown), observed clock/start time, remaining time. Time gate is enforced by `autoresearch/session_budget.py`: initially 105min measured +20min per-run margin +25min final preservation reserve (>=150min for one, >=275min for two); update estimate from actual runs. Four complete A1/B1/A2/B2 half-runs require >=525min under the initial budget model and cannot fit a 330min session. A single A/B pair is provisional.
 - Git branch, HEAD, exact v11 operator SHA256 and tracked/untracked status; compare known v10 starting-source trees without *executing* v10. Record source and checkpoint hashes after every acceptance.
 - BI-V150 hardware/drivers, Torch/Corex/Triton/vLLM/FlagGems package versions, model and weights hashes, loaded `inspect.getfile` locations, launch and serving flags, optimizer path invocation trace.
 - Exact unmodified external benchmark SHA, benchmark CLI inputs, fresh named raw CSV and summary, successful requests/error counts, cache capacity/prefix hits, GPU telemetry.
-- All bulk raw evidence retained in ignored `/root/Optimization/v11/.autoresearch-work/`; preserve each complete A/B pair, including failures and negative experiments.
+- All bulk raw evidence retained in ignored `/root/Optimization/v11/.autoresearch-work/` and backed up to persistent off-instance storage before GPU expiry; Git-only notes must include hashes/paths plus a candid availability status. Capture failures and negative experiments too. Use `autoresearch/checkpoint.py --push` periodically (<=30min), before expensive runs and at time/credit pressure.
 
 ## Research queue (re-rank after v11 production traces)
 
@@ -54,4 +54,4 @@ The v10 source of the reported two-workload development half-run is `profiling/v
 - Other workload regression/competition impact and remaining MATH-500:
 - Accepted/rejected, rollback proof, commit SHA, draft PR URL and next direction:
 
-Never erase a negative result or label interrupted half-runs as complete. `autoresearch/evaluate.py` exit 0 means valid CSVs only; numeric threshold fields are **not** acceptance certificates.
+Never erase a negative result or label interrupted half-runs as complete. Checkpoints in this file are append-only; PR updates are not evidence of benchmark success. `autoresearch/evaluate.py` exit 0 means valid CSVs only; numeric threshold fields are **not** acceptance certificates.
