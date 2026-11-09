@@ -11,12 +11,12 @@ The v10 source of the reported two-workload development half-run is `profiling/v
 
 - Require fixed goal **AND** independently verified >=5% or >=10% uplift over a fresh *v11 starting-code* matched A/B control in one workload. Other workload must be reported without an unapproved material regression. Confirm every half-run has two successful 4K repetitions of 256/256 requests and two successful 16K repetitions of 128/128 requests; `RUNS=2`, `SKIP_FIRST=0`.
 - At >=3% reproducible gain vs latest accepted v11 control: draft progress PR. At >=5% verified fixed+matched minimum: milestone PR and keep researching toward 10% if resources allow. At >=10% verified fixed+matched stretch: final PR and stop. No auto-merge; human owns MATH-500.
-- v10 performance noise: control A1 4K individual repetitions 2103.78 / 2474.28; candidate B1 2078.02 / 2677.88. Report run-level spread and independently paired confirmation; a single high 4K mean is insufficient.
+- v10 performance noise: control A1 4K individual repetitions 2103.78 / 2474.28; candidate B1 2078.02 / 2677.88. Compare first-vs-first and second-vs-second 4K repetitions under matched cache/warmup/order conditions; report run-level spread and independent A/B confirmation. A single high 4K second repetition or mean is insufficient.
 - v10 short profiled GPU-sum shares (NOT wall time, NOT v11 evidence): 4K attention 55.64%, MM 34.93%; 16K attention 84%, MM 11.60%. Reprofile. v10 widened BF16 GQA prefill query tile `BLOCK_M=32 -> 64`, reducing one long prefill kernel 30.4801 -> 17.4209 ms, although SMEM 24KB -> 32KB and estimated occupancy 16% -> 13%; these are historical clues only.
 
 ## Start-of-run provenance checklist
 
-- Authorized GPU owner, wall deadline/allocation (or unknown), observed clock/start time, remaining time. Half-run start floor >=90min; may need 120min, and repeated A/B may require 300+min.
+- Authorized GPU owner, wall deadline/allocation (or unknown), observed clock/start time, remaining time. Half-run start floor >=90min; may need 120min. Independent four-run A1/B1/A2/B2 confirmation takes about 360–480min of benchmarks alone; prefer >=480min with overhead or mark a single matched pair provisional.
 - Git branch, HEAD, exact v11 operator SHA256 and tracked/untracked status; compare known v10 starting-source trees without *executing* v10. Record source and checkpoint hashes after every acceptance.
 - BI-V150 hardware/drivers, Torch/Corex/Triton/vLLM/FlagGems package versions, model and weights hashes, loaded `inspect.getfile` locations, launch and serving flags, optimizer path invocation trace.
 - Exact unmodified external benchmark SHA, benchmark CLI inputs, fresh named raw CSV and summary, successful requests/error counts, cache capacity/prefix hits, GPU telemetry.
