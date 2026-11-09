@@ -17,7 +17,10 @@ import sys
 import time
 from urllib.request import urlopen
 
-from checkpoint import ROOT, checkpoint
+if __package__:
+    from .checkpoint import ROOT, checkpoint
+else:
+    from checkpoint import ROOT, checkpoint
 
 STATE = ROOT / ".autoresearch-work" / "session_budget.json"
 BENCHMARK = Path("/workspace/vllm-plugin-FL/benchmarks/benchmark_throughput_serve_half.py")
