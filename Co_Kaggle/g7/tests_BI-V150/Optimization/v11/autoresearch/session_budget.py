@@ -123,6 +123,8 @@ def execute_half(state: dict, state_path: Path, push: bool = False) -> int:
     # Re-admit immediately before launch; never start inside the safety reserve.
     refreshed = decision(state)
     if not refreshed["admitted"]:
+        record.update({"status": "CANCELLED_NOT_STARTED", "finished_epoch": time.time()})
+        save(run_dir / "run.json", record)
         checkpoint(ROOT, "Benchmark cancelled after preflight deadline recheck",
                    f"Run manifest: {run_dir / 'run.json'}; remaining={refreshed['remaining_minutes']}",
                    "Preserve current evidence; do not start a half-run", "blocked",
