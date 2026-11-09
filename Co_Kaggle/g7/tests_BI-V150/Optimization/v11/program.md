@@ -93,7 +93,7 @@ Repeat with matched restarts, unchanged inputs and preferably balanced A/B order
 
 ## 5 — Unmodified official-format development half-run (Terminal B)
 
-A complete two-case half-run historically takes **90–120 minutes**. **Never start below 90 minutes remaining**; 90 minutes may be insufficient to complete. An independently confirmed **A1/B1/A2/B2** sequence requires approximately **360–480 minutes for four half-run benchmarks alone**, plus restarts, correctness and profiling; prefer **>=480 minutes** for full independent verification. A single A/B pair is provisional. If deadline cannot be verified, state it as unknown and do not guarantee the run. The external benchmark must be unmodified with `RUNS=2`, `SKIP_FIRST=0`.
+A complete two-case half-run historically takes **90–120 minutes**. **Never start below 90 minutes remaining**; 90 minutes may be insufficient to complete. An independently confirmed **A1/B1/A2/B2** sequence requires approximately **360–480 minutes for four half-run benchmarks alone**, plus restarts, correctness and profiling; prefer **>=480 minutes** for full independent verification. A single A/B pair is provisional. If remaining GPU time cannot be verified, continue quick kernel/serving diagnostics and request a confirmed allocation; do **not** launch a costly full half-run blindly. The external benchmark must be unmodified with `RUNS=2`, `SKIP_FIRST=0`.
 
 ```bash
 curl -f http://127.0.0.1:9031/health
