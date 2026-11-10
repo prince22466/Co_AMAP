@@ -1,19 +1,19 @@
 # v11 latest research handoff
 
-Updated UTC: 2026-11-10T09:03:02+00:00
+Updated UTC: 2026-11-10T09:03:32+00:00
 
-Status: provisional (researcher-reported)
+Status: hypothesis (researcher-reported)
 
-Source HEAD before checkpoint: e598461cbcc8d15b6d3bf8b458c0405d49aefadd
+Source HEAD before checkpoint: 9acbbd03a9fc9469adaee1c8dbf4e7b7feee025e
 
 Remaining GPU time: unknown
 
-Finding: Deadline threshold reached: mixed 4K trace captured graph replay with no aten::mm or unified attention CPU events; phase attribution remains unresolved
+Finding: Screen hypothesis: deduplicate KV page-table loads within existing BF16 GQA prefill attention; 16K short profile sampled 79.25 percent unified attention GPU-sum
 
-Evidence/provenance: Backed up local .autoresearch-work/remote-handoff/profiles/rank0.1794288777900331932.pt.trace.json.gz and all diagnostic logs; full control evidence backed up; 4K and 16K initial prefill profiles do not establish wall-time gain
+Evidence/provenance: Hypothesis only, no causal wall share or mixed-phase attribution; profile trace hidden by graph replay; fixed benchmark control 16K mean 1859.34; baseline source tree and diagnostics retained
 
 Small CSV evidence committed when --push works: none (external backup required)
 
-Next action: Timebox a single paged-KV kernel screen and preserve reserve; no full benchmark admitted
+Next action: Use one guarded operator change, run numerical tests and paired kernel A/B; revert if it fails or remains unverified
 
 Incomplete half-runs are never verified results. Ignored raw artifacts must be backed up outside the rented instance. This handoff does not verify accuracy or establish a causal speedup.
