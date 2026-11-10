@@ -305,3 +305,13 @@ Never erase a negative result or label interrupted half-runs as complete. Checkp
 - PR-preserved small benchmark CSVs: none (external backup required)
 - Next action: Preserve 25-minute reserve; next allocation needs graph-aware mixed/decode traces, a justified operator candidate, matched A/B and independent replication; human MATH-500 remains pending
 - Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
+
+### Research checkpoint 2026-11-10T09:33:07+00:00: provisional
+
+- HEAD before checkpoint: 94ae4e60137be29681ea8f5c48d5a13609343100
+- Budget remaining: unknown
+- Finding: Operator requests 20-minute follow-up to identify other optimization directions; earlier guarded deadline remains 09:48 UTC, approximately 15 minutes remaining
+- Evidence and artifact paths: Two prior prefill hypotheses rejected; both traces and full control saved; no owned server running; half-run admission denied
+- PR-preserved small benchmark CSVs: none (external backup required)
+- Next action: Inspect real projection paths and baseline trace shapes, screen a narrowly scoped kernel hypothesis only if time allows, preserve before expiry
+- Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
