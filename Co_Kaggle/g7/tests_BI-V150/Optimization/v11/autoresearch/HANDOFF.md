@@ -1,19 +1,19 @@
 # v11 latest research handoff
 
-Updated UTC: 2026-11-10T09:09:39+00:00
+Updated UTC: 2026-11-10T09:12:34+00:00
 
-Status: hypothesis (researcher-reported)
+Status: rejected (researcher-reported)
 
-Source HEAD before checkpoint: 9bc87e97de15053bf1aa02486eba99234d58b095
+Source HEAD before checkpoint: 2572fd9949695eada86badefbcfc10e20d4e0d00
 
 Remaining GPU time: unknown
 
-Finding: Second bounded hypothesis: explicitly pipeline the 16K prefill KV tile loop with two in-flight stages while preserving non-prefill loop defaults
+Finding: REJECTED: explicit two-stage prefill loop passed 21 GPU tests but did not improve paired kernel medians
 
-Evidence/provenance: 16K initial prefill trace: attention 840 launches and 9.995 s sampled GPU sum, median 11.337 ms range 5.822 to 19.975 ms; this is not wall time; first page-gather candidate rejected
+Evidence/provenance: Alternating 10 samples, BF16 query 2048 with randomized 16-token pages: context 4096 control 5.7891 ms candidate 5.7782 ms; context 14336 control 17.4541 ms candidate 17.4999 ms; outputs identical; remote .autoresearch-work/pipeline-tests.log and pipeline-screen.log; control SHA256 6e3e8f7cbc24140a9cfd3ef3d2ed8d99cf7ae0f4e0147ac3d9d9b0775925931a restored
 
 Small CSV evidence committed when --push works: none (external backup required)
 
-Next action: Run GPU correctness and alternating same-input kernel screen; reject if slow or unverified before 25-minute reserve
+Next action: Back up both screen logs and traces, verify PR and stop at preservation reserve; no candidate promoted
 
 Incomplete half-runs are never verified results. Ignored raw artifacts must be backed up outside the rented instance. This handoff does not verify accuracy or establish a causal speedup.

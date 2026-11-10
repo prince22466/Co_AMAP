@@ -255,3 +255,13 @@ Never erase a negative result or label interrupted half-runs as complete. Checkp
 - PR-preserved small benchmark CSVs: none (external backup required)
 - Next action: Run GPU correctness and alternating same-input kernel screen; reject if slow or unverified before 25-minute reserve
 - Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
+
+### Research checkpoint 2026-11-10T09:12:34+00:00: rejected
+
+- HEAD before checkpoint: 2572fd9949695eada86badefbcfc10e20d4e0d00
+- Budget remaining: unknown
+- Finding: REJECTED: explicit two-stage prefill loop passed 21 GPU tests but did not improve paired kernel medians
+- Evidence and artifact paths: Alternating 10 samples, BF16 query 2048 with randomized 16-token pages: context 4096 control 5.7891 ms candidate 5.7782 ms; context 14336 control 17.4541 ms candidate 17.4999 ms; outputs identical; remote .autoresearch-work/pipeline-tests.log and pipeline-screen.log; control SHA256 6e3e8f7cbc24140a9cfd3ef3d2ed8d99cf7ae0f4e0147ac3d9d9b0775925931a restored
+- PR-preserved small benchmark CSVs: none (external backup required)
+- Next action: Back up both screen logs and traces, verify PR and stop at preservation reserve; no candidate promoted
+- Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
