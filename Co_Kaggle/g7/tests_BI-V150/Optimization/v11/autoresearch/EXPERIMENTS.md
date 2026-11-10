@@ -395,3 +395,13 @@ Never erase a negative result or label interrupted half-runs as complete. Checkp
 - PR-preserved small benchmark CSVs: none (external backup required)
 - Next action: Verify full source/model provenance, apply saved candidate in v11, run prepared GPU correctness coverage and matched production screens
 - Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
+
+### Research checkpoint 2026-11-10T16:14:22+00:00: provisional
+
+- HEAD before checkpoint: 31e1ef8d6fd496491378a7d0ff3396623806c289
+- Budget remaining: unknown
+- Finding: Provisional grouped-MM candidate passed seven focused BI-V150 tests including observed BF16 shape, FP16, transposed and strided inputs, fallback tails and strided output
+- Evidence and artifact paths: Remote .autoresearch-work/mm-tests-new.log: 7 passed; candidate mm sha256 a6edcade7c0805cb4eeae41828d1d089b1b76ae3b383176779bd7fe7a89ed276; initial control/model/benchmark hashes unchanged; no serving evidence yet
+- PR-preserved small benchmark CSVs: none (external backup required)
+- Next action: Run full attention regression suite, then matched control/candidate short 4K and 16K diagnostics with identical restarts and order
+- Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
