@@ -145,3 +145,13 @@ Never erase a negative result or label interrupted half-runs as complete. Checkp
 - PR-preserved small benchmark CSVs: none (external backup required)
 - Next action: Finish and validate the control, preserve full logs, then profile production phases before selecting a hypothesis
 - Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
+
+### Research checkpoint 2026-11-10T05:01:58+00:00: provisional
+
+- HEAD before checkpoint: 5007973b49eb3d9f4a49cde6ff8993c924692d31
+- Budget remaining: unknown
+- Finding: Control 16K repetition 1 SUCCESS 128/128, total 1824.16 tok/s; final 16K repetition pending
+- Evidence and artifact paths: Raw CSV contains 4K 2211.04 and 2526.52, 16K first 1824.16; duration 1221.51 s; 3 preemptions observed earlier; no matched candidate or speedup claim
+- PR-preserved small benchmark CSVs: autoresearch\evidence\.autoresearch-work_87b0bdb9c657_raw_runs_20261110_122048.csv (sha256 87b0bdb9c6570fbcaa628129e0a58f78caee96576bfcf31ddc6b0884288db208)
+- Next action: Finish 16K repetition 2 and back up full evidence; profile production behavior
+- Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
