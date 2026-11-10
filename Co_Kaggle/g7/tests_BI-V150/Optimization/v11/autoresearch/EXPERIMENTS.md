@@ -405,3 +405,13 @@ Never erase a negative result or label interrupted half-runs as complete. Checkp
 - PR-preserved small benchmark CSVs: none (external backup required)
 - Next action: Run full attention regression suite, then matched control/candidate short 4K and 16K diagnostics with identical restarts and order
 - Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
+
+### Research checkpoint 2026-11-10T16:21:27+00:00: provisional
+
+- HEAD before checkpoint: f84547ff78a075e572d5fb2999f50b8fbcd1dfe9
+- Budget remaining: unknown
+- Finding: Matched short control diagnostics completed: 4K 16/16, total 2464.25 tok/s; 16K 8/8, total 3196.90 tok/s
+- Evidence and artifact paths: Remote .autoresearch-work/quick-new/control-4k.log and control-16k.log; seed 0, fixed random inputs, concurrency 8, output 128; diagnostic only, 4K TTFT 6014.21 ms TPOT 60.01 ms; 16K TTFT 19046.19 ms TPOT 170.58 ms; candidate comparison pending
+- PR-preserved small benchmark CSVs: none (external backup required)
+- Next action: Restart matching server on candidate, run same probes, verify candidate execution and compare both without treating screen as half-run
+- Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
