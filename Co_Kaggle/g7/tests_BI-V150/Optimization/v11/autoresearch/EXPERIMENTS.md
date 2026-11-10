@@ -315,3 +315,13 @@ Never erase a negative result or label interrupted half-runs as complete. Checkp
 - PR-preserved small benchmark CSVs: none (external backup required)
 - Next action: Inspect real projection paths and baseline trace shapes, screen a narrowly scoped kernel hypothesis only if time allows, preserve before expiry
 - Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
+
+### Research checkpoint 2026-11-10T09:33:43+00:00: hypothesis
+
+- HEAD before checkpoint: b4afd39b41faa9de2962d244b4510e75aafdbac6
+- Budget remaining: unknown
+- Finding: Follow-up 4K trace: BF16 MLP-sized projection (2048x2048) x (2048x12288) contributes 942.19 ms of 1806.45 ms sampled mm kernel time
+- Evidence and artifact paths: Trace CPU-to-GPU external-id attribution: 672 such calls, median 1402.18 us; second (2048x6144)x(6144x2048) 487.28 ms of sampled mm sum; first 20 profiled iterations, CUDA graphs and serving wall share unresolved; source .autoresearch-work/trace-associate.py
+- PR-preserved small benchmark CSVs: none (external backup required)
+- Next action: Screen a shape-specific tile-order data-reuse idea against identical BF16 inputs; require correctness and reject regressions; no serving claim
+- Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
