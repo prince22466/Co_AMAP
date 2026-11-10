@@ -95,3 +95,13 @@ Never erase a negative result or label interrupted half-runs as complete. Checkp
 - PR-preserved small benchmark CSVs: none (external backup required)
 - Next action: Start owned control server, capture model provenance, and prepare baseline guarded half-run using local Git checkpoint preservation
 - Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
+
+### Research checkpoint 2026-11-10T04:19:54+00:00: provisional
+
+- HEAD before checkpoint: 707be5f26575fe4fe5c251d326a4b9c9a3c433f4
+- Budget remaining: unknown
+- Finding: Preparing first unchanged v11 control half-run; no performance result yet
+- Evidence and artifact paths: Source working-tree comparison 2812 files matched; BI-V150; model weights sha256 14fb8e7f0a18d53d1f239773758bf581cee7e456a4523a54622c3a245b64402c; benchmark sha256 873f17f932d4643222be9903ba3b569c1863c4e2d246ceafbe6f75ebe7163ffc; 21 GPU tests pass; allocation ends 2026-11-10T09:48:00Z; local backup .autoresearch-work/remote-handoff
+- PR-preserved small benchmark CSVs: none (external backup required)
+- Next action: After server health and deadline admission, run guarded half-run and sync all checkpoints and evidence via local Git as operator requested
+- Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
