@@ -195,3 +195,13 @@ Never erase a negative result or label interrupted half-runs as complete. Checkp
 - PR-preserved small benchmark CSVs: none (external backup required)
 - Next action: Capture mixed/decode phases, assess Amdahl bound and select one real operator change
 - Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
+
+### Research checkpoint 2026-11-10T09:01:17+00:00: provisional
+
+- HEAD before checkpoint: 9f42717e8ea13859d3afc0c4cf2c269f1e8910f7
+- Budget remaining: unknown
+- Finding: User reports 50 minutes remaining; retained earlier guarded expiry 09:48 UTC, now approximately 47 minutes remain; no further half-run admitted
+- Evidence and artifact paths: Control completed and CSVs pushed; 4K and 16K initial profiles backed up; mixed 4K diagnostic completed remotely at .autoresearch-work/profiles/quick-mixed-4k.log and rank0.1794288777900331932.pt.trace.json.gz; candidate not yet tested
+- PR-preserved small benchmark CSVs: none (external backup required)
+- Next action: Immediately back up mixed profile and all diagnostic logs, analyze mixed attention and run a brief kernel screen if time remains
+- Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
