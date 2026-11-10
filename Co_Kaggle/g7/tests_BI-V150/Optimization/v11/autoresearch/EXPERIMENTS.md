@@ -55,3 +55,33 @@ The v10 source of the reported two-workload development half-run is `profiling/v
 - Accepted/rejected, rollback proof, commit SHA, draft PR URL and next direction:
 
 Never erase a negative result or label interrupted half-runs as complete. Checkpoints in this file are append-only; PR updates are not evidence of benchmark success. `autoresearch/evaluate.py` exit 0 means valid CSVs only; numeric threshold fields are **not** acceptance certificates.
+
+### Research checkpoint 2026-11-10T04:07:07+00:00: blocked
+
+- HEAD before checkpoint: not available
+- Budget remaining: unknown
+- Finding: initial_remote_access_checkout_missing_git
+- Evidence and artifact paths: matching_three_operator_hashes_external_benchmark_sha_873f17f9
+- PR-preserved small benchmark CSVs: none (external backup required)
+- Next action: establish_git_PR_and_confirm_allocation_deadline
+- Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
+
+### Research checkpoint 2026-11-10T04:07:57+00:00: blocked
+
+- HEAD before checkpoint: not available
+- Budget remaining: unknown
+- Finding: checkpoint_CSV_shadowing_bug_fixed_tests_passed
+- Evidence and artifact paths: 33_harness_tests_pass_git_checkout_missing_benchmark_hash_873f17f9
+- PR-preserved small benchmark CSVs: none (external backup required)
+- Next action: establish_PR_branch_confirm_deadline_and_backup
+- Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
+
+### Research checkpoint 2026-11-10T04:10:36+00:00: provisional
+
+- HEAD before checkpoint: not available
+- Budget remaining: unknown
+- Finding: initial_GPU_correctness_21_tests_passed
+- Evidence and artifact paths: .autoresearch-work/initial_correctness.log_and_33_harness_tests_passed
+- PR-preserved small benchmark CSVs: none (external backup required)
+- Next action: restore_Git_push_access_and_PR_checkout_before_benchmark
+- Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
