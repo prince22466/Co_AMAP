@@ -245,3 +245,13 @@ Never erase a negative result or label interrupted half-runs as complete. Checkp
 - PR-preserved small benchmark CSVs: none (external backup required)
 - Next action: Back up negative raw logs; inspect another safe hypothesis only if time permits; preserve 25-minute handoff reserve
 - Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
+
+### Research checkpoint 2026-11-10T09:09:39+00:00: hypothesis
+
+- HEAD before checkpoint: 9bc87e97de15053bf1aa02486eba99234d58b095
+- Budget remaining: unknown
+- Finding: Second bounded hypothesis: explicitly pipeline the 16K prefill KV tile loop with two in-flight stages while preserving non-prefill loop defaults
+- Evidence and artifact paths: 16K initial prefill trace: attention 840 launches and 9.995 s sampled GPU sum, median 11.337 ms range 5.822 to 19.975 ms; this is not wall time; first page-gather candidate rejected
+- PR-preserved small benchmark CSVs: none (external backup required)
+- Next action: Run GPU correctness and alternating same-input kernel screen; reject if slow or unverified before 25-minute reserve
+- Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.

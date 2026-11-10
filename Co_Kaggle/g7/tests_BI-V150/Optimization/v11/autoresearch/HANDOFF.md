@@ -1,19 +1,19 @@
 # v11 latest research handoff
 
-Updated UTC: 2026-11-10T09:07:45+00:00
+Updated UTC: 2026-11-10T09:09:39+00:00
 
-Status: rejected (researcher-reported)
+Status: hypothesis (researcher-reported)
 
-Source HEAD before checkpoint: fe8c3f5ac31d387417ce4721d67c5555aaccc842
+Source HEAD before checkpoint: 9bc87e97de15053bf1aa02486eba99234d58b095
 
 Remaining GPU time: unknown
 
-Finding: REJECTED: BF16 GQA prefill page-index reuse passed 21 tests but regressed paired kernel medians by 29.99 percent at context 4096 and 29.88 percent at context 14336; reverted
+Finding: Second bounded hypothesis: explicitly pipeline the 16K prefill KV tile loop with two in-flight stages while preserving non-prefill loop defaults
 
-Evidence/provenance: Identical BF16 query=2048 and randomized 16-token pages; alternating 10 samples: 5.7616 to 7.4898 ms and 17.4620 to 22.6797 ms; max output difference 0; remote .autoresearch-work/kernel-screen.log and candidate-tests.log; original source SHA256 6e3e8f7cbc24140a9cfd3ef3d2ed8d99cf7ae0f4e0147ac3d9d9b0775925931a restored; no serving test
+Evidence/provenance: 16K initial prefill trace: attention 840 launches and 9.995 s sampled GPU sum, median 11.337 ms range 5.822 to 19.975 ms; this is not wall time; first page-gather candidate rejected
 
 Small CSV evidence committed when --push works: none (external backup required)
 
-Next action: Back up negative raw logs; inspect another safe hypothesis only if time permits; preserve 25-minute handoff reserve
+Next action: Run GPU correctness and alternating same-input kernel screen; reject if slow or unverified before 25-minute reserve
 
 Incomplete half-runs are never verified results. Ignored raw artifacts must be backed up outside the rented instance. This handoff does not verify accuracy or establish a causal speedup.
