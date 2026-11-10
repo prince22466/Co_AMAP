@@ -85,3 +85,13 @@ Never erase a negative result or label interrupted half-runs as complete. Checkp
 - PR-preserved small benchmark CSVs: none (external backup required)
 - Next action: restore_Git_push_access_and_PR_checkout_before_benchmark
 - Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
+
+### Research checkpoint 2026-11-10T04:17:30+00:00: provisional
+
+- HEAD before checkpoint: 3b930fa7a8afa7ae2858497390d46beb6df697a7
+- Budget remaining: unknown
+- Finding: Remote v11 inference sources match 2812 local working tree files; BI-V150 imports v11 modules and port 9031 is free
+- Evidence and artifact paths: Remote .autoresearch-work/source-bytes-check.log and probe-v11.log; prior 21 GPU and 33 harness tests passed; Git commit 3b930fa7; benchmark sha256 873f17f932d4643222be9903ba3b569c1863c4e2d246ceafbe6f75ebe7163ffc
+- PR-preserved small benchmark CSVs: none (external backup required)
+- Next action: Start owned control server, capture model provenance, and prepare baseline guarded half-run using local Git checkpoint preservation
+- Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
