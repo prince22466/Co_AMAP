@@ -1,19 +1,19 @@
 # v11 latest research handoff
 
-Updated UTC: 2026-11-10T09:12:34+00:00
+Updated UTC: 2026-11-10T09:14:36+00:00
 
-Status: rejected (researcher-reported)
+Status: provisional (researcher-reported)
 
-Source HEAD before checkpoint: 2572fd9949695eada86badefbcfc10e20d4e0d00
+Source HEAD before checkpoint: e3330c0ddfe1117259da795509771cedcaad10cc
 
 Remaining GPU time: unknown
 
-Finding: REJECTED: explicit two-stage prefill loop passed 21 GPU tests but did not improve paired kernel medians
+Finding: Final restoration verified: 2812 tracked inference working-tree files match remote bytes; both experimental operators rejected and no v11 speedup verified
 
-Evidence/provenance: Alternating 10 samples, BF16 query 2048 with randomized 16-token pages: context 4096 control 5.7891 ms candidate 5.7782 ms; context 14336 control 17.4541 ms candidate 17.4999 ms; outputs identical; remote .autoresearch-work/pipeline-tests.log and pipeline-screen.log; control SHA256 6e3e8f7cbc24140a9cfd3ef3d2ed8d99cf7ae0f4e0147ac3d9d9b0775925931a restored
+Evidence/provenance: 4K control 2211.04/2526.52 and 16K 1824.16/1894.52 total tok/s; all 4 rows SUCCESS; two candidate tests 21/21 and alternating A/B logs backed up in local .autoresearch-work/remote-handoff; profiler logs and compressed traces backed up; checkpoint evidence committed to draft PR; no owned tmux sessions remain
 
 Small CSV evidence committed when --push works: none (external backup required)
 
-Next action: Back up both screen logs and traces, verify PR and stop at preservation reserve; no candidate promoted
+Next action: Next allocation: capture phase-resolved serving traces including graph replay and real wall shares; investigate 16K KV pipeline or real small-M GEMM only with evidence; reproduce baseline and matched independent A/B; human MATH-500 >=95 percent for chosen candidate
 
 Incomplete half-runs are never verified results. Ignored raw artifacts must be backed up outside the rented instance. This handoff does not verify accuracy or establish a causal speedup.

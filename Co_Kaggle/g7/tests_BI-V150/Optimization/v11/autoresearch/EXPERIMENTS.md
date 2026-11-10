@@ -265,3 +265,13 @@ Never erase a negative result or label interrupted half-runs as complete. Checkp
 - PR-preserved small benchmark CSVs: none (external backup required)
 - Next action: Back up both screen logs and traces, verify PR and stop at preservation reserve; no candidate promoted
 - Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
+
+### Research checkpoint 2026-11-10T09:14:36+00:00: provisional
+
+- HEAD before checkpoint: e3330c0ddfe1117259da795509771cedcaad10cc
+- Budget remaining: unknown
+- Finding: Final restoration verified: 2812 tracked inference working-tree files match remote bytes; both experimental operators rejected and no v11 speedup verified
+- Evidence and artifact paths: 4K control 2211.04/2526.52 and 16K 1824.16/1894.52 total tok/s; all 4 rows SUCCESS; two candidate tests 21/21 and alternating A/B logs backed up in local .autoresearch-work/remote-handoff; profiler logs and compressed traces backed up; checkpoint evidence committed to draft PR; no owned tmux sessions remain
+- PR-preserved small benchmark CSVs: none (external backup required)
+- Next action: Next allocation: capture phase-resolved serving traces including graph replay and real wall shares; investigate 16K KV pipeline or real small-M GEMM only with evidence; reproduce baseline and matched independent A/B; human MATH-500 >=95 percent for chosen candidate
+- Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
