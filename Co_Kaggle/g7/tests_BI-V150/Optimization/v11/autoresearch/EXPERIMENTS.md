@@ -275,3 +275,13 @@ Never erase a negative result or label interrupted half-runs as complete. Checkp
 - PR-preserved small benchmark CSVs: none (external backup required)
 - Next action: Next allocation: capture phase-resolved serving traces including graph replay and real wall shares; investigate 16K KV pipeline or real small-M GEMM only with evidence; reproduce baseline and matched independent A/B; human MATH-500 >=95 percent for chosen candidate
 - Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
+
+### Research checkpoint 2026-11-10T09:15:00+00:00: provisional
+
+- HEAD before checkpoint: 206bfb25f117da8519b2953f3fda9650dc3f8015
+- Budget remaining: unknown
+- Finding: Baseline server-log sampling shows sustained 16K KV pressure and queues; this does not identify a permissible or causal optimization by itself
+- Evidence and artifact paths: Approximate 16K time window: 238 active 10-second server samples, 201 with KV usage >=90 percent and 225 with requests waiting; 4K window: 110 active samples, zero with KV usage >=90 percent and 14 with requests waiting. Local .autoresearch-work/analyze-server-log.py and remote-handoff/v11-control.log. Windows are approximate and neither GPU kernel shares nor attribution of wall delay
+- PR-preserved small benchmark CSVs: none (external backup required)
+- Next action: Next session measure phase-resolved critical path and preemption cost; investigate only allowed equivalent-semantics operator/data-path changes, without altering cache capacity or scheduler settings
+- Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
