@@ -1,19 +1,19 @@
 # v11 latest research handoff
 
-Updated UTC: 2026-11-10T09:36:26+00:00
+Updated UTC: 2026-11-10T09:38:14+00:00
 
 Status: provisional (researcher-reported)
 
-Source HEAD before checkpoint: 75a2074564f1cfc83be1de3fc83c7b287c6bfd53
+Source HEAD before checkpoint: ce54f19b5842ad8949e6aeddc72c1b3362a5a241
 
 Remaining GPU time: unknown
 
-Finding: PROVISIONAL lead: shape-specific grouped MM tile ordering 1.40223 ms control vs 1.16975 ms candidate, approximately 16.6 percent kernel-time reduction on traced 2048x2048 by 2048x12288 BF16 projection
+Finding: Promising but unpromoted MM lead replicated in separate process: 2048x2048 by 2048x12288 BF16 grouped tile mapping reduces kernel median 1.40223 to 1.16975 ms and 1.41153 to 1.17371 ms
 
-Evidence/provenance: 8 alternating GPU event samples on identical transposed weights; outputs matched control and torch reference; fallback 57x2048x12288 and 7x2051x257 also matched; .autoresearch-work/mm-screen.log; no independent repetition, complete test coverage, production invocation proof for candidate or serving A/B
+Evidence/provenance: Two runs of eight alternating GPU event samples, separate seeds; candidate outputs match control and torch reference for observed shape, small-M and tail cases; additional transposed-input shape 1.45587 to 1.17392 ms and numerically matches. 4K trace sampled this shape at 942.19 of 1806.45 ms MM kernel sum. Remote mm-screen.log and mm-screen-2.log; candidate backup .autoresearch-work/mm-candidate.py and .patch local. No complete correctness/fallback coverage, production candidate trace, serving A/B or independent serving replication.
 
 Small CSV evidence committed when --push works: none (external backup required)
 
-Next action: Repeat kernel screen independently, back up full source diff and logs, restore unverified candidate before deadline; no speedup or progress gate claim
+Next action: Restore control; next allocation run focused operator tests and matched short serving probes, then guarded independent A/B only if justified
 
 Incomplete half-runs are never verified results. Ignored raw artifacts must be backed up outside the rented instance. This handoff does not verify accuracy or establish a causal speedup.
