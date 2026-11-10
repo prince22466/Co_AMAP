@@ -105,3 +105,13 @@ Never erase a negative result or label interrupted half-runs as complete. Checkp
 - PR-preserved small benchmark CSVs: none (external backup required)
 - Next action: After server health and deadline admission, run guarded half-run and sync all checkpoints and evidence via local Git as operator requested
 - Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
+
+### Research checkpoint 2026-11-10T04:21:10+00:00: provisional
+
+- HEAD before checkpoint: 07a2276a254879b42bad2f08c0465d54ed099ed8
+- Budget remaining: unknown
+- Finding: Unchanged v11 control half-run started at 2026-11-10T04:20:48Z; result pending
+- Evidence and artifact paths: Remote .autoresearch-work/bench_runs/guard_20261110T042048_3897/run.json and benchmark.log; GPU telemetry .autoresearch-work/gpu-telemetry-control.log; fixed two-workload benchmark and source/model hashes recorded in prior checkpoint
+- PR-preserved small benchmark CSVs: none (external backup required)
+- Next action: Monitor run; back up raw CSVs and logs, validate request counts, and publish results via local Git
+- Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
