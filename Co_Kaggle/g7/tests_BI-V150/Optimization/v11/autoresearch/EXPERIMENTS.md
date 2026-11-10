@@ -225,3 +225,13 @@ Never erase a negative result or label interrupted half-runs as complete. Checkp
 - PR-preserved small benchmark CSVs: none (external backup required)
 - Next action: Use one guarded operator change, run numerical tests and paired kernel A/B; revert if it fails or remains unverified
 - Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
+
+### Research checkpoint 2026-11-10T09:05:59+00:00: provisional
+
+- HEAD before checkpoint: d8a0e99de350a34faff114a4e7a890a4efa10cea
+- Budget remaining: unknown
+- Finding: Experimental prefill page-table reuse passed 21 attention/decode/mixed GPU tests; alternating same-input kernel A/B is in progress
+- Evidence and artifact paths: Remote .autoresearch-work/candidate-tests.log; candidate preserves decode lookup and BLOCK_M=64, checks BF16 GQA tails and mixed paging; correctness alone is not performance evidence
+- PR-preserved small benchmark CSVs: none (external backup required)
+- Next action: Inspect interleaved GPU timings; revert candidate if weak or unverified; no half-run under deadline
+- Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
