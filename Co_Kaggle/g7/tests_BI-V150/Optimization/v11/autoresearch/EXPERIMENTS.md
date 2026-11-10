@@ -135,3 +135,13 @@ Never erase a negative result or label interrupted half-runs as complete. Checkp
 - PR-preserved small benchmark CSVs: autoresearch\evidence\.autoresearch-work_7027890d743c_raw_runs_20261110_122048.csv (sha256 7027890d743cd9df4402a35c5cfa82db3d7095d2a57095cbb56a248d9b4550af)
 - Next action: Monitor both 16K repetitions and back up full raw, summary, telemetry and logs
 - Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
+
+### Research checkpoint 2026-11-10T04:55:05+00:00: provisional
+
+- HEAD before checkpoint: 5f6d931b712ebea239d1f35778944b0cb9dbe056
+- Budget remaining: unknown
+- Finding: First 16K control repetition in progress; server metrics show 3 cumulative preemptions and KV cache near capacity
+- Evidence and artifact paths: Prometheus vllm:num_preemptions_total=3 at 2026-11-10 approximately 04:54 UTC; server log .autoresearch-work/serve_runs/v11-control.log; both 4K rows preserved; causal wall-time attribution not established
+- PR-preserved small benchmark CSVs: none (external backup required)
+- Next action: Finish and validate the control, preserve full logs, then profile production phases before selecting a hypothesis
+- Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
