@@ -465,3 +465,13 @@ Never erase a negative result or label interrupted half-runs as complete. Checkp
 - PR-preserved small benchmark CSVs: none (external backup required)
 - Next action: Back up logs, inspect production-path and kernel resource evidence to select a stronger next hypothesis; single-shape candidate still has no-go serving screen
 - Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
+
+### Research checkpoint 2026-11-10T16:48:31+00:00: hypothesis
+
+- HEAD before checkpoint: 1c12bff3c2b03b9b7b3d9aa32cfe60bdb50ebeb2
+- Budget remaining: unknown
+- Finding: Hypothesis: fuse softmax-rescaled accumulator into the BF16 GQA prefill P-by-V dot to reduce accumulator dependency and data movement
+- Evidence and artifact paths: 16K short profile sampled unified attention 79.25 percent of GPU kernel sum; existing prefill BLOCK_M=64 and two stages preserved; v10 resource profile suggests accumulator pressure but fresh register and wall share data missing
+- PR-preserved small benchmark CSVs: none (external backup required)
+- Next action: Run numerical/fallback suite and alternating same-input kernel measurements; reject if numerical or performance screen fails
+- Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
