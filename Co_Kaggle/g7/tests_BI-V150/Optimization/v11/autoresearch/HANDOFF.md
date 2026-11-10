@@ -1,19 +1,19 @@
 # v11 latest research handoff
 
-Updated UTC: 2026-11-10T09:15:28+00:00
+Updated UTC: 2026-11-10T09:16:25+00:00
 
-Status: rejected (researcher-reported)
+Status: provisional (researcher-reported)
 
-Source HEAD before checkpoint: 2be7351f32fba02e816092b1c73674b3d6b91a59
+Source HEAD before checkpoint: cdb6b66642d97c287ba727a8585f8c1b90cd9ffc
 
 Remaining GPU time: unknown
 
-Finding: Reproduction material preserved for both rejected screens; no candidate promoted
+Finding: Off-instance backup checksum verification complete; no tested speedup and no owned GPU processes remain
 
-Evidence/provenance: Off-instance local .autoresearch-work/kernel-screen.py contains alternating test inputs and timings; recreate-rejected.py and recreate-rejected-pipeline.py reconstruct the experimental changes from the verified original source; regenerated candidate files are approximations, not verified original byte snapshots; full raw logs and traces are in .autoresearch-work/remote-handoff
+Evidence/provenance: Local backups match remote SHA256: 4K trace 4f4ded08, 16K trace e1b20abb, mixed trace ffa3029f, control server log 4a6ce4ba, GPU telemetry fcbe45d0, negative kernel logs 0a4f1ce2 and 683dc067; full control raw and summary CSVs committed to PR; restored source 2812 files matched
 
 Small CSV evidence committed when --push works: none (external backup required)
 
-Next action: Use a new confirmed allocation for graph-aware phase profiling, matched control/candidate serving and independent replication; preserve existing dispatch and model settings
+Next action: Preserve 25-minute reserve; next allocation needs graph-aware mixed/decode traces, a justified operator candidate, matched A/B and independent replication; human MATH-500 remains pending
 
 Incomplete half-runs are never verified results. Ignored raw artifacts must be backed up outside the rented instance. This handoff does not verify accuracy or establish a causal speedup.

@@ -295,3 +295,13 @@ Never erase a negative result or label interrupted half-runs as complete. Checkp
 - PR-preserved small benchmark CSVs: none (external backup required)
 - Next action: Use a new confirmed allocation for graph-aware phase profiling, matched control/candidate serving and independent replication; preserve existing dispatch and model settings
 - Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
+
+### Research checkpoint 2026-11-10T09:16:25+00:00: provisional
+
+- HEAD before checkpoint: cdb6b66642d97c287ba727a8585f8c1b90cd9ffc
+- Budget remaining: unknown
+- Finding: Off-instance backup checksum verification complete; no tested speedup and no owned GPU processes remain
+- Evidence and artifact paths: Local backups match remote SHA256: 4K trace 4f4ded08, 16K trace e1b20abb, mixed trace ffa3029f, control server log 4a6ce4ba, GPU telemetry fcbe45d0, negative kernel logs 0a4f1ce2 and 683dc067; full control raw and summary CSVs committed to PR; restored source 2812 files matched
+- PR-preserved small benchmark CSVs: none (external backup required)
+- Next action: Preserve 25-minute reserve; next allocation needs graph-aware mixed/decode traces, a justified operator candidate, matched A/B and independent replication; human MATH-500 remains pending
+- Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
