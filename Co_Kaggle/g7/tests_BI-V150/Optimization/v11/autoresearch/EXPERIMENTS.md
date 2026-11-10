@@ -455,3 +455,13 @@ Never erase a negative result or label interrupted half-runs as complete. Checkp
 - PR-preserved small benchmark CSVs: none (external backup required)
 - Next action: Prove second-shape numerical correctness, alternating kernel A/B and paired two-workload serving screening; reject on material regression
 - Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
+
+### Research checkpoint 2026-11-10T16:47:02+00:00: rejected
+
+- HEAD before checkpoint: eae8b766d691667596e8c8c915d2f5735bc20cc4
+- Budget remaining: unknown
+- Finding: REJECTED second-projection grouped MM extension: 2048x6144 by 6144x2048 median 0.72554 to 0.76789 ms, 5.84 percent slower
+- Evidence and artifact paths: Nine BF16/FP16, stride and fallback GPU tests passed; 10 alternating same-input event samples, max output difference zero. First projection 1.40098 to 1.17001 ms. Remote .autoresearch-work/mm-dual-screen.log and mm-tests-dual.log; extension reverted to prior single-shape candidate. No serving run for extension.
+- PR-preserved small benchmark CSVs: none (external backup required)
+- Next action: Back up logs, inspect production-path and kernel resource evidence to select a stronger next hypothesis; single-shape candidate still has no-go serving screen
+- Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
