@@ -102,6 +102,7 @@ def mm_kernel(
     UPGRADE_A_OFFS: tl.constexpr,
     UPGRADE_B_OFFS: tl.constexpr,
     UPGRADE_C_OFFS: tl.constexpr,
+    GROUPED_MAPPING: tl.constexpr,
 ):
     # matrix multiplication
     if UPGRADE:
@@ -118,8 +119,16 @@ def mm_kernel(
     # group_size = min(grid_m - group_id * GROUP_M, GROUP_M)
     # pid_m = group_id * GROUP_M + (pid % group_size)
     # pid_n = (pid % width) // (group_size)
-    pid_m = pid // grid_n
-    pid_n = pid % grid_n
+    if GROUPED_MAPPING:
+        grid_m = tl.cdiv(M, BLOCK_M)
+        width = GROUP_M * grid_n
+        group_id = pid // width
+        group_size = min(grid_m - group_id * GROUP_M, GROUP_M)
+        pid_m = group_id * GROUP_M + (pid % group_size)
+        pid_n = (pid % width) // group_size
+    else:
+        pid_m = pid // grid_n
+        pid_n = pid % grid_n
     # do matrix multiplication
     if UPGRADE_A_OFFS:
         rm = (pid_m * BLOCK_M + tl.arange(0, BLOCK_M)).to(tl.int64)
@@ -232,6 +241,7 @@ def _launch_mm(a, b, c, M, N, K):
             input_precision=None,
             fp8_fast_accum=True,
             GROUP_M=8,
+            GROUPED_MAPPING=(M == 2048 and K == 2048 and N == 12288),
             AB_DTYPE=ab_dtype_tl,
         )
     return c

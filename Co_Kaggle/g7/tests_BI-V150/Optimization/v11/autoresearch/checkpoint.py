@@ -43,28 +43,28 @@ def checkpoint(root: Path, summary: str, evidence: str, next_step: str,
     preserved = []
     evidence_paths = []
     allowed = (root / ".autoresearch-work").resolve()
-    for csv in csv_paths or []:
-        source_path = csv.resolve()
+    for csv_path in csv_paths or []:
+        source_path = csv_path.resolve()
         try:
             source_path.relative_to(allowed)
         except ValueError as exc:
-            raise ValueError(f"CSV outside ignored work tree: {csv}") from exc
+            raise ValueError(f"CSV outside ignored work tree: {csv_path}") from exc
         if (not source_path.is_file()
                 or not source_path.name.startswith(("raw_runs", "summary"))
                 or source_path.suffix.lower() != ".csv"
                 or source_path.stat().st_size > 1_000_000):
-            raise ValueError(f"Only raw_runs/summary CSV <=1 MB are allowed: {csv}")
+            raise ValueError(f"Only raw_runs/summary CSV <=1 MB are allowed: {csv_path}")
         raw = source_path.read_bytes()
         try:
             header = next(csv.reader(io.StringIO(raw.decode("utf-8-sig"))))
         except (UnicodeError, StopIteration, csv.Error) as exc:
-            raise ValueError(f"Unparseable benchmark CSV: {csv}") from exc
+            raise ValueError(f"Unparseable benchmark CSV: {csv_path}") from exc
         required = {"Prefill", "Decode", "Conc", "Num Prompts",
                     "Total tok/s", "Mean TTFT (ms)"}
         if source_path.name.startswith("raw_runs"):
             required |= {"Run Status", "Successful Requests"}
         if not required.issubset(set(header)):
-            raise ValueError(f"CSV lacks expected benchmark columns: {csv}")
+            raise ValueError(f"CSV lacks expected benchmark columns: {csv_path}")
         sha256 = hashlib.sha256(raw).hexdigest()
         stored = directory / "evidence" / (
             f"{source_path.parent.parent.name}_{sha256[:12]}_{source_path.name}"

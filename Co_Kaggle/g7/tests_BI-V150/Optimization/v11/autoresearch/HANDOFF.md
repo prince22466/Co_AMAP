@@ -1,14 +1,19 @@
-# v11 autoresearch handoff — setup state
+# v11 latest research handoff
 
-Status: **research harness prepared; no v11 GPU execution verified**.
+Updated UTC: 2026-11-10T16:49:49+00:00
 
-- Branch/PR: [Codex Terra 6.1 autoresearch setup PR #235](https://github.com/prince22466/Co_AMAP/pull/235)
-- Source starting point: v10-derived v11 FlagGems and vLLM plugin with BF16 GQA prefill BLOCK_M=64; this PR does not modify inference kernels.
-- Frozen reported v10 half-run anchors: 4K 2372.38 Total tok/s, 16K 1872.70 Total tok/s. These are **not** matched v11 controls.
-- Frozen minimum: 4K 2490.999 OR 16K 1966.335. Stretch: 4K 2609.618 OR 16K 2059.970. Both workloads must be disclosed.
-- Verified in a previous setup review: existing evaluator's 20 synthetic tests; **new budget/checkpoint tests have not been run on the GPU host**.
-- Missing: confirmed operator-provided GPU allocation/deadline, GPU health, current source/import hashes, fresh production profile, v11 matched control, candidate experiments, repeated independent A/B, and human MATH-500.
-- Next action: synchronize this PR branch to the authorized /root/Optimization/v11 workspace, confirm GPU health and Git push access; run session_budget.py init with actual remaining time. Before a costly run, use checkpoint.py --push and session_budget.py admit. Prioritize production-profile-based high-confidence kernel experiments. Ensure all ignored raw evidence is backed up off-instance.
-- The researcher must update this file on each checkpoint with the latest exact evidence, source commit/hash, provisional/verified status, budget remaining, failures, and the single best next action. Eligible small raw/summary CSVs can be copied into tracked `autoresearch/evidence/` by the checkpoint tool; GPU traces still require off-host backup.
+Status: provisional (researcher-reported)
 
-This note preserves **setup state only**. No model speedup or accuracy improvement is claimed.
+Source HEAD before checkpoint: 67e4492d8442fb437b69bf6d7204206ed245d402
+
+Remaining GPU time: unknown
+
+Finding: Credit-pressure handoff: user requested grouped MM prototype and major findings in draft PR; code and seven GPU-tested cases committed as 67e4492d, no verified serving win
+
+Evidence/provenance: Candidate hash a6edcade; paired kernel 1.402 to 1.170 ms and 1.412 to 1.174 ms. A1/B1/B2/A2 short 4K 2464.25/2054.31/2509.82/2473.56 and 16K 3196.90/2596.40/3235.04/3194.16; all requests successful; 7 focused plus 21 attention tests passed. Second-projection extension regressed 0.72554 to 0.76789 ms and was rejected. Full short logs and negative screen logs backed up locally under .autoresearch-work/remote-handoff; raw half-run evidence tracked on PR.
+
+Small CSV evidence committed when --push works: none (external backup required)
+
+Next action: Next session inspect cold versus warm autotuning and graph replay, prove grouped candidate executes in production; repeat matched short serving screens and only admit half-runs if justified; no promotion without independent A/B and human MATH-500
+
+Incomplete half-runs are never verified results. Ignored raw artifacts must be backed up outside the rented instance. This handoff does not verify accuracy or establish a causal speedup.
