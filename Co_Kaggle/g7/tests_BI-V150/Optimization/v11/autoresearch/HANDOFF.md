@@ -1,19 +1,19 @@
 # v11 latest research handoff
 
-Updated UTC: 2026-11-10T09:15:00+00:00
+Updated UTC: 2026-11-10T09:15:28+00:00
 
-Status: provisional (researcher-reported)
+Status: rejected (researcher-reported)
 
-Source HEAD before checkpoint: 206bfb25f117da8519b2953f3fda9650dc3f8015
+Source HEAD before checkpoint: 2be7351f32fba02e816092b1c73674b3d6b91a59
 
 Remaining GPU time: unknown
 
-Finding: Baseline server-log sampling shows sustained 16K KV pressure and queues; this does not identify a permissible or causal optimization by itself
+Finding: Reproduction material preserved for both rejected screens; no candidate promoted
 
-Evidence/provenance: Approximate 16K time window: 238 active 10-second server samples, 201 with KV usage >=90 percent and 225 with requests waiting; 4K window: 110 active samples, zero with KV usage >=90 percent and 14 with requests waiting. Local .autoresearch-work/analyze-server-log.py and remote-handoff/v11-control.log. Windows are approximate and neither GPU kernel shares nor attribution of wall delay
+Evidence/provenance: Off-instance local .autoresearch-work/kernel-screen.py contains alternating test inputs and timings; recreate-rejected.py and recreate-rejected-pipeline.py reconstruct the experimental changes from the verified original source; regenerated candidate files are approximations, not verified original byte snapshots; full raw logs and traces are in .autoresearch-work/remote-handoff
 
 Small CSV evidence committed when --push works: none (external backup required)
 
-Next action: Next session measure phase-resolved critical path and preemption cost; investigate only allowed equivalent-semantics operator/data-path changes, without altering cache capacity or scheduler settings
+Next action: Use a new confirmed allocation for graph-aware phase profiling, matched control/candidate serving and independent replication; preserve existing dispatch and model settings
 
 Incomplete half-runs are never verified results. Ignored raw artifacts must be backed up outside the rented instance. This handoff does not verify accuracy or establish a causal speedup.
