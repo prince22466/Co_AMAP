@@ -445,3 +445,13 @@ Never erase a negative result or label interrupted half-runs as complete. Checkp
 - PR-preserved small benchmark CSVs: none (external backup required)
 - Next action: No-go for half-run of single-shape candidate; investigate actual second traced MLP projection and screen a narrowly extended tile-reuse hypothesis; preserve candidate and all raw logs
 - Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
+
+### Research checkpoint 2026-11-10T16:43:10+00:00: hypothesis
+
+- HEAD before checkpoint: ad84a15b57a442a28fb51377b19cd308877e1ee7
+- Budget remaining: unknown
+- Finding: Next hypothesis: extend the same grouped MM tile-order data reuse to the second traced MLP projection (2048x6144 by 6144x2048)
+- Evidence and artifact paths: 4K sampled GPU profile: first projection 942.19 ms and second projection 487.28 ms of 3891 ms GPU kernel sum; single-shape serving screen did not demonstrate a repeatable win; no wall-time inference
+- PR-preserved small benchmark CSVs: none (external backup required)
+- Next action: Prove second-shape numerical correctness, alternating kernel A/B and paired two-workload serving screening; reject on material regression
+- Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
