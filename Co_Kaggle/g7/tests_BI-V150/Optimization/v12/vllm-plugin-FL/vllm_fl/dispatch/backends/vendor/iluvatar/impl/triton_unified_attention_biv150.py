@@ -275,6 +275,10 @@ def kernel_unified_attention(
     USE_TD_QO: tl.constexpr = False,
     Q_IS_FP8: tl.constexpr = False,
     DECODE_PAGE_LOOKUP: tl.constexpr = False,
+    # v12 experimental training-free local+prefix tile skipping.
+    # Default-off: the production backend keeps dense semantics.
+    EXPERIMENTAL_SPARSE_WINDOW: tl.constexpr = 0,
+    EXPERIMENTAL_SPARSE_SINK: tl.constexpr = 0,
 ):
     USE_PER_TOKEN_HEAD_SCALES: tl.constexpr = KV_QUANT_MODE >= 2
     USE_FP8_Q_DESCALE: tl.constexpr = KV_QUANT_MODE == 1 and Q_IS_FP8
@@ -399,8 +403,46 @@ def kernel_unified_attention(
         CHUNK_SIZE,
     )
 
-    # iterate through tiles (now limited to the sliding window range)
-    for j in range(loop_lo, loop_hi):
+    # v12: visit the retained prefix tiles and the recent KV tiles only.
+    # This must skip loads and MMA, rather than calculating dense scores and
+    # masking the result. When sink/recent ranges overlap, count tiles once.
+    # Single-token decode in a mixed prefill batch stays exactly dense.
+    if EXPERIMENTAL_SPARSE_WINDOW > 0:
+        if cur_batch_query_len > 1:
+            sink_end = tl.minimum(
+                loop_hi,
+                tl.maximum(loop_lo, tl.cdiv(EXPERIMENTAL_SPARSE_SINK, TILE_SIZE)),
+            )
+            first_query_abs = context_len + q_block_local_idx * BLOCK_Q
+            earliest_local = tl.maximum(
+                0, first_query_abs - EXPERIMENTAL_SPARSE_WINDOW + 1
+            )
+            recent_start = tl.minimum(
+                loop_hi, tl.maximum(sink_end, earliest_local // TILE_SIZE)
+            )
+            prefix_tiles = sink_end - loop_lo
+            visited_tiles = prefix_tiles + loop_hi - recent_start
+        else:
+            recent_start = loop_lo
+            prefix_tiles = 0
+            visited_tiles = loop_hi - loop_lo
+    else:
+        recent_start = loop_lo
+        prefix_tiles = 0
+        visited_tiles = loop_hi - loop_lo
+
+    for tile_idx in range(visited_tiles):
+        if EXPERIMENTAL_SPARSE_WINDOW > 0:
+            if cur_batch_query_len > 1:
+                j = tl.where(
+                    tile_idx < prefix_tiles,
+                    loop_lo + tile_idx,
+                    recent_start + tile_idx - prefix_tiles,
+                )
+            else:
+                j = loop_lo + tile_idx
+        else:
+            j = loop_lo + tile_idx
         seq_offset = j * TILE_SIZE + offs_t
         tile_mask = seq_offset < max_seq_prefix_len
 
@@ -544,6 +586,17 @@ def kernel_unified_attention(
             CHUNK_LOOKBACK,
             CHUNK_SIZE,
         )
+
+        if EXPERIMENTAL_SPARSE_WINDOW > 0:
+            if cur_batch_query_len > 1:
+                # Enforce per-query sparse semantics inside boundary tiles:
+                # retain global prefix tokens or each query's causal W-window.
+                sparse_mask = (
+                    (seq_offset[None, :] < EXPERIMENTAL_SPARSE_SINK)
+                    | (seq_offset[None, :] + EXPERIMENTAL_SPARSE_WINDOW
+                       > query_abs_pos)
+                )
+                seq_mask = seq_mask & sparse_mask
 
         # S : (BLOCK_M, TILE_SIZE)
         S = tl.zeros(shape=(BLOCK_M, TILE_SIZE), dtype=tl.float32)
@@ -853,6 +906,10 @@ def unified_attention(
     # The non-TD branch is dead-code-eliminated at Triton compile time so
     # disabling this flag costs nothing.
     use_td: bool = False,
+    # v12 research only. Per-call operator arguments, disabled for vLLM
+    # production until accuracy and serving A/B have been established.
+    experimental_sparse_window_tokens: int = 0,
+    experimental_sparse_sink_tokens: int = 0,
 ):
     # Resolve causal: bool or per-seq tensor.
     use_per_seq_causal = isinstance(causal, torch.Tensor)
@@ -949,6 +1006,20 @@ def unified_attention(
         BLOCK_M = 64
         BLOCK_Q = BLOCK_M // num_queries_per_kv
         launch_num_stages = 2
+
+    # Explicit experimental arguments are not wired through the serving
+    # adapter. Dense behavior is unchanged by default. A decode-only call
+    # with a requested sparse configuration also stays dense.
+    if experimental_sparse_window_tokens < 0 or experimental_sparse_sink_tokens < 0:
+        raise ValueError("v12 sparse window and prefix lengths must be nonnegative")
+    if experimental_sparse_sink_tokens and not experimental_sparse_window_tokens:
+        raise ValueError("v12 sparse sink requires a positive local window")
+    if experimental_sparse_window_tokens and max_seqlen_q > 1 and not optimize_prefill_gqa:
+        raise ValueError("v12 sparse experiments require standard BF16 GQA causal prefill")
+    sparse_window = (
+        experimental_sparse_window_tokens if optimize_prefill_gqa else 0
+    )
+    sparse_sink = experimental_sparse_sink_tokens if sparse_window else 0
 
     # Ideally we would launch with kernel with:
     # \sum_i[ceil(query_len[i] / BLOCK_Q)] blocks.
@@ -1173,6 +1244,8 @@ def unified_attention(
         USE_TD=use_td,
         USE_TD_QO=use_td_qo,
         DECODE_PAGE_LOOKUP=decode_page_lookup,
+        EXPERIMENTAL_SPARSE_WINDOW=sparse_window,
+        EXPERIMENTAL_SPARSE_SINK=sparse_sink,
         **launch_kwargs,
     )
 
