@@ -30,3 +30,9 @@ The helper scripts check deadlines and CSV structure; they **cannot** certify mo
 - One idle BI-V150, PyTorch 2.10.0; plugin and FlagGems import from `/root/Optimization/v12`; external half-run SHA-256 `873f17f932d4643222be9903ba3b569c1863c4e2d246ceafbe6f75ebe7163ffc`.
 - 21 research helper tests passed; baseline attention correctness is running. No throughput or accuracy results yet.
 - Next: verify full source provenance, finish correctness, profile production attention, screen exact and sparse candidates. GitHub branch checkpoint uses connector because remote Git access is not yet established.
+
+### 2026-11-11 10:25 UTC — baseline correctness and source verification
+- Remote attention, decode, and mixed-paging suite: **21 passed**, one Triton benchmark fallback warning, 14.97 s. Research helper suite: 21 passed.
+- SHA-256 compared 5,177 tracked files from local main: all 5,139 present remote files matched; 38 `FlagGems/.github` metadata files were absent. No source content mismatch observed. The remote extracted tree still is not a Git checkout; source identity should not be described as a checked-out Git SHA.
+- A dedicated baseline server was started with fixed runbook flags; its first graph capture is in progress. Baseline quick serving diagnostics are queued behind health readiness. No A/B measurements yet.
+- One physical GPU was detected, so multi-GPU Ring Attention is not applicable in this allocation.
