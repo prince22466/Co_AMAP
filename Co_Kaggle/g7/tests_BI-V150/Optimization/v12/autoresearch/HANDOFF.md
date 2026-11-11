@@ -1,12 +1,11 @@
 # v12 autoresearch handoff
 
-**Status: SETUP ONLY — no v12 GPU tests or throughput measurements performed by this PR.**
+**Status: research in progress; no validated throughput improvement.** Allocation ends 2026-11-11 16:00 UTC (17:00 Warsaw). The deadline guard was initialized once.
 
-1. Open the draft PR branch in the authorized `/root/Optimization/v12` Remote-SSH workspace without overwriting user edits; verify v12 imported modules and source/benchmark SHA.
-2. Obtain actual GPU allocation deadline; initialize `session_budget.py` (do not invent or reset time). Run offline helper tests and baseline attention correctness.
-3. **Before any expensive half-run**, profile 4K/16K prefill/mixed/decode and cheaply screen one exact attention-dataflow hypothesis plus one sparse/nonlocal-retrieval hypothesis.
-4. Reject invalid or implausible candidates early. Only after real kernel and short-serving matched A/B evidence, measure a **fresh original-v12 half-run control** and a candidate using the untouched external benchmark.
-5. Approximate sparse results must be checked against dense middle-context retrieval and human-owned unchanged MATH-500; organizer comparability rules still apply.
-6. Checkpoint/push evidence at least every 30 minutes, commit candidate operator code separately, back up ignored raw traces off-instance. On deadline leave best verified source SHA, rejected options, raw log hashes and next action.
-
-For procedures read `AGENTS.md` and `program.md`; results go in append-only `autoresearch/EXPERIMENTS.md`. Neither this file nor the tools starts Codex or runs a GPU job.
+- Baseline main revision `bbdfba2665e6f3aa8c9d17d7acca8173a181ee8b`; remote is an extracted tree, not a Git checkout. All 5,139 present tracked v12 source files match local hashes; 38 GitHub metadata files are absent. Production operator SHA-256 `6e3e8f7cbc24140a9cfd3ef3d2ed8d99cf7ae0f4e0147ac3d9d9b0775925931a`. Benchmark SHA `873f17f932d4643222be9903ba3b569c1863c4e2d246ceafbe6f75ebe7163ffc`.
+- Baseline helper and GPU regression suites: 21 passed each. Non-scoring short serving baselines: 4K 2459.48 total tok/s, TTFT 6038.05 ms, TPOT 60.03 ms (16/16); 16K 3196.27 total tok/s, TTFT 19050.60 ms, TPOT 170.62 ms (8/8). Not official and no matched A/B.
+- Exact prefill page-table reuse: reject; isolated kernel 15.6–30.4% slower on tested prefill shapes. No serving A/B.
+- PR #237 sparse prototype: 4 oracle tests fail; original dense also differs from the independent CPU/GPU FP32 reference in the full-window case. This pre-existing discrepancy requires investigation before sparse correctness can be determined; do not treat sparse as validated or contest eligible.
+- Raw evidence is under `/root/Optimization/v12/.autoresearch-work/`; screen, quick and baseline test logs backed up under the local workspace's `Optimization/v12/.autoresearch-work/remote_backup/`. See append-only EXPERIMENTS.md for details and limitations.
+- Production server trace in progress under `.autoresearch-work/profile/` using `ixsys`; analyze attention GPU share vs wall time and profile prefill/mixed/decode. Continue independent exact hypotheses, and fix/understand the numerical oracle discrepancy before sparse screening. Do not run half-benchmarks until the required serving gate and budget admission pass. Save logs off-instance and checkpoint changes on the draft PR branch.
+- GitHub is unreachable directly from the GPU host; PR updates are being made through the connected GitHub app. No operator edits have been accepted or committed. Never auto-merge.
