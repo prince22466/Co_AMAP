@@ -49,28 +49,33 @@ class CsvEvaluatorTests(unittest.TestCase):
             ),
         )
 
-    def test_5pct_4k_and_10pct_16k_thresholds(self):
-        report = evaluate(self.args(
-            cand4=2372.38 * 1.05, cand16=1872.70 * 1.10
-        ))
-        self.assertTrue(report["numeric_minimum_5pct"])
-        self.assertTrue(report["numeric_stretch_10pct"])
-        self.assertFalse(report["replication_verified"])
+    def test_5pct_goal_either_workload(self):
+        for cand4, cand16 in (
+            (2372.38 * 1.05, 1872.70),
+            (2372.38, 1872.70 * 1.05),
+        ):
+            with self.subTest(cand4=cand4, cand16=cand16):
+                report = evaluate(self.args(cand4=cand4, cand16=cand16))
+                self.assertTrue(report["numeric_goal_5pct"])
+                self.assertFalse(report["replication_verified"])
+
+    def test_less_than_5pct_is_not_goal(self):
+        report = evaluate(self.args(cand4=2372.38 * 1.0499))
+        self.assertFalse(report["numeric_goal_5pct"])
 
     def test_control_above_anchor_is_not_a_gain(self):
         report = evaluate(self.args(
             base4=2600, cand4=2600, base16=2100, cand16=2100
         ))
-        self.assertFalse(report["numeric_minimum_5pct"])
-        self.assertFalse(report["numeric_progress_3pct"])
+        self.assertFalse(report["numeric_goal_5pct"])
 
     def test_fixed_anchor_alone_does_not_prove_gain(self):
         report = evaluate(self.args(base4=2500, cand4=2491))
-        self.assertFalse(report["numeric_minimum_5pct"])
+        self.assertFalse(report["numeric_goal_5pct"])
 
     def test_matched_gain_alone_does_not_cross_fixed_anchor(self):
         report = evaluate(self.args(base4=2000, cand4=2300))
-        self.assertFalse(report["numeric_minimum_5pct"])
+        self.assertFalse(report["numeric_goal_5pct"])
 
     def test_discloses_other_case_regression(self):
         report = evaluate(self.args(cand4=2600, cand16=1500))
