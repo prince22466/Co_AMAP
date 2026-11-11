@@ -1,3 +1,33 @@
 # upload zip file and unzip the file in the xfolder
 cd xfolder
 python3 -m zipfile -e archive.zip .
+
+
+
+
+
+# start vllm with v**
+cd /root/Optimization/v11
+
+# Load v11 implementations
+export PYTHONPATH="$PWD/FlagGems/src:$PWD/vllm-plugin-FL:${PYTHONPATH:-}"
+export VLLM_PLUGINS=fl
+
+# Remove backend overrides
+unset VLLM_FL_USE_FLAGGEMS_ATTN
+unset VLLM_ATTENTION_BACKEND
+unset VLLM_BATCH_INVARIANT
+
+# Check port availability
+ss -ltnp | grep ':9031 ' || true
+
+# Start vLLM with v11
+set -o pipefail
+
+vllm serve /workspace/MiniCPM5-2B \
+  --port 9031 \
+  --compilation-config '{"cudagraph_mode":"FULL_DECODE_ONLY"}' \
+  --served-model-name minicpm \
+  --gpu-memory-utilization 0.85 \
+  --max-model-len 131072 \
+  2>&1 | tee /root/Optimization/v11/vllm_v11.log
