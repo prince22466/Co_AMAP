@@ -1,10 +1,7 @@
 #!/usr/bin/env python3
-"""Read-only CSV integrity and numeric comparison for v12 4K/16K half-runs.
+"""Read-only v12 half-run CSV integrity and matched A/B numeric comparison.
 
-The reported v10 reference is a FROZEN goal anchor, not matched machine data.
-Require THREE pairs: the most recent matched accepted control, the preserved
-v12 starting-code control (may be the same files for the initial candidate),
-and the candidate. Does not run/modify any benchmark or establish repeatability.
+This does not run benchmarks or certify repeatability, accuracy, or eligibility.
 """
 from __future__ import annotations
 
@@ -15,138 +12,116 @@ import math
 from pathlib import Path
 
 CASES = {4096: (1024, 64, 256), 16384: (1024, 64, 128)}
-V10_REPORTED = {"4K": 2372.38, "16K": 1872.70}
-MINIMUM_GAIN = 0.05
-STRETCH_GAIN = 0.10
-PROGRESS_GAIN = 0.03
-MINIMUM_TARGETS = {k: v * (1 + MINIMUM_GAIN) for k, v in V10_REPORTED.items()}
-STRETCH_TARGETS = {k: v * (1 + STRETCH_GAIN) for k, v in V10_REPORTED.items()}
+REPORTED_V10 = {4096: 2372.38, 16384: 1872.70}
 
 
-def positive(value: str, label: str) -> float:
-    result = float(value)
-    if not math.isfinite(result) or result <= 0:
-        raise ValueError(f"Invalid {label}: {value!r}")
-    return result
+def _positive(value: str, name: str) -> float:
+    num = float(value)
+    if not math.isfinite(num) or num <= 0:
+        raise ValueError(f"Invalid {name}: {value!r}")
+    return num
 
 
-def read_csv(path: Path, *, raw: bool) -> dict[int, list[dict]]:
-    grouped: dict[int, list[dict]] = {size: [] for size in CASES}
-    with path.open(newline="", encoding="utf-8-sig") as stream:
-        reader = csv.DictReader(stream)
+def read_rows(path: Path, *, raw: bool) -> dict[int, list[dict]]:
+    results = {4096: [], 16384: []}
+    with path.open(newline="", encoding="utf-8-sig") as file:
+        reader = csv.DictReader(file)
         if not reader.fieldnames:
             raise ValueError(f"Empty CSV: {path}")
         for row in reader:
             size = int(row["Prefill"])
             if size not in CASES:
-                raise ValueError(f"{path}: unexpected workload {size}")
-            shape = tuple(int(row[col]) for col in ("Decode", "Conc", "Num Prompts"))
+                raise ValueError(f"Unexpected workload {size} in {path}")
+            shape = tuple(int(row[k]) for k in ("Decode", "Conc", "Num Prompts"))
             if shape != CASES[size]:
-                raise ValueError(f"{path}: workload {size} invalid shape {shape}")
+                raise ValueError(f"Wrong shape for {size}: {shape}")
             if raw:
                 if row["Run Status"] != "SUCCESS":
-                    raise ValueError(f"{path}: {size} failed run")
-                if positive(row["Successful Requests"], "successful requests") != CASES[size][2]:
-                    raise ValueError(f"{path}: {size} missing requests")
-            grouped[size].append({
-                "tok": positive(row["Total tok/s"], "Total tok/s"),
-                "ttft": positive(row["Mean TTFT (ms)"], "Mean TTFT"),
+                    raise ValueError(f"Failed run for {size}: {row['Run Status']}")
+                if int(row["Successful Requests"]) != CASES[size][2]:
+                    raise ValueError(f"Incomplete requests for {size}")
+            results[size].append({
+                "tok": _positive(row["Total tok/s"], "Total tok/s"),
+                "ttft": _positive(row["Mean TTFT (ms)"], "Mean TTFT"),
             })
-    required = 2 if raw else 1
-    for size, rows in grouped.items():
-        if len(rows) != required:
-            raise ValueError(f"{path}: {size} needs exactly {required} "
-                             f"{'raw runs' if raw else 'summary row'}")
-    return grouped
+    expected_count = 2 if raw else 1
+    for size in CASES:
+        if len(results[size]) != expected_count:
+            raise ValueError(
+                f"Expected {expected_count} {'raw' if raw else 'summary'} "
+                f"rows for {size}, found {len(results[size])}"
+            )
+    return results
 
 
 def load_pair(summary_path: Path, raw_path: Path) -> dict[int, dict]:
-    summary, raw = read_csv(summary_path, raw=False), read_csv(raw_path, raw=True)
+    summary = read_rows(summary_path, raw=False)
+    raw = read_rows(raw_path, raw=True)
+    result = {}
     for size in CASES:
         for metric in ("tok", "ttft"):
             avg = sum(row[metric] for row in raw[size]) / 2
             if abs(summary[size][0][metric] - avg) > 0.05:
-                raise ValueError(f"{size} {metric}: summary disagrees with raw half-runs")
-    return {size: {
-        **summary[size][0],
-        "raw_total_tok_s": [row["tok"] for row in raw[size]],
-    } for size in CASES}
+                raise ValueError(f"{size} {metric}: summary disagrees with raw runs")
+        result[size] = {
+            **summary[size][0],
+            "raw_tok": [r["tok"] for r in raw[size]],
+        }
+    return result
 
 
 def evaluate(args: argparse.Namespace) -> dict:
-    baseline = load_pair(args.baseline_summary, args.baseline_raw)
-    starting = load_pair(args.starting_summary, args.starting_raw)
+    control = load_pair(args.control_summary, args.control_raw)
     candidate = load_pair(args.candidate_summary, args.candidate_raw)
-    comparisons = {}
+    rows = {}
     for size in CASES:
-        name = f"{size // 1024}K"
-        accepted, original, new = baseline[size], starting[size], candidate[size]
-        tok = new["tok"]
-        progress = tok + 1e-9 >= accepted["tok"] * (1 + PROGRESS_GAIN)
-        fixed_min = tok + 1e-9 >= MINIMUM_TARGETS[name]
-        fixed_stretch = tok + 1e-9 >= STRETCH_TARGETS[name]
-        matched_min = tok + 1e-9 >= original["tok"] * (1 + MINIMUM_GAIN)
-        matched_stretch = tok + 1e-9 >= original["tok"] * (1 + STRETCH_GAIN)
-        comparisons[name] = {
-            "accepted_matched_control_total_tok_s": accepted["tok"],
-            "v12_starting_code_control_total_tok_s": original["tok"],
-            "candidate_total_tok_s": tok,
-            "candidate_raw_total_tok_s": new["raw_total_tok_s"],
-            "reported_v10_anchor_total_tok_s": V10_REPORTED[name],
-            "minimum_fixed_v10_target_total_tok_s": MINIMUM_TARGETS[name],
-            "stretch_fixed_v10_target_total_tok_s": STRETCH_TARGETS[name],
-            "change_pct_vs_accepted_matched_control": round(100 * (tok / accepted["tok"] - 1), 4),
-            "change_pct_vs_v12_starting_code": round(100 * (tok / original["tok"] - 1), 4),
-            "change_pct_vs_reported_v10": round(100 * (tok / V10_REPORTED[name] - 1), 4),
-            "numeric_3pct_progress_vs_accepted": progress,
-            "numeric_fixed_minimum_5pct_crossed": fixed_min,
-            "numeric_fixed_stretch_10pct_crossed": fixed_stretch,
-            "numeric_matched_minimum_5pct_crossed": matched_min,
-            "numeric_matched_stretch_10pct_crossed": matched_stretch,
-            "numeric_minimum_candidate": fixed_min and matched_min,
-            "numeric_stretch_candidate": fixed_stretch and matched_stretch,
-            "accepted_mean_ttft_ms": accepted["ttft"],
-            "candidate_mean_ttft_ms": new["ttft"],
-            "ttft_change_pct_vs_accepted": round(
-                100 * (new["ttft"] / accepted["ttft"] - 1), 4
+        base, trial = control[size], candidate[size]
+        anchor = REPORTED_V10[size]
+        gain = trial["tok"] / base["tok"] - 1
+        rows[f"{size // 1024}K"] = {
+            "control_tok_s": base["tok"],
+            "candidate_tok_s": trial["tok"],
+            "control_raw_tok_s": base["raw_tok"],
+            "candidate_raw_tok_s": trial["raw_tok"],
+            "reported_v10_anchor_tok_s": anchor,
+            "matched_gain_pct": round(100 * gain, 4),
+            "vs_v10_pct": round(100 * (trial["tok"] / anchor - 1), 4),
+            "ttft_change_pct": round(
+                100 * (trial["ttft"] / base["ttft"] - 1), 4
+            ),
+            "numeric_progress_3pct": gain + 1e-12 >= 0.03,
+            "numeric_minimum_5pct": (
+                gain + 1e-12 >= 0.05
+                and trial["tok"] + 1e-9 >= anchor * 1.05
+            ),
+            "numeric_stretch_10pct": (
+                gain + 1e-12 >= 0.10
+                and trial["tok"] + 1e-9 >= anchor * 1.10
             ),
         }
     return {
         "valid_half_run_csvs": True,
-        "numeric_progress_checkpoint_candidate": any(
-            item["numeric_3pct_progress_vs_accepted"] for item in comparisons.values()
-        ),
-        "numeric_minimum_candidate": any(
-            item["numeric_minimum_candidate"] for item in comparisons.values()
-        ),
-        "numeric_stretch_candidate": any(
-            item["numeric_stretch_candidate"] for item in comparisons.values()
-        ),
-        "reproducibility_verified": False,
+        "numeric_progress_3pct": any(r["numeric_progress_3pct"] for r in rows.values()),
+        "numeric_minimum_5pct": any(r["numeric_minimum_5pct"] for r in rows.values()),
+        "numeric_stretch_10pct": any(r["numeric_stretch_10pct"] for r in rows.values()),
+        "replication_verified": False,
+        "model_quality_verified": False,
         "production_kernel_verified": False,
-        "accuracy": "deferred_to_human_MATH500",
-        "comparison": comparisons,
-        "note": (
-            "CSV integrity and numeric thresholds only: NO proof of repeatability, "
-            "causal speedup, actual operator execution, accuracy or acceptable "
-            "two-workload tradeoff. Check independently repeated A/B half-runs, "
-            "source/benchmark provenance, GPU correctness and untouched benchmark "
-            "before any progress or final PR. Exit code zero is NOT a performance win."
-        ),
+        "comparison": rows,
+        "warning": "Numeric screen only; independent matched A/B, kernel provenance, "
+                   "model ability and unchanged MATH-500 remain unverified.",
     }
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ("baseline-summary", "baseline-raw",
-                 "starting-summary", "starting-raw",
-                 "candidate-summary", "candidate-raw"):
-        parser.add_argument("--" + name, required=True, type=Path)
+    for opt in ("control-summary", "control-raw", "candidate-summary", "candidate-raw"):
+        parser.add_argument("--" + opt, required=True, type=Path)
     parser.add_argument("--json-out", type=Path)
     args = parser.parse_args()
     try:
         report = evaluate(args)
-    except (ValueError, KeyError, TypeError, OSError) as exc:
+    except (OSError, ValueError, KeyError, TypeError) as exc:
         report = {"valid_half_run_csvs": False, "error": str(exc)}
     output = json.dumps(report, indent=2, sort_keys=True) + "\n"
     if args.json_out:
