@@ -23,3 +23,10 @@ The standalone unmerged PR #237 has a **default-off, untested** sparse kernel pr
 - Decision, accepted SHA or rollback, checkpoint/PR, raw evidence off-instance, next step:
 
 The helper scripts check deadlines and CSV structure; they **cannot** certify model quality, reproducibility or eligibility. Preserve negative evidence, failures and rejected candidates.
+
+### 2026-11-11 10:23 UTC — session setup, provisional
+- Allocation confirmed until 16:00 UTC (17:00 Warsaw); budget guard initialized once.
+- Remote checkout was an extracted source tree without research files or its own Git checkout; missing research files were copied from local main bbdfba2665e6f3aa8c9d17d7acca8173a181ee8b. The attention source SHA-256 matches local: `6e3e8f7cbc24140a9cfd3ef3d2ed8d99cf7ae0f4e0147ac3d9d9b0775925931a`. Complete tree identity is not yet verified.
+- One idle BI-V150, PyTorch 2.10.0; plugin and FlagGems import from `/root/Optimization/v12`; external half-run SHA-256 `873f17f932d4643222be9903ba3b569c1863c4e2d246ceafbe6f75ebe7163ffc`.
+- 21 research helper tests passed; baseline attention correctness is running. No throughput or accuracy results yet.
+- Next: verify full source provenance, finish correctness, profile production attention, screen exact and sparse candidates. GitHub branch checkpoint uses connector because remote Git access is not yet established.
