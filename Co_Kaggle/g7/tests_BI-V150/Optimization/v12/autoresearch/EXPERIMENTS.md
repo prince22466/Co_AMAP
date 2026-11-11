@@ -83,3 +83,7 @@ The helper scripts check deadlines and CSV structure; they **cannot** certify mo
 
 ### 2026-11-11 10:45 UTC — trace backup
 - GPU trace and engine SQLite were copied off-instance to the workspace under `Optimization/v12/.autoresearch-work/remote_backup/profile/`. Local SHA-256: `production` = `712265ab64ad567945658788c9ad25cf905caccefe190fd311ad8262ea58b8b8`; `engine.sqlite` = `0090d2936e4c5358dd95d97881bf4d526390200bca39b30001eeb51eb8fe2be2`. These hashes are local backup hashes; source hashes were not independently compared after copy. Traced 16K log reports 8/8 completed despite the SSH client session dropping.
+
+### 2026-11-11 10:48 UTC — stage-1 candidate B1 short-serving diagnostic, mixed
+- Candidate B1, fixed server flags and same non-scoring quick configuration as initial control A1; all requests completed. 4K: 16/16, 2263.25 total tok/s, mean TTFT 7245.44 ms, TPOT 59.91 ms; A1 2459.48, 6038.05 ms, 60.03 ms. 16K: 8/8, 3567.85 total tok/s, mean TTFT 16710.78 ms, TPOT 155.12 ms; A1 3196.27, 19050.60 ms, 170.62 ms. Unreplicated deltas about -8.0% / +11.6% total throughput; no inference of causality or official score.
+- Material 4K regression if repeatable; do not advance to half-run on this single mixed result. Alternate fresh A2/B2 restarts, same flags/order and inspect cache/source/production invocation. Source/logs `.autoresearch-work/stage1/quick_b1/`, `serve/candidate_b1.log`; baseline in `.autoresearch-work/quick/baseline/`.
