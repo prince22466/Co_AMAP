@@ -89,21 +89,14 @@ def evaluate(args: argparse.Namespace) -> dict:
             "ttft_change_pct": round(
                 100 * (trial["ttft"] / base["ttft"] - 1), 4
             ),
-            "numeric_progress_3pct": gain + 1e-12 >= 0.03,
-            "numeric_minimum_5pct": (
+            "numeric_goal_5pct": (
                 gain + 1e-12 >= 0.05
                 and trial["tok"] + 1e-9 >= anchor * 1.05
-            ),
-            "numeric_stretch_10pct": (
-                gain + 1e-12 >= 0.10
-                and trial["tok"] + 1e-9 >= anchor * 1.10
             ),
         }
     return {
         "valid_half_run_csvs": True,
-        "numeric_progress_3pct": any(r["numeric_progress_3pct"] for r in rows.values()),
-        "numeric_minimum_5pct": any(r["numeric_minimum_5pct"] for r in rows.values()),
-        "numeric_stretch_10pct": any(r["numeric_stretch_10pct"] for r in rows.values()),
+        "numeric_goal_5pct": any(r["numeric_goal_5pct"] for r in rows.values()),
         "replication_verified": False,
         "model_quality_verified": False,
         "production_kernel_verified": False,
