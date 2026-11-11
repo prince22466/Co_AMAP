@@ -1,3 +1,17 @@
-# BI-V150 MiniCPM5-2B optimization — v12
+# MiniCPM5-2B BI-V150 — v12 attention autoresearch
 
-**Starting code:** same tracked FlagGems and vLLM plugin operator sources as optimized v10, 
+**Status:** Research program / GPU results pending. v12 on `main` currently has the same FlagGems and vLLM operator trees as v10. This PR changes research instructions and adds evidence/budget tooling, **not the model kernels or benchmark**.
+
+**Mission:** improve 4K/16K **end-to-end total tokens/s** on the fixed MiniCPM5-2B BI-V150 configuration by reducing *real* attention compute, paged-KV traffic, or GPU stalls without unacceptable long-context regressions. Optimize throughput first; validate model quality and competition eligibility before promoting a candidate.
+
+**Baseline (reported v10 development half-run, NOT fresh matched controls):** 4K 2372.38 total tok/s; 16K 1872.70 total tok/s; v10 reported MATH-500 97.1%. Minimum target (OR): +5% = 4K 2490.999 or 16K 1966.335. Stretch target (OR): +10% = 4K 2609.618 or 16K 2059.970. A fixed threshold crossing alone never proves causal uplift; require fresh v12 starting-code control, independent matched A/B, and disclose both workloads and TTFT/TPOT.
+
+**Work:** read [AGENTS.md](AGENTS.md) (authority), [program.md](program.md) (commands and Codex prompt), [autoresearch/RESEARCH_QUEUE.md](autoresearch/RESEARCH_QUEUE.md) (hypotheses), and [autoresearch/EXPERIMENTS.md](autoresearch/EXPERIMENTS.md) (append-only ledger). All work on authorized Remote-SSH machine under `/root/Optimization/v12`. GitHub commits **do not start** Codex or a GPU run.
+
+**Ranking:** (1) exact FlashAttention-2-style optimization *inside current Triton unified attention*; (2) exact split-K/Flash-Decoding style paged-KV parallelism; (3) optional approximate block-sparse and query-aware K/V page selection with stringent long-context checks; (4) fused/pipelined KV indexing and mixed-batch layouts; (5) Ring Attention **only if** a real multi-device setup and measurable communication bottleneck exist. The existing kernel already uses tiled online softmax; a backend switch or renaming is NOT a permitted optimization.
+
+**Sparse risk:** the existing MiniCPM model was trained with dense causal attention. Local+sink or top-K sparse approximations can lose information from the middle of a document, even if MATH-500 passes. The competition may reject behavior-changing approximations as noncomparable. Treat them as exploratory only until organizer approval, long-context validation, and unchanged accuracy gate are satisfied. `PR #237` includes a separate unverified default-off sparse prototype; do not assume that prototype exists on main, compiles, or has proven serving gains. Review its logic before optionally porting an isolated change into v12.
+
+**Constraints:** no quantization enabled via hyperparameters, speculative decoding, benchmark tuning, dispatch-only changes, deletion of core operator-selection logic, or merge of latest upstream FlagOS. Do not use models other than MiniCPM5-2B. Keep competition vLLM serving flags and benchmark identical.
+
+Sources: competition https://flagos.io/race-detail-season2?id=539vlt2p&lang=cn ; exact FlashAttention-2 https://arxiv.org/abs/2307.08691 ; Ring Attention https://proceedings.iclr.cc/paper_files/paper/2024/hash/1119587863e78451f080da2a768c4935-Abstract-Conference.html ; query-aware sparsity https://proceedings.mlr.press/v235/tang24l.html ; attention sinks https://proceedings.iclr.cc/paper_files/paper/2024/hash/5e5fd18f863cbe6d8ae392a93fd271c9-Abstract-Conference.html .
