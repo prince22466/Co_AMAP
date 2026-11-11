@@ -6,7 +6,7 @@
 
 - The remote server used for diagnostics was stopped and the original operator and mixed-paging test restored. Original remote operator SHA-256: `6e3e8f7cbc24140a9cfd3ef3d2ed8d99cf7ae0f4e0147ac3d9d9b0775925931a`. The machine is an extracted source tree, not a Git checkout.
 - The draft PR branch retains the tested one-stage BF16 GQA prefill pipeline candidate and its test expectation change. Candidate remote raw SHA-256: `1c65864df8333a6ff91f005b29547441ef128a33c847466c09accca0cf6a0d28`. Source commit `26b4cbc320f6f8648c35f6ab5ab9f24582c9dcf0`; test commit `d60c295317b6459bea545f6aa8ab100d2edde34b`. Neither has met the half-run, quality, or reproducibility gate; do not merge.
-- GPU allocation has one BI-V150. Tensor and FlagGems modules imported from v12. The unmodified benchmark SHA-256 is `873f17f932d4643222be9903ba3b569c1863c4e2d246ceafbe6f75ebe7163ffc`. Original helper tests: 21 passed; original and candidate GPU suites: 21 passed each. Sampled FP16 fallback outputs matched the original. Human-owned MATH-500 and broader quality tests were not run.
+- GPU allocation has one BI-V150. The vLLM plugin and FlagGems modules imported from v12. The unmodified benchmark SHA-256 is `873f17f932d4643222be9903ba3b569c1863c4e2d246ceafbe6f75ebe7163ffc`. Original helper tests: 21 passed; original and candidate GPU suites: 21 passed each. Sampled FP16 fallback outputs matched the original. Human-owned MATH-500 and broader quality tests were not run.
 
 ## Evidence and limitations
 
@@ -28,7 +28,7 @@ Rejected kernel-only investigations: prefill page-table reuse, 128/32 query tile
 
 ## Evidence and next action
 
-The append-only `EXPERIMENTS.md` records measurements and limitations. Remote raw traces, SQLite, test logs, candidate sources and client logs are under `/root/Optimization/v12/.autoresearch-work/`; the off-instance backup is under the local workspace `Optimization/v12/.autoresearch-work/remote_backup/`. The production trace and engine SQLite backup SHA-256 hashes are recorded in the ledger. A final refresh of the backup is in progress.
+The append-only `EXPERIMENTS.md` records measurements and limitations. Remote raw traces, SQLite, test logs, candidate sources and client logs are under `/root/Optimization/v12/.autoresearch-work/`; the off-instance backup is under the local workspace `Optimization/v12/.autoresearch-work/remote_backup/`. The production trace and engine SQLite backup SHA-256 hashes are recorded in the ledger. The backup was refreshed after the controlled diagnostics; it remains local to this workspace.
 
 Next allocation: investigate dense-vs-FP32 discrepancy, confirm production invocation without changing benchmark behavior, extend mixed/paged/decode and retrieval validation, and reproduce both scenarios with matched restarts. Only if the short-serving and quality gates pass, obtain a confirmed allocation deadline and use the unchanged guarded half-run for fresh control and candidate, with independent replication and a 25-minute preservation reserve. Do not auto-merge.
 
