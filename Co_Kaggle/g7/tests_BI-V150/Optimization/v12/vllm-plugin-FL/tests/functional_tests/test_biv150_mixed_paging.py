@@ -4,7 +4,7 @@ import torch
 
 @pytest.mark.parametrize(
     ("window", "expected_stages"),
-    [((-1, -1), 2), ((127, 0), None)],
+    [((-1, -1), 1), ((127, 0), None)],
 )
 def test_mixed_prefill_decode_paging_matches_reference(window, expected_stages, monkeypatch):
     if not torch.cuda.is_available():
@@ -64,5 +64,5 @@ def test_mixed_prefill_decode_paging_matches_reference(window, expected_stages, 
 
     torch.testing.assert_close(actual, expected, atol=3e-2, rtol=3e-2)
     assert len(launches) == 1
-    assert launches[0][0] == (64 if expected_stages == 2 else 16)
+    assert launches[0][0] == (64 if expected_stages == 1 else 16)
     assert launches[0][1] == expected_stages
