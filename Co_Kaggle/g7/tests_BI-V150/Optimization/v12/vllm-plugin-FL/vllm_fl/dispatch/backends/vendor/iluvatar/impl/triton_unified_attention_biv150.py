@@ -948,7 +948,7 @@ def unified_attention(
         # More query rows share each paged KV tile during long prefill.
         BLOCK_M = 64
         BLOCK_Q = BLOCK_M // num_queries_per_kv
-        launch_num_stages = 2
+        launch_num_stages = 1
 
     # Ideally we would launch with kernel with:
     # \sum_i[ceil(query_len[i] / BLOCK_Q)] blocks.
