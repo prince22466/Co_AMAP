@@ -1,14 +1,12 @@
-# v12 autoresearch — latest handoff
+# v12 autoresearch handoff
 
-Updated: 2026-11-11 (setup PR)
+**Status: SETUP ONLY — no v12 GPU tests or throughput measurements performed by this PR.**
 
-Status: **not started on GPU**. This change prepares a v12 Codex research protocol and copied/adapted evidence-budget tools; it does not launch Codex or run benchmarks.
+1. Open the draft PR branch in the authorized `/root/Optimization/v12` Remote-SSH workspace without overwriting user edits; verify v12 imported modules and source/benchmark SHA.
+2. Obtain actual GPU allocation deadline; initialize `session_budget.py` (do not invent or reset time). Run offline helper tests and baseline attention correctness.
+3. **Before any expensive half-run**, profile 4K/16K prefill/mixed/decode and cheaply screen one exact attention-dataflow hypothesis plus one sparse/nonlocal-retrieval hypothesis.
+4. Reject invalid or implausible candidates early. Only after real kernel and short-serving matched A/B evidence, measure a **fresh original-v12 half-run control** and a candidate using the untouched external benchmark.
+5. Approximate sparse results must be checked against dense middle-context retrieval and human-owned unchanged MATH-500; organizer comparability rules still apply.
+6. Checkpoint/push evidence at least every 30 minutes, commit candidate operator code separately, back up ignored raw traces off-instance. On deadline leave best verified source SHA, rejected options, raw log hashes and next action.
 
-Main source operator trees are unchanged from v10-equivalent v12. First tasks:
-1. Confirm this PR branch is checked out in the authorized /root/Optimization/v12 workspace; preserve all uncommitted remote user changes.
-2. Obtain real GPU allocation expiration from the operator; run `session_budget.py init` once per allocation.
-3. Verify v12 source/benchmark/model provenance, run budget helper and original GPU regression tests, then obtain a fresh dense v12 control.
-4. Profile actual prefill/decode/mixed critical path; screen one exact kernel hypothesis and one sparse long-context hypothesis; write evidence to EXPERIMENTS.md.
-5. Checkpoint and push on a non-main draft PR branch at least every 30 minutes and at meaningful test outcomes; off-instance back up large traces.
-
-Do not claim GPU test results, MATH-500 pass or model ability preservation from this handoff. Candidate sparse masks intentionally change model behavior and remain research-only until validated and judged eligible.
+For procedures read `AGENTS.md` and `program.md`; results go in append-only `autoresearch/EXPERIMENTS.md`. Neither this file nor the tools starts Codex or runs a GPU job.
