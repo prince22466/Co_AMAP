@@ -1,18 +1,33 @@
 # v12 autoresearch handoff
 
-**Status: research in progress; no validated throughput improvement.** Allocation ends 2026-11-11 16:00 UTC (17:00 Warsaw). The deadline guard was initialized once.
+**Status: provisional research candidate; no verified official throughput improvement.** User shortened the remaining work window to 40 minutes at approximately 15:07 UTC on 2026-11-11. GPU allocation ends at 16:00 UTC. The original budget guard rejects a half-run because it requires at least 150 minutes.
 
-- Baseline main revision `bbdfba2665e6f3aa8c9d17d7acca8173a181ee8b`; remote is an extracted tree, not a Git checkout. All 5,139 present tracked v12 source files match local hashes; 38 GitHub metadata files are absent. Production operator SHA-256 `6e3e8f7cbc24140a9cfd3ef3d2ed8d99cf7ae0f4e0147ac3d9d9b0775925931a`. Benchmark SHA `873f17f932d4643222be9903ba3b569c1863c4e2d246ceafbe6f75ebe7163ffc`.
-- Baseline helper and GPU regression suites: 21 passed each. Non-scoring short serving baselines: 4K 2459.48 total tok/s, TTFT 6038.05 ms, TPOT 60.03 ms (16/16); 16K 3196.27 total tok/s, TTFT 19050.60 ms, TPOT 170.62 ms (8/8). Not official and no matched A/B.
-- Exact prefill page-table reuse: reject; isolated kernel 15.6–30.4% slower on tested prefill shapes. No serving A/B.
-- PR #237 sparse prototype: 4 oracle tests fail; original dense also differs from the independent CPU/GPU FP32 reference in the full-window case. This pre-existing discrepancy requires investigation before sparse correctness can be determined; do not treat sparse as validated or contest eligible.
-- Raw evidence is under `/root/Optimization/v12/.autoresearch-work/`; screen, quick and baseline test logs backed up under the local workspace's `Optimization/v12/.autoresearch-work/remote_backup/`. See append-only EXPERIMENTS.md for details and limitations.
-- Production server trace in progress under `.autoresearch-work/profile/` using `ixsys`; analyze attention GPU share vs wall time and profile prefill/mixed/decode. Continue independent exact hypotheses, and fix/understand the numerical oracle discrepancy before sparse screening. Do not run half-benchmarks until the required serving gate and budget admission pass. Save logs off-instance and checkpoint changes on the draft PR branch.
-- GitHub is unreachable directly from the GPU host; PR updates are being made through the connected GitHub app. No operator edits have been accepted or committed. Never auto-merge.
+## Current state
 
-## Latest candidate checkpoint (2026-11-11 10:51 UTC)
+- The remote server used for diagnostics was stopped and the original operator and mixed-paging test restored. Original remote operator SHA-256: `6e3e8f7cbc24140a9cfd3ef3d2ed8d99cf7ae0f4e0147ac3d9d9b0775925931a`. The machine is an extracted source tree, not a Git checkout.
+- The draft PR branch retains the tested one-stage BF16 GQA prefill pipeline candidate and its test expectation change. Candidate remote raw SHA-256: `1c65864df8333a6ff91f005b29547441ef128a33c847466c09accca0cf6a0d28`. Source commit `26b4cbc320f6f8648c35f6ab5ab9f24582c9dcf0`; test commit `d60c295317b6459bea545f6aa8ab100d2edde34b`. Neither has met the half-run, quality, or reproducibility gate; do not merge.
+- GPU allocation has one BI-V150. Tensor and FlagGems modules imported from v12. The unmodified benchmark SHA-256 is `873f17f932d4643222be9903ba3b569c1863c4e2d246ceafbe6f75ebe7163ffc`. Original helper tests: 21 passed; original and candidate GPU suites: 21 passed each. Sampled FP16 fallback outputs matched the original. Human-owned MATH-500 and broader quality tests were not run.
 
-- Stage-one BF16 GQA prefill candidate is committed on the PR branch and passed 21 GPU regression tests. Its isolated kernel was 10.9–14.8% faster on three sampled prefill shapes, but this is not serving proof.
-- First quick serving A1/B1 was mixed: 4K 2459.48 -> 2263.25 tok/s, TTFT 6038 -> 7245 ms; 16K 3196.27 -> 3567.85 tok/s, TTFT 19051 -> 16711 ms. No causal claim; no half-run decision until replicated and the 4K regression is explained.
-- Remote currently has original source restored (SHA `6e3e8f7cbc24140a9cfd3ef3d2ed8d99cf7ae0f4e0147ac3d9d9b0775925931a`) and fresh control server A2 is starting. Candidate source and test backups are under `.autoresearch-work/stage1/`. Next: finish A2, restart candidate B2 with same conditions, compare both scenarios and TTFT/TPOT, prove kernel invocation and resource behavior, then decide whether budget and rules permit any half-run.
-- Production trace and SQLite are backed up off-instance in the local workspace, hashes in EXPERIMENTS.md. The independent dense-vs-FP32 oracle discrepancy remains unresolved and must not be hidden by the passing vLLM comparison tests.
+## Evidence and limitations
+
+The GPU trace records `kernel_unified_attention` at 71.672% of summed kernel time across its captured interval. This is not a wall-clock or phase-specific share. Separate kernel profiling on one 16K-shaped prefill reports 114 -> 97 vector registers and mean 17.379 -> 15.122 ms; no occupancy or reliable spill accounting. An instrumented diagnostic server showed the v12 stage-one path invoked for a 2048-token prefill; this probe's timing is not serving evidence.
+
+| Short diagnostic | 4K total tok/s; TTFT / TPOT ms | 16K total tok/s; TTFT / TPOT ms |
+|---|---|---|
+| Control A1 | 2459.48; 6038.05 / 60.03 | 3196.27; 19050.60 / 170.62 |
+| Candidate B1 | 2263.25; 7245.44 / 59.91 | 3567.85; 16710.78 / 155.12 |
+| Control A2 | 2460.35; 6022.39 / 60.10 | 3195.17; 19069.86 / 170.55 |
+| Candidate B2 | 2500.87; 5926.09 / 59.13 | 3546.01; 16764.00 / 156.52 |
+| Candidate B3 | 2512.00; 5883.39 / 58.99 | Not run |
+
+All completed requests in these short diagnostics. They use concurrency 8 and output length 128, not the official benchmark. The 16K short gain repeated, but 4K varied, including one material regression. No unchanged official half-run, fresh full control, TTFT-limit validation, score calculation, independently replicated half-run, or accuracy verification has been performed.
+
+Four PR #237 sparse-reference tests failed. Original dense and a full-window sparse variant were identical for one case but disagreed with an FP32 CPU oracle; GPU and CPU references agreed and shuffled page reconstruction was checked. The cause is unresolved. Sparse output, middle-context retrieval, MATH-500 and organizer eligibility remain unverified.
+
+Rejected kernel-only investigations: prefill page-table reuse, 128/32 query tiles and pipeline stage 3; explicit four-warps gave no meaningful gain. A 64-token KV tile improved one short-query kernel but substantially regressed longer prefill shapes, so it is only a narrow future research lead.
+
+## Evidence and next action
+
+The append-only `EXPERIMENTS.md` records measurements and limitations. Remote raw traces, SQLite, test logs, candidate sources and client logs are under `/root/Optimization/v12/.autoresearch-work/`; the off-instance backup is under the local workspace `Optimization/v12/.autoresearch-work/remote_backup/`. The production trace and engine SQLite backup SHA-256 hashes are recorded in the ledger. A final refresh of the backup is in progress.
+
+Next allocation: investigate dense-vs-FP32 discrepancy, confirm production invocation without changing benchmark behavior, extend mixed/paged/decode and retrieval validation, and reproduce both scenarios with matched restarts. Only if the short-serving and quality gates pass, obtain a confirmed allocation deadline and use the unchanged guarded half-run for fresh control and candidate, with independent replication and a 25-minute preservation reserve. Do not auto-merge.
