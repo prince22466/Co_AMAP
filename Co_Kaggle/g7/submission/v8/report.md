@@ -1,7 +1,4 @@
-# FlagOS Open Computing Global Challenge S2 — Track 2
-## MiniCPM5-2B inference throughput optimization on Iluvatar BI-V150 (v8)
-
-**Technical report — working draft, 2026-11-06**
+# 技术报告(v8)
 
 **Registered team:** [TO FILL — registered name]  
 **Authors:** [TO FILL — confirm attribution before submission]  
