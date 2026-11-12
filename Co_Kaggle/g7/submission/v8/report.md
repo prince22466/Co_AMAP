@@ -1,19 +1,14 @@
 # 技术报告(v8)
 
-实验环境:
-测试结果与效果分析:
-**Registered team:** [TO FILL — registered name]  
-**Authors:** [TO FILL — confirm attribution before submission]  
-**Target hardware:** 1 x Iluvatar BI-V150 (32 GiB)  
-**Target model:** MiniCPM5-2B  
-**Implementation:** v8, the consolidated v1 prefill + v5 decode optimization  
-**Evaluation status:** Self-run development results, **not certified by the organizer**.
+实验环境: 天数 BI-V150
+测试结果与效果分析: 
 
-### Abstract
+
+### 方案设计思路
 
 We optimize MiniCPM5-2B inference throughput on the organizer-specified FlagOS / vLLM-FL stack by improving the **existing Triton unified attention operator** on BI-V150. The final selected v8 implementation combines (1) a guarded BF16 grouped-query-attention (GQA) prefill tiling change and (2) guarded physical-page lookup reuse in paged-KV pure decode. It preserves vLLM's attention metadata, KV-cache updates, backend interface, supported fallback configurations and official serving arguments. In the archived internal summary, v8 reached **2,331.29 total tokens/s** in the 4K workload and **1,251.22 total tokens/s** in the 16K workload, respectively **+23.88%** and **+45.17%** against our historical self-run baseline summaries. These results are preliminary until the raw final-v8 runs and full Level 3 accuracy evaluation are archived and reproduced.
 
-### 1. Rules, goals and scope
+### 算法原理及优化策略
 
 The competition evaluates **total tokens/s** at two fixed scenarios and requires the same launch parameters as the baseline, accuracy **>=0.95** on MATH-500 Level 3 (baseline 0.962), and latency safeguards (the competition describes a 1% tolerance around the baseline TTFT). The organizer also requires the specified `vllm-plugin-FL` branch (`flagos-2026-s2`) and `FlagGems` tag `v5.3.5`, submission of code/technical PDF/reproduction guide and a reproducible environment. The performance contribution is assessed on both the 4K and 16K workloads.
 
@@ -21,7 +16,7 @@ This implementation does **not** use hyperparameter-enabled quantization, specul
 
 The project targets **BI-V150 only**. We do not claim results on MuXi C500, any other model, or untested device combinations.
 
-### 2. Hardware and software
+### 实现架构
 
 The inspected development environment snapshot from 2026-10-25 records BI-V150 with 32 GiB GPU memory, Ubuntu 24.04.2 LTS, Python 3.12.11, vLLM 0.24.0+empty, `vllm-plugin-fl` 0.3.0rc0+g13eb9be69, FlagGems 5.3.5, PyTorch 2.10.0+corex.4.5.0, flagtree 0.6.2a3+iluvatar3.6 and driver 4.5.0. Final source commit SHAs and software versions need to be recorded from the release host and matched to organizer pinning.
 
@@ -165,4 +160,4 @@ The primary technical contribution is a **phase-aware and shape-safe improvement
 - v5 bottleneck analysis: `profiling/v5/v5_decode_16k_bottleneck_findings.md`
 - Environment snapshots: `HW_SW_info.txt` and `FlagOS_Env.txt`
 
-**Disclosure:** This report is a draft for transparent technical review, not an assertion that the official submission has been created, tested, uploaded or accepted.
+**其他说明:** 本优化方案无法在沐曦-曦云 C500(显存 64 GB)上进行验证
