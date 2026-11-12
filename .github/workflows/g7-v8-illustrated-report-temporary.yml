@@ -1,0 +1,78 @@
+name: Render illustrated v8 report
+on:
+  push:
+    branches: [docs/v8-illustrate-attention-optimizations]
+    paths: ['.github/workflows/g7-v8-illustrated-report-temporary.yml']
+permissions:
+  contents: write
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            Co_Kaggle/g7/submission/v8
+      - name: Render and verify
+        working-directory: Co_Kaggle/g7/submission/v8
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends pandoc fonts-noto-cjk poppler-utils
+          temp="$(mktemp -d)"
+          cat > "$temp/style.css" <<'CSS'
+          @page { size: A4; margin: 18mm 18mm 19mm; }
+          body { font-family: "Noto Sans CJK SC", sans-serif; font-size: 10pt; line-height: 1.65; color: #202832; margin: 0; }
+          h1 { font-size: 22pt; color: #182b40; margin: 0 0 8pt; }
+          h2 { font-size: 12pt; color: #33485e; margin: 0 0 12pt; }
+          h3 { font-size: 16pt; color: #18354b; border-bottom: 1px solid #b4c4d1; padding-bottom: 4pt; margin: 18pt 0 8pt; }
+          h4 { font-size: 12pt; color: #29455b; margin: 12pt 0 5pt; }
+          h1, h2, h3, h4 { break-after: avoid; }
+          p { margin: 5pt 0; orphans: 2; widows: 2; }
+          ul { padding-left: 1.5em; margin: 5pt 0; } li { margin: 3pt 0; }
+          table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 9pt; margin: 8pt 0; }
+          th { background: #e9eff4; color: #18354b; text-align: left; }
+          td, th { border: 0.6pt solid #b4c4d1; padding: 5pt; vertical-align: top; overflow-wrap: anywhere; }
+          tr { break-inside: avoid; } thead { display: table-header-group; }
+          code { font-family: "DejaVu Sans Mono", "Noto Sans Mono CJK SC", monospace; font-size: 0.88em; overflow-wrap: anywhere; }
+          pre { background: #f3f6f8; padding: 8pt; font-size: 9pt; line-height: 1.5; white-space: pre-wrap; break-inside: avoid; }
+          math[display="block"] { margin: 10pt 0; }
+          figure { margin: 10pt 0; text-align: center; break-inside: avoid; }
+          figure img { display: block; width: 100%; height: auto; }
+          figcaption { color: #33485e; font-size: 9pt; margin-top: 4pt; }
+          CSS
+          pandoc report.md --from=markdown --to=html5 --standalone --mathml --self-contained --metadata pagetitle="技术报告（v8）" --css="$temp/style.css" -o "$temp/report.html"
+          python3 - "$temp/report.html" <<'PY'
+          import sys
+          from pathlib import Path
+          from html.parser import HTMLParser
+          class Checker(HTMLParser):
+              def __init__(self):
+                  super().__init__()
+                  self.images = []
+              def handle_starttag(self, tag, attrs):
+                  if tag == 'img':
+                      self.images.append(dict(attrs).get('src', ''))
+          checker = Checker()
+          checker.feed(Path(sys.argv[1]).read_text())
+          assert len(checker.images) == 2, checker.images
+          assert all(x.startswith('data:image/svg+xml') for x in checker.images)
+          PY
+          google-chrome --headless --no-sandbox --disable-dev-shm-usage --disable-gpu --no-pdf-header-footer --print-to-pdf="$PWD/report.pdf" "file://$temp/report.html"
+          pdfinfo report.pdf
+          pdftotext -layout report.pdf "$temp/report.txt"
+          for expected in '图 1' '图 2' '2,331.29' '1,251.22' '23.88%' '45.17%' '方案设计思路' '算法原理及优化策略' '实现架构' '其他说明' 'C500'; do
+            grep -Fq "$expected" "$temp/report.txt"
+          done
+          pdftoppm -r 100 -png report.pdf "$temp/page"
+          for page in "$temp"/page-*.png; do
+            echo "PAGE_BEGIN $(basename "$page")"
+            base64 -w 120 "$page"
+            echo PAGE_END
+          done
+          git add report.pdf
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'docs: regenerate report PDF with both optimization figures'
+          git push origin HEAD:docs/v8-illustrate-attention-optimizations
