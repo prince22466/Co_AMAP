@@ -8,7 +8,7 @@
 ```text
 <team-name>.zip
     ├── FlagGems(code location)
-    ├── vllm-plugin-FL(code location
+    ├── vllm-plugin-FL(code location)
     ├── readme.md(this folder)
     └── report.pdf(this folder)
 ```
