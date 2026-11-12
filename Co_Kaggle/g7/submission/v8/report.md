@@ -57,9 +57,9 @@ $$
 BLOCK_Q = BLOCK_M / 8 = 2
 $$
 
-v8 在满足条件时将 `BLOCK_M` 增大至 32，使 `BLOCK_Q` 增大至 4。
+本方案在满足条件时将 `BLOCK_M` 增大至 32，使 `BLOCK_Q` 增大至 4。
 
-| 分块参数 | 原始实现 | v8 |
+| 分块参数 | 原始实现 | 本方案 |
 |---|---:|---:|
 | Query Head / KV Head 比例 | 8 | 8 |
 | `BLOCK_M` | 16 | 32 |
@@ -80,7 +80,7 @@ v8 在满足条件时将 `BLOCK_M` 增大至 32，使 `BLOCK_Q` 增大至 4。
 
 Decode 阶段需要反复读取历史 KV Cache。原有实现对一个 KV Tile 中的各 Token Lane 计算对应物理页索引，而同一页中的多个 Token 实际共享同一个物理页索引。
 
-v8 在现有 Unified Attention Kernel 内引入编译期特化参数 `DECODE_PAGE_LOOKUP`，按照 KV Tile 与 KV 页的大小关系复用页表查询结果：
+本方案在现有 Unified Attention Kernel 内引入编译期特化参数 `DECODE_PAGE_LOOKUP`，按照 KV Tile 与 KV 页的大小关系复用页表查询结果：
 
 | 场景 | 标准 16-Token KV 页示例 | 优化方式 |
 |---|---|---|
@@ -109,7 +109,7 @@ Prefill 分块优化以 `max_seqlen_q > 1` 为条件，Decode 页表复用以 `m
 
 #### 1. 整体架构
 
-v8 沿用 vLLM 的 Attention Metadata、KV Cache 更新机制和 Backend 接口，在 Iluvatar 平台的现有 Triton 注意力路径内集成优化。
+本方案沿用 vLLM 的 Attention Metadata、KV Cache 更新机制和 Backend 接口，在 Iluvatar 平台的现有 Triton 注意力路径内集成优化。
 
 ```text
 vllm serve（官方规定的启动参数）
@@ -138,7 +138,7 @@ vLLM / vllm-plugin-FL Dispatch
 
 #### 2. 核心代码及职责
 
-以下路径均相对于 v8 源码目录中的 `vllm-plugin-FL/`：
+以下路径均相对于本方案源码目录中的 `vllm-plugin-FL/`：
 
 | 源码文件 | 实现职责 |
 |---|---|
