@@ -4,7 +4,7 @@
 set -euo pipefail
 
 HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT="$(cd -- "$HERE/../.." && pwd)"
+PROJECT="$(cd -- "$HERE/../../tests_BI-V150" && pwd)"
 SRC="$PROJECT/Optimization/v8"
 OUTPUT_DIR="${OUTPUT_DIR:-$HERE/dist}"
 REPORT_PDF="${REPORT_PDF:-$HERE/report.pdf}"
@@ -36,7 +36,7 @@ done
 }
 [[ -s "$REPORT_PDF" ]] || {
   echo "Missing reviewed report PDF: $REPORT_PDF" >&2
-  echo "Render report.md to report.pdf first; see README.md" >&2
+  echo "Render report.md to report.pdf first; see README_v8.md" >&2
   exit 2
 }
 
