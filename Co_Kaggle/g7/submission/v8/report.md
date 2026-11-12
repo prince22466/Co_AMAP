@@ -1,5 +1,7 @@
 # 技术报告(v8)
 
+实验环境:
+测试结果与效果分析:
 **Registered team:** [TO FILL — registered name]  
 **Authors:** [TO FILL — confirm attribution before submission]  
 **Target hardware:** 1 x Iluvatar BI-V150 (32 GiB)  
