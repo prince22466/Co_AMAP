@@ -68,6 +68,8 @@ $$
 
 通过在同一个注意力计算块中处理更多 Query 位置，提高对已加载 KV Tile 的复用程度，减少重复加载同一 KV Tile 的需求，并减少长序列所需的 Query Block 数量。实际收益取决于序列长度、分块边界及 GPU 资源占用。
 
+![图 1：单个 KV Head 的 Prefill 分块及 KV Tile 复用示意图](figures/prefill_gqa.svg)
+
 该优化通过 `optimize_prefill_gqa` 条件启用，适用范围包括：
 
 - `max_seqlen_q > 1`，即批次中至少有一个请求的 Query 长度大于 1（包括符合条件的 Prefill 和混合批次）；
@@ -90,6 +92,8 @@ Decode 阶段需要反复读取历史 KV Cache。原有实现对一个 KV Tile �
 | 不符合特化条件 | 任意未支持配置 | 保留原有逐 Token 页表查询方式 |
 
 通过合并同一物理页的索引加载，减少重复的页表加载及地址生成开销。各 Token 的页内偏移、有效性掩码及 K/V 读取语义保持不变；不减少参与注意力计算的历史 Token。
+
+![图 2：Decode 分页 KV 索引复用示意图（标准 16-Token KV 页）](figures/decode_page_lookup.svg)
 
 特化仅在以下条件全部成立时启用：
 
