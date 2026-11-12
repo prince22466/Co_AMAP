@@ -49,7 +49,7 @@ GQA 允许多个 Query Head 共享同一组 Key/Value Head。MiniCPM5-2B 在目�
 对于一个 Query Head，注意力计算可表示为：
 
 $$
-O = \\operatorname{softmax}\\left(\\frac{QK^{\\mathsf T}}{\\sqrt{d}}+M\\right)V
+O = \operatorname{softmax}\left(\frac{QK^{\mathsf T}}{\sqrt{d}}+M\right)V
 $$
 
 其中 $d$ 为 Head Dimension，$M$ 为注意力掩码。不同 Query Head 可以复用相同 KV Head 的数据，但仍分别计算其注意力权重及输出。
@@ -57,8 +57,8 @@ $$
 vLLM 使用分页 KV Cache，通过逻辑页到物理页的映射定位历史 K/V 数据。对于逻辑 Token 位置 $t$ 和页大小 $B$，其物理页索引与页内偏移分别为：
 
 $$
-p(t)=\\operatorname{BlockTable}\\left[\\left\\lfloor t/B\\right\\rfloor\\right],
-\\qquad r(t)=t\\bmod B
+p(t)=\operatorname{BlockTable}\left[\left\lfloor t/B\right\rfloor\right],
+\qquad r(t)=t\bmod B
 $$
 
 本方案不改变上述注意力公式、逻辑页映射、因果掩码及输出语义，而是优化 GPU 上的分块执行和物理页地址生成。
