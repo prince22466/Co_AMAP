@@ -22,11 +22,11 @@ def test_decode_matches_vllm_unified_attention(
     query_len, kv_len, num_q_heads, num_kv_heads, num_segments, monkeypatch
 ):
     if not torch.cuda.is_available():
-        pytest.skip("Requires a CUDA-compatible GPU")
+        pytest.skip("Requires BI-V150 or another CUDA-compatible GPU")
 
     from vllm.v1.attention.ops import triton_unified_attention as baseline_module
-    from vllm_fl.dispatch.backends import (
-        triton_unified_attention as optimized_module,
+    from vllm_fl.dispatch.backends.vendor.iluvatar.impl import (
+        triton_unified_attention_biv150 as optimized_module,
     )
 
     # Make the 3D test deterministic even if the surrounding test
@@ -138,9 +138,9 @@ def test_decode_matches_vllm_unified_attention(
 def test_decode_paged_lookup_is_not_enabled_for_prefill(monkeypatch):
     """Decode-only page lookup must remain disabled during prefill."""
     if not torch.cuda.is_available():
-        pytest.skip("Requires a CUDA-compatible GPU")
-    from vllm_fl.dispatch.backends import (
-        triton_unified_attention as optimized,
+        pytest.skip("Requires BI-V150 or another CUDA-compatible GPU")
+    from vllm_fl.dispatch.backends.vendor.iluvatar.impl import (
+        triton_unified_attention_biv150 as optimized,
     )
 
     # Catch the *compile-time* gate as well as numerical equivalence.

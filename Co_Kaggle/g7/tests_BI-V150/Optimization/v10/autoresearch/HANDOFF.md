@@ -1,8 +1,8 @@
 # v10 handoff — 2026-11-08
 
-Historical PR: https://github.com/prince22466/Co_AMAP/pull/229 (merged). Results below predate the device-independent refactor; the kernel file is relocated without any source-content change. Revalidate the refactored backend before using these results as its performance evidence.
+PR: https://github.com/prince22466/Co_AMAP/pull/229 (draft).
 
-## Historical code and verification (before the device-independent refactor)
+## Current code and verification
 
 - Remote workspace: `/root/Optimization/v10`. The **candidate is restored**; no owned server or benchmark is running.
 - In the existing specialized BF16 GQA prefill path, `BLOCK_M` changes from 32 to 64: eight query positions reuse a KV tile instead of four. The two-stage pipeline and feature/dispatch gates are preserved.
@@ -23,7 +23,7 @@ Values are Total tok/s; means are the benchmark's reported summaries. Candidate 
 
 For A1 -> B1, 16K mean TTFT improved 345098.05 -> 273240.49 ms, TPOT 299.55 -> 244.30 ms, and output rate 89.00 -> 110.25 tok/s. The corresponding 4K metrics also improved. Retain the large first/second 4K spread when interpreting the gain.
 
-The independent control A2 completed 4K at 2102.89 / 2473.88 (mean 2288.39) and its first 16K repetition at 1489.88. Its last 16K repetition was **interrupted at the user's request**; A2 is incomplete and B2 was not run. Independent complete matched confirmation and human MATH-500 were outstanding at this historical handoff.
+The independent control A2 completed 4K at 2102.89 / 2473.88 (mean 2288.39) and its first 16K repetition at 1489.88. Its last 16K repetition was **interrupted at the user's request**; A2 is incomplete and B2 was not run. Independent complete matched confirmation and human MATH-500 remain outstanding. Keep the PR in draft pending that evidence.
 
 ## Provenance and artifacts
 
@@ -73,4 +73,4 @@ python3 /workspace/vllm-plugin-FL/benchmarks/benchmark_throughput_serve_half.py 
 
 Do not modify the provided benchmark. Verify four raw SUCCESS rows with 256/256 requests for each 4K repetition and 128/128 for each 16K repetition. Reserve at least the documented 90-minute start floor; completion can take longer. A fresh server restart and the same workload order are required for matched comparisons.
 
-For a historical kernel-only comparison within the current shared Triton backend (not a full pre-refactor dispatch comparison), the saved control source is `.autoresearch-work/validation_20261108/control_attention.py`; saved candidate source is `candidate_attention.py`. To perform a control measurement, stop the owned server first, replace only `vllm-plugin-FL/vllm_fl/dispatch/backends/triton_unified_attention.py` with the saved control, and restart with identical flags. Restore the saved candidate afterward. Control attention SHA-256 is `c651c1f0172feadf1ec1f286fe4466b25c45e25496dc1b1b31237a25946fd55b`.
+The saved control source is `.autoresearch-work/validation_20261108/control_attention.py`; saved candidate source is `candidate_attention.py`. To perform a control measurement, stop the owned server first, replace only `vllm-plugin-FL/vllm_fl/dispatch/backends/vendor/iluvatar/impl/triton_unified_attention_biv150.py` with the saved control, and restart with identical flags. Restore the saved candidate afterward. Control attention SHA-256 is `c651c1f0172feadf1ec1f286fe4466b25c45e25496dc1b1b31237a25946fd55b`.

@@ -275,17 +275,6 @@ class PlatformFL(Platform):
 
         backend_path = call_op("attention_backend", use_mla=use_mla, use_sparse=use_sparse)
 
-        # Specialize the stock Triton implementation after the existing
-        # dispatch policy has selected it. Vendor/default/reference choices
-        # and registered custom backends retain their original priority.
-        if not use_mla and not use_sparse and backend_path == (
-            "vllm.v1.attention.backends.triton_attn.TritonAttentionBackend"
-        ):
-            backend_path = (
-                "vllm_fl.dispatch.backends."
-                "triton_attention.OptimizedTritonAttentionBackend"
-            )
-
         logger.info_once(
             "Using attention backend via dispatch (use_mla=%s, use_sparse=%s): %s",
             use_mla,

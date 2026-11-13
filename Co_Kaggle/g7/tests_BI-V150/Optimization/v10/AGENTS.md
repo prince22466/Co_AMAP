@@ -35,8 +35,8 @@ Use the UNMODIFIED `/workspace/vllm-plugin-FL/benchmarks/benchmark_throughput_se
 Re-rank whenever fresh **v10** serving traces contradict the historic ordering. Report shares as GPU summed-kernel time versus true wall time accurately. Track GPU active/idle, memory counters and output tok/s/TPOT in addition to the official target metric Total tok/s.
 
 Primary source candidates:
-- `vllm-plugin-FL/vllm_fl/dispatch/backends/triton_unified_attention.py`
-- `vllm-plugin-FL/vllm_fl/dispatch/backends/triton_attention.py`
+- `vllm-plugin-FL/vllm_fl/dispatch/backends/vendor/iluvatar/impl/triton_unified_attention_biv150.py`
+- `vllm-plugin-FL/vllm_fl/dispatch/backends/vendor/iluvatar/impl/attention_biv150.py`
 - `FlagGems/src/flag_gems/runtime/backend/_iluvatar/ops/mm.py`
 - `FlagGems/src/flag_gems/runtime/backend/_iluvatar/ops/linear.py`
 
