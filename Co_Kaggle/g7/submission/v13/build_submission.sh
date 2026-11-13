@@ -2,7 +2,7 @@
 set -euo pipefail
 cd -- "$(dirname -- "$0")"
 
-SRC=../../tests_BI-V150/Optimization/v8
+SRC=../../tests_BI-V150/Optimization/v13
 [[ -d "$SRC/FlagGems" && -d "$SRC/vllm-plugin-FL" && -s readme.md && -s report.pdf ]]
 
 # Stage the files under the same top-level directory as the existing archive.
