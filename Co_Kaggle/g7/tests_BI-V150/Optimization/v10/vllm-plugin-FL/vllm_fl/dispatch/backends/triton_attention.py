@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-"""BI-V150 tuned Triton attention backend.
+"""Workload-specialized Triton attention backend.
 
 The unified launcher contains specialized prefill tiling and decode
 page-table lookup with shape-gated fallbacks. vLLM metadata, KV-cache
@@ -18,10 +18,10 @@ from vllm.v1.attention.backends.triton_attn import (
 )
 from vllm.v1.kv_cache_interface import KVQuantMode
 
-from .triton_unified_attention_biv150 import unified_attention
+from .triton_unified_attention import unified_attention
 
 
-class BIV150TritonAttentionImpl(TritonAttentionImpl):
+class OptimizedTritonAttentionImpl(TritonAttentionImpl):
     def forward(
         self,
         layer: torch.nn.Module,
@@ -171,9 +171,9 @@ class BIV150TritonAttentionImpl(TritonAttentionImpl):
         return output
 
 
-class BIV150TritonAttentionBackend(TritonAttentionBackend):
+class OptimizedTritonAttentionBackend(TritonAttentionBackend):
     """Reuse vLLM metadata and KV-cache handling with tuned attention."""
 
     @staticmethod
-    def get_impl_cls() -> type[BIV150TritonAttentionImpl]:
-        return BIV150TritonAttentionImpl
+    def get_impl_cls() -> type[OptimizedTritonAttentionImpl]:
+        return OptimizedTritonAttentionImpl
