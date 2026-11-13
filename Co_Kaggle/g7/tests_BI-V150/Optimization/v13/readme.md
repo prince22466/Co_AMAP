@@ -1,6 +1,6 @@
-# MiniCPM5-2B — v13 (device-independent refactor of v10)
+# v13 (device-independent refactor of v10)
 
-v13 is the reviewed device-independent attention refactor of v10. The original v10 folder remains unchanged.
+v13 is the reviewed device-independent attention refactor of v10. v13 should be functionally the same as v10. The original v10 folder remains unchanged.
 
 ## Implementation
 
