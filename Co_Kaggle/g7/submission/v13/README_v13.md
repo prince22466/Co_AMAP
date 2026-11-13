@@ -1,39 +1,27 @@
-# Submission v13 — prince22466
+## submission version - v13
+## code location - Co_Kaggle/g7/tests_BI-V150/Optimization/v13
 
-## Sources and evidence
 
-- [v13 source](../../tests_BI-V150/Optimization/v13/) — device-independent refactor of v10; all production changes relative to v0 are in vllm-plugin-FL.
-- [v13 profiling](../../tests_BI-V150/profiling/v13/) — official full-run CSVs and half-run/accuracy summary.
-- [Historical baseline](../../tests_BI-V150/4k16K_summary_benchmark.csv) — first full-run block (1881.95 / 861.88 tok/s), consistent with the previous submission comparison.
-- [Technical report source](report.md) and [submission PDF](report.pdf).
-- [Reproduction instructions](readme.md).
-
-## Verified results (full-run)
-
-| Workload | Historical baseline | v13 | Gain |
-|---|---:|---:|---:|
-| 4K | 1881.95 | 2752.60 | +46.26% |
-| 16K | 861.88 | 1890.18 | +119.31% |
-
-All values are total tokens/s. MATH-500 threshold recorded as >=0.95: True; exact v13 accuracy and complete evaluation logs are not in the profiling folder. Half-run results are internal diagnostics only.
-
-## Submission archive
-
-Run `bash build_submission.sh` in this directory to create `prince22466.zip`. The existing packaging layout is retained:
+## submission .zip file components(according to the competition rules) and corresponding locations
+## Official ZIP layout
 
 ```text
-prince22466.zip
-└── prince22466/
-    ├── FlagGems/       # unchanged vs v0; optional component retained
-    ├── vllm-plugin-FL/ # v13 source
-    ├── readme.md
-    └── report.pdf
+<team-name>.zip
+    ├── FlagGems(code location)
+    ├── vllm-plugin-FL(code location)
+    ├── readme.md(this folder)
+    └── report.pdf(this folder)
 ```
 
-The archive includes v13 source, reproduction instructions and the Chinese technical report. The editable report and figures remain in this repository; they are not required inside the submission ZIP.
+代码仓库：  
+vllm-plugin-FL：包含所有源代码和编译脚本，代码规范，确保在指定环境中能够顺利运行。代码需具有良好的注释和清晰的结构，便于评审人员理解和复现。  
+【可选】FlagGems：涉及到算子相关改动，提交到FlagGems  
+
+技术报告（report.pdf）：完整阐述方案设计思路、算法原理、实现架构、优化策略、实验环境、测试结果与效果分析；图文结合，逻辑清晰，完整支撑作品方案，便于评审人员理解整体技术路线与创新点。  
+复现说明（readme.md）：清晰列明软硬件环境、依赖版本、环境部署步骤、编译执行流程、数据集准备方式、运行命令与结果校验方法，步骤完整可落地，保障评审人员依据文档能够顺利复现实验结果。
 
 ## Compliance
 
-No quantization-by-hyperparameter, speculative decoding, official benchmark modifications, removal of the main framework selection logic, substitution with an unoptimized operator, or direct merge of newer FlagOS inference code. v13 retains the original dispatch and specializes only selected stock dense Triton attention, using the actual prefill and decode kernel optimizations. No claim of performance on untested hardware.
+No quantization-by-hyperparameter, speculative decoding, official benchmark edits, framework operator-selection removal, operator substitution without optimization, or wholesale update/merge of newer FlagOS inference code is proposed. The submission report describes only the tuned attention kernel mechanics present in **v8**. The work focuses on throughput subject to accuracy and latency constraints.
 
 Official rules: https://flagos.io/race-detail-season2?id=539vlt2p&lang=cn
