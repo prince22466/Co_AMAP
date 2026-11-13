@@ -60,7 +60,7 @@ $$
 
 本方案在满足条件时将 `BLOCK_M` 增大至 64，使 `BLOCK_Q` 增大至 8，并设置 `num_stages = 2`；KV Tile 大小仍为 32，`num_warps` 保持 Triton 默认。
 
-| 分块参数 | 原始实现 | 本方案 |
+| 分块参数 | 优化前 | 本方案 |
 |---|---:|---:|
 | Query Head / KV Head 比例 | 8 | 8 |
 | `BLOCK_M` | 16 | 64 |
