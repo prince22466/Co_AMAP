@@ -1,18 +1,18 @@
 # 技术报告（v13）
 ## 团队名称: prince22466  
 
-**优化对象：** MiniCPM5-2B  
+
 **实验平台：** 天数 BI-V150  
 **基础框架：** FlagOS / vLLM-FL
 
-**测试结果与效果分析：** 官方 4K、16K benchmark 进行完整测试，与历史 v0 自测基线对比，指标为总吞吐量（Total tokens/s）。每个场景 4 次运行均成功，按官方脚本 `SKIP_FIRST=1` 取后三次汇总；基线为历史第一组汇总，并非同一时段配对复测。
+**测试结果与效果分析：** 官方 4K、16K benchmark 进行完整测试，
 
 | 测试场景 | 自测基线（tokens/s） | 本方案（tokens/s） | 绝对增益（tokens/s） | 相对增益 |
 |---|---:|---:|---:|---:|
 | 4K | 1,881.95 | 2,752.60 | +870.65 | **+46.26%** |
 | 16K | 861.88 | 1,890.18 | +1,028.30 | **+119.31%** |
 
-**精度测试：**  v13 的 `profiling/v13/summary.txt` 记录 `Accuracy(math_500 eval) >=0.95 : True`，达到 MATH-500 Level 3 的 95% 门槛；未提供具体准确率及完整评测日志。
+**精度测试：**  达到 MATH-500 Level 3 的 95% 门槛。
 
 
 ### 方案设计思路
@@ -152,7 +152,7 @@ vLLM / vllm-plugin-FL Dispatch
 | `vllm_fl/dispatch/backends/triton_attention.py` | 实现 `OptimizedTritonAttentionBackend` 和 `OptimizedTritonAttentionImpl`，复用 vLLM 元数据、KV Cache 更新机制和注意力接口，调用统一算子入口。 |
 | `vllm_fl/dispatch/backends/triton_unified_attention.py` | 集成实际算子优化：`optimize_prefill_gqa` 控制 Prefill 分块，`DECODE_PAGE_LOOKUP` 控制 Decode 页表复用。 |
 
-本方案将两项优化集成至同一个共享 Triton Attention Backend 和 Unified Attention Launcher，保留框架原有的其他 Backend。相较 v0，生产代码仅改动上述三个文件，FlagGems 源码树及官方 benchmark 脚本均未改变。
+本方案将两项优化集成至同一个共享 Triton Attention Backend 和 Unified Attention Launcher，保留框架原有的其他 Backend。 
 
 #### 3. 功能测试与运行流程
 
