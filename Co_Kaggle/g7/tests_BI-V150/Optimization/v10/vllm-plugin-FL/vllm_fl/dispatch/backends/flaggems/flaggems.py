@@ -184,18 +184,7 @@ class FlagGemsBackend(Backend):
             print("Using FlagGems attention backend.")
             return "vllm_fl.dispatch.backends.flaggems.impl.attention.AttentionFLBackend"
 
-        # Keep the existing Triton selection and any registered override.
-        # Specialize only the stock Triton implementation, independently of
-        # GPU vendor. The launcher retains its shape/feature fallback paths.
-        triton_path = AttentionBackendEnum.TRITON_ATTN.get_path()
-        if triton_path == (
-            "vllm.v1.attention.backends.triton_attn.TritonAttentionBackend"
-        ):
-            return (
-                "vllm_fl.dispatch.backends."
-                "triton_attention.OptimizedTritonAttentionBackend"
-            )
-        return triton_path
+        return AttentionBackendEnum.TRITON_ATTN.get_path()
 
     def moe_align_block_size(
         self,

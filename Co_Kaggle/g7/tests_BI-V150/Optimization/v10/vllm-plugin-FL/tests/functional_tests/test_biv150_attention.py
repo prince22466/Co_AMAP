@@ -28,20 +28,64 @@ def _mock_platform(monkeypatch, vendor_name):
     )
 
 
-@pytest.mark.parametrize("vendor_name", ["iluvatar", "nvidia", "amd", None])
-def test_stock_triton_selection_is_vendor_independent(monkeypatch, vendor_name):
-    from vllm_fl.dispatch.backends.flaggems.flaggems import FlagGemsBackend
+@pytest.mark.parametrize("vendor_name", ["iluvatar", "nvidia", "amd", "musa", None])
+def test_flaggems_keeps_stock_triton_selection(monkeypatch, vendor_name):
     from vllm.v1.attention.backends.registry import AttentionBackendEnum
+
+    from vllm_fl.dispatch.backends.flaggems.flaggems import FlagGemsBackend
 
     _mock_platform(monkeypatch, vendor_name)
     monkeypatch.delenv("VLLM_FL_USE_FLAGGEMS_ATTN", raising=False)
     monkeypatch.setattr(AttentionBackendEnum, "get_path", lambda self: BASELINE)
-    assert FlagGemsBackend().attention_backend() == OPTIMIZED_BACKEND
+    assert FlagGemsBackend().attention_backend() == BASELINE
+
+
+@pytest.mark.parametrize(
+    ("vendor_name", "selected_path", "expected"),
+    [
+        ("iluvatar", BASELINE, OPTIMIZED_BACKEND),
+        ("nvidia", BASELINE, OPTIMIZED_BACKEND),
+        ("amd", BASELINE, OPTIMIZED_BACKEND),
+        ("musa", BASELINE, OPTIMIZED_BACKEND),
+        (None, BASELINE, OPTIMIZED_BACKEND),
+        ("nvidia", FLAGGEMS, FLAGGEMS),
+        ("iluvatar", "custom.attention.RegisteredBackend", "custom.attention.RegisteredBackend"),
+        ("nvidia", "vllm.v1.attention.backends.flash_attn.FlashAttentionBackend",
+         "vllm.v1.attention.backends.flash_attn.FlashAttentionBackend"),
+        ("ascend", "custom.native.AscendAttentionBackend", "custom.native.AscendAttentionBackend"),
+    ],
+)
+def test_platform_specializes_only_stock_triton(monkeypatch, vendor_name, selected_path, expected):
+    import vllm_fl.dispatch as dispatch
+    from vllm_fl.platform import PlatformFL
+
+    monkeypatch.setattr(PlatformFL, "vendor_name", vendor_name)
+    calls = []
+
+    def select(op_name, **kwargs):
+        calls.append((op_name, kwargs))
+        return selected_path
+
+    monkeypatch.setattr(dispatch, "call_op", select)
+    config = SimpleNamespace(use_mla=False, use_sparse=False)
+    assert PlatformFL.get_attn_backend_cls(None, config) == expected
+    assert calls == [("attention_backend", {"use_mla": False, "use_sparse": False})]
+
+
+@pytest.mark.parametrize(("use_mla", "use_sparse"), [(True, False), (True, True), (False, True)])
+def test_platform_does_not_specialize_non_dense_modes(monkeypatch, use_mla, use_sparse):
+    import vllm_fl.dispatch as dispatch
+    from vllm_fl.platform import PlatformFL
+
+    monkeypatch.setattr(dispatch, "call_op", lambda *args, **kwargs: BASELINE)
+    config = SimpleNamespace(use_mla=use_mla, use_sparse=use_sparse)
+    assert PlatformFL.get_attn_backend_cls(None, config) == BASELINE
 
 
 def test_registered_triton_override_is_preserved(monkeypatch):
-    from vllm_fl.dispatch.backends.flaggems.flaggems import FlagGemsBackend
     from vllm.v1.attention.backends.registry import AttentionBackendEnum
+
+    from vllm_fl.dispatch.backends.flaggems.flaggems import FlagGemsBackend
 
     _mock_platform(monkeypatch, "nvidia")
     monkeypatch.delenv("VLLM_FL_USE_FLAGGEMS_ATTN", raising=False)
@@ -84,7 +128,10 @@ def test_unified_backend_binds_integrated_kernel():
         triton_unified_attention as kernel,
     )
 
-    from vllm.v1.attention.backends.triton_attn import TritonAttentionBackend, TritonAttentionImpl
+    from vllm.v1.attention.backends.triton_attn import (
+        TritonAttentionBackend,
+        TritonAttentionImpl,
+    )
 
     assert issubclass(adapter.OptimizedTritonAttentionBackend, TritonAttentionBackend)
     assert issubclass(adapter.OptimizedTritonAttentionImpl, TritonAttentionImpl)
