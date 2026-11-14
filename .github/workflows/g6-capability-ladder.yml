@@ -1,0 +1,33 @@
+name: G6 E4B Capability Ladder CPU Contract
+
+on:
+  pull_request:
+    paths:
+      - 'Co_Kaggle/g6/tests_on_tasks/capability_ladder/**'
+      - '.github/workflows/g6-capability-ladder.yml'
+  workflow_dispatch:
+
+jobs:
+  capability-ladder-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile diagnostic scripts
+        working-directory: Co_Kaggle/g6/tests_on_tasks/capability_ladder
+        run: |
+          python -m py_compile probe.py verify.py report.py run_autonomy.py test_ladder.py
+      - name: Run leak-safety, editing, verifier-contract and reporting tests
+        working-directory: Co_Kaggle/g6/tests_on_tasks/capability_ladder
+        run: python -m unittest -v test_ladder.py
+      - name: Verify S29 reference remains unchanged
+        run: |
+          git diff --exit-code origin/main...HEAD -- \
+            Co_Kaggle/g6/submission_nb/submission_29/
+      - name: Verify patch whitespace
+        run: git diff --check origin/main...HEAD
