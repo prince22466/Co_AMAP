@@ -32,7 +32,7 @@
 | Prefill | 不同 Query 分块重复读取 KV Tile | 扩大 Query 分块，提高 KV Tile 复用；采用单级流水线控制资源开销 |
 | Pure Decode | 同一 KV 页内的 Token 重复查询物理页索引 | 按页加载索引，在 Tile 内广播或 Gather 复用 |
 
-优化以 v0 的原生 Triton Attention 为基础，仅改变算子内部的执行方式，不改变注意力计算范围、模型结构或服务调度策略。
+优化以原生 Triton Attention 为基础，仅改变算子内部的执行方式，不改变注意力计算范围、模型结构或服务调度策略。
 
 ### 算法原理及优化策略
 
@@ -66,7 +66,7 @@ $$
 \qquad (2\rightarrow8)
 $$
 
-| 参数 | v0 | v14（满足特化条件） |
+| 参数 | 优化前 | 本方案（满足特化条件） |
 |---|---:|---:|
 | `BLOCK_M`（Query 行数） | 16 | 64 |
 | `BLOCK_Q`（Query 位置数） | 2 | 8 |
@@ -101,7 +101,7 @@ $$
 
 以 16-Token KV 页和目标 BF16、无 Sliding Window 配置为例：
 
-| 执行路径 | KV Tile | v0 逻辑加载元素数 | v14 逻辑加载元素数 | 复用方式 |
+| 执行路径 | KV Tile | 优化前  逻辑加载元素数 | 本方案 逻辑加载元素数 | 复用方式 |
 |---|---:|---:|---:|---|
 | 2D Decode | 32 | 32 | 2 | Gather |
 | 3D Segmented Decode | 16 | 16 | 1 | Broadcast |
@@ -170,7 +170,7 @@ PlatformFL.get_attn_backend_cls
 
 #### 2. 核心代码及职责
 
-相对于 v0，生产代码仅涉及以下三个文件（路径相对于 `vllm-plugin-FL/`）：
+相对于 优化前，生产代码仅涉及以下三个文件（路径相对于 `vllm-plugin-FL/`）：
 
 | 文件 | 变化 | 职责 |
 |---|---|---|
