@@ -59,7 +59,7 @@ $$
 
 #### 2. Prefill：扩大 Query 分块，提高 KV Tile 复用
 
-**优化原理。** 原有算子在一个 KV Head 对应 8 个 Query Head 时，使用 `BLOCK_M = 16`，即每个 Query Block 处理 2 个 Query 位置。v14 将 `BLOCK_M` 增至 64，使同一计算块处理 8 个 Query 位置。
+**优化原理。** 原有算子在一个 KV Head 对应 8 个 Query Head 时，使用 `BLOCK_M = 16`，即每个 Query Block 处理 2 个 Query 位置。本方案 将 `BLOCK_M` 增至 64，使同一计算块处理 8 个 Query 位置。
 
 $$
 \mathrm{BLOCK\_Q}=\frac{\mathrm{BLOCK\_M}}{8}
@@ -78,7 +78,7 @@ $$
 
 **预期收益。** 更多 Query 位置可共享同一已加载的 KV Tile，减少长序列所需的 Query Block 数量和重复加载 K/V 的需求。完整分块的复用位置数由 2 增至 8，即 4 倍的理论复用能力，而非 4 倍实测吞吐量。
 
-**流水线配置。** 更大的 Query 分块也会增加累加器和中间状态的规模。因此，v14 显式设置 `launch_num_stages = 1`（传入 Triton 的 `num_stages = 1`），以控制多级流水线可能带来的寄存器及片上资源压力。KV Tile 大小不变，`num_warps` 仍由 Triton 默认决定。实际收益取决于编译器、硬件及输入形状。
+**流水线配置。** 更大的 Query 分块也会增加累加器和中间状态的规模。因此，本方案 显式设置 `launch_num_stages = 1`（传入 Triton 的 `num_stages = 1`），以控制多级流水线可能带来的寄存器及片上资源压力。KV Tile 大小不变，`num_warps` 仍由 Triton 默认决定。实际收益取决于编译器、硬件及输入形状。
 
 **启用条件。** `optimize_prefill_gqa` 必须同时满足：
 
@@ -92,7 +92,7 @@ $$
 
 #### 3. Decode：复用分页 KV 物理页索引
 
-**优化原理。** 原有算子为每个 Token Lane 查询页表。同一物理页中的多个 Token 共享同一页索引，因此无须分别加载该索引。v14 在统一 Kernel 中加入编译期参数 `DECODE_PAGE_LOOKUP`，按页加载索引后分配给对应的 Token Lane。
+**优化原理。** 原有算子为每个 Token Lane 查询页表。同一物理页中的多个 Token 共享同一页索引，因此无须分别加载该索引。本方案 在统一 Kernel 中加入编译期参数 `DECODE_PAGE_LOOKUP`，按页加载索引后分配给对应的 Token Lane。
 
 设 KV 页大小为 $B$、Tile 大小为 $T$。在二者满足整倍数对齐关系时：
 
@@ -137,7 +137,7 @@ $$
 
 #### 1. 整体架构
 
-v14 将优化集成至 `vllm-plugin-FL` 的共享 Triton Attention 路径。框架先按原有 Dispatch 规则选择 Backend；仅当返回原生 `TritonAttentionBackend`，且 `use_mla`、`use_sparse` 均为 False 时，映射至优化后的实现。
+本方案 将优化集成至 `vllm-plugin-FL` 的共享 Triton Attention 路径。框架先按原有 Dispatch 规则选择 Backend；仅当返回原生 `TritonAttentionBackend`，且 `use_mla`、`use_sparse` 均为 False 时，映射至优化后的实现。
 
 ```text
 vllm serve
