@@ -10,6 +10,12 @@ def test_mixed_prefill_decode_paging_matches_reference(window, expected_stages, 
     if not torch.cuda.is_available():
         pytest.skip("Requires a CUDA-compatible GPU")
 
+    # Direct kernel tests bypass serving startup; initialize the existing
+    # platform compatibility hooks before importing the Triton modules.
+    from vllm_fl.platform import PlatformFL
+
+    PlatformFL.pre_register_and_update()
+
     from vllm.v1.attention.ops.triton_unified_attention import unified_attention as reference
     from vllm_fl.dispatch.backends import (
         triton_unified_attention as candidate,

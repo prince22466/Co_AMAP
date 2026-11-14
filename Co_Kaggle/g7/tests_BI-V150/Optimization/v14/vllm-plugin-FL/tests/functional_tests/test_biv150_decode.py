@@ -24,6 +24,12 @@ def test_decode_matches_vllm_unified_attention(
     if not torch.cuda.is_available():
         pytest.skip("Requires a CUDA-compatible GPU")
 
+    # Direct kernel tests bypass serving startup; initialize the existing
+    # platform compatibility hooks before importing the Triton modules.
+    from vllm_fl.platform import PlatformFL
+
+    PlatformFL.pre_register_and_update()
+
     from vllm.v1.attention.ops import triton_unified_attention as baseline_module
     from vllm_fl.dispatch.backends import (
         triton_unified_attention as optimized_module,
@@ -139,6 +145,13 @@ def test_decode_paged_lookup_is_not_enabled_for_prefill(monkeypatch):
     """Decode-only page lookup must remain disabled during prefill."""
     if not torch.cuda.is_available():
         pytest.skip("Requires a CUDA-compatible GPU")
+
+    # Direct kernel tests bypass serving startup; initialize the existing
+    # platform compatibility hooks before importing the Triton modules.
+    from vllm_fl.platform import PlatformFL
+
+    PlatformFL.pre_register_and_update()
+
     from vllm_fl.dispatch.backends import (
         triton_unified_attention as optimized,
     )

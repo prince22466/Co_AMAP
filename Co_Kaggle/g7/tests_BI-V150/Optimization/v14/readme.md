@@ -13,7 +13,7 @@ v14 applies the same integration pattern as [v13](../v13/) (the device-independe
 
 ## Validation
 
-Run the three functional test files from this version's plugin root with its own FlagGems and plugin on PYTHONPATH:
+Run the three functional test files from this version's optimization root with its own FlagGems and plugin on PYTHONPATH:
 
 ```bash
 cd /root/Optimization/v14
@@ -25,4 +25,4 @@ python3 -m pytest -q -s --noconftest \
   vllm-plugin-FL/tests/functional_tests/test_biv150_mixed_paging.py
 ```
 
-The tests cover dispatch preservation, shared adapter binding, BF16 GQA attention, decode paging, mixed paging and the one-stage prefill launch. Use fresh matched v12/v14 runs on BI-V150 with unchanged competition benchmarks (4K/16K) and MATH-500, then validate on other compatible Triton platforms. v12's [handoff](../v12/autoresearch/HANDOFF.md) records unresolved dense-attention reference discrepancies and provisional performance results; the refactor does not resolve them. No new GPU, official throughput, accuracy, or cross-device results are claimed.
+The tests cover dispatch preservation, shared adapter binding, BF16 GQA attention, decode paging, mixed paging and the one-stage prefill launch. Direct kernel tests call the existing platform startup hook before importing the Triton modules, so isolated test runs do not depend on incidental vendor package imports. Use fresh matched v12/v14 runs on BI-V150 with unchanged competition benchmarks (4K/16K) and MATH-500, then validate on other compatible Triton platforms. v12's [handoff](../v12/autoresearch/HANDOFF.md) records unresolved dense-attention reference discrepancies and provisional performance results; the refactor does not resolve them. No new GPU, official throughput, accuracy, or cross-device results are claimed.

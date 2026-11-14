@@ -123,6 +123,12 @@ def test_no_gpu_still_raises(monkeypatch):
 
 
 def test_unified_backend_binds_integrated_kernel():
+    # Direct kernel tests bypass serving startup; initialize the existing
+    # platform compatibility hooks before importing the Triton modules.
+    from vllm_fl.platform import PlatformFL
+
+    PlatformFL.pre_register_and_update()
+
     from vllm_fl.dispatch.backends import (
         triton_attention as adapter,
         triton_unified_attention as kernel,
@@ -158,6 +164,12 @@ def test_bf16_gqa_attention_matches_baseline(query_len, context_len, monkeypatch
     if not torch.cuda.is_available():
         pytest.skip("Requires a CUDA-compatible GPU")
 
+    # Direct kernel tests bypass serving startup; initialize the existing
+    # platform compatibility hooks before importing the Triton modules.
+    from vllm_fl.platform import PlatformFL
+
+    PlatformFL.pre_register_and_update()
+
     from vllm.v1.attention.ops.triton_unified_attention import (
         unified_attention as baseline_unified_attention,
     )
@@ -175,7 +187,10 @@ def test_bf16_gqa_attention_matches_baseline(query_len, context_len, monkeypatch
             launcher = original_kernel[grid]
 
             def capture(**kwargs):
-                launches.append((kwargs["BLOCK_M"], kwargs["DECODE_PAGE_LOOKUP"]))
+                launches.append(
+                    (kwargs["BLOCK_M"], kwargs["DECODE_PAGE_LOOKUP"],
+                     kwargs.get("num_stages"))
+                )
                 return launcher(**kwargs)
 
             return capture
@@ -239,4 +254,7 @@ def test_bf16_gqa_attention_matches_baseline(query_len, context_len, monkeypatch
         torch.cuda.synchronize()
 
     torch.testing.assert_close(actual, expected, atol=3e-2, rtol=3e-2)
-    assert launches == [(64 if query_len > 1 else 16, query_len == 1)]
+    assert launches == [
+        (64 if query_len > 1 else 16, query_len == 1,
+         1 if query_len > 1 else None)
+    ]
