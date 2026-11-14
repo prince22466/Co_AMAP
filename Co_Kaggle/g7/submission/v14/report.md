@@ -25,154 +25,172 @@
 
 #### 2. 方案选择
 
-基于上述分析，本方案采用**面向推理阶段和张量形状的算子特化策略**，在同一个 Triton Unified Attention 算子中集成两项优化：
+本方案的核心思路是**提高注意力算子的数据复用效率，减少长上下文推理中的重复访存与地址计算**。针对 Prefill 和 Decode 的不同特点，在同一个 Triton Unified Attention 算子中实施两项优化：
 
-- **Prefill：BF16 GQA Query 分块与流水线优化。** 将目标形状的 `BLOCK_M` 从 16 增至 64、`BLOCK_Q` 从 2 增至 8，并显式设置 `num_stages = 1`，以提高 KV Tile 复用程度、控制流水线资源开销。
-- **Pure Decode：分页 KV 物理页索引复用。** 按 Tile 与 KV 页的对齐关系，将逐 Token Lane 的页表查询改为按页加载与广播或 Gather，降低重复索引查询开销。
+| 推理阶段 | 主要问题 | 优化策略 |
+|---|---|---|
+| Prefill | 不同 Query 分块重复读取 KV Tile | 扩大 Query 分块，提高 KV Tile 复用；采用单级流水线控制资源开销 |
+| Pure Decode | 同一 KV 页内的 Token 重复查询物理页索引 | 按页加载索引，在 Tile 内广播或 Gather 复用 |
 
-相对于 v0，两项优化均实现在 `vllm-plugin-FL` 的共享 Triton 注意力路径中，不修改 `FlagGems`、GEMM / Linear、RMSNorm、KV Cache 写入算子或调度策略。仅当原有框架选择原生 dense Triton Attention 时才接入优化实现；新增特化不依赖 GPU 厂商或设备型号，但仍受工作负载形状和功能条件限制。
+优化以 v0 的原生 Triton Attention 为基础，仅改变算子内部的执行方式，不改变注意力计算范围、模型结构或服务调度策略。
 
 ### 算法原理及优化策略
 
 #### 1. 基础算法：GQA 与分页 KV Cache
 
-GQA 允许多个 Query Head 共享同一个 Key/Value Head。MiniCPM5-2B 在目标注意力配置下具有 16 个 Query Head、2 个 KV Head，Head Dimension 为 128，每个 KV Head 对应 8 个 Query Head。
+MiniCPM5-2B 的目标 GQA（分组查询注意力）配置为 16 个 Query Head、2 个 KV Head，Head Dimension 为 128。因此，每个 KV Head 可供 8 个 Query Head 共享。
 
-对于一个 Query Head，标准缩放点积注意力计算可表示为：
+对于单个 Query Head，标准缩放点积注意力为：
 
 $$
 O = \operatorname{softmax}\left(\frac{QK^{\mathsf T}}{\sqrt{d}}+M\right)V
 $$
 
-其中 $d$ 为 Head Dimension，$M$ 为注意力掩码。不同 Query Head 可以复用相同 KV Head 的数据，但仍分别计算其注意力权重及输出。
+其中 $d$ 为 Head Dimension，$M$ 为注意力掩码。不同 Query Head 共享 K/V 数据，但分别计算注意力权重及输出。实际实现沿用 vLLM 0.24.0 的分块在线 Softmax 算法及缩放系数。
 
-vLLM 使用分页 KV Cache，通过逻辑页到物理页的映射定位历史 K/V 数据。对于逻辑 Token 位置 $t$ 和页大小 $B$，其物理页索引与页内偏移分别为：
+vLLM 使用分页 KV Cache。对于某条序列的逻辑 Token 位置 $t$ 和页大小 $B$，其物理页索引 $p(t)$ 与页内偏移 $r(t)$ 为：
 
 $$
 p(t)=\operatorname{BlockTable}\left[\left\lfloor t/B\right\rfloor\right],
 \qquad r(t)=t\bmod B
 $$
 
-本方案不改变上述注意力公式、逻辑页映射、因果掩码及输出语义，而是优化 GPU 上的分块执行和物理页地址生成。
+下面两项优化分别针对 K/V 数据的分块复用和物理页索引的复用，保持上述计算目标和页映射不变。
 
-#### 2. Prefill：BF16 GQA 分块及 KV Tile 复用
+#### 2. Prefill：扩大 Query 分块，提高 KV Tile 复用
 
-原有 Triton Unified Attention 算子在目标 GQA 配置下使用 `BLOCK_M = 16`，每个 KV Head 对应 8 个 Query Head，因此一个 Query Block 包含的 Query 位置数为：
+**优化原理。** 原有算子在一个 KV Head 对应 8 个 Query Head 时，使用 `BLOCK_M = 16`，即每个 Query Block 处理 2 个 Query 位置。v14 将 `BLOCK_M` 增至 64，使同一计算块处理 8 个 Query 位置。
 
 $$
-\mathrm{BLOCK\_Q} = \frac{\mathrm{BLOCK\_M}}{8} = \frac{16}{8} = 2
+\mathrm{BLOCK\_Q}=\frac{\mathrm{BLOCK\_M}}{8}
+\qquad (2\rightarrow8)
 $$
 
-本方案在满足条件时将 `BLOCK_M` 增大至 64，使 `BLOCK_Q` 增大至 8，并通过 `launch_num_stages = 1` 向 Triton 显式传入 `num_stages = 1`。目标形状的 2D KV Tile 大小仍为 32，`num_warps` 不显式指定，沿用 Triton 默认。
-
-| 分块参数 | 优化前 | 本方案 |
+| 参数 | v0 | v14（满足特化条件） |
 |---|---:|---:|
-| Query Head / KV Head 比例 | 8 | 8 |
-| `BLOCK_M` | 16 | 64 |
-| `BLOCK_Q` | 2 | 8 |
-| KV Tile 大小（2D） | 32 | 32 |
-| `num_stages` | Triton 默认（未显式指定） | 1 |
-| `num_warps` | Triton 默认（未显式指定） | Triton 默认（未显式指定） |
-
-通过在同一个注意力计算块中处理更多 Query 位置，提高对已加载 KV Tile 的复用程度，减少重复加载同一 KV Tile 的需求，并减少长序列所需的 Query Block 数量。完整 Query Block 中，复用位置数最多由 2 增至 8（4 倍），不是实测带宽或吞吐加速比。实际收益取决于序列长度、分块边界及 GPU 资源占用。
-
-扩大 Query 分块也会增加每个 Program 的中间状态和累加器规模。单级流水线配置（`num_stages = 1`）旨在减少多级流水线可能引入的寄存器及片上资源压力，在数据复用与资源占用之间取得平衡。该参数属于 Triton 算子内部的编译/启动配置，不是模型或服务超参数；其实际资源占用、访存重叠与吞吐收益依赖编译器和硬件，不能由参数值直接推断。
+| `BLOCK_M`（Query 行数） | 16 | 64 |
+| `BLOCK_Q`（Query 位置数） | 2 | 8 |
+| KV Tile 大小（Token 数） | 32 | 32 |
+| `num_stages` | Triton 默认 | 1 |
+| `num_warps` | Triton 默认 | Triton 默认 |
 
 ![图 1：单个 KV Head 的 Prefill 分块及 KV Tile 复用示意图](../v13/figures/prefill_gqa.svg)
 
-该优化通过 `optimize_prefill_gqa` 条件启用，适用范围包括：
+**预期收益。** 更多 Query 位置可共享同一已加载的 KV Tile，减少长序列所需的 Query Block 数量和重复加载 K/V 的需求。完整分块的复用位置数由 2 增至 8，即 4 倍的理论复用能力，而非 4 倍实测吞吐量。
 
-- `max_seqlen_q > 1`，即批次中至少有一个请求的 Query 长度大于 1（包括符合条件的 Prefill 和混合批次）；
-- Q/K/V 数据类型均为 BF16，16 个 Query Head、2 个 KV Head，Head Dimension 为 128；
-- 非量化 KV Cache，因果注意力，且不使用 Tensor Descriptor；
-- 不使用逐序列因果模式、Sliding Window、Chunk Lookback、多模态前缀、ALiBi、QQ Bias、Sink Tokens、Soft Cap 或输出量化等不兼容特性。
+**流水线配置。** 更大的 Query 分块也会增加累加器和中间状态的规模。因此，v14 显式设置 `launch_num_stages = 1`（传入 Triton 的 `num_stages = 1`），以控制多级流水线可能带来的寄存器及片上资源压力。KV Tile 大小不变，`num_warps` 仍由 Triton 默认决定。实际收益取决于编译器、硬件及输入形状。
 
-不符合条件的调用不启用本项特化，沿用原有分块及启动参数选择逻辑（包括原有其他形状的特化）。该优化仅调整算子内部的计算分块，不修改模型超参数，不裁剪注意力范围，也不引入稀疏近似。
+**启用条件。** `optimize_prefill_gqa` 必须同时满足：
 
-#### 3. Decode：分页 KV 物理页索引复用
+- `max_seqlen_q > 1`：批次含多 Token Query，包括符合条件的 Prefill 和混合批次。
+- Q/K/V 均为 BF16，16 个 Query Head、2 个 KV Head，Head Dimension 为 128。
+- 非量化 KV Cache（`KVQuantMode.NONE`），且不使用 Tensor Descriptor（`use_td=False`）。
+- 使用标量因果注意力，不使用逐序列因果模式；`sliding_window_val == 0`、`chunk_lookback == -1`。
+- 未启用多模态前缀、ALiBi 或 QQ Bias，且 `sinks is None`、`softcap == 0`、`output_scale is None`。
 
-Decode 阶段需要反复读取历史 KV Cache。原有实现对一个 KV Tile 中的各 Token Lane 计算对应物理页索引，而同一页中的多个 Token 实际共享同一个物理页索引。
+不满足条件时，沿用原有分块和启动参数选择逻辑。
 
-本方案在现有 Unified Attention Kernel 内引入编译期特化参数 `DECODE_PAGE_LOOKUP`，按照 KV Tile 与 KV 页的大小关系复用页表查询结果：
+#### 3. Decode：复用分页 KV 物理页索引
 
-| 场景 | 标准 16-Token KV 页示例 | 优化方式 |
-|---|---|---|
-| 2D Decode | 32-Token Tile 覆盖 2 个页 | 加载 2 个物理页索引，通过 `tl.gather` 分配给相应 Token Lane |
-| 3D Segmented Decode | 16-Token Tile 位于 1 个页 | 加载 1 个物理页索引，并广播至整个 Tile |
-| 不符合特化条件 | 任意未支持配置 | 保留原有逐 Token 页表查询方式 |
+**优化原理。** 原有算子为每个 Token Lane 查询页表。同一物理页中的多个 Token 共享同一页索引，因此无须分别加载该索引。v14 在统一 Kernel 中加入编译期参数 `DECODE_PAGE_LOOKUP`，按页加载索引后分配给对应的 Token Lane。
 
-通过合并同一物理页的索引加载，减少重复的页表加载及地址生成开销。当页大小不小于 Tile 时，每 Tile 加载一个页索引并通过 `tl.broadcast_to` 广播；当 Tile 覆盖多个整页时，使用 `tl.gather`，多页加载使用 `page_start + page_offs < ceil(seq_len / BLOCK_SIZE)` 掩码，避免访问尾部无效页表项。各 Token 的页内偏移、有效性掩码及 K/V 读取语义保持不变；不减少参与注意力计算的历史 Token。
+设 KV 页大小为 $B$、Tile 大小为 $T$。在二者满足整倍数对齐关系时：
 
-对于完整的 16-Token KV 页，32-Token Tile 的逻辑页表加载元素数由 32 减为 2，16-Token Tile 则由 16 减为 1（均为 16 倍的逻辑元素数缩减）。这不是实际显存事务、带宽或吞吐加速比；实际收益受编译器合并访存、缓存命中与地址生成成本影响。
+- $B\ge T$：Tile 位于一个物理页内，只加载一次页索引，并使用 `tl.broadcast_to` 广播。
+- $T>B$：Tile 覆盖多个整页，加载各页索引，再用 `tl.gather` 按 Lane 所属页分配索引。末尾页通过 `page_start + page_offs < ceil(seq_len / BLOCK_SIZE)` 掩码保护。
 
-![图 2：Decode 分页 KV 索引复用示意图（标准 16-Token KV 页）](../v13/figures/decode_page_lookup.svg)
+以 16-Token KV 页和目标 BF16、无 Sliding Window 配置为例：
 
-特化仅在以下条件全部成立时启用：
+| 执行路径 | KV Tile | v0 逻辑加载元素数 | v14 逻辑加载元素数 | 复用方式 |
+|---|---:|---:|---:|---|
+| 2D Decode | 32 | 32 | 2 | Gather |
+| 3D Segmented Decode | 16 | 16 | 1 | Broadcast |
 
-- `max_seqlen_q == 1`，即批次中最大 Query 长度为 1（Pure Decode 路径）；
-- Q/K/V 数据类型均为 BF16，16 个 Query Head、2 个 KV Head，Head Dimension 为 128；
-- KV 页大小为正整数且为 2 的幂，页大小与 Tile 大小中较大者为较小者的整数倍；
-- 非量化 KV Cache，不使用 Tensor Descriptor。
+![图 2：Decode 分页 KV 索引复用示意图](../v13/figures/decode_page_lookup.svg)
 
-该特化同时适用于符合条件的 2D 和 3D Decode 路径，不调整 Decode 的 Query 分块、KV Tile 大小或流水线配置，不改变原有 `use_3d` 选择逻辑及分段 Softmax 归约过程。对于目标 BF16 配置，2D 路径使用 32-Token Tile；满足中间缓冲区、序列数量阈值等原有条件且未启用 Batch Invariance 时，3D 路径使用 16-Token Tile。
+**预期收益。** 对于完整 Tile，上例的页表逻辑加载元素数降至原来的 1/16。此比例不代表实际显存事务数或吞吐量加速比；编译器访存合并及缓存命中仍会影响实际收益。各 Token 的物理页、页内偏移、有效性掩码及 K/V 读取语义保持不变。
 
-#### 4. 优化方案的协同关系与创新点
+**启用条件。** `decode_page_lookup` 必须同时满足：
 
-Prefill 分块优化以 `max_seqlen_q > 1` 为条件，Decode 页表复用以 `max_seqlen_q == 1` 为条件，两者在同一次算子调用中互斥。在混合批次中，仅在符合条件时启用 Prefill 分块优化，单 Token Decode 请求仍由原有 Query 有效性掩码保护，不强行启用 Pure Decode 特化。
+- `max_seqlen_q == 1`：Pure Decode 批次。
+- Q/K/V 均为 BF16，16 个 Query Head、2 个 KV Head，Head Dimension 为 128。
+- KV 页大小为正的 2 的幂，且页大小与 Tile 大小中较大者为较小者的整数倍。
+- 非量化 KV Cache（`KVQuantMode.NONE`），不使用 Tensor Descriptor。
 
-本方案的主要技术贡献在于：在同一个实际运行的注意力算子中，根据推理阶段和受支持的输入形状分别优化 KV 数据复用、Prefill 流水线配置与页表索引复用，并为不满足特化条件的配置保留原有执行路径。两项优化均以保持注意力数学语义为设计目标，不改变原有 Softmax 更新、因果掩码及分段归约算法；浮点数分块执行不等同于逐位一致，实际精度需通过功能测试与 MATH-500 验证。其思路可供其他 GQA 和分页注意力工作负载参考，但本报告不宣称未经测试的模型或硬件具有同等收益。
+该优化不改变 Decode 的 Query 分块、Tile 大小或流水线配置。2D/3D 路径仍由原有 `use_3d` 逻辑选择：3D 需要分段参数与三个 Softmax 中间缓冲区均存在，序列数量不超过阈值，`max_seqlen_q <= 1`，且未启用 Batch Invariance。其他配置的 Tile 大小仍遵循原有选择规则，例如 Gemma3 Sliding Window 特化。
+
+不满足 Decode 特化条件时，Kernel 保留原有逐 Token 页表查询路径。
+
+#### 4. 两项优化如何协同
+
+| 批次类型 | 执行方式（满足相应特化条件时） |
+|---|---|
+| Prefill 或 Prefill/Decode 混合批次 | 扩大 Query 分块，采用单级流水线 |
+| Pure Decode 批次 | 复用物理页索引 |
+| 不满足任一特化条件 | 同一共享 Kernel 中的原有执行逻辑 |
+
+两项优化在单次算子调用中互斥，由批次最大 Query 长度及其他资格条件决定；混合批次不会单独启用 Pure Decode 页表特化。原有 Query 有效性掩码继续保护其中的单 Token 请求。
+
+**技术贡献**是通过两种复用机制减少重复工作，而非缩短注意力范围或替换为近似算法。原有在线 Softmax、因果掩码和分段归约算法保持不变；浮点分块执行不保证逐位一致，精度仍须通过功能测试及 MATH-500 验证。
 
 ### 实现架构
 
 #### 1. 整体架构
 
-本方案沿用 vLLM 的 Attention Metadata、KV Cache 更新机制和 Backend 接口，在现有 Triton 注意力路径内以设备无关方式集成优化。保留 `call_op("attention_backend")` 的原有选择逻辑，仅当 `call_op` 返回 `vllm.v1.attention.backends.triton_attn.TritonAttentionBackend` 且 `use_mla`、`use_sparse` 均为 False 时，映射到优化后的 Backend。此处不添加 GPU 厂商判断，也不改变原有 Dispatch 优先级。下图展示目标模型所使用的标准注意力路径。
+v14 将优化集成至 `vllm-plugin-FL` 的共享 Triton Attention 路径。框架先按原有 Dispatch 规则选择 Backend；仅当返回原生 `TritonAttentionBackend`，且 `use_mla`、`use_sparse` 均为 False 时，映射至优化后的实现。
 
 ```text
-vllm serve（官方规定的启动参数）
+vllm serve
     |
     v
-vLLM / vllm-plugin-FL Dispatch
+PlatformFL.get_attn_backend_cls
     |
-    |-- 原有 call_op("attention_backend") 选中其他后端
-    |       --> 原样返回（含 FlagGems、自定义后端）
+    v
+原有 call_op("attention_backend")
     |
-    |-- 选中原生 Triton，且非 MLA / sparse
-    |       |
-    |       v
-    |   OptimizedTritonAttentionBackend / Impl
-    |       |  复用原有 Attention Metadata、KV Cache 更新及接口
-    |       v
-    |   Triton Unified Attention Launcher
-    |       |
-    |       |-- 符合条件的 Prefill / 混合批次：GQA 分块 + 单级流水线
-    |       |-- 符合条件的 Pure Decode：分页 KV 索引复用
-    |       |-- 其他配置：不启用新增特化，保留原有执行逻辑
+    |-- 其他 Backend，或 MLA / sparse
+    |       --> 保持原选择
+    |
+    |-- 原生 dense Triton Backend
+            |
+            v
+        OptimizedTritonAttentionBackend / Impl
+            |
+            v
+        unified_attention
+            |
+            |-- Prefill 特化：BLOCK_M=64，num_stages=1
+            |-- Decode 特化：按页加载索引并复用
+            |-- 其他配置：原有 Kernel 分支
 ```
 
-图中 Prefill 与 Decode 特化是同一个算子中的不同执行配置，不是两个独立的注意力算子。两项新增特化均无 GPU 厂商或设备能力门控；原有算子中针对其他形状的设备特定逻辑（如 `head_size=256` 的特化）保留不变。设备无关不代表已在其他 GPU 上验证。
+适配层继承原生 Triton Backend 和 Impl，复用 Attention Metadata、KV Cache 更新机制及接口，仅将分页注意力的调用接入优化后的统一算子。Encoder Attention 仍使用继承的原有处理方法。
+
+**设备无关性。** 两项新增特化及其接入方式不含 GPU 厂商或设备能力门控，但保留上游已有的设备特定分支（如 Head Dimension 为 256 的特化）。因此，设备无关指优化不受新增厂商门控限制，不代表已在其他 GPU 上验证性能或兼容性。
 
 #### 2. 核心代码及职责
 
-以下路径均相对于本方案源码目录中的 `vllm-plugin-FL/`：
+相对于 v0，生产代码仅涉及以下三个文件（路径相对于 `vllm-plugin-FL/`）：
 
-| 源码文件 | 实现职责 |
-|---|---|
-| `vllm_fl/platform.py` | 保留原有 Dispatch，仅将已选中的原生 dense Triton 路径（非 MLA / sparse）映射至优化后的 Backend。 |
-| `vllm_fl/dispatch/backends/triton_attention.py` | 实现 `OptimizedTritonAttentionBackend` 和 `OptimizedTritonAttentionImpl`，复用 vLLM 元数据、KV Cache 更新机制和注意力接口，调用统一算子入口。 |
-| `vllm_fl/dispatch/backends/triton_unified_attention.py` | 集成实际算子优化：`optimize_prefill_gqa` 控制 Prefill 分块及 `num_stages=1`；`decode_page_lookup` 计算 Pure Decode 特化条件，并将其传给编译期参数 `DECODE_PAGE_LOOKUP`，控制按页索引加载与复用。 |
+| 文件 | 变化 | 职责 |
+|---|---|---|
+| `vllm_fl/platform.py` | 修改 | 保留原有 Dispatch，映射选中的原生 dense Triton Backend |
+| `vllm_fl/dispatch/backends/triton_attention.py` | 新增 | 共享 Backend / Impl 适配层，调用统一注意力算子 |
+| `vllm_fl/dispatch/backends/triton_unified_attention.py` | 新增 | Prefill 分块与单级流水线；Decode 页表索引复用 |
 
-相对于 v0，生产代码仅修改 `vllm_fl/platform.py` 并新增上述两个共享 Triton 模块；`vllm_fl/dispatch/backends/flaggems/flaggems.py` 及整个 `FlagGems/` 源码树保持不变。适配层通过继承 vLLM 原有 `TritonAttentionBackend` / `TritonAttentionImpl` 保留接口和元数据处理，覆盖 `forward` 以调用本方案的统一算子；Encoder Attention 仍使用继承的原有处理方法。
+`flaggems/flaggems.py`、整个 `FlagGems/` 源码树、GEMM / Linear、RMSNorm、KV Cache 写入算子及调度策略均未修改。官方 benchmark 与模型、服务启动参数也保持不变。
 
 #### 3. 功能测试与运行流程
 
-部署本方案源码后，可运行以下功能测试验证两项优化：
+本方案提供以下三个功能测试文件，均位于 `vllm-plugin-FL/tests/functional_tests/`：
 
-- `vllm-plugin-FL/tests/functional_tests/test_biv150_attention.py`：验证原有 Dispatch 优先级、不同厂商条件下的共享 Backend 映射、Adapter 与 Kernel 绑定、BF16 GQA 数值对照，以及 Prefill 的 `BLOCK_M=64` 和 `num_stages=1`、Decode 的页表复用特化。
-- `vllm-plugin-FL/tests/functional_tests/test_biv150_decode.py`：验证 2D / 3D Decode 页表复用、非连续物理页、未对齐尾页、特化条件及回退行为，并与原生 Triton Attention 数值对照。
-- `vllm-plugin-FL/tests/functional_tests/test_biv150_mixed_paging.py`：验证混合批次及乱序分页正确性，并检查无 Sliding Window 时采用 `BLOCK_M=64`、`num_stages=1`，启用 Sliding Window 时保留原有启动配置。
+| 测试文件 | 验证内容 |
+|---|---|
+| `test_biv150_attention.py` | 模拟不同厂商及 Dispatch 返回路径，检查 Backend 映射和 Adapter 绑定；GPU 对照测试验证 BF16 GQA 输出及 Prefill/Decode 特化参数 |
+| `test_biv150_decode.py` | 对照原生 Triton，检查 2D/3D Decode、乱序物理页、未对齐尾页及特化回退 |
+| `test_biv150_mixed_paging.py` | 检查混合批次和乱序分页；目标形状无 Sliding Window 时验证 `BLOCK_M=64`、`num_stages=1`，启用 Sliding Window 时验证 `BLOCK_M=16` 且不显式设置 `num_stages` |
 
-独立算子测试在导入 Triton 模块前调用现有 `PlatformFL.pre_register_and_update()` 平台初始化钩子，保证原有平台兼容性逻辑不因共享模块迁移而遗漏。上述测试是代码所提供的验证流程，并不替代官方端到端吞吐量与精度评测。
+独立算子测试在导入 Triton 模块前调用 `PlatformFL.pre_register_and_update()`，保留原有平台兼容性初始化流程。厂商模拟测试不等同于跨设备 GPU 实测；与原生 Triton 的数值对照也不替代独立数学参考验证及官方吞吐量、精度测试。
 
 ### **其他说明**
 
