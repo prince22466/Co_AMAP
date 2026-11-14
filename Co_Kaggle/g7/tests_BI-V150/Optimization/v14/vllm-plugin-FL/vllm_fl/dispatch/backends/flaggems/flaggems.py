@@ -184,17 +184,6 @@ class FlagGemsBackend(Backend):
             print("Using FlagGems attention backend.")
             return "vllm_fl.dispatch.backends.flaggems.impl.attention.AttentionFLBackend"
 
-        # Keep the original FlagOS attention priority/fallback chain.
-        # The unified BI-V150 kernel enables page-table reuse for eligible
-        # decode requests and tuned tiles for supported prefill shapes.
-        from vllm.platforms import current_platform
-
-        if getattr(current_platform, "vendor_name", None) == "iluvatar":
-            return (
-                "vllm_fl.dispatch.backends.vendor.iluvatar.impl."
-                "attention_biv150.BIV150TritonAttentionBackend"
-            )
-
         return AttentionBackendEnum.TRITON_ATTN.get_path()
 
     def moe_align_block_size(

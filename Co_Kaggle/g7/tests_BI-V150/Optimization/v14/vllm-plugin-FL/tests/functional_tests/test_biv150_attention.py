@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Regression checks for the integrated BI-V150 Triton attention backend.
+"""Regression checks for the integrated workload-specialized Triton attention backend.
 
 GPU comparisons cover prefill and decode against pinned vLLM 0.24.0;
 they do not replace official accuracy or serving benchmarks.
@@ -13,8 +13,8 @@ import torch
 
 BASELINE = "vllm.v1.attention.backends.triton_attn.TritonAttentionBackend"
 OPTIMIZED_BACKEND = (
-    "vllm_fl.dispatch.backends.vendor.iluvatar.impl."
-    "attention_biv150.BIV150TritonAttentionBackend"
+    "vllm_fl.dispatch.backends."
+    "triton_attention.OptimizedTritonAttentionBackend"
 )
 FLAGGEMS = "vllm_fl.dispatch.backends.flaggems.impl.attention.AttentionFLBackend"
 
@@ -28,20 +28,82 @@ def _mock_platform(monkeypatch, vendor_name):
     )
 
 
-def test_selects_tuned_attention_on_iluvatar(monkeypatch):
+@pytest.mark.parametrize("vendor_name", ["iluvatar", "nvidia", "amd", "musa", None])
+def test_flaggems_keeps_stock_triton_selection(monkeypatch, vendor_name):
+    from vllm.v1.attention.backends.registry import AttentionBackendEnum
+
     from vllm_fl.dispatch.backends.flaggems.flaggems import FlagGemsBackend
 
-    _mock_platform(monkeypatch, "iluvatar")
+    _mock_platform(monkeypatch, vendor_name)
     monkeypatch.delenv("VLLM_FL_USE_FLAGGEMS_ATTN", raising=False)
-    assert FlagGemsBackend().attention_backend() == OPTIMIZED_BACKEND
+    monkeypatch.setattr(AttentionBackendEnum, "get_path", lambda self: BASELINE)
+    assert FlagGemsBackend().attention_backend() == BASELINE
 
 
-def test_other_platform_preserves_triton_fallback(monkeypatch):
+@pytest.mark.parametrize(
+    ("vendor_name", "selected_path", "expected"),
+    [
+        ("iluvatar", BASELINE, OPTIMIZED_BACKEND),
+        ("nvidia", BASELINE, OPTIMIZED_BACKEND),
+        ("amd", BASELINE, OPTIMIZED_BACKEND),
+        ("musa", BASELINE, OPTIMIZED_BACKEND),
+        (None, BASELINE, OPTIMIZED_BACKEND),
+        ("nvidia", FLAGGEMS, FLAGGEMS),
+        ("iluvatar", "custom.attention.RegisteredBackend", "custom.attention.RegisteredBackend"),
+        ("nvidia", "vllm.v1.attention.backends.flash_attn.FlashAttentionBackend",
+         "vllm.v1.attention.backends.flash_attn.FlashAttentionBackend"),
+        ("ascend", "custom.native.AscendAttentionBackend", "custom.native.AscendAttentionBackend"),
+    ],
+)
+def test_platform_specializes_only_stock_triton(monkeypatch, vendor_name, selected_path, expected):
+    import vllm_fl.dispatch as dispatch
+    from vllm_fl.platform import PlatformFL
+
+    monkeypatch.setattr(PlatformFL, "vendor_name", vendor_name)
+    calls = []
+
+    def select(op_name, **kwargs):
+        calls.append((op_name, kwargs))
+        return selected_path
+
+    monkeypatch.setattr(dispatch, "call_op", select)
+    config = SimpleNamespace(use_mla=False, use_sparse=False)
+    assert PlatformFL.get_attn_backend_cls(None, config) == expected
+    assert calls == [("attention_backend", {"use_mla": False, "use_sparse": False})]
+
+
+@pytest.mark.parametrize(("use_mla", "use_sparse"), [(True, False), (True, True), (False, True)])
+def test_platform_does_not_specialize_non_dense_modes(monkeypatch, use_mla, use_sparse):
+    import vllm_fl.dispatch as dispatch
+    from vllm_fl.platform import PlatformFL
+
+    monkeypatch.setattr(dispatch, "call_op", lambda *args, **kwargs: BASELINE)
+    config = SimpleNamespace(use_mla=use_mla, use_sparse=use_sparse)
+    assert PlatformFL.get_attn_backend_cls(None, config) == BASELINE
+
+
+def test_registered_triton_override_is_preserved(monkeypatch):
+    from vllm.v1.attention.backends.registry import AttentionBackendEnum
+
     from vllm_fl.dispatch.backends.flaggems.flaggems import FlagGemsBackend
 
     _mock_platform(monkeypatch, "nvidia")
     monkeypatch.delenv("VLLM_FL_USE_FLAGGEMS_ATTN", raising=False)
-    assert FlagGemsBackend().attention_backend() == BASELINE
+    override = "custom.attention.RegisteredBackend"
+    monkeypatch.setattr(AttentionBackendEnum, "get_path", lambda self: override)
+    assert FlagGemsBackend().attention_backend() == override
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "error"),
+    [({"use_mla": True}, NotImplementedError), ({"use_sparse": True}, ValueError)],
+)
+def test_unsupported_attention_modes_preserve_errors(monkeypatch, kwargs, error):
+    from vllm_fl.dispatch.backends.flaggems.flaggems import FlagGemsBackend
+
+    _mock_platform(monkeypatch, "nvidia")
+    with pytest.raises(error):
+        FlagGemsBackend().attention_backend(**kwargs)
 
 
 def test_explicit_flaggems_override_still_takes_precedence(monkeypatch):
@@ -61,13 +123,26 @@ def test_no_gpu_still_raises(monkeypatch):
 
 
 def test_unified_backend_binds_integrated_kernel():
-    from vllm_fl.dispatch.backends.vendor.iluvatar.impl import (
-        attention_biv150 as adapter,
-        triton_unified_attention_biv150 as kernel,
+    # Direct kernel tests bypass serving startup; initialize the existing
+    # platform compatibility hooks before importing the Triton modules.
+    from vllm_fl.platform import PlatformFL
+
+    PlatformFL.pre_register_and_update()
+
+    from vllm_fl.dispatch.backends import (
+        triton_attention as adapter,
+        triton_unified_attention as kernel,
     )
 
-    assert adapter.BIV150TritonAttentionBackend.get_impl_cls() is (
-        adapter.BIV150TritonAttentionImpl
+    from vllm.v1.attention.backends.triton_attn import (
+        TritonAttentionBackend,
+        TritonAttentionImpl,
+    )
+
+    assert issubclass(adapter.OptimizedTritonAttentionBackend, TritonAttentionBackend)
+    assert issubclass(adapter.OptimizedTritonAttentionImpl, TritonAttentionImpl)
+    assert adapter.OptimizedTritonAttentionBackend.get_impl_cls() is (
+        adapter.OptimizedTritonAttentionImpl
     )
     assert adapter.unified_attention is kernel.unified_attention
 
@@ -87,13 +162,19 @@ def test_unified_backend_binds_integrated_kernel():
 )
 def test_bf16_gqa_attention_matches_baseline(query_len, context_len, monkeypatch):
     if not torch.cuda.is_available():
-        pytest.skip("Requires a CUDA-compatible GPU (run on BI-V150)")
+        pytest.skip("Requires a CUDA-compatible GPU")
+
+    # Direct kernel tests bypass serving startup; initialize the existing
+    # platform compatibility hooks before importing the Triton modules.
+    from vllm_fl.platform import PlatformFL
+
+    PlatformFL.pre_register_and_update()
 
     from vllm.v1.attention.ops.triton_unified_attention import (
         unified_attention as baseline_unified_attention,
     )
-    from vllm_fl.dispatch.backends.vendor.iluvatar.impl import (
-        triton_unified_attention_biv150 as optimized_module,
+    from vllm_fl.dispatch.backends import (
+        triton_unified_attention as optimized_module,
     )
 
     # Assert kernel selection as well as numerical equivalence. Otherwise
@@ -106,7 +187,10 @@ def test_bf16_gqa_attention_matches_baseline(query_len, context_len, monkeypatch
             launcher = original_kernel[grid]
 
             def capture(**kwargs):
-                launches.append((kwargs["BLOCK_M"], kwargs["DECODE_PAGE_LOOKUP"]))
+                launches.append(
+                    (kwargs["BLOCK_M"], kwargs["DECODE_PAGE_LOOKUP"],
+                     kwargs.get("num_stages"))
+                )
                 return launcher(**kwargs)
 
             return capture
@@ -170,4 +254,7 @@ def test_bf16_gqa_attention_matches_baseline(query_len, context_len, monkeypatch
         torch.cuda.synchronize()
 
     torch.testing.assert_close(actual, expected, atol=3e-2, rtol=3e-2)
-    assert launches == [(64 if query_len > 1 else 16, query_len == 1)]
+    assert launches == [
+        (64 if query_len > 1 else 16, query_len == 1,
+         1 if query_len > 1 else None)
+    ]
