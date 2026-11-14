@@ -1,0 +1,106 @@
+name: Render final v14 report PDF
+on:
+  push:
+    branches: [temp/render-v14-report-pdf]
+    paths: ['.github/workflows/g7-v14-report-render-temporary.yml']
+permissions:
+  contents: write
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            Co_Kaggle/g7/submission/v14
+            Co_Kaggle/g7/submission/v13/figures
+      - name: Render and verify
+        working-directory: Co_Kaggle/g7/submission/v14
+        run: |
+          set -euo pipefail
+          test "$(git hash-object report.md)" = c8f94dae6c3c38e98c48d8a31d76ae5624bd39b7
+          test -s ../v13/figures/prefill_gqa.svg
+          test -s ../v13/figures/decode_page_lookup.svg
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends pandoc fonts-noto-cjk poppler-utils python3-pil
+          temp="$(mktemp -d)"
+          cat > "$temp/style.css" <<'CSS'
+          @page { size: A4; margin: 17mm 18mm 18mm; }
+          body { font-family: "Noto Sans CJK SC", sans-serif; font-size: 10pt; line-height: 1.58; color: #202832; margin: 0; }
+          h1 { font-size: 23pt; color: #182b40; margin: 0 0 8pt; }
+          h2 { font-size: 12pt; color: #33485e; margin: 0 0 13pt; }
+          h3 { font-size: 16pt; color: #18354b; border-bottom: 1px solid #b4c4d1; padding-bottom: 4pt; margin: 17pt 0 8pt; }
+          h4 { font-size: 12pt; color: #29455b; margin: 12pt 0 5pt; }
+          h1, h2, h3, h4 { break-after: avoid; }
+          p { margin: 5pt 0; orphans: 2; widows: 2; }
+          ul { padding-left: 1.5em; margin: 5pt 0; } li { margin: 3pt 0; }
+          table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 9pt; margin: 8pt 0; }
+          th { background: #e9eff4; color: #18354b; text-align: left; }
+          td, th { border: 0.6pt solid #b4c4d1; padding: 5pt; vertical-align: top; overflow-wrap: anywhere; }
+          tr { break-inside: avoid; } thead { display: table-header-group; }
+          code { font-family: "DejaVu Sans Mono", "Noto Sans Mono CJK SC", monospace; font-size: 0.88em; overflow-wrap: anywhere; }
+          pre { background: #f3f6f8; padding: 8pt; font-size: 9pt; line-height: 1.45; white-space: pre-wrap; break-inside: avoid; }
+          math[display="block"] { margin: 10pt 0; }
+          figure { margin: 10pt 0; text-align: center; break-inside: avoid; }
+          figure img { display: block; width: 100%; height: auto; }
+          figcaption { color: #33485e; font-size: 9pt; margin-top: 4pt; }
+          CSS
+          pandoc report.md --from=markdown --to=html5 --standalone --mathml --self-contained --metadata pagetitle="技术报告（v14）" --css="$temp/style.css" -o "$temp/report.html"
+          python3 - "$temp/report.html" <<'PY'
+          import sys
+          from pathlib import Path
+          from html.parser import HTMLParser
+          class Checker(HTMLParser):
+              def __init__(self):
+                  super().__init__()
+                  self.images = []
+                  self.math = 0
+              def handle_starttag(self, tag, attrs):
+                  if tag == 'img':
+                      self.images.append(dict(attrs).get('src', ''))
+                  if tag == 'math':
+                      self.math += 1
+          checker = Checker()
+          checker.feed(Path(sys.argv[1]).read_text())
+          assert len(checker.images) == 2, checker.images
+          assert all(x.startswith('data:image/svg+xml') for x in checker.images)
+          assert checker.math >= 3, checker.math
+          print("Verified two embedded SVG figures and", checker.math, "MathML elements")
+          PY
+          google-chrome --headless --no-sandbox --disable-dev-shm-usage --disable-gpu --no-pdf-header-footer --print-to-pdf="$PWD/report.pdf" "file://$temp/report.html"
+          pdfinfo report.pdf
+          pdftotext -layout report.pdf "$temp/report.txt"
+          for expected in '图 1' '图 2' '2,817.15' '2,073.93' '49.7%' '140.6%' '95%' '方案设计思路' '算法原理及优化策略' '实现架构' '其他说明' 'C500' 'num_stages=1' 'DECODE_PAGE_LOOKUP' 'test_biv150_mixed_paging.py'; do
+            grep -Fq "$expected" "$temp/report.txt" || { echo "Missing expected PDF text: $expected"; exit 1; }
+          done
+          pdftoppm -r 100 -png report.pdf "$temp/page"
+          python3 - "$temp" <<'PY'
+          import sys
+          from pathlib import Path
+          from PIL import Image, ImageOps
+          root = Path(sys.argv[1])
+          pages = sorted(root.glob('page-*.png'))
+          assert pages
+          # JPEG contact sheet for visual inspection, retaining all page content.
+          thumbs = []
+          for p in pages:
+              im = Image.open(p).convert('RGB')
+              im.thumbnail((530, 750))
+              thumbs.append(ImageOps.expand(im, border=2, fill='#9aa6b0'))
+          cols = 2
+          w, h = max(i.width for i in thumbs), max(i.height for i in thumbs)
+          sheet = Image.new('RGB', (cols*w, ((len(thumbs)+cols-1)//cols)*h), '#e4e8ec')
+          for i, im in enumerate(thumbs):
+              sheet.paste(im, ((i%cols)*w, (i//cols)*h))
+          sheet.save(root/'contact.jpg', quality=83, optimize=True)
+          print("Rendered", len(pages), "pages")
+          PY
+          echo CONTACT_BEGIN
+          base64 -w 120 "$temp/contact.jpg"
+          echo CONTACT_END
+          git add report.pdf
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'docs: regenerate v14 report PDF from current Markdown'
+          git push origin HEAD:temp/render-v14-report-pdf
