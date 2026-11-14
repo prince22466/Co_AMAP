@@ -1,4 +1,4 @@
-"""Mixed paged-KV attention correctness for BI-V150 prefill and fallback."""
+"""Mixed paged-KV attention correctness for workload-specialized prefill and fallback."""
 import pytest
 import torch
 
@@ -8,11 +8,11 @@ import torch
 )
 def test_mixed_prefill_decode_paging_matches_reference(window, expected_stages, monkeypatch):
     if not torch.cuda.is_available():
-        pytest.skip("Requires BI-V150 or another CUDA-compatible GPU")
+        pytest.skip("Requires a CUDA-compatible GPU")
 
     from vllm.v1.attention.ops.triton_unified_attention import unified_attention as reference
-    from vllm_fl.dispatch.backends.vendor.iluvatar.impl import (
-        triton_unified_attention_biv150 as candidate,
+    from vllm_fl.dispatch.backends import (
+        triton_unified_attention as candidate,
     )
 
     torch.manual_seed(261107)
