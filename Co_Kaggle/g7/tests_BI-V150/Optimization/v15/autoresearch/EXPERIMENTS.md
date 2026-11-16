@@ -55,3 +55,13 @@ Closest prior: v15 sampler phase adds 522207232 bytes to cumulative peak, though
 
 ## 2026-11-16 UTC: sampler in-place softmax feasibility (planned)
 Closest prior: log-domain fusion reduced memory but mismatched reference tokens. New mechanism: native torch.softmax with its output aliased to the mutable FP32 logits buffer, preserving same exponential noise and division/argmax; native top-k/top-p API permits in-place logits updates. Missing evidence: vendor backend supports aliased softmax correctly; exact output, unusual values, graph replay, logprob modes and caller ownership; peak allocation impact. Test standalone against out-of-place reference first. Do not integrate unless runtime and all invariants hold.
+
+### Research checkpoint 2026-11-16T19:19:17+00:00: provisional
+
+- HEAD before checkpoint: 092dc0aea560caa0c098619bef985665ac1c623e
+- Budget remaining: unknown
+- Finding: Sampler in-place softmax adds KV blocks in startup probe
+- Evidence and artifact paths: Candidate source 1fd9d417. Direct seeded tests matched native token IDs for unfiltered, top-k, top-p and per-row generator cases, and nonfinite behavior; processed-logits fallback and three graph replays passed. Actual diagnostic worker invoked candidate twice on 256x130560. Measured original/candidate activation peak 656424960/522207232 bytes; non-torch 1000341504/1004535808; KV available 22447777996/22577801420 bytes; 521936/524960 KV tokens, +3024 tokens (+189 blocks, +0.58%). Same fixed server flags, one startup each, temporary provenance/accounting loggers removed before use. Candidate actual device memory after capture 28476 MiB; source and tests committed separately. No matched serving or independent block replication; exact logits alias side effects, processed modes, mixed RNG paths and competition eligibility still need review. Baseline graph pool actual 228589568 bytes. Candidate startup log SHA256 a6b5587dcd19e0eb0e7a0d06bba9d8050b1caa0cbe3cb0b4140b1622f3b894be.
+- PR-preserved small benchmark CSVs: none (external backup required)
+- Next action: Back up raw evidence; run clean-source 4K/16K serving checks and a 16K concurrency-64 pressure screen; replicate startup block allocation and expand semantics tests.
+- Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
