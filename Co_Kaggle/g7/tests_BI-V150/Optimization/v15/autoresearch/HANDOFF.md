@@ -10,20 +10,20 @@ Original production trees: see AGENTS.md. Pin checkout SHA and verified GPU dead
 
 ## Latest checkpoint
 
-Updated UTC: 2026-11-16T19:19:17+00:00
+Updated UTC: 2026-11-16T19:41:08+00:00
 
-Status: provisional (researcher-reported)
+Status: rejected (researcher-reported)
 
-Source HEAD before checkpoint: 092dc0aea560caa0c098619bef985665ac1c623e
+Source HEAD before checkpoint: d6f04770d6766be5fc96a6b9239cae93bb6289a7
 
 Remaining GPU time: unknown
 
-Finding: Sampler in-place softmax adds KV blocks in startup probe
+Finding: Sampler reuse fails 16K pressure screen despite extra KV blocks
 
-Evidence/provenance: Candidate source 1fd9d417. Direct seeded tests matched native token IDs for unfiltered, top-k, top-p and per-row generator cases, and nonfinite behavior; processed-logits fallback and three graph replays passed. Actual diagnostic worker invoked candidate twice on 256x130560. Measured original/candidate activation peak 656424960/522207232 bytes; non-torch 1000341504/1004535808; KV available 22447777996/22577801420 bytes; 521936/524960 KV tokens, +3024 tokens (+189 blocks, +0.58%). Same fixed server flags, one startup each, temporary provenance/accounting loggers removed before use. Candidate actual device memory after capture 28476 MiB; source and tests committed separately. No matched serving or independent block replication; exact logits alias side effects, processed modes, mixed RNG paths and competition eligibility still need review. Baseline graph pool actual 228589568 bytes. Candidate startup log SHA256 a6b5587dcd19e0eb0e7a0d06bba9d8050b1caa0cbe3cb0b4140b1622f3b894be.
+Evidence/provenance: Candidate source 1fd9d417, candidate-first matched restart. Candidate/control KV tokens 525056/521936 (+3120, 195 blocks, +0.60%). 4K low concurrency candidate/control 1805.59/1814.49 tok/s, mean TTFT 10365.94/10285.81 ms, TPOT 64.57/64.49 ms, 8/8 each. 16K low concurrency 3556.83/3544.86 tok/s, TTFT 16746.18/16746.63 ms, TPOT 155.75/156.73 ms, 8/8 each. 16K pressure concurrency 64 candidate/control 3282.76/3490.77 tok/s (-5.96%), mean TTFT 139102.68/122267.96 ms (+13.77%), TPOT 581.95/568.36 ms (+2.39%), 64/64 each, no failures. One pressure pair, not causal proof or independent replication; fails guardrails. Prior direct seeded and graph checks limited; no complete correctness or quality coverage. No half-run. Raw evidence archive SHA256 8f556eb192c7dbcdd4cec3868bf90416ddb11f8f6a886989d02819319402f3ec backed up locally.
 
 Small CSV evidence committed when --push works: none (external backup required)
 
-Next action: Back up raw evidence; run clean-source 4K/16K serving checks and a 16K concurrency-64 pressure screen; replicate startup block allocation and expand semantics tests.
+Next action: Keep PR as experimental evidence, reject promotion on current screen and revert to original v15 before new research.
 
 Incomplete half-runs are never verified results. Ignored raw artifacts must be backed up outside the rented instance. This handoff does not verify accuracy or establish a causal speedup.
