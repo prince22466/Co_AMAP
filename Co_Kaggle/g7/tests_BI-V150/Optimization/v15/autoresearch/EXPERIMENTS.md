@@ -26,3 +26,16 @@ Prior: v14 521840 KV tokens, v15 startup probe weights 5101233152, activation pe
 - PR-preserved small benchmark CSVs: none (external backup required)
 - Next action: Identify the peak allocation phase inside profile_run, then pursue only a real live-workspace reduction.
 - Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
+
+## 2026-11-16 UTC: allocation peak phase attribution (planned)
+Closest prior: startup profiling shows 656424960-byte peak activation but no attribution to model forward versus logits/sampler. New evidence: log cumulative peak and live/reserved bytes at the existing dummy forward and sampler boundaries, including logits allocation; do not reset stats or change allocation decisions. Decision: identify an operator-owned transient that can be reduced in real serving as well as profiling; reject any change that merely shrinks the diagnostic workload.
+
+### Research checkpoint 2026-11-16T19:10:08+00:00: provisional
+
+- HEAD before checkpoint: 2aa3cf10028a7d642f2bf2a968e46538cb9c98be
+- Budget remaining: unknown
+- Finding: Attribute activation peak to sampler
+- Evidence and artifact paths: Original v15 source, diagnostic logging only, no resets to peak statistics: after dummy model forward allocated 5161098752, reserved 5395972096, cumulative peak 5252322816 bytes; after logits allocated 5229256192, reserved 5463080960, peak 5252322816; after dummy sampler allocated 5371865600, reserved 5999951872, cumulative peak 5774530048. The cumulative peak rises 522207232 bytes during sampling, but does not identify the exact live buffers. Dummy sampler tests top-p/top-k and per-request RNG paths; actual benchmark sampling semantics are not established. Raw log SHA256 48d04a812a537c6b42d742d45347e2c94e8a1a2428e51e11845a1dd3b7c584db backed up locally. Logger removed and owned server stopped.
+- PR-preserved small benchmark CSVs: none (external backup required)
+- Next action: Identify sampler live allocations and determine if exact generation semantics can be retained while reducing real workspace; do not merely reduce profile workload.
+- Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
