@@ -10,20 +10,20 @@ Original production trees: see AGENTS.md. Pin checkout SHA and verified GPU dead
 
 ## Latest checkpoint
 
-Updated UTC: 2026-11-16T17:06:25+00:00
+Updated UTC: 2026-11-16T17:29:22+00:00
 
-Status: provisional (researcher-reported)
+Status: rejected (researcher-reported)
 
-Source HEAD before checkpoint: 342e8d359730c4c06d325e821a9f0f7464bd1b88
+Source HEAD before checkpoint: b6fa34e84ab9d7312b716194f4227c4103879a51
 
 Remaining GPU time: unknown
 
-Finding: Grouped MM kernel gain with direct correctness and graph replay
+Finding: Reject grouped MM candidate on 4K pressure screen
 
-Evidence/provenance: Wide MM M=2048 K=2048 N=12288 median control1/candidate1/control2/candidate2 1.40987/1.17073/1.3928/1.1703 ms, 15 warm event timings each; other production shapes and irregular fallback were nearly unchanged. Direct FP32-reference BF16 checks passed on four shapes plus fallback (atol .25 rtol .02); grouped odd M/N tail and three graph replays passed for FP16/BF16. Native original-wide capture: 76.41 percent TCU efficiency, 25.14 percent occupancy, 97 vector registers per thread, 65536 bytes shared memory, launch 384 blocks x 1024 threads; selected 256x256x32, 16 warps, 2 stages. Only kernel evidence, sequential not alternating per sample, no serving result or quality claim. Prior v11 serving was inconclusive; no throughput-goal claim.
+Evidence/provenance: Candidate source commit 342e8d35; low-concurrency matched 8/8 each control/candidate 4K 1822.06/1804.21 tok/s, TTFT 10257.89/10375.08 ms, TPOT 64.11/64.62 ms; 16K 3557.37/3597.35 tok/s, TTFT 16756.01/16467.06 ms, TPOT 155.62/154.65 ms. Candidate-first 4K pressure 64/64 each control/candidate 1934.69/1797.72 tok/s (-7.08%), TTFT 24690.07/24288.74 ms, TPOT 709.55/807.14 ms (+13.75%); no failures. One pressure pair; no replication, causality or official score claim. Reject for guardrail; no half-run. Source hashes and logs available; evidence archive SHA256 d8f8342b8f5b636cf6f0b02f0fd7bd87108fec6fef4b7f2f61fa77a9c75fc590 backed up locally. Actual worker candidate-kernel launch not independently proven; source path alone is not attribution.
 
 Small CSV evidence committed when --push works: none (external backup required)
 
-Next action: Back up raw logs; run matched short 4K and 16K serving screens, confirm production candidate execution and keep latency guardrails.
+Next action: Keep candidate PR as rejected/provisional kernel evidence; switch to clean baseline and investigate a genuinely different GEMM or memory-lifetime hypothesis.
 
 Incomplete half-runs are never verified results. Ignored raw artifacts must be backed up outside the rented instance. This handoff does not verify accuracy or establish a causal speedup.
