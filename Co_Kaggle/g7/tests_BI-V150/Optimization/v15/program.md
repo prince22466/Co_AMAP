@@ -29,9 +29,7 @@ PY
 ixsmi
 ```
 
-Verify model/versions, actual worker paths (not just shell imports), memory and owned server. Initialize once using the confirmed UTC allocation deadline (replace placeholder, no guessed duration):
-
-Before initialization, check external script read-only: verify RUNS=2, SKIP_FIRST=0, actual CLI and output location; if different, stop rather than patch it. Record script hash, model/config fingerprint, server flags, GPU/device and cache state. Initialize only after verifying the external script; if a genuinely new allocation is confirmed by the operator, archive the previous state and evidence before initializing a new session; never reset within the same allocation. Do not launch expensive control half-run before promising screen.
+Verify model/versions, actual worker paths (not just shell imports), memory and owned server. Before initialization, check the external script read-only: verify RUNS=2, SKIP_FIRST=0, actual CLI and output location; if different, stop rather than patch it. Record script hash, model/config fingerprint, server flags, GPU/device and cache state. Initialize once using the operator-confirmed UTC deadline below (replace placeholder, no guessed duration), only after verifying the external script; if a genuinely new allocation is confirmed by the operator, archive the previous state and evidence before initializing a new session; never reset within the same allocation. Do not launch expensive control half-run before promising screen.
 
 ```bash
 python3 autoresearch/session_budget.py init --deadline-utc 'ACTUAL-ISO8601-UTC-DEADLINE'
@@ -92,23 +90,24 @@ for input_len in 4096 16384; do
 done
 ```
 
-For KV pressure restart the owned server for a matched clean state and run the following separately on both versions. Sample live /metrics, GPU memory and running/waiting every few seconds in a separate shell (start before the load and stop after completion).
+For a promising GEMM candidate, screen 4K at concurrency 64; for a KV-capacity candidate, screen 16K at concurrency 64. Set input_len to the corresponding length before each run. Restart the owned server for a matched clean state and run the following separately on both versions. Sample live /metrics, GPU memory and running/waiting every few seconds in a separate shell (start before the load and stop after completion).
 
 ```bash
 set -euo pipefail
 cd /root/Optimization/v15
 mkdir -p .autoresearch-work/quick
-pressure_dir=$(mktemp -d "$PWD/.autoresearch-work/quick/pressure_XXXXXXXX")
+input_len=16384 # use 4096 for the 4K GEMM pressure screen
+pressure_dir=$(mktemp -d "$PWD/.autoresearch-work/quick/pressure_${input_len}_XXXXXXXX")
 curl -fsS http://127.0.0.1:9031/metrics > "$pressure_dir/before.prom"
 vllm bench serve --backend vllm --model minicpm \
  --tokenizer /workspace/MiniCPM5-2B --endpoint /v1/completions \
  --host localhost --port 9031 --dataset-name random --ignore-eos \
- --seed 42 --random-input-len 16384 --random-output-len 128 \
+ --seed 42 --random-input-len "$input_len" --random-output-len 128 \
  --max-concurrency 64 --num-prompts 64 2>&1 | tee "$pressure_dir/pressure.log"
 curl -fsS http://127.0.0.1:9031/metrics > "$pressure_dir/after.prom"
 ```
 
-If 128 output tokens do not expose decode growth/preemption, use a matched longer diagnostic only when budget allows; never change the official workload. These screens are not scoring and low concurrency cannot validate capacity improvement. Match cache warm/cold state and capture prefix hits. Record actual completed requests, tokens, TTFT/TPOT and errors. Alternate A/B order and rerun plausible gains; compare memory and kernel evidence, then decide whether to spend on full half-runs.
+If the low-concurrency screen does not exercise the optimized production shape or memory pressure, do not reject a candidate on that screen alone. If 128 output tokens do not expose decode growth/preemption, use a matched longer diagnostic only when budget allows; never change the official workload. These screens are not scoring and low concurrency cannot validate capacity improvement. Match cache warm/cold state and capture prefix hits. Record actual completed requests, tokens, TTFT/TPOT and errors. Alternate A/B order and rerun plausible gains; compare memory and kernel evidence, then decide whether to spend on full half-runs.
 
 ## D. Guarded unchanged half-run
 
@@ -144,4 +143,4 @@ Save raw traces off-instance. Commit/push tested inference source separately; th
 
 ## Paste-ready Codex task
 
-> Work as Codex Terra 6.1 GPU inference autoresearch engineer on the authorized BI-V150 Remote-SSH host, /root/Optimization/v15 only. Read AGENTS.md, program.md, autoresearch/RESEARCH_QUEUE.md, EXPERIMENTS.md and HANDOFF.md. Pin original v15 (v14-identical), verify worker imports and actual allocation deadline. Explore GEMM/Linear real kernel dataflow and KV capacity through actual memory/lifetime savings as separate reversible hypotheses, with serial GPU tests. Use v7 measured shapes/grouped-MM evidence, v14 early 4K GEMM trace, and 16K KV saturation. Prefer real grouped tile reuse, accumulator/pipeline/epilogue improvements and reduced non-KV scratch/graph allocation at fixed flags. No quantization, speculation, benchmark tuning, dispatch-only swaps, upstream merges, scheduler-only contest claims or lossy KV. Correctness -> matched kernel/memory A/B -> short matched 4K/16K serving including capacity pressure -> unchanged guarded half-run. Aim >=5% repeatable total tok/s in either case, ideally >=10%, no material regression elsewhere, unchanged MATH-500 >=95% human validation. Preserve evidence and tested source separately on PR branches every <=30 min; publish smaller observed wins too, continue until verified target or allocation/credit deadline, and never auto-merge.
+> Work as Codex Terra 6.1 on the authorized BI-V150 Remote-SSH host. Follow AGENTS.md, this runbook and autoresearch/RESEARCH_QUEUE.md in the real v15 Git checkout. Pin the baseline and allocation deadline. Investigate grouped MM and genuine KV-capacity savings first; use the specified acceptance loop, preserve evidence and publish candidate PRs. Continue until the verified >=5% throughput goal (stretch >=10%) or the actual resource deadline, without violating competition rules or auto-merging.
