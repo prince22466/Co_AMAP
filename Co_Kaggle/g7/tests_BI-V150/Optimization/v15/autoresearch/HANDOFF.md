@@ -10,20 +10,20 @@ Original production trees: see AGENTS.md. Pin checkout SHA and verified GPU dead
 
 ## Latest checkpoint
 
-Updated UTC: 2026-11-16T19:41:08+00:00
+Updated UTC: 2026-11-16T20:02:21+00:00
 
 Status: rejected (researcher-reported)
 
-Source HEAD before checkpoint: d6f04770d6766be5fc96a6b9239cae93bb6289a7
+Source HEAD before checkpoint: ff0805f2d9a7b496d12d59b4b6c113443119dbe3
 
 Remaining GPU time: unknown
 
-Finding: Sampler reuse fails 16K pressure screen despite extra KV blocks
+Finding: Reverse-order sampler serving screen also below control
 
-Evidence/provenance: Candidate source 1fd9d417, candidate-first matched restart. Candidate/control KV tokens 525056/521936 (+3120, 195 blocks, +0.60%). 4K low concurrency candidate/control 1805.59/1814.49 tok/s, mean TTFT 10365.94/10285.81 ms, TPOT 64.57/64.49 ms, 8/8 each. 16K low concurrency 3556.83/3544.86 tok/s, TTFT 16746.18/16746.63 ms, TPOT 155.75/156.73 ms, 8/8 each. 16K pressure concurrency 64 candidate/control 3282.76/3490.77 tok/s (-5.96%), mean TTFT 139102.68/122267.96 ms (+13.77%), TPOT 581.95/568.36 ms (+2.39%), 64/64 each, no failures. One pressure pair, not causal proof or independent replication; fails guardrails. Prior direct seeded and graph checks limited; no complete correctness or quality coverage. No half-run. Raw evidence archive SHA256 8f556eb192c7dbcdd4cec3868bf90416ddb11f8f6a886989d02819319402f3ec backed up locally.
+Evidence/provenance: Control-first matched restart, 8/8 short cases and 64/64 pressure cases with zero failures. 4K candidate/control 1806.90/1807.88 tok/s, TTFT 10333.14/10317.14 ms, TPOT 64.73/64.78 ms. 16K candidate/control 3557.90/3555.52 tok/s, TTFT 16743.76/16734.46 ms, TPOT 155.69/155.94 ms. 16K pressure candidate/control 3565.89/3664.46 tok/s (-2.69%), TTFT 127515.54/122818.35 ms (+3.82%), TPOT 559.51/542.79 ms (+3.08%). Prior candidate-first pair was -5.96%; differences are noisy and not causal proof, but neither supports a serving gain and both throughput screens exceed the 2% guardrail. No half-run; candidate remains research-only. Raw archive SHA256 e1e3bc1c1e6e2d668e943dfc0aa4f72a96b918c0b2f30983ec6a5139e7b1936c backed up locally.
 
 Small CSV evidence committed when --push works: none (external backup required)
 
-Next action: Keep PR as experimental evidence, reject promotion on current screen and revert to original v15 before new research.
+Next action: Return to original v15; seek genuinely different GEMM or allocation mechanism, subject to remaining budget and rules.
 
 Incomplete half-runs are never verified results. Ignored raw artifacts must be backed up outside the rented instance. This handoff does not verify accuracy or establish a causal speedup.
