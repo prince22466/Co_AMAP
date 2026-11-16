@@ -52,3 +52,6 @@ Closest prior: v15 sampler phase adds 522207232 bytes to cumulative peak, though
 - PR-preserved small benchmark CSVs: none (external backup required)
 - Next action: Investigate exact softmax-and-noise workspace fusion or other real memory reductions only if numerical equivalence can be maintained; preserve current KV accounting.
 - Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
+
+## 2026-11-16 UTC: sampler in-place softmax feasibility (planned)
+Closest prior: log-domain fusion reduced memory but mismatched reference tokens. New mechanism: native torch.softmax with its output aliased to the mutable FP32 logits buffer, preserving same exponential noise and division/argmax; native top-k/top-p API permits in-place logits updates. Missing evidence: vendor backend supports aliased softmax correctly; exact output, unusual values, graph replay, logprob modes and caller ownership; peak allocation impact. Test standalone against out-of-place reference first. Do not integrate unless runtime and all invariants hold.
