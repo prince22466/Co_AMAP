@@ -1,1 +1,9 @@
-# v15 — built based on v14
+# v15 — GEMM and KV-cache capacity autoresearch
+
+v15 starts with identical production source trees to v14 (FlagGems and vllm-plugin-FL). Setup only: no new inference optimization or GPU result is implied.
+
+For Codex Terra 6.1 on the authorized BI-V150 Remote-SSH host, read [AGENTS.md](AGENTS.md), [program.md](program.md), and [research queue](autoresearch/RESEARCH_QUEUE.md). Maintain [experiment ledger](autoresearch/EXPERIMENTS.md) and [handoff](autoresearch/HANDOFF.md).
+
+Goal: independently repeatable >=5% total tok/s gain over a fresh matched v15-original control in either unchanged 4K or 16K half-run, ideally >=10%, without material regression in the other workload or loss of model capability. Historical v14 official references: 2817.15 / 2073.93 tok/s; do not treat them as matched half-run measurements.
+
+Competition: https://flagos.io/race-detail-season2?id=539vlt2p&lang=cn
