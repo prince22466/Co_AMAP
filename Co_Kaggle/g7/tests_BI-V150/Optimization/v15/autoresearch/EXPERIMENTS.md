@@ -75,3 +75,16 @@ Prior v7 and v11 grouped wide MM reduced kernel latency, but v11 short-serving A
 - PR-preserved small benchmark CSVs: none (external backup required)
 - Next action: Keep candidate PR as rejected/provisional kernel evidence; switch to clean baseline and investigate a genuinely different GEMM or memory-lifetime hypothesis.
 - Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
+
+## 2026-11-16 UTC: reverse-order grouped 4K pressure replication (planned)
+Prior candidate-first matched pressure pair was -7.08% throughput with +13.75% mean TPOT. Subsequent sampler pressure experiment found material order/noise effects and motivates one control-first replication. Same 4096 input, 128 output, concurrency/prompts 64, seed42, flags and cache protocol. Decision: determine whether the grouped result remains a regression or is inconclusive; this is not a half-run or a new candidate.
+
+### Research checkpoint 2026-11-16T20:57:32+00:00: provisional
+
+- HEAD before checkpoint: 42e81ce380aa3aeee5d27a1ce190abc88afd3e19
+- Budget remaining: unknown
+- Finding: Grouped MM reverse-order pressure screen is inconclusive
+- Evidence and artifact paths: Control-first 4K pressure 4096 input, 128 output, 64 prompts/concurrency, seed42, fixed flags. Candidate/control total 2031.52/2011.02 tok/s (+1.02%), TTFT 23978.47/24527.79 ms (-2.24%), TPOT 675.56/681.84 ms (-0.92%); 64/64 successes each, no failures. Earlier candidate-first pair 1797.72/1934.69 tok/s (-7.08%) and +13.75% TPOT. The reversed result and earlier regression indicate order or run variability; no repeatable serving gain or causal attribution is established, and a single positive diagnostic is not target achievement. Candidate remains provisional/research-only; no unchanged half-run. Raw archive SHA256 aa521f9e2cfb450af383f7f5bffae61dc80500cecd9a4aef96f1f258f5da4449 backed up locally.
+- PR-preserved small benchmark CSVs: none (external backup required)
+- Next action: Do not promote without balanced independent serving replication, production kernel attribution and matched 4K/16K half-runs; restore original source.
+- Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
