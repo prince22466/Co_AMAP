@@ -36,7 +36,9 @@ python3 autoresearch/session_budget.py init --deadline-utc 'ACTUAL-ISO8601-UTC-D
 python3 autoresearch/session_budget.py status
 ```
 
-## B. Correctness and profiling
+## B. Prior-work gate and candidate-specific correctness
+
+Before any GPU experiment, read the prior-work register in autoresearch/RESEARCH_QUEUE.md and log its closest prior result, distinct mechanism/unknown, smallest decisive test and expected decision in EXPERIMENTS.md. Reuse v14 telemetry, server logs and v7 shape inventory; do not run old profiling or benchmarks again. The commands below are examples of regression tests for changed or affected code, **not an unconditional startup suite**. Run only the relevant subset and direct tests of the new candidate; broaden integration coverage before promotion.
 
 ```bash
 cd /root/Optimization/v15
@@ -50,7 +52,7 @@ python3 -m pytest -q -s --noconftest \
  vllm-plugin-FL/tests/functional_tests/test_biv150_mixed_paging.py
 ```
 
-Run targeted subsets first if suite is large; record exact cases and skips. Add direct vendor tests (no fallback) for changed MM/linear, and cache lifecycle/graph tests for memory changes. Use independent torch references, explicit tolerances, nontrivial tensors and repeated runs. Inspect actual installed vLLM APIs read-only. Profile phase-specific shape histograms and timings; measure allocator snapshots and KV block/token counts before/after profile, graph capture, initialization and load; use ixsmi and /metrics with counters as deltas. Use archived v7 shape inventory, 34 A/B comparisons, 58-pass direct operator results, v11 GEMM findings and v14 traces as prior evidence (links in queue). Do not repeat old proxy/real-shape sweeps, grouping experiments, edge-mask or accumulator experiments. Collect only missing v15-specific frequency/resource/lifetime data for a new hypothesis. Reuse existing tests and add focused correctness coverage for changed code; no historical candidate is automatically promoted. Remove diagnostic instrumentation before final runs.
+Record exact cases and skips. Do not rerun unchanged historical suites merely to reproduce prior results; rerun relevant tests when a new change can affect them. Add direct vendor tests (no fallback) for changed MM/linear, and cache lifecycle/graph tests for memory changes. Use independent torch references, explicit tolerances, nontrivial tensors and repeated runs. Inspect actual installed vLLM APIs read-only. Use v0–v14 prior-work register; do not repeat grouped-MM, edge-mask, direct-dot, old KV write tiling, attention or rejected-stack experiments. Use existing v14 startup allocation, queue/prefix/preemption telemetry and phase traces. Collect only missing frequency/resource/lifetime or block-level cause data required by the new hypothesis, then measure its effect against a matched control. Reuse existing tests and add focused correctness coverage for changed code; no historical candidate is automatically promoted. Remove diagnostic instrumentation before final runs.
 
 ## C. Fixed server and non-scoring screens
 
@@ -120,7 +122,7 @@ python3 autoresearch/session_budget.py admit --runs 2
 python3 autoresearch/session_budget.py run-half --push-checkpoint
 ```
 
-Run each control/candidate independently with matched restarts. If insufficient time for a matched pair, checkpoint instead unless a comparable control is already archived and one run is admitted. Verify two SUCCESS raw rows per length, 256/128 completed requests, exact workload, summary integrity. Use read-only evaluator:
+Run control/candidate independently with matched restarts. Reuse an original-v15 half-run already completed in this allocation if all conditions match; no repeat just because a new hypothesis begins. If insufficient time for a matched pair, checkpoint instead unless that comparable control is available and one run is admitted. Verify two SUCCESS raw rows per length, 256/128 completed requests, exact workload, summary integrity. Use read-only evaluator:
 
 ```bash
 python3 autoresearch/evaluate.py \
@@ -143,4 +145,4 @@ Save raw traces off-instance. Commit/push tested inference source separately; th
 
 ## Paste-ready Codex task
 
-> Work as Codex Terra 6.1 on the authorized BI-V150 Remote-SSH host. Follow AGENTS.md, this runbook and autoresearch/RESEARCH_QUEUE.md in the real v15 Git checkout. Pin the baseline and allocation deadline. Read the completed v7/v11 GEMM research first; investigate new GEMM dataflow/resource bottlenecks and genuine KV-capacity savings without repeating the old experiments; use the specified acceptance loop, preserve evidence and publish candidate PRs. Continue until the verified >=5% throughput goal (stretch >=10%) or the actual resource deadline, without violating competition rules or auto-merging.
+> Work as Codex Terra 6.1 on the authorized BI-V150 Remote-SSH host. Follow AGENTS.md, this runbook and autoresearch/RESEARCH_QUEUE.md in the real v15 Git checkout. Pin the baseline and allocation deadline. Apply the v0–v14 prior-work gate before any GPU experiment; investigate only new GEMM dataflow/resource bottlenecks and genuine KV-capacity savings, reusing archived evidence; use the specified acceptance loop, preserve evidence and publish candidate PRs. Continue until the verified >=5% throughput goal (stretch >=10%) or the actual resource deadline, without violating competition rules or auto-merging.
