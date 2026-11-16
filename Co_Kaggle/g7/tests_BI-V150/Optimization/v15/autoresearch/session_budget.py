@@ -9,6 +9,7 @@ import argparse
 from datetime import datetime, timezone
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import signal
@@ -18,9 +19,9 @@ import time
 from urllib.request import urlopen
 
 if __package__:
-    from .checkpoint import ROOT, checkpoint
+    from .checkpoint import ROOT, checkpoint, git
 else:
-    from checkpoint import ROOT, checkpoint
+    from checkpoint import ROOT, checkpoint, git
 
 STATE = ROOT / ".autoresearch-work" / "session_budget.json"
 BENCHMARK = Path("/workspace/vllm-plugin-FL/benchmarks/benchmark_throughput_serve_half.py")
@@ -39,7 +40,7 @@ def start_session(duration_minutes: float | None, deadline_utc: str | None,
         raise ValueError("Provide exactly one of duration or UTC deadline")
     now = time.time() if now is None else now
     if duration_minutes is not None:
-        if duration_minutes <= 0:
+        if not math.isfinite(duration_minutes) or duration_minutes <= 0:
             raise ValueError("Duration must be positive")
         deadline = now + duration_minutes * 60
     else:
@@ -63,7 +64,8 @@ def read_state(path: Path = STATE) -> dict:
     if not path.exists():
         raise ValueError("Unknown GPU deadline; operator must run init first")
     data = json.loads(path.read_text())
-    if data.get("deadline_epoch", 0) <= data.get("started_epoch", 0):
+    if not all(isinstance(data.get(key), (int, float)) and math.isfinite(data[key])
+               for key in ("deadline_epoch", "started_epoch")) or data["deadline_epoch"] <= data["started_epoch"]:
         raise ValueError("Invalid deadline in budget state")
     return data
 
@@ -74,7 +76,7 @@ def decision(state: dict, runs: int = 1, now: float | None = None) -> dict:
     now = time.time() if now is None else now
     remaining = max(0.0, (state["deadline_epoch"] - now) / 60)
     durations = state.get("observed_runs_minutes", [])
-    estimate = max([state["baseline_run_minutes"], *durations[-5:]])
+    estimate = max([state["baseline_run_minutes"], *durations])
     per_run = estimate + state["per_run_margin_minutes"]
     required = runs * per_run + state["preservation_reserve_minutes"]
     return {
@@ -88,6 +90,23 @@ def decision(state: dict, runs: int = 1, now: float | None = None) -> dict:
     }
 
 
+def source_identity() -> dict:
+    branch = git(ROOT, "branch", "--show-current")
+    if not branch or branch in ("main", "master"):
+        raise ValueError("Half-run requires a dedicated non-main branch")
+    prefix = git(ROOT, "rev-parse", "--show-prefix")
+    # git() strips trailing whitespace, not the trailing slash of nested prefixes.
+    for path in ("FlagGems", "vllm-plugin-FL"):
+        if git(ROOT, "status", "--porcelain", "--untracked-files=all", "--", path):
+            raise ValueError(f"Commit clean production source before half-run: {path}")
+    return {
+        "branch": branch,
+        "head": git(ROOT, "rev-parse", "HEAD"),
+        "trees": {path: git(ROOT, "rev-parse", f"HEAD:{prefix}{path}")
+                  for path in ("FlagGems", "vllm-plugin-FL")},
+    }
+
+
 def execute_half(state: dict, state_path: Path, push: bool = False) -> int:
     verdict = decision(state)
     if not verdict["admitted"]:
@@ -95,6 +114,7 @@ def execute_half(state: dict, state_path: Path, push: bool = False) -> int:
         return 2
     if not BENCHMARK.is_file():
         raise FileNotFoundError(f"External benchmark missing: {BENCHMARK}")
+    source = source_identity()
     with urlopen("http://127.0.0.1:9031/health", timeout=5) as result:
         if result.status != 200:
             raise RuntimeError("vLLM server is not healthy")
@@ -113,12 +133,13 @@ def execute_half(state: dict, state_path: Path, push: bool = False) -> int:
     ]
     record = {
         "run_dir": str(run_dir), "benchmark_sha256": sha, "command": cmd,
+        "source_before": source,
         "started_epoch": time.time(), "status": "STARTED_UNVERIFIED",
     }
     save(run_dir / "run.json", record)
     # Publish before an expensive run so a credits timeout does not erase its intent.
     checkpoint(ROOT, "Starting unchanged v15 half-run",
-               f"Manifest: {run_dir / 'run.json'}; benchmark SHA256={sha}",
+               f"Manifest: {run_dir / 'run.json'}; benchmark SHA256={sha}; source={source}",
                "After run, validate all four SUCCESS rows and persist raw evidence",
                "provisional", verdict["remaining_minutes"], push)
     # A slow git push or stalled preflight may have consumed the allocation.
@@ -137,30 +158,47 @@ def execute_half(state: dict, state_path: Path, push: bool = False) -> int:
         record.update({"status": "CANCELLED_BENCHMARK_CHANGED", "finished_epoch": time.time()})
         save(run_dir / "run.json", record)
         raise ValueError("Benchmark changed during preflight; stop")
+    refreshed_source = source_identity()
+    if refreshed_source["trees"] != source["trees"] or refreshed_source["branch"] != source["branch"]:
+        record.update({"status": "CANCELLED_SOURCE_CHANGED", "finished_epoch": time.time()})
+        save(run_dir / "run.json", record)
+        raise ValueError("Production source changed during preflight; stop")
     hard_seconds = int(state["deadline_epoch"] - time.time()
                        - 60 * state["preservation_reserve_minutes"])
     if hard_seconds <= 0:
         return 2
     timed_out = False
+    interrupted = False
     with (run_dir / "benchmark.log").open("w", encoding="utf-8") as stream:
         process = subprocess.Popen(cmd, cwd=run_dir, stdout=stream,
                                    stderr=subprocess.STDOUT, start_new_session=True)
         try:
             returncode = process.wait(timeout=hard_seconds)
-        except subprocess.TimeoutExpired:
-            timed_out = True
+        except (subprocess.TimeoutExpired, KeyboardInterrupt) as exc:
+            timed_out = isinstance(exc, subprocess.TimeoutExpired)
+            interrupted = not timed_out
             os.killpg(process.pid, signal.SIGTERM)
             try:
                 process.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 os.killpg(process.pid, signal.SIGKILL)
                 process.wait()
-            returncode = 124
+            returncode = 124 if timed_out else 130
     elapsed = (time.time() - record["started_epoch"]) / 60
+    try:
+        after = source_identity()
+        source_changed = after["trees"] != source["trees"] or after["branch"] != source["branch"]
+    except (ValueError, subprocess.CalledProcessError):
+        after, source_changed = None, True
+    benchmark_changed = not BENCHMARK.is_file() or hashlib.sha256(BENCHMARK.read_bytes()).hexdigest() != sha
+    if source_changed or benchmark_changed:
+        returncode = 1
     record.update({
         "finished_epoch": time.time(), "elapsed_minutes": round(elapsed, 2),
-        "returncode": returncode,
-        "status": "TIMED_OUT_INCOMPLETE" if timed_out else
+        "returncode": returncode, "source_after": after,
+        "status": "INVALID_SOURCE_OR_BENCHMARK_CHANGED" if source_changed or benchmark_changed else
+                  "INTERRUPTED_INCOMPLETE" if interrupted else
+                  "TIMED_OUT_INCOMPLETE" if timed_out else
                   ("EXIT_ZERO_CSV_UNVERIFIED" if returncode == 0 else "FAILED_INCOMPLETE"),
     })
     save(run_dir / "run.json", record)
@@ -176,7 +214,7 @@ def execute_half(state: dict, state_path: Path, push: bool = False) -> int:
                "provisional" if returncode == 0 else "blocked",
                decision(state)["remaining_minutes"], push, csv_files)
     print(json.dumps(record, indent=2))
-    return 0 if returncode == 0 else (124 if timed_out else 1)
+    return returncode if returncode in (0, 124, 130) else 1
 
 
 def main() -> int:
@@ -211,7 +249,7 @@ def main() -> int:
             print(json.dumps(report, indent=2))
             return 0 if args.command == "status" or report["admitted"] else 2
         if args.command == "record":
-            if args.elapsed_minutes <= 0:
+            if not math.isfinite(args.elapsed_minutes) or args.elapsed_minutes <= 0:
                 raise ValueError("Elapsed minutes must be positive")
             state.setdefault("observed_runs_minutes", []).append(args.elapsed_minutes)
             save(args.state, state)

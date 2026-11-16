@@ -14,7 +14,7 @@ class CsvEvaluatorTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
 
-    def write(self, name, tok4, tok16, *, raw, fail=False, incomplete=False):
+    def write(self, name, tok4, tok16, *, raw, fail=False, incomplete=False, tpot=100, ttft=10000):
         path = self.root / name
         rows = []
         for size, prompts, tok in ((4096, 256, tok4), (16384, 128, tok16)):
@@ -22,13 +22,16 @@ class CsvEvaluatorTests(unittest.TestCase):
                 row = {
                     "Prefill": size, "Decode": 1024, "Conc": 64,
                     "Num Prompts": prompts, "Total tok/s": tok,
-                    "Mean TTFT (ms)": 10000,
+                    "Mean TTFT (ms)": ttft,
+                    "Mean TPOT (ms)": tpot,
+                    "Total Input Tokens": float(size * prompts),
+                    "Total Output Tokens": float(1024 * prompts),
                 }
                 if raw:
                     bad = size == 16384 and rep == 1
                     row["Run Status"] = "FAILED" if fail and bad else "SUCCESS"
                     row["Successful Requests"] = (
-                        prompts - 1 if incomplete and bad else prompts
+                        float(prompts - 1 if incomplete and bad else prompts)
                     )
                 rows.append(row)
         with path.open("w", newline="") as f:
@@ -38,14 +41,14 @@ class CsvEvaluatorTests(unittest.TestCase):
         return path
 
     def args(self, *, base4=2817.15, base16=2073.93,
-             cand4=2817.15, cand16=2073.93, fail=False, incomplete=False):
+             cand4=2817.15, cand16=2073.93, fail=False, incomplete=False, tpot=100, ttft=10000):
         return SimpleNamespace(
             control_summary=self.write("a_summary.csv", base4, base16, raw=False),
             control_raw=self.write("a_raw.csv", base4, base16, raw=True),
-            candidate_summary=self.write("b_summary.csv", cand4, cand16, raw=False),
+            candidate_summary=self.write("b_summary.csv", cand4, cand16, raw=False, tpot=tpot, ttft=ttft),
             candidate_raw=self.write(
                 "b_raw.csv", cand4, cand16, raw=True,
-                fail=fail, incomplete=incomplete,
+                fail=fail, incomplete=incomplete, tpot=tpot, ttft=ttft,
             ),
         )
 
@@ -57,6 +60,7 @@ class CsvEvaluatorTests(unittest.TestCase):
             with self.subTest(cand4=cand4, cand16=cand16):
                 report = evaluate(self.args(cand4=cand4, cand16=cand16))
                 self.assertTrue(report["numeric_goal_5pct"])
+                self.assertTrue(report["numeric_screen_pass"])
                 self.assertFalse(report["replication_verified"])
 
     def test_less_than_5pct_is_not_goal(self):
@@ -81,12 +85,48 @@ class CsvEvaluatorTests(unittest.TestCase):
         report = evaluate(self.args(cand4=3000, cand16=1500))
         self.assertLess(report["comparison"]["16K"]["matched_gain_pct"], 0)
         self.assertFalse(report["throughput_regression_screen_pass"])
+        self.assertFalse(report["numeric_screen_pass"])
 
     def test_incomplete_or_failed_raw_rejected(self):
         with self.assertRaisesRegex(ValueError, "Failed run"):
             evaluate(self.args(fail=True))
         with self.assertRaisesRegex(ValueError, "Incomplete requests"):
             evaluate(self.args(incomplete=True))
+
+    def change_cell(self, path, column, value):
+        with path.open(newline="") as f:
+            rows = list(csv.DictReader(f))
+        rows[0][column] = value
+        with path.open("w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=list(rows[0]))
+            writer.writeheader()
+            writer.writerows(rows)
+
+    def test_real_float_request_counts_and_token_totals(self):
+        self.assertTrue(evaluate(self.args())["valid_half_run_csvs"])
+        for column, value in (("Successful Requests", "256.5"),
+                              ("Total Output Tokens", "262143.0"),
+                              ("Total Input Tokens", "1048575.0")):
+            with self.subTest(column=column):
+                a = self.args()
+                self.change_cell(a.candidate_raw, column, value)
+                with self.assertRaises(ValueError):
+                    evaluate(a)
+
+    def test_tpot_and_ttft_regressions_block_numeric_screen(self):
+        for kwargs, key in (({"tpot": 106}, "tpot_regression_screen_pass"),
+                            ({"ttft": 10600}, "ttft_regression_screen_pass")):
+            with self.subTest(key=key):
+                report = evaluate(self.args(cand4=3000, **kwargs))
+                self.assertTrue(report["numeric_goal_5pct"])
+                self.assertFalse(report[key])
+                self.assertFalse(report["numeric_screen_pass"])
+
+    def test_tpot_summary_mismatch(self):
+        a = self.args()
+        self.change_cell(a.candidate_summary, "Mean TPOT (ms)", 120)
+        with self.assertRaisesRegex(ValueError, "summary disagrees"):
+            evaluate(a)
 
     def test_raw_summary_mismatch_rejected(self):
         a = self.args()

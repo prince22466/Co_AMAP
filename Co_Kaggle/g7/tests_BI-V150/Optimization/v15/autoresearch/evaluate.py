@@ -12,7 +12,7 @@ import math
 from pathlib import Path
 
 CASES = {4096: (1024, 64, 256), 16384: (1024, 64, 128)}
-HISTORICAL_V14_OFFICIAL = {4096: 2817.15, 16384: 2073.93}
+METRICS = {"tok": "Total tok/s", "ttft": "Mean TTFT (ms)", "tpot": "Mean TPOT (ms)"}
 
 
 def _positive(value: str, name: str) -> float:
@@ -22,6 +22,14 @@ def _positive(value: str, name: str) -> float:
     return num
 
 
+def _integer(value: str, name: str) -> int:
+    # Archived benchmark files serialize counts as e.g. "256.0".
+    num = _positive(value, name)
+    if not num.is_integer():
+        raise ValueError(f"Non-integral {name}: {value!r}")
+    return int(num)
+
+
 def read_rows(path: Path, *, raw: bool) -> dict[int, list[dict]]:
     results = {4096: [], 16384: []}
     with path.open(newline="", encoding="utf-8-sig") as file:
@@ -29,20 +37,24 @@ def read_rows(path: Path, *, raw: bool) -> dict[int, list[dict]]:
         if not reader.fieldnames:
             raise ValueError(f"Empty CSV: {path}")
         for row in reader:
-            size = int(row["Prefill"])
+            size = _integer(row["Prefill"], "Prefill")
             if size not in CASES:
                 raise ValueError(f"Unexpected workload {size} in {path}")
-            shape = tuple(int(row[k]) for k in ("Decode", "Conc", "Num Prompts"))
+            shape = tuple(_integer(row[k], k) for k in ("Decode", "Conc", "Num Prompts"))
             if shape != CASES[size]:
                 raise ValueError(f"Wrong shape for {size}: {shape}")
             if raw:
                 if row["Run Status"] != "SUCCESS":
                     raise ValueError(f"Failed run for {size}: {row['Run Status']}")
-                if int(row["Successful Requests"]) != CASES[size][2]:
+                if _integer(row["Successful Requests"], "Successful Requests") != CASES[size][2]:
                     raise ValueError(f"Incomplete requests for {size}")
+            decode, _, prompts = CASES[size]
+            for column, expected in (("Total Input Tokens", size * prompts),
+                                     ("Total Output Tokens", decode * prompts)):
+                if _integer(row[column], column) != expected:
+                    raise ValueError(f"Wrong {column} for {size}: {row[column]}")
             results[size].append({
-                "tok": _positive(row["Total tok/s"], "Total tok/s"),
-                "ttft": _positive(row["Mean TTFT (ms)"], "Mean TTFT"),
+                key: _positive(row[column], column) for key, column in METRICS.items()
             })
     expected_count = 2 if raw else 1
     for size in CASES:
@@ -59,13 +71,13 @@ def load_pair(summary_path: Path, raw_path: Path) -> dict[int, dict]:
     raw = read_rows(raw_path, raw=True)
     result = {}
     for size in CASES:
-        for metric in ("tok", "ttft"):
+        for metric in METRICS:
             avg = sum(row[metric] for row in raw[size]) / 2
             if abs(summary[size][0][metric] - avg) > 0.05:
                 raise ValueError(f"{size} {metric}: summary disagrees with raw runs")
         result[size] = {
             **summary[size][0],
-            "raw_tok": [r["tok"] for r in raw[size]],
+            "raw": {metric: [r[metric] for r in raw[size]] for metric in METRICS},
         }
     return result
 
@@ -76,33 +88,39 @@ def evaluate(args: argparse.Namespace) -> dict:
     rows = {}
     for size in CASES:
         base, trial = control[size], candidate[size]
-        anchor = HISTORICAL_V14_OFFICIAL[size]
         gain = trial["tok"] / base["tok"] - 1
         rows[f"{size // 1024}K"] = {
             "control_tok_s": base["tok"],
             "candidate_tok_s": trial["tok"],
-            "control_raw_tok_s": base["raw_tok"],
-            "candidate_raw_tok_s": trial["raw_tok"],
-            "historical_v14_official_tok_s": anchor,
+            "control_raw_tok_s": base["raw"]["tok"],
+            "candidate_raw_tok_s": trial["raw"]["tok"],
+            "control_mean_ttft_ms": base["ttft"],
+            "candidate_mean_ttft_ms": trial["ttft"],
+            "control_mean_tpot_ms": base["tpot"],
+            "candidate_mean_tpot_ms": trial["tpot"],
             "matched_gain_pct": round(100 * gain, 4),
-            "vs_historical_v14_official_pct": round(100 * (trial["tok"] / anchor - 1), 4),
             "ttft_change_pct": round(
                 100 * (trial["ttft"] / base["ttft"] - 1), 4
             ),
-            "numeric_goal_5pct": (
-                gain + 1e-12 >= 0.05
-            ),
+            "tpot_change_pct": round(100 * (trial["tpot"] / base["tpot"] - 1), 4),
+            "numeric_goal_5pct": gain + 1e-12 >= 0.05,
         }
+    goal = any(r["numeric_goal_5pct"] for r in rows.values())
+    throughput_ok = all(candidate[s]["tok"] >= control[s]["tok"] * 0.98 - 1e-9 for s in CASES)
+    ttft_ok = all(candidate[s]["ttft"] <= control[s]["ttft"] * 1.05 + 1e-9 for s in CASES)
+    tpot_ok = all(candidate[s]["tpot"] <= control[s]["tpot"] * 1.05 + 1e-9 for s in CASES)
     return {
         "valid_half_run_csvs": True,
-        "numeric_goal_5pct": any(r["numeric_goal_5pct"] for r in rows.values()),
-        "throughput_regression_screen_pass": all(r["matched_gain_pct"] >= -2 for r in rows.values()),
-        "ttft_regression_screen_pass": all(r["ttft_change_pct"] <= 5 for r in rows.values()),
+        "numeric_goal_5pct": goal,
+        "throughput_regression_screen_pass": throughput_ok,
+        "ttft_regression_screen_pass": ttft_ok,
+        "tpot_regression_screen_pass": tpot_ok,
+        "numeric_screen_pass": goal and throughput_ok and ttft_ok and tpot_ok,
         "replication_verified": False,
         "model_quality_verified": False,
         "production_kernel_verified": False,
         "comparison": rows,
-        "warning": "Numeric screen only; historical official references are not matched half-runs; independent matched A/B, kernel provenance, "
+        "warning": "Numeric screen only; matched conditions, independent replication, competition score/latency limits, kernel provenance, "
                    "model ability and unchanged MATH-500 remain unverified.",
     }
 

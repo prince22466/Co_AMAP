@@ -87,6 +87,20 @@ class SessionBudgetTests(unittest.TestCase):
                 self.assertNotEqual(result, 0)
                 self.assertEqual(state_path.read_bytes(), before)
 
+    def test_source_identity_refuses_dirty_or_main(self):
+        with patch.object(budget, "git", side_effect=["main"]):
+            with self.assertRaisesRegex(ValueError, "non-main"):
+                budget.source_identity()
+        with patch.object(budget, "git", side_effect=["candidate", "nested/v15/", " M file"]):
+            with self.assertRaisesRegex(ValueError, "Commit clean"):
+                budget.source_identity()
+
+    def test_source_identity_supports_nested_checkout(self):
+        with patch.object(budget, "git", side_effect=["candidate", "nested/v15/", "", "", "commit", "treeA", "treeB"]) as fake:
+            self.assertEqual(budget.source_identity()["trees"], {"FlagGems": "treeA", "vllm-plugin-FL": "treeB"})
+            self.assertIn(("rev-parse", "HEAD:nested/v15/FlagGems"),
+                          [call.args[1:] for call in fake.call_args_list])
+
     def test_invalid_one_run_admission_does_not_start_benchmark(self):
         state = budget.start_session(1, None)
         with TemporaryDirectory() as folder, patch.object(
@@ -104,6 +118,7 @@ class CheckpointTests(unittest.TestCase):
             notes.mkdir()
             ledger = notes / "EXPERIMENTS.md"
             ledger.write_text("# Prior evidence\n")
+            (notes / "HANDOFF.md").write_text("# Handoff\nBest verified SHA: abc\n<!-- latest-checkpoint -->\nOld checkpoint\n")
             checkpoints.checkpoint(
                 root, "Kernel 16K improved provisionally", "log/runA.csv",
                 "Run matched control", "provisional", 40,
@@ -118,6 +133,9 @@ class CheckpointTests(unittest.TestCase):
             self.assertIn("Test was rejected", text)
             handoff = (notes / "HANDOFF.md").read_text()
             self.assertIn("Restore baseline", handoff)
+            self.assertIn("Best verified SHA: abc", handoff)
+            self.assertNotIn("Old checkpoint", handoff)
+            self.assertEqual(handoff.count("<!-- latest-checkpoint -->"), 1)
             self.assertIn("not verify accuracy", handoff)
 
     def test_small_raw_csv_is_preserved_with_hash(self):

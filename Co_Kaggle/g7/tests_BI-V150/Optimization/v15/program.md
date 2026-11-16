@@ -4,17 +4,18 @@ Read AGENTS.md first. This is a human-started Codex Terra 6.1 task, not a backgr
 
 ## A. Verify baseline and budget
 
-Run on the authorized remote host. Use the actual v15 checkout (if nested, locate it without changing other versions). Ensure your branch contains this setup and source trees match the original, then pin the clean baseline SHA.
+Run on the authorized remote host. Use the actual v15 checkout (if nested, locate it without changing other versions). Ensure your branch contains this setup and source trees match the original, then pin the clean baseline SHA. An exported v15 folder with no tracked Git source cannot publish reliable PRs: set up a real monorepo checkout/sparse checkout first. Use its actual v15 path in every command.
 
 ```bash
 cd /root/Optimization/v15
 pwd
 git rev-parse --show-toplevel
+git ls-files --error-unmatch FlagGems/src/flag_gems/__init__.py vllm-plugin-FL/vllm_fl/__init__.py
 git status --short
 git branch --show-current
 git rev-parse HEAD
 sha256sum /workspace/vllm-plugin-FL/benchmarks/benchmark_throughput_serve_half.py
-export PYTHONPATH="$PWD/FlagGems/src:$PWD/vllm-plugin-FL:${PYTHONPATH:-}"
+export PYTHONPATH="$PWD/FlagGems/src:$PWD/vllm-plugin-FL"
 export VLLM_PLUGINS=fl
 python3 -m unittest discover -s autoresearch/tests -v
 python3 - <<'PY'
@@ -30,12 +31,12 @@ ixsmi
 
 Verify model/versions, actual worker paths (not just shell imports), memory and owned server. Initialize once using the confirmed UTC allocation deadline (replace placeholder, no guessed duration):
 
+Before initialization, check external script read-only: verify RUNS=2, SKIP_FIRST=0, actual CLI and output location; if different, stop rather than patch it. Record script hash, model/config fingerprint, server flags, GPU/device and cache state. Initialize only after verifying the external script; if a genuinely new allocation is confirmed by the operator, archive the previous state and evidence before initializing a new session; never reset within the same allocation. Do not launch expensive control half-run before promising screen.
+
 ```bash
 python3 autoresearch/session_budget.py init --deadline-utc 'ACTUAL-ISO8601-UTC-DEADLINE'
 python3 autoresearch/session_budget.py status
 ```
-
-If a genuinely new allocation is confirmed by the operator, archive the previous state and evidence before initializing a new session; never reset within the same allocation. Check external script read-only: verify RUNS=2, SKIP_FIRST=0, actual CLI and output location; if different, stop rather than patch it. Record script hash, model/config fingerprint, server flags, GPU/device and cache state. Do not launch expensive control half-run before promising screen.
 
 ## B. Correctness and profiling
 
@@ -61,7 +62,7 @@ Use exactly the same server flags on every A/B. Restart only the server you own,
 cd /root/Optimization/v15
 mkdir -p .autoresearch-work/serve_runs
 serve_log=$(mktemp "$PWD/.autoresearch-work/serve_runs/serve_XXXXXXXX.log")
-export PYTHONPATH="$PWD/FlagGems/src:$PWD/vllm-plugin-FL:${PYTHONPATH:-}"
+export PYTHONPATH="$PWD/FlagGems/src:$PWD/vllm-plugin-FL"
 export VLLM_PLUGINS=fl
 unset VLLM_FL_USE_FLAGGEMS_ATTN VLLM_ATTENTION_BACKEND VLLM_BATCH_INVARIANT
 set -o pipefail
@@ -107,11 +108,11 @@ vllm bench serve --backend vllm --model minicpm \
 curl -fsS http://127.0.0.1:9031/metrics > "$pressure_dir/after.prom"
 ```
 
- If 128 output tokens do not expose decode growth/preemption, use a matched longer diagnostic only when budget allows; never change the official workload. These screens are not scoring and low concurrency cannot validate capacity improvement. Match cache warm/cold state and capture prefix hits. Record actual completed requests, tokens, TTFT/TPOT and errors. Alternate A/B order and rerun plausible gains; compare memory and kernel evidence, then decide whether to spend on full half-runs.
+If 128 output tokens do not expose decode growth/preemption, use a matched longer diagnostic only when budget allows; never change the official workload. These screens are not scoring and low concurrency cannot validate capacity improvement. Match cache warm/cold state and capture prefix hits. Record actual completed requests, tokens, TTFT/TPOT and errors. Alternate A/B order and rerun plausible gains; compare memory and kernel evidence, then decide whether to spend on full half-runs.
 
 ## D. Guarded unchanged half-run
 
-Official development half-run external script is read-only: RUNS=2, SKIP_FIRST=0, cases [[4096,1024,64,256],[16384,1024,64,128]]. Full official scoring is a separate procedure. Confirm matching script hash and owned profiler-OFF server before each run. Preflight: at least 150 min for one or 275 min for two initially; 90 min is a hard minimum, not sufficient admission. Preserve 25 min. Run only after quick A/B shows benefit and tests pass.
+Official development half-run external script is read-only: RUNS=2, SKIP_FIRST=0, cases [[4096,1024,64,256],[16384,1024,64,128]]. Full official scoring is a separate procedure. Commit tested source, start a fresh owned profiler-OFF server from that exact commit, and confirm matching script hash and actual worker provenance before each run. Do not change source until the server stops. Preflight: at least 150 min for one or 275 min for two initially; 90 min is a hard minimum, not sufficient admission. Preserve 25 min. Run only after quick A/B shows benefit and tests pass.
 
 ```bash
 python3 autoresearch/session_budget.py status
@@ -129,7 +130,7 @@ python3 autoresearch/evaluate.py \
  --json-out .autoresearch-work/comparison.json
 ```
 
-Repeat independent matched A/B before verified claim. Evaluator is numeric screen only; compare TPOT and score/TTFT limits separately. Never count historical official values as matched controls. Human runs unchanged MATH-500 before final acceptance.
+Repeat independent matched A/B before verified claim. Evaluator validates both cases, full token/request counts, raw/summary consistency, mean TTFT and TPOT, and reports a combined numeric screen. A zero exit only means the CSVs are valid, not that the screen passed. Check competition score/latency limits and matched conditions separately. Never count historical official values as matched controls. Human runs unchanged MATH-500 before final acceptance.
 
 ## E. Preservation
 
@@ -139,8 +140,8 @@ python3 autoresearch/checkpoint.py --summary 'Hypothesis and observed result' \
  --next-step 'Next experiment or blocker' --status provisional --push
 ```
 
-Save raw traces off-instance. Commit/push tested inference source separately; the helper only commits evidence. Open a candidate PR when measurable improvements appear even if smaller than goal; label provisional until independent replication/quality. Continue until goal or actual deadline; no auto-merge. Final HANDOFF must identify original SHA, best verified SHA, rejected ideas, evidence and remaining risks.
+Save raw traces off-instance. Commit/push tested inference source separately; the helper only commits evidence. Open a candidate PR when measurable improvements appear even if smaller than goal; label provisional until independent replication/quality. Continue until goal or actual deadline; no auto-merge. Maintain the manual section of HANDOFF with original SHA, best verified SHA, rejected ideas, evidence and remaining risks; the helper replaces only the generated latest-checkpoint section.
 
 ## Paste-ready Codex task
 
-> Work as Codex Terra 6.1 GPU inference autoresearch engineer on the authorized BI-V150 Remote-SSH host, /root/Optimization/v15 only. Read AGENTS.md, program.md, autoresearch/RESEARCH_QUEUE.md, EXPERIMENTS.md and HANDOFF.md. Pin original v15 (v14-identical), verify worker imports and actual allocation deadline. Explore GEMM/Linear real kernel dataflow and KV capacity through actual memory/lifetime savings, in parallel as separate reversible hypotheses, not concurrent GPU benchmarks. Use v7 measured shapes/grouped-MM evidence, v14 early 4K GEMM trace, and 16K KV saturation. Prefer real grouped tile reuse, accumulator/pipeline/epilogue improvements and reduced non-KV scratch/graph allocation at fixed flags. No quantization, speculation, benchmark tuning, dispatch-only swaps, upstream merges, scheduler-only contest claims or lossy KV. Correctness -> matched kernel/memory A/B -> short matched 4K/16K serving including capacity pressure -> unchanged guarded half-run. Aim >=5% repeatable total tok/s in either case, ideally >=10%, no material regression elsewhere, unchanged MATH-500 >=95% human validation. Preserve evidence and tested source separately on PR branches every <=30 min; publish smaller observed wins too, continue until verified target or allocation/credit deadline, and never auto-merge.
+> Work as Codex Terra 6.1 GPU inference autoresearch engineer on the authorized BI-V150 Remote-SSH host, /root/Optimization/v15 only. Read AGENTS.md, program.md, autoresearch/RESEARCH_QUEUE.md, EXPERIMENTS.md and HANDOFF.md. Pin original v15 (v14-identical), verify worker imports and actual allocation deadline. Explore GEMM/Linear real kernel dataflow and KV capacity through actual memory/lifetime savings as separate reversible hypotheses, with serial GPU tests. Use v7 measured shapes/grouped-MM evidence, v14 early 4K GEMM trace, and 16K KV saturation. Prefer real grouped tile reuse, accumulator/pipeline/epilogue improvements and reduced non-KV scratch/graph allocation at fixed flags. No quantization, speculation, benchmark tuning, dispatch-only swaps, upstream merges, scheduler-only contest claims or lossy KV. Correctness -> matched kernel/memory A/B -> short matched 4K/16K serving including capacity pressure -> unchanged guarded half-run. Aim >=5% repeatable total tok/s in either case, ideally >=10%, no material regression elsewhere, unchanged MATH-500 >=95% human validation. Preserve evidence and tested source separately on PR branches every <=30 min; publish smaller observed wins too, continue until verified target or allocation/credit deadline, and never auto-merge.

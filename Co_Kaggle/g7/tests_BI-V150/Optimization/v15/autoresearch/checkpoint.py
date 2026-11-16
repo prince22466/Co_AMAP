@@ -15,6 +15,7 @@ from pathlib import Path
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
+HANDOFF_MARKER = "<!-- latest-checkpoint -->"
 
 
 def git(root: Path, *args: str) -> str:
@@ -94,8 +95,9 @@ def checkpoint(root: Path, summary: str, evidence: str, next_step: str,
     with ledger.open("a", encoding="utf-8") as stream:
         stream.write(entry)
         stream.flush()
+    manual = handoff.read_text(encoding="utf-8").split(HANDOFF_MARKER, 1)[0].rstrip() if handoff.exists() else "# v15 latest research handoff\n\n## Research state (maintained by Codex)"
     handoff.write_text(
-        "# v15 latest research handoff\n\n"
+        manual + "\n\n" + HANDOFF_MARKER + "\n\n## Latest checkpoint\n\n"
         f"Updated UTC: {timestamp}\n\n"
         f"Status: {status} (researcher-reported)\n\n"
         f"Source HEAD before checkpoint: {source}\n\n"
