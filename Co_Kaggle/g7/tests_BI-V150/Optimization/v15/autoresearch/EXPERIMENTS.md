@@ -13,3 +13,16 @@ v7 grouped MM/edge masking/Linear accumulation, shape inventory and operator A/B
 ## Prior-work audit v0–v14 (planning update; no new GPU result)
 
 The research queue now registers all previous versions, v8 rejected stacks and existing v14 startup/queue/prefix/cache evidence. Before each new GPU experiment record closest prior result, material novelty, specific missing evidence, smallest decisive test and decision. Do not spend GPU time on old measurements, old patches or generic profiling. New candidate correctness and matched performance validation remain required.
+
+## 2026-11-16 UTC: non-KV allocation lifetime and graph pool attribution (planned)
+Prior: v14 521840 KV tokens, v15 startup probe weights 5101233152, activation peak 656424960, non-torch increase 1000341504, zero applied graph estimate; these totals do not identify lifetimes. New evidence required: initial versus pre/post-profile non-Torch/reserved and actual captured graph bytes. Probe the existing snapshots and graph capture return without changing accounting or flags. Decision: pursue only an identifiable duplicate or temporary allocation whose removal increases actual KV blocks safely.
+
+### Research checkpoint 2026-11-16T17:34:11+00:00: provisional
+
+- HEAD before checkpoint: 1b680a7781ff0ba07c12d681708695fd5ccda55e
+- Budget remaining: unknown
+- Finding: Attribute startup non-KV and graph allocations
+- Evidence and artifact paths: Original v15 1b680a7781ff0ba07c12d681708695fd5ccda55e, unchanged flags; initial non-torch 153092096 bytes; before profiling non-torch 1092616192, after profiling 1153433600; torch reserved before/after 5226102784/5500829696; weights 5101233152; peak activation 656424960; available KV 22447777996 bytes; actual graph capture return 228589568 bytes with reported estimate 0 on this platform. Most non-torch growth predates profiling, 60817408 bytes arose between pre/post snapshots. No part proven reclaimable; do not relax memory accounting. Temporary logger removed, owned server stopped. Raw log SHA256 7ca50516c0f1175e1554e389c85963581741b6dff5d9b9293ba032946a0a2771, backed up locally.
+- PR-preserved small benchmark CSVs: none (external backup required)
+- Next action: Identify the peak allocation phase inside profile_run, then pursue only a real live-workspace reduction.
+- Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
