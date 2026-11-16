@@ -10,20 +10,20 @@ Original production trees: see AGENTS.md. Pin checkout SHA and verified GPU dead
 
 ## Latest checkpoint
 
-Updated UTC: 2026-11-16T17:00:07+00:00
+Updated UTC: 2026-11-16T17:06:25+00:00
 
 Status: provisional (researcher-reported)
 
-Source HEAD before checkpoint: d356e5b158e3006972d44313f769072823b95c0e
+Source HEAD before checkpoint: 342e8d359730c4c06d325e821a9f0f7464bd1b88
 
 Remaining GPU time: unknown
 
-Finding: 4K MM Python dispatch shape frequency diagnostic
+Finding: Grouped MM kernel gain with direct correctness and graph replay
 
-Evidence/provenance: Baseline source 1b680a7781ff0ba07c12d681708695fd5ccbf5eea18787d was not edited except temporary logger; correct pinned commit is 1b680a7781ff0ba07c12d681708695fd5ccda55e. Instrumented 4K quick screen: 8/8 requests, 1786.12 total tok/s, mean TTFT 10553.19 ms, mean TPOT 64.71 ms; NOT an uninstrumented baseline. After server startup, Python logger saw 672 each M=2048 K=2048 N=2560,2048,12288 and M=2048 K=6144 N=2048, plus 42 each of these at M=57. Logger does not observe graph replay; phase markers overwritten so interval is after application startup, including warmup; no representative full-run frequency claim. Raw startup log SHA256 8f2247c3eebb71ce4794211b33bf1670014622d14487c775ffd8aaec67090c99 and bench log 9e72c34de58a826d3132317dcbeabdb290ad694895cb597b21f265822f974c9a backed up locally; logger removed and server stopped.
+Evidence/provenance: Wide MM M=2048 K=2048 N=12288 median control1/candidate1/control2/candidate2 1.40987/1.17073/1.3928/1.1703 ms, 15 warm event timings each; other production shapes and irregular fallback were nearly unchanged. Direct FP32-reference BF16 checks passed on four shapes plus fallback (atol .25 rtol .02); grouped odd M/N tail and three graph replays passed for FP16/BF16. Native original-wide capture: 76.41 percent TCU efficiency, 25.14 percent occupancy, 97 vector registers per thread, 65536 bytes shared memory, launch 384 blocks x 1024 threads; selected 256x256x32, 16 warps, 2 stages. Only kernel evidence, sequential not alternating per sample, no serving result or quality claim. Prior v11 serving was inconclusive; no throughput-goal claim.
 
 Small CSV evidence committed when --push works: none (external backup required)
 
-Next action: Profile resource bottleneck of observed 2048x2048x12288 MM; use native counters and test only new K-loop hypothesis.
+Next action: Back up raw logs; run matched short 4K and 16K serving screens, confirm production candidate execution and keep latency guardrails.
 
 Incomplete half-runs are never verified results. Ignored raw artifacts must be backed up outside the rented instance. This handoff does not verify accuracy or establish a causal speedup.

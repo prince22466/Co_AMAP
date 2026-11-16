@@ -49,3 +49,19 @@ Closest prior: v7 distinct shape inventory and v14 47% 4K early GEMM share. Miss
 - PR-preserved small benchmark CSVs: none (external backup required)
 - Next action: Profile resource bottleneck of observed 2048x2048x12288 MM; use native counters and test only new K-loop hypothesis.
 - Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
+
+## 2026-11-16 UTC: native resource attribution for wide prefill MM (planned)
+Prior: v7 and v11 grouped ordering improved this shape in isolation but did not yield a replicated serving gain; stages 1/2 are existing autotune candidates, and no K-loop resource bottleneck has been established. New question: selected launch configuration, generated resources and native memory/occupancy counters for M=2048 K=2048 N=12288 with production B stride. Smallest decisive probe: direct original-v15 kernel launch with fixed production layout, check numerical correctness and inspect selected kernel and profiler capabilities. Decision: only pursue a distinct dataflow or staging mechanism if the counters identify a plausible bottleneck; no repeat grouping sweep.
+
+## 2026-11-16 UTC: grouped wide MM A/B (requested follow-up; planned)
+Prior v7 and v11 grouped wide MM reduced kernel latency, but v11 short-serving A/B was inconclusive and a second projection regressed. New evidence: this allocation's 4K short request window shows 672 Python dispatches per M=2048 projection family, including the wide projection; graph replay not counted. User explicitly requested grouped scheduling experiments. Candidate uses a general wide-output/large-M/transpose-layout resource predicate with fallback, not benchmark-length dispatch. Test direct all four production shapes plus irregular fallback against FP32, alternating warmed events, then only consider serving A/B if correct and total projected gain is material. This reopens the old mapping at the user's request; it does not assume v11 benefit transfers or claim novelty of the mechanism.
+
+### Research checkpoint 2026-11-16T17:06:25+00:00: provisional
+
+- HEAD before checkpoint: 342e8d359730c4c06d325e821a9f0f7464bd1b88
+- Budget remaining: unknown
+- Finding: Grouped MM kernel gain with direct correctness and graph replay
+- Evidence and artifact paths: Wide MM M=2048 K=2048 N=12288 median control1/candidate1/control2/candidate2 1.40987/1.17073/1.3928/1.1703 ms, 15 warm event timings each; other production shapes and irregular fallback were nearly unchanged. Direct FP32-reference BF16 checks passed on four shapes plus fallback (atol .25 rtol .02); grouped odd M/N tail and three graph replays passed for FP16/BF16. Native original-wide capture: 76.41 percent TCU efficiency, 25.14 percent occupancy, 97 vector registers per thread, 65536 bytes shared memory, launch 384 blocks x 1024 threads; selected 256x256x32, 16 warps, 2 stages. Only kernel evidence, sequential not alternating per sample, no serving result or quality claim. Prior v11 serving was inconclusive; no throughput-goal claim.
+- PR-preserved small benchmark CSVs: none (external backup required)
+- Next action: Back up raw logs; run matched short 4K and 16K serving screens, confirm production candidate execution and keep latency guardrails.
+- Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
