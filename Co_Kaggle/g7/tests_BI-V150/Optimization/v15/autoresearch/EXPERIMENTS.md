@@ -23,3 +23,16 @@ The research queue now registers all previous versions, v8 rejected stacks and e
 - PR-preserved small benchmark CSVs: none (external backup required)
 - Next action: Target unexplained non-KV startup allocations and inspect production GEMM resource evidence; apply novelty gate before GPU tests.
 - Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
+
+## 2026-11-16 UTC: targeted startup allocation attribution (planned)
+Closest prior: v14 startup and telemetry established 521840 KV tokens, 4.69 GiB checkpoint, and high 16K occupancy, but did not report a complete non-KV breakdown. Distinct unknown: weights, peak activations, non-torch allocation, and graph-pool estimate/actual with unchanged serving configuration. Smallest test: temporary diagnostic logging at the existing accounting boundary and one owned startup, no workload or allocation changes. Decision: inspect largest reclaimable lifetime before proposing any memory optimization. This does not repeat queue or capacity telemetry, establish a gain, or alter accounting.
+
+### Research checkpoint 2026-11-16T16:53:19+00:00: provisional
+
+- HEAD before checkpoint: f896b5e2a72aa702b9929005115a31b9b70703fc
+- Budget remaining: unknown
+- Finding: Measure v15 startup non-KV memory breakdown
+- Evidence and artifact paths: Baseline source 1b680a7781ff0ba07c12d681708695fd5ccda55e; temporary diagnostic worker logging only, removed after owned server shutdown; fixed flags per program.md; requested 29205777612 bytes, weights 5101233152, activation peak 656424960, non-torch 1000341504, graph estimate and applied 0, available KV 22447777996, 521936 KV tokens; full decode graph capture completed. Raw startup log SHA256 36a195657709a0c5a82a8eaab23a39efd04d9a658f781ba81f8c0f97603d45f5, backed up locally. No reclaimability or throughput gain established; actual graph pool bytes not isolated.
+- PR-preserved small benchmark CSVs: none (external backup required)
+- Next action: Find specific reclaimable lifetime or obtain targeted GEMM resource evidence, then test genuinely new candidate.
+- Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
