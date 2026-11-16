@@ -88,3 +88,16 @@ Prior candidate-first matched pressure pair was -7.08% throughput with +13.75% m
 - PR-preserved small benchmark CSVs: none (external backup required)
 - Next action: Do not promote without balanced independent serving replication, production kernel attribution and matched 4K/16K half-runs; restore original source.
 - Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
+
+## 2026-11-16 UTC: grouped worker dispatch attribution (planned)
+Prior: grouped kernel isolated gain, serving pressure -7.08% candidate-first and +1.02% control-first. Missing: direct evidence that the production worker reaches grouped-eligible MM calls during a 4K request. Temporary log at the actual guarded launch, one short 4K diagnostic and post-start log count; instrumentation distorts performance and does not itself prove emitted kernel identity or graph replay attribution. Decision: determine whether future independent kernel tracing is warranted; no throughput claim.
+
+### Research checkpoint 2026-11-16T21:02:37+00:00: blocked
+
+- HEAD before checkpoint: 17a49650db5cdfb3bad10ea189657139090d5629
+- Budget remaining: unknown
+- Finding: Stop grouped worker attribution to conserve credits
+- Evidence and artifact paths: User requested findings be recorded as credits run out. Instrumented grouped worker attribution was stopped during graph capture before a 4K request; no production request or kernel attribution result, so do not count it as completed. GPU idle and temporary MM logger restored. Existing grouped direct kernel, balanced serving, sampler capacity and pressure findings are preserved in draft PRs 255 and 256 and separate evidence archives. Four-warp and stage3 negative experiments preserved on research/v15-gemm-resource.
+- PR-preserved small benchmark CSVs: none (external backup required)
+- Next action: On a fresh allocation with confirmed deadline, verify actual candidate worker kernel execution, then balanced matched serving and guarded half-runs; investigate larger real non-KV workspace reductions and preserve exact sampling semantics.
+- Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
