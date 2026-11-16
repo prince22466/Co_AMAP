@@ -10,20 +10,20 @@ Original production trees: see AGENTS.md. Pin checkout SHA and verified GPU dead
 
 ## Latest checkpoint
 
-Updated UTC: 2026-11-16T19:10:08+00:00
+Updated UTC: 2026-11-16T19:12:18+00:00
 
-Status: provisional (researcher-reported)
+Status: rejected (researcher-reported)
 
-Source HEAD before checkpoint: 2aa3cf10028a7d642f2bf2a968e46538cb9c98be
+Source HEAD before checkpoint: c8da3be15512f0cb3d2e722a832da3bf33d13de8
 
 Remaining GPU time: unknown
 
-Finding: Attribute activation peak to sampler
+Finding: Reject sampler log-domain fusion on exact token semantics
 
-Evidence/provenance: Original v15 source, diagnostic logging only, no resets to peak statistics: after dummy model forward allocated 5161098752, reserved 5395972096, cumulative peak 5252322816 bytes; after logits allocated 5229256192, reserved 5463080960, peak 5252322816; after dummy sampler allocated 5371865600, reserved 5999951872, cumulative peak 5774530048. The cumulative peak rises 522207232 bytes during sampling, but does not identify the exact live buffers. Dummy sampler tests top-p/top-k and per-request RNG paths; actual benchmark sampling semantics are not established. Raw log SHA256 48d04a812a537c6b42d742d45347e2c94e8a1a2428e51e11845a1dd3b7c584db backed up locally. Logger removed and owned server stopped.
+Evidence/provenance: Standalone prototype uses identical precomputed exponential noise. Normal random rows 8x10003 and 256x130560 yielded zero token mismatches; large baseline/candidate median 2.153/0.408 ms, temporary peak 134221824/67584 bytes, excluding original logits and noise buffers. It mismatched existing sampler for +inf and NaN logits and for 14956 of 65536 constructed finite close-noise ties; therefore exact generation behavior is not preserved. No production integration, no KV block or serving measurement; timings do not justify promotion. Scripts and raw logs preserved. Original sampler and research branch production source unchanged.
 
 Small CSV evidence committed when --push works: none (external backup required)
 
-Next action: Identify sampler live allocations and determine if exact generation semantics can be retained while reducing real workspace; do not merely reduce profile workload.
+Next action: Investigate exact softmax-and-noise workspace fusion or other real memory reductions only if numerical equivalence can be maintained; preserve current KV accounting.
 
 Incomplete half-runs are never verified results. Ignored raw artifacts must be backed up outside the rented instance. This handoff does not verify accuracy or establish a causal speedup.

@@ -39,3 +39,16 @@ Closest prior: startup profiling shows 656424960-byte peak activation but no att
 - PR-preserved small benchmark CSVs: none (external backup required)
 - Next action: Identify sampler live allocations and determine if exact generation semantics can be retained while reducing real workspace; do not merely reduce profile workload.
 - Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
+
+## 2026-11-16 UTC: sampler workspace fusion feasibility (planned)
+Closest prior: v15 sampler phase adds 522207232 bytes to cumulative peak, though individual buffers are not attributed. The native sampler computes softmax, exponential noise and argmax. Test a two-stage logit-minus-log-noise argmax using identical noise, comparing outputs, memory and speed. This is an isolated feasibility test; bitwise and RNG semantics must be verified before any integration.
+
+### Research checkpoint 2026-11-16T19:12:18+00:00: rejected
+
+- HEAD before checkpoint: c8da3be15512f0cb3d2e722a832da3bf33d13de8
+- Budget remaining: unknown
+- Finding: Reject sampler log-domain fusion on exact token semantics
+- Evidence and artifact paths: Standalone prototype uses identical precomputed exponential noise. Normal random rows 8x10003 and 256x130560 yielded zero token mismatches; large baseline/candidate median 2.153/0.408 ms, temporary peak 134221824/67584 bytes, excluding original logits and noise buffers. It mismatched existing sampler for +inf and NaN logits and for 14956 of 65536 constructed finite close-noise ties; therefore exact generation behavior is not preserved. No production integration, no KV block or serving measurement; timings do not justify promotion. Scripts and raw logs preserved. Original sampler and research branch production source unchanged.
+- PR-preserved small benchmark CSVs: none (external backup required)
+- Next action: Investigate exact softmax-and-noise workspace fusion or other real memory reductions only if numerical equivalence can be maintained; preserve current KV accounting.
+- Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
