@@ -85,3 +85,13 @@ Closest prior: log-domain fusion reduced memory but mismatched reference tokens.
 - PR-preserved small benchmark CSVs: none (external backup required)
 - Next action: Return to original v15; seek genuinely different GEMM or allocation mechanism, subject to remaining budget and rules.
 - Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
+
+### Research checkpoint 2026-11-16T20:42:29+00:00: rejected
+
+- HEAD before checkpoint: fc31cfa8296efcaf2d162ac1980e7d1104e172be
+- Budget remaining: unknown
+- Finding: Longer 16K cache-growth diagnostic does not show sampler gain
+- Evidence and artifact paths: Control-first matched diagnostic 16384 input, 1024 output, 64 prompts/concurrency 64, seed42, original flags. Candidate/control: 1768.94/1826.72 total tok/s (-3.16%), TTFT 225604.12/218122.45 ms (+3.43%), TPOT 239.72/229.25 ms (+4.57%); 64/64 successes each, zero failures, 2 preemptions each and zero prefix hits. One pair, no independent replication or official score. Both reached ~100 percent KV occupancy; extra candidate blocks did not eliminate preemption or produce gain. Raw archive SHA256 c81cc7da2a49e2346fec79ea6de5ab656daf435a6d4a23f873f430b0b7f3a3a9 backed up locally. Prior short pressure pairs -5.96% and -2.69%; candidate remains rejected and research-only.
+- PR-preserved small benchmark CSVs: none (external backup required)
+- Next action: Restore original production source and continue only genuinely new small experiments while preserving confirmed allocation reserve.
+- Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
