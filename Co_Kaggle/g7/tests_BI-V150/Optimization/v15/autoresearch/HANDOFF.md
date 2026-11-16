@@ -10,20 +10,20 @@ Original production trees: see AGENTS.md. Pin checkout SHA and verified GPU dead
 
 ## Latest checkpoint
 
-Updated UTC: 2026-11-16T16:53:19+00:00
+Updated UTC: 2026-11-16T17:00:07+00:00
 
 Status: provisional (researcher-reported)
 
-Source HEAD before checkpoint: f896b5e2a72aa702b9929005115a31b9b70703fc
+Source HEAD before checkpoint: d356e5b158e3006972d44313f769072823b95c0e
 
 Remaining GPU time: unknown
 
-Finding: Measure v15 startup non-KV memory breakdown
+Finding: 4K MM Python dispatch shape frequency diagnostic
 
-Evidence/provenance: Baseline source 1b680a7781ff0ba07c12d681708695fd5ccda55e; temporary diagnostic worker logging only, removed after owned server shutdown; fixed flags per program.md; requested 29205777612 bytes, weights 5101233152, activation peak 656424960, non-torch 1000341504, graph estimate and applied 0, available KV 22447777996, 521936 KV tokens; full decode graph capture completed. Raw startup log SHA256 36a195657709a0c5a82a8eaab23a39efd04d9a658f781ba81f8c0f97603d45f5, backed up locally. No reclaimability or throughput gain established; actual graph pool bytes not isolated.
+Evidence/provenance: Baseline source 1b680a7781ff0ba07c12d681708695fd5ccbf5eea18787d was not edited except temporary logger; correct pinned commit is 1b680a7781ff0ba07c12d681708695fd5ccda55e. Instrumented 4K quick screen: 8/8 requests, 1786.12 total tok/s, mean TTFT 10553.19 ms, mean TPOT 64.71 ms; NOT an uninstrumented baseline. After server startup, Python logger saw 672 each M=2048 K=2048 N=2560,2048,12288 and M=2048 K=6144 N=2048, plus 42 each of these at M=57. Logger does not observe graph replay; phase markers overwritten so interval is after application startup, including warmup; no representative full-run frequency claim. Raw startup log SHA256 8f2247c3eebb71ce4794211b33bf1670014622d14487c775ffd8aaec67090c99 and bench log 9e72c34de58a826d3132317dcbeabdb290ad694895cb597b21f265822f974c9a backed up locally; logger removed and server stopped.
 
 Small CSV evidence committed when --push works: none (external backup required)
 
-Next action: Find specific reclaimable lifetime or obtain targeted GEMM resource evidence, then test genuinely new candidate.
+Next action: Profile resource bottleneck of observed 2048x2048x12288 MM; use native counters and test only new K-loop hypothesis.
 
 Incomplete half-runs are never verified results. Ignored raw artifacts must be backed up outside the rented instance. This handoff does not verify accuracy or establish a causal speedup.

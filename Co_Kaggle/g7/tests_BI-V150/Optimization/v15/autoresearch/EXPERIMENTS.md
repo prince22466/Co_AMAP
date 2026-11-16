@@ -36,3 +36,16 @@ Closest prior: v14 startup and telemetry established 521840 KV tokens, 4.69 GiB 
 - PR-preserved small benchmark CSVs: none (external backup required)
 - Next action: Find specific reclaimable lifetime or obtain targeted GEMM resource evidence, then test genuinely new candidate.
 - Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
+
+## 2026-11-16 UTC: targeted production GEMM frequency probe (planned)
+Closest prior: v7 distinct shape inventory and v14 47% 4K early GEMM share. Missing: phase-specific MM shape call weighting. New measurement: temporary MM dispatch logging during a short 4K serving diagnostic; Python dispatch counts may miss graph replay and are not timings. Decision: guide a genuinely new K-loop/resource probe.
+
+### Research checkpoint 2026-11-16T17:00:07+00:00: provisional
+
+- HEAD before checkpoint: d356e5b158e3006972d44313f769072823b95c0e
+- Budget remaining: unknown
+- Finding: 4K MM Python dispatch shape frequency diagnostic
+- Evidence and artifact paths: Baseline source 1b680a7781ff0ba07c12d681708695fd5ccbf5eea18787d was not edited except temporary logger; correct pinned commit is 1b680a7781ff0ba07c12d681708695fd5ccda55e. Instrumented 4K quick screen: 8/8 requests, 1786.12 total tok/s, mean TTFT 10553.19 ms, mean TPOT 64.71 ms; NOT an uninstrumented baseline. After server startup, Python logger saw 672 each M=2048 K=2048 N=2560,2048,12288 and M=2048 K=6144 N=2048, plus 42 each of these at M=57. Logger does not observe graph replay; phase markers overwritten so interval is after application startup, including warmup; no representative full-run frequency claim. Raw startup log SHA256 8f2247c3eebb71ce4794211b33bf1670014622d14487c775ffd8aaec67090c99 and bench log 9e72c34de58a826d3132317dcbeabdb290ad694895cb597b21f265822f974c9a backed up locally; logger removed and server stopped.
+- PR-preserved small benchmark CSVs: none (external backup required)
+- Next action: Profile resource bottleneck of observed 2048x2048x12288 MM; use native counters and test only new K-loop hypothesis.
+- Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
