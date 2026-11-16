@@ -35,7 +35,7 @@ python3 autoresearch/session_budget.py init --deadline-utc 'ACTUAL-ISO8601-UTC-D
 python3 autoresearch/session_budget.py status
 ```
 
-Check external script read-only: verify RUNS=2, SKIP_FIRST=0, actual CLI and output location; if different, stop rather than patch it. Record script hash, model/config fingerprint, server flags, GPU/device and cache state. Do not launch expensive control half-run before promising screen.
+If a genuinely new allocation is confirmed by the operator, archive the previous state and evidence before initializing a new session; never reset within the same allocation. Check external script read-only: verify RUNS=2, SKIP_FIRST=0, actual CLI and output location; if different, stop rather than patch it. Record script hash, model/config fingerprint, server flags, GPU/device and cache state. Do not launch expensive control half-run before promising screen.
 
 ## B. Correctness and profiling
 
@@ -71,7 +71,7 @@ vllm serve /workspace/MiniCPM5-2B \
  --max-model-len 131072 2>&1 | tee "$serve_log"
 ```
 
-In a separate shell, verify health and actual candidate execution. For quick screen run these independent diagnostics identically for control/candidate, using matched clean restarts for each workload and fixed seed. Do not modify or replace the official benchmark. Stop a screen if budget is insufficient; incomplete screens are not comparable.
+In a separate shell, verify health and actual candidate execution. For quick screen run these independent diagnostics identically for control/candidate, using a matched clean restart before each two-case sequence, the same 4K→16K order and fixed seed. Do not modify or replace the official benchmark. Stop a screen if budget is insufficient; incomplete screens are not comparable.
 
 ```bash
 cd /root/Optimization/v15
@@ -91,7 +91,23 @@ for input_len in 4096 16384; do
 done
 ```
 
-For KV pressure use a separate identical diagnostic at 16K, concurrency 64, 64 prompts and 128 output tokens; sample live /metrics, GPU memory and running/waiting every few seconds. If 128 output tokens do not expose decode growth/preemption, use a matched longer diagnostic only when budget allows; never change the official workload. These screens are not scoring and low concurrency cannot validate capacity improvement. Match cache warm/cold state and capture prefix hits. Record actual completed requests, tokens, TTFT/TPOT and errors. Alternate A/B order and rerun plausible gains; compare memory and kernel evidence, then decide whether to spend on full half-runs.
+For KV pressure restart the owned server for a matched clean state and run the following separately on both versions. Sample live /metrics, GPU memory and running/waiting every few seconds in a separate shell (start before the load and stop after completion).
+
+```bash
+set -euo pipefail
+cd /root/Optimization/v15
+mkdir -p .autoresearch-work/quick
+pressure_dir=$(mktemp -d "$PWD/.autoresearch-work/quick/pressure_XXXXXXXX")
+curl -fsS http://127.0.0.1:9031/metrics > "$pressure_dir/before.prom"
+vllm bench serve --backend vllm --model minicpm \
+ --tokenizer /workspace/MiniCPM5-2B --endpoint /v1/completions \
+ --host localhost --port 9031 --dataset-name random --ignore-eos \
+ --seed 42 --random-input-len 16384 --random-output-len 128 \
+ --max-concurrency 64 --num-prompts 64 2>&1 | tee "$pressure_dir/pressure.log"
+curl -fsS http://127.0.0.1:9031/metrics > "$pressure_dir/after.prom"
+```
+
+ If 128 output tokens do not expose decode growth/preemption, use a matched longer diagnostic only when budget allows; never change the official workload. These screens are not scoring and low concurrency cannot validate capacity improvement. Match cache warm/cold state and capture prefix hits. Record actual completed requests, tokens, TTFT/TPOT and errors. Alternate A/B order and rerun plausible gains; compare memory and kernel evidence, then decide whether to spend on full half-runs.
 
 ## D. Guarded unchanged half-run
 

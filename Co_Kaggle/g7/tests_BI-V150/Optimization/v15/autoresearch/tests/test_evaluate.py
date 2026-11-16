@@ -63,13 +63,13 @@ class CsvEvaluatorTests(unittest.TestCase):
         report = evaluate(self.args(cand4=2817.15 * 1.0499))
         self.assertFalse(report["numeric_goal_5pct"])
 
-    def test_control_above_anchor_is_not_a_gain(self):
+    def test_unchanged_control_is_not_a_gain(self):
         report = evaluate(self.args(
             base4=3000, cand4=3000, base16=2200, cand16=2200
         ))
         self.assertFalse(report["numeric_goal_5pct"])
 
-    def test_fixed_anchor_alone_does_not_prove_gain(self):
+    def test_historical_reference_alone_does_not_prove_gain(self):
         report = evaluate(self.args(base4=3000, cand4=2959))
         self.assertFalse(report["numeric_goal_5pct"])
 

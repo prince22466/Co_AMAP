@@ -65,6 +65,28 @@ class SessionBudgetTests(unittest.TestCase):
             budget.save(path, state)
             self.assertEqual(budget.read_state(path), state)
 
+    def test_cli_init_pins_hash_and_refuses_reset(self):
+        import hashlib
+        import sys
+        with TemporaryDirectory() as folder:
+            state_path = Path(folder) / "state.json"
+            benchmark = Path(folder) / "benchmark.py"
+            benchmark.write_text("# unchanged external benchmark")
+            argv = ["session_budget.py", "--state", str(state_path),
+                    "init", "--duration-minutes", "330"]
+            with patch.object(budget, "BENCHMARK", benchmark), patch.object(sys, "argv", argv):
+                self.assertEqual(budget.main(), 0)
+                before = state_path.read_bytes()
+                self.assertEqual(budget.read_state(state_path)["benchmark_sha256"],
+                                 hashlib.sha256(benchmark.read_bytes()).hexdigest())
+                # CLI error convention may be nonzero return or argparse exit.
+                try:
+                    result = budget.main()
+                except SystemExit as exc:
+                    result = exc.code
+                self.assertNotEqual(result, 0)
+                self.assertEqual(state_path.read_bytes(), before)
+
     def test_invalid_one_run_admission_does_not_start_benchmark(self):
         state = budget.start_session(1, None)
         with TemporaryDirectory() as folder, patch.object(

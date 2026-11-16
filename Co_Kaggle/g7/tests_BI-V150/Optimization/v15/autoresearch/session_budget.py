@@ -133,6 +133,10 @@ def execute_half(state: dict, state_path: Path, push: bool = False) -> int:
                    refreshed["remaining_minutes"], push)
         print(json.dumps(refreshed, indent=2), file=sys.stderr)
         return 2
+    if hashlib.sha256(BENCHMARK.read_bytes()).hexdigest() != sha:
+        record.update({"status": "CANCELLED_BENCHMARK_CHANGED", "finished_epoch": time.time()})
+        save(run_dir / "run.json", record)
+        raise ValueError("Benchmark changed during preflight; stop")
     hard_seconds = int(state["deadline_epoch"] - time.time()
                        - 60 * state["preservation_reserve_minutes"])
     if hard_seconds <= 0:
