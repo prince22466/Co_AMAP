@@ -303,3 +303,16 @@ Prior v15 grouped candidate wide GEMM direct latency 1.39-1.41 to 1.17ms, but se
 - PR-preserved small benchmark CSVs: none (external backup required)
 - Next action: Analyze new independent GEMM/epilogue mechanism and preserve baseline; prior balanced serving remains inconclusive and half-runs are not admitted in remaining time.
 - Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
+
+## 2026-11-17 UTC: interleaved single-dot fused SwiGLU (planned)
+Previous fused SwiGLU dual-dot variants were exact but slower: row-major 1.895 ms and grouped 2.046 ms vs original MM plus single-launch activation 1.547 ms. New mechanism: load gate/up weight columns interleaved into a single 256-wide tensor-core dot, reshape and split its accumulator into gate/up lanes after BF16 rounding, then fuse activation. This preserves the original 256x256 accumulator footprint while using one dot per K-step instead of two. Compare 256x128, 16-warp implementation against original chain on production and ragged BF16 shapes with alternating warmed timings. Reject on mismatches or no improvement; proxy activation still requires production validation.
+
+### Research checkpoint 2026-11-17T19:39:21+00:00: rejected
+
+- HEAD before checkpoint: f103820d6efd88521527a5993a49a9979163208a
+- Budget remaining: unknown
+- Finding: Reject interleaved single-dot SwiGLU fusion
+- Evidence and artifact paths: Original v15 source; interleaved gate/up columns, single 256-wide dot and split BF16-rounded accumulator vs original MM plus one-launch pointwise proxy. For M2048 K2048 N6144, alternating 12-event median fused 3.01379 ms vs baseline 1.53813 ms (+95.9%); M33 K96 N257 0.01843 vs 0.01199 ms. Sampled BF16 outputs exactly matched, but FP16/strides/graph/production integration were not tested. Reject this kernel; no serving or accuracy result.
+- PR-preserved small benchmark CSVs: none (external backup required)
+- Next action: Find a genuinely different mechanism; do not retest this interleaved fusion without new causal evidence.
+- Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
