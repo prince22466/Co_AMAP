@@ -197,3 +197,22 @@ The earlier 4K shape-attribution checkpoint contains a mistyped baseline identif
 - PR-preserved small benchmark CSVs: none (external backup required)
 - Next action: Inspect production MLP projection/activation execution and choose a novel fused epilogue probe.
 - Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
+
+## 2026-11-17 UTC: fused gate/up projection plus SwiGLU feasibility (planned)
+Closest prior: v7 grouped MM/edge-mask/direct-accumulation, v11 selective grouping, and v15 grouped A/B did not establish a serving win; none fused gate/up GEMM with SwiGLU. Archived 4K trace shows mm_kernel plus a separate silu/multiply pointwise kernel; installed LlamaMLP executes merged gate_up_proj followed by SiluAndMul. Missing: whether two dot accumulators with a BF16-rounding-preserving activation epilogue save enough time and intermediate storage to offset resource pressure. Smallest decisive probe: compare original v15 MM plus fused activation against one two-accumulator Triton GEMM epilogue, identical weights/layout, warmed alternating events, M=2048 K=2048 output=2x6144 and a small ragged correctness case. Preserve BF16 rounding before activation. Reject if reference fails or chain time regresses. This is an isolated new operator/dataflow, not a change to dispatch, official flags, or benchmark.
+
+## 2026-11-17 UTC: resource-matched fused SwiGLU tile (planned)
+Prior immediate probe used 128x128, 8-warps, two accumulators and was exact on two BF16 cases but production-shaped chain 3.38967 vs baseline 1.94357 ms (+74.4%). This doubles the output program count relative to selected original wide 256x256 tile. New specific test: 256x128 with 16 warps and two 256x128 accumulators, preserving the original 256x256 output footprint, 384 programs, and equivalent A/B tile volume while fusing the activation. Same original MM+activation control and BF16 checks, alternating timings; reject if it does not outperform the full original chain. No generic tile sweep.
+
+## 2026-11-17 UTC: production-like activation baseline check (planned)
+The fused 256x128 prototype measured 1.893/1.887 ms vs MM plus FlagGems pointwise wrapper 1.938/1.938 ms in two screens, but v14 production uses a distinct compiler-generated triton_poi_fused_mul_silu_slice_1 (1764 calls, 241.05 ms, about 0.137 ms/call across observed early trace). Missing: whether wrapper overhead exaggerates the activation cost. Compare against original MM plus an explicit single-launch Triton slice/silu/mul kernel on the same inputs. This is a proxy, not proof of exact production generated kernel behavior.
+
+### Research checkpoint 2026-11-17T11:54:44+00:00: rejected
+
+- HEAD before checkpoint: bd666241cce6f861c285643a6ea21fa86a32b177
+- Budget remaining: unknown
+- Finding: Reject fused SwiGLU after production-like baseline check
+- Evidence and artifact paths: Original production control 063f1fb7 with original source trees. Fused BF16 output exactly matched baseline on M33 K96 N257 and M2048 K2048 N6144. First 128x128 8-warp fused tile was 3.38967 ms vs MM plus FlagGems wrapper 1.94357 ms. Resource-matched 256x128 16-warp fused tile measured 1.89325 and 1.88678 ms vs wrapper baseline 1.93786 and 1.93790 ms in two alternating screens, but wrapper exaggerates production activation cost: original MM plus explicit single-launch Triton activation proxy measured 1.54745 ms vs fused 1.89528 ms (+22.48% latency), BF16 outputs exact. v14 real compiled activation averaged 241.05 ms /1764 calls =0.137 ms/call; proxy is not proof of identical production kernel, but rules out initial gain claim. No integration, no serving, FP16/strides/graph/accuracy not tested. Exact scripts and raw logs preserved.
+- PR-preserved small benchmark CSVs: none (external backup required)
+- Next action: Investigate a different resource mechanism or small-M/vocabulary bottleneck; do not promote this fused tile or count the wrapper result as a production gain.
+- Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
