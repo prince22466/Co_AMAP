@@ -1,10 +1,10 @@
 # v15 latest research handoff
 
-Status: GPU research completed for the November 16 allocation; no verified end-to-end throughput improvement or final accuracy result. Grouped MM remains a research-only candidate with inconclusive serving results.
+Status: GPU research was completed for the November 16 allocation. Neither the grouped MM candidate nor the sampler candidate has a verified end-to-end throughput improvement or final accuracy result; both remain research-only.
 
 ## Research state (maintained by Codex; checkpoint helper preserves this section)
 
-Original source commit: 1b680a7781ff0ba07c12d681708695fd5ccda55e. Grouped MM candidate source commit: 342e8d35. Direct wide-projection kernel timing improved, but candidate-first and control-first serving screens disagreed. The later worker-attribution probe was stopped before completing a request. See EXPERIMENTS.md and draft PR #255 for measurements and limitations. Separate four-warp and three-stage GEMM probes regressed; their evidence is on research/v15-gemm-resource.
+Original source commit: 1b680a7781ff0ba07c12d681708695fd5ccda55e. Grouped MM candidate source commit: 342e8d35; sampler buffer-reuse candidate source commit: 1fd9d417. Grouped MM improved a wide projection in direct kernel tests, while its serving screens were order-sensitive. Sampler buffer reuse increased measured KV capacity, but its 16K serving screens did not show a gain. The grouped worker-attribution probe was stopped before completing a request. See EXPERIMENTS.md and draft PRs #255 and #256 for evidence, test gaps and limitations. Separate four-warp and three-stage GEMM probes regressed; their evidence is on research/v15-gemm-resource. The rejected log-domain sampler fusion changes token selections and must not be integrated.
 
 <!-- latest-checkpoint -->
 
