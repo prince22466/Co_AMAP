@@ -23,16 +23,17 @@ def fused(x,q):
  finish[(r,)](pm,pi,out,t,triton.next_power_of_2(t),num_warps=4)
  return out
 def base(x,q): return x.softmax(dim=-1,dtype=torch.float32).div_(q).argmax(dim=-1)
-torch.manual_seed(32)
-for rows,n in [(8,10003),(256,130560)]:
- x=torch.randn((rows,n),device='cuda',dtype=torch.float32)
- q=torch.empty_like(x).exponential_()
- a=base(x,q); b=fused(x,q); torch.cuda.synchronize()
- print(json.dumps({'shape':[rows,n],'mismatches':int((a!=b).sum())}),flush=True)
- for name,fn in [('baseline',base),('candidate',fused)]:
-  fn(x,q); torch.cuda.synchronize(); torch.cuda.reset_peak_memory_stats()
-  start=torch.cuda.memory_allocated(); times=[]
-  for j in range(8):
-   e0=torch.cuda.Event(enable_timing=True); e1=torch.cuda.Event(enable_timing=True)
-   e0.record(); out=fn(x,q); e1.record(); e1.synchronize(); times.append(e0.elapsed_time(e1))
-  print(json.dumps({'path':name,'shape':[rows,n],'peak_increment':torch.cuda.max_memory_allocated()-start,'median_ms':statistics.median(times),'samples_ms':times}),flush=True)
+if __name__ == '__main__':
+    torch.manual_seed(32)
+    for rows,n in [(8,10003),(256,130560)]:
+     x=torch.randn((rows,n),device='cuda',dtype=torch.float32)
+     q=torch.empty_like(x).exponential_()
+     a=base(x,q); b=fused(x,q); torch.cuda.synchronize()
+     print(json.dumps({'shape':[rows,n],'mismatches':int((a!=b).sum())}),flush=True)
+     for name,fn in [('baseline',base),('candidate',fused)]:
+      fn(x,q); torch.cuda.synchronize(); torch.cuda.reset_peak_memory_stats()
+      start=torch.cuda.memory_allocated(); times=[]
+      for j in range(8):
+       e0=torch.cuda.Event(enable_timing=True); e1=torch.cuda.Event(enable_timing=True)
+       e0.record(); out=fn(x,q); e1.record(); e1.synchronize(); times.append(e0.elapsed_time(e1))
+      print(json.dumps({'path':name,'shape':[rows,n],'peak_increment':torch.cuda.max_memory_allocated()-start,'median_ms':statistics.median(times),'samples_ms':times}),flush=True)
