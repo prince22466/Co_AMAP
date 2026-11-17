@@ -218,27 +218,6 @@ def patch_sampler_compile_for_iluvatar() -> None:
             _orig = _tts.compiled_random_sample
             _tts.compiled_random_sample = getattr(_orig, '__wrapped__', _orig)
             _tts._iluvatar_compile_patched = True
-            # The native sampler permits logits to be modified in-place.
-            # Reuse that FP32 buffer for softmax when processed logits are not
-            # returned, avoiding a full-vocabulary probability allocation.
-            _original_native = _tts.TopKTopPSampler.forward_native
-
-            def _inplace_native(self, logits, generators, k, p):
-                import torch
-                if (self.logprobs_mode not in ("raw_logits", "raw_logprobs")
-                        or logits.dtype != torch.float32
-                        or not logits.is_contiguous()
-                        or logits.requires_grad):
-                    return _original_native(self, logits, generators, k, p)
-                logits = _tts.apply_top_k_top_p(logits, k, p)
-                if logits.is_contiguous():
-                    torch.softmax(logits, dim=-1, dtype=torch.float32, out=logits)
-                    probs = logits
-                else:
-                    probs = logits.softmax(dim=-1, dtype=torch.float32)
-                return _tts.random_sample(probs, generators, self.use_fp64_gumbel), None
-
-            _tts.TopKTopPSampler.forward_native = _inplace_native
             logger.info('patch_sampler_compile_for_iluvatar: unwrapped topk_topp_sampler.compiled_random_sample')
     except Exception as e:
         logger.warning('patch_sampler_compile_for_iluvatar (topk_topp): %s', e)
