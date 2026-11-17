@@ -10,20 +10,20 @@ Original source commit: 1b680a7781ff0ba07c12d681708695fd5ccda55e. Grouped MM can
 
 ## Latest checkpoint
 
-Updated UTC: 2026-11-17T13:27:40+00:00
+Updated UTC: 2026-11-17T13:49:07+00:00
 
 Status: provisional (researcher-reported)
 
-Source HEAD before checkpoint: 586252064ff732956b43b29c02265e194e4ac597
+Source HEAD before checkpoint: a06e86030e0fb0ef25f008f6e5a6c9928e466fce
 
 Remaining GPU time: unknown
 
-Finding: Localize model non-Torch growth to allocation granularity
+Finding: Expandable allocation adds KV capacity; short serving near neutral
 
-Evidence/provenance: Baseline unmodified v15: non-Torch 264241152 bytes before initialize_model and 1096810496 immediately after (+832569344); weight loading and postprocessing did not change it. Fresh synthetic processes allocating 5GB: one 5GB allocation non-Torch unchanged; 50 x 100MB unchanged; 500 x 10MB raised non-Torch 394264576 bytes and released it when all tensors/cache freed. With PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True, 500 x 10MB raised non-Torch by 0 and torch reserved 5012193280 vs default 5242880000. This is a synthetic feasibility result, not evidence of actual model KV blocks or throughput. Changing allocator policy may have unclear competition eligibility; diagnostic only until organizer approval. No flags, model data, cache accounting or official benchmark modified.
+Evidence/provenance: Diagnostic allocator policy only; original source 063f1fb7 production trees, unchanged model/server/benchmark flags. Candidate-first matched startup default/expandable: non-Torch increase 1000341504/67108864 bytes, activation peak 656424960/654032896, KV bytes 22447777996/23383402700, token capacity 521936/543696 (+21760, +1360 blocks, +4.17%). Both full decode graph captures completed. 4K 8/8 candidate/control 1785.25/1786.35 tok/s, TTFT 10508.31/10466.80 ms, TPOT 65.11/65.38 ms; 16K 8/8 3545.67/3529.18, TTFT 16755.13/16798.55, TPOT 156.60/157.63. 16K pressure 64/64 3662.88/3646.08 (+0.46%), TTFT 122457.78/122507.27, TPOT 541.53/544.34, zero failed requests, zero new preemptions and 130944 prefix hits each. One pair; no independent throughput replication, correctness or MATH-500; pressure uses warmed prefix cache and 128 output tokens. Allocator-policy eligibility requires organizer approval; never count as competition win merely from diagnostic. Server instrumentation removed and processes stopped.
 
 Small CSV evidence committed when --push works: none (external backup required)
 
-Next action: Measure actual model allocation, KV blocks, graph capture and reliability with the same server flags under allocator A/B; assess eligibility independently.
+Next action: Preserve raw logs; independently verify allocator graph/lifetime correctness and evaluate cache-growth pressure only if budget allows; organizer approval required for any scored allocator-policy candidate.
 
 Incomplete half-runs are never verified results. Ignored raw artifacts must be backed up outside the rented instance. This handoff does not verify accuracy or establish a causal speedup.
