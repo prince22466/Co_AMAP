@@ -1,5 +1,6 @@
 import runpy,torch
-d=runpy.run_path('.autoresearch-work/sampler-fusion/probe.py')
+from pathlib import Path
+d=runpy.run_path(str(Path(__file__).with_name('sampler_fusion_probe.py')))
 base,fused=d['base'],d['fused']
 tests=[
  ('near_tie', [[0.,1e-8]], [[1.,1.]]),
