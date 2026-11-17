@@ -187,3 +187,13 @@ Prior: grouped kernel isolated gain, serving pressure -7.08% candidate-first and
 ## Review correction: baseline commit identifier
 
 The earlier 4K shape-attribution checkpoint contains a mistyped baseline identifier beginning `1b680a77` and ending `5ccbf5eea18787d`. The correct original v15 commit is `1b680a7781ff0ba07c12d681708695fd5ccda55e`; the original FlagGems tree is `7cdae638186b8dba929cbfb1a4ccbf5eea18787d`. The affected checkpoint itself also states the correct commit. This correction does not change the recorded measurements.
+
+### Research checkpoint 2026-11-17T11:50:03+00:00: provisional
+
+- HEAD before checkpoint: 063f1fb7d079cb276106af81fcc4c3b64dbc3793
+- Budget remaining: unknown
+- Finding: Start continuation allocation with original v15 production control
+- Evidence and artifact paths: User confirmed 2026-11-17 16:00 UTC deadline on new host 2309343dd3b8; BI-V150 32GiB idle. Production control commit 063f1fb7d079cb276106af81fcc4c3b64dbc3793, identical source trees to original 1b680a7781ff0ba07c12d681708695fd5ccda55e: FlagGems 7cdae638186b8dba929cbfb1a4ccbf5eea18787d and plugin b481b8fa8b41712267262ce678adba8132a3043f. Parent includes merged 255/256 evidence; candidates isolated out of control. Prior session budget archived; benchmark SHA256 873f17f932d4643222be9903ba3b569c1863c4e2d246ceafbe6f75ebe7163ffc, RUNS=2 SKIP_FIRST=0 and helper supplies exact cases. Fresh matched half-run pair not admitted at 250 minutes; reserve 25 minutes.
+- PR-preserved small benchmark CSVs: none (external backup required)
+- Next action: Inspect production MLP projection/activation execution and choose a novel fused epilogue probe.
+- Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
