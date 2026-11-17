@@ -316,3 +316,19 @@ Previous fused SwiGLU dual-dot variants were exact but slower: row-major 1.895 m
 - PR-preserved small benchmark CSVs: none (external backup required)
 - Next action: Find a genuinely different mechanism; do not retest this interleaved fusion without new causal evidence.
 - Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
+
+## 2026-11-17 UTC: fused SwiGLU native resource attribution (planned)
+Prior dual-dot fused 256x128 latency 1.895 ms vs original MM plus activation proxy 1.547 ms; interleaving and grouped scheduling also regressed. Missing evidence: hardware resource and utilization measurements for the production-sized fused kernel, which may explain the regression and identify whether a distinct dataflow is plausible. Profile one existing fused launch on M2048 K2048 N6144 with native analyzer; compare qualitatively with the archived original MM profile. Diagnostic only: profiler replay perturbs timing, no source or serving modifications. Stop fusion exploration if measurements expose no actionable bottleneck.
+
+## 2026-11-17 UTC: smaller-N dual-dot fusion resource test (planned)
+Nearest prior 256x128 dual-dot fused kernel: 1.895 ms versus MM plus pointwise proxy 1.547 ms. Native profile showed 78.31% LSU utilization, 55.77% TCU efficiency, 102 vector registers/thread and 65536 bytes shared/block, vs archived original MM 54.59%, 76.41%, 97 and 65536 respectively (separate profiler captures; counters are diagnostic, not a causality proof). New single variant halves N tile to 64 and warps to 8, reducing per-block accumulators and potentially improving resident blocks; 256 M and 2-stage K32 unchanged. Test exact sampled BF16 outputs and alternating timings vs the production-like original proxy, on ragged and production shapes. Reject if no speedup; no broad sweep.
+
+### Research checkpoint 2026-11-17T19:42:50+00:00: rejected
+
+- HEAD before checkpoint: 369af371168c7acf69b128ba0ae2679c13231639
+- Budget remaining: unknown
+- Finding: Reject smaller-N fusion and record resource attribution
+- Evidence and artifact paths: Original v15 source; native profile fused dual-dot 256x128 LSU 78.31%, TCU 55.77%, 102 vector registers/thread, 65536 shared bytes/block, no local memory; archived original MM 54.59%, 76.41%, 97 and 65536 respectively. Independent profiler captures, no causality established. Profiler forced termination after capture triggered pybind shutdown error; report completed. Smaller-N fused 256x64 eight warps 2 stages exact sampled BF16 on production and ragged shapes; production M2048 K2048 N6144 median 2.59466 ms vs original MM plus activation proxy 1.53635 ms (+68.9%); ragged 0.01366 vs 0.01196 ms. Reject; proxy differs from actual compiled production activation; no production serving claim.
+- PR-preserved small benchmark CSVs: none (external backup required)
+- Next action: Leave fusion absent a materially distinct mechanism; investigate other priorities within session budget.
+- Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.

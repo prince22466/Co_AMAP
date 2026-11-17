@@ -10,20 +10,20 @@ Original source commit: 1b680a7781ff0ba07c12d681708695fd5ccda55e. Grouped MM can
 
 ## Latest checkpoint
 
-Updated UTC: 2026-11-17T19:39:21+00:00
+Updated UTC: 2026-11-17T19:42:50+00:00
 
 Status: rejected (researcher-reported)
 
-Source HEAD before checkpoint: f103820d6efd88521527a5993a49a9979163208a
+Source HEAD before checkpoint: 369af371168c7acf69b128ba0ae2679c13231639
 
 Remaining GPU time: unknown
 
-Finding: Reject interleaved single-dot SwiGLU fusion
+Finding: Reject smaller-N fusion and record resource attribution
 
-Evidence/provenance: Original v15 source; interleaved gate/up columns, single 256-wide dot and split BF16-rounded accumulator vs original MM plus one-launch pointwise proxy. For M2048 K2048 N6144, alternating 12-event median fused 3.01379 ms vs baseline 1.53813 ms (+95.9%); M33 K96 N257 0.01843 vs 0.01199 ms. Sampled BF16 outputs exactly matched, but FP16/strides/graph/production integration were not tested. Reject this kernel; no serving or accuracy result.
+Evidence/provenance: Original v15 source; native profile fused dual-dot 256x128 LSU 78.31%, TCU 55.77%, 102 vector registers/thread, 65536 shared bytes/block, no local memory; archived original MM 54.59%, 76.41%, 97 and 65536 respectively. Independent profiler captures, no causality established. Profiler forced termination after capture triggered pybind shutdown error; report completed. Smaller-N fused 256x64 eight warps 2 stages exact sampled BF16 on production and ragged shapes; production M2048 K2048 N6144 median 2.59466 ms vs original MM plus activation proxy 1.53635 ms (+68.9%); ragged 0.01366 vs 0.01196 ms. Reject; proxy differs from actual compiled production activation; no production serving claim.
 
 Small CSV evidence committed when --push works: none (external backup required)
 
-Next action: Find a genuinely different mechanism; do not retest this interleaved fusion without new causal evidence.
+Next action: Leave fusion absent a materially distinct mechanism; investigate other priorities within session budget.
 
 Incomplete half-runs are never verified results. Ignored raw artifacts must be backed up outside the rented instance. This handoff does not verify accuracy or establish a causal speedup.
