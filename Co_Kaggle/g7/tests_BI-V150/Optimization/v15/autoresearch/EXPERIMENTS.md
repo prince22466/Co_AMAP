@@ -290,3 +290,16 @@ Prior fused 256x128 two-accumulator kernel had exact BF16 output but took 1.895 
 - PR-preserved small benchmark CSVs: none (external backup required)
 - Next action: Investigate a distinct source-owned projection, memory-lifetime or small-M dataflow mechanism; preserve 25-minute reserve and do not attempt unadmitted half-runs.
 - Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
+
+## 2026-11-17 UTC: grouped MM production kernel attribution (planned)
+Prior v15 grouped candidate wide GEMM direct latency 1.39-1.41 to 1.17ms, but serving A/B -7.08% and +1.02% by order; previous worker-attribution attempt stopped before request. Missing evidence: an actual production 4K worker launches a grouped-specialized MM kernel. Diagnostic uses the existing candidate commit 342e8d35 in isolation against original v15, duplicates its kernel with a distinct profiling name only for the existing grouped shape/layout predicate, and captures a short torch profiler window during a 4K diagnostic. Kernel naming and profiler are diagnostic changes, not scoring; no repeated microbenchmarks or serving performance claims. Decision: establish or disprove production execution before considering further grouped work. Remove temporary source changes and profiler after capture.
+
+### Research checkpoint 2026-11-17T19:37:09+00:00: provisional
+
+- HEAD before checkpoint: 1e8cc4a87dc83e3225c8bbb6f2b6bfc0130ccdfb
+- Budget remaining: unknown
+- Finding: Verify grouped MM GPU execution in 4K worker
+- Evidence and artifact paths: Diagnostic original v15 control source plus isolated grouped candidate 342e8d35; duplicate identical grouped kernel renamed mm_kernel_grouped_probe and selected only for M>=1024 N>=8192 stride_bk=1, profiler enabled, no performance claim. A 4K random diagnostic with 8/8 successful requests generated 672 rank0 GPU kernel events matching mm_kernel_grouped_probe, summed duration 784050.465 microseconds in profiler window; this establishes grouped-specialized worker execution in that diagnostic. Async frontend trace has zero GPU events; correct worker rank0 trace SHA256 8f46da15738f8063bc94aef4c12bb00738af80001a3e0e1f28175cacc2ef4a57; 4k client log SHA256 1241260ebaeeac420a9d3e1577f4bc94d3ef4efbbd58514740a3f9aba21e9313. Trace perturbed timings and excludes unseen graph replay; no claim of throughput or accuracy gain. Temporary source restored, owned server stopped.
+- PR-preserved small benchmark CSVs: none (external backup required)
+- Next action: Analyze new independent GEMM/epilogue mechanism and preserve baseline; prior balanced serving remains inconclusive and half-runs are not admitted in remaining time.
+- Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.

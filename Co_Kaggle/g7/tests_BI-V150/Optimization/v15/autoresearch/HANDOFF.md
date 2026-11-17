@@ -10,20 +10,20 @@ Original source commit: 1b680a7781ff0ba07c12d681708695fd5ccda55e. Grouped MM can
 
 ## Latest checkpoint
 
-Updated UTC: 2026-11-17T19:30:54+00:00
+Updated UTC: 2026-11-17T19:37:09+00:00
 
-Status: rejected (researcher-reported)
+Status: provisional (researcher-reported)
 
-Source HEAD before checkpoint: 5a59283f98443a08fc7c49b9b1431f050bbb4790
+Source HEAD before checkpoint: 1e8cc4a87dc83e3225c8bbb6f2b6bfc0130ccdfb
 
 Remaining GPU time: unknown
 
-Finding: Grouped fused SwiGLU is slower than original chain
+Finding: Verify grouped MM GPU execution in 4K worker
 
-Evidence/provenance: User granted two additional hours; same host, budget extended to 2026-11-17T21:29:00Z preserving old deadline history. Original v15 production trees; grouped fused 256x128 two-accumulator BF16 kernel with 16 warps, 2 stages vs original MM plus explicit single-launch activation proxy. Alternating 12-event median production shape M2048 K2048 N6144: grouped fused 2.04581 ms, control 1.54150 ms (+32.7% latency); M33 K96 N257 0.01316/0.00986 ms. Outputs exactly match for both sampled BF16 cases; FP16, graph, full stride coverage and production serving not tested. The activation proxy is not the exact compiled production kernel. Reject candidate, no production change.
+Evidence/provenance: Diagnostic original v15 control source plus isolated grouped candidate 342e8d35; duplicate identical grouped kernel renamed mm_kernel_grouped_probe and selected only for M>=1024 N>=8192 stride_bk=1, profiler enabled, no performance claim. A 4K random diagnostic with 8/8 successful requests generated 672 rank0 GPU kernel events matching mm_kernel_grouped_probe, summed duration 784050.465 microseconds in profiler window; this establishes grouped-specialized worker execution in that diagnostic. Async frontend trace has zero GPU events; correct worker rank0 trace SHA256 8f46da15738f8063bc94aef4c12bb00738af80001a3e0e1f28175cacc2ef4a57; 4k client log SHA256 1241260ebaeeac420a9d3e1577f4bc94d3ef4efbbd58514740a3f9aba21e9313. Trace perturbed timings and excludes unseen graph replay; no claim of throughput or accuracy gain. Temporary source restored, owned server stopped.
 
 Small CSV evidence committed when --push works: none (external backup required)
 
-Next action: Investigate a distinct source-owned projection, memory-lifetime or small-M dataflow mechanism; preserve 25-minute reserve and do not attempt unadmitted half-runs.
+Next action: Analyze new independent GEMM/epilogue mechanism and preserve baseline; prior balanced serving remains inconclusive and half-runs are not admitted in remaining time.
 
 Incomplete half-runs are never verified results. Ignored raw artifacts must be backed up outside the rented instance. This handoff does not verify accuracy or establish a causal speedup.
