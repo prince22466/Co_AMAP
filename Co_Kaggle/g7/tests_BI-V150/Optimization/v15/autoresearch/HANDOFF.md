@@ -10,20 +10,20 @@ Original source commit: 1b680a7781ff0ba07c12d681708695fd5ccda55e. Grouped MM can
 
 ## Latest checkpoint
 
-Updated UTC: 2026-11-17T19:27:29+00:00
+Updated UTC: 2026-11-17T19:30:54+00:00
 
 Status: rejected (researcher-reported)
 
-Source HEAD before checkpoint: ecc9fee944c2d107d7ba7962b9cc69429b062f2d
+Source HEAD before checkpoint: 5a59283f98443a08fc7c49b9b1431f050bbb4790
 
 Remaining GPU time: unknown
 
-Finding: Expandable allocator long 16K diagnostic regresses
+Finding: Grouped fused SwiGLU is slower than original chain
 
-Evidence/provenance: Original v15 production control 063f1fb7, unchanged server flags. Fresh control-first 16K diagnostic: 16384 input, 1024 output, 64 prompts/concurrency, seed42. Expandable/control 1678.40/1878.24 total tok/s (-10.64%), TTFT 228617.09/218196.08 ms (+4.78%), TPOT 264.75/222.17 ms (+19.17%). Both completed 64 requests, zero failures, zero prefix hits, and two preemptions each. Single pair is not causal proof or official half-run, but fails throughput and latency guardrails; no verified gain. Standalone allocation smoke: 80 reuse iterations, ten graph replays and matching output SHA256 9fb6b2c687b0d115530224460470c3cd950842303acb0c6f636ae44b403cc227 for both modes. This does not prove full KV lifecycle correctness. Allocator-policy eligibility remains unresolved; diagnostic only. Confirmed allocation expired 2026-11-17 16:00 UTC. Raw evidence backup required.
+Evidence/provenance: User granted two additional hours; same host, budget extended to 2026-11-17T21:29:00Z preserving old deadline history. Original v15 production trees; grouped fused 256x128 two-accumulator BF16 kernel with 16 warps, 2 stages vs original MM plus explicit single-launch activation proxy. Alternating 12-event median production shape M2048 K2048 N6144: grouped fused 2.04581 ms, control 1.54150 ms (+32.7% latency); M33 K96 N257 0.01316/0.00986 ms. Outputs exactly match for both sampled BF16 cases; FP16, graph, full stride coverage and production serving not tested. The activation proxy is not the exact compiled production kernel. Reject candidate, no production change.
 
 Small CSV evidence committed when --push works: none (external backup required)
 
-Next action: Do not promote allocator mode on these screens. Restore original source, back up logs and continue future work only on a new confirmed allocation.
+Next action: Investigate a distinct source-owned projection, memory-lifetime or small-M dataflow mechanism; preserve 25-minute reserve and do not attempt unadmitted half-runs.
 
 Incomplete half-runs are never verified results. Ignored raw artifacts must be backed up outside the rented instance. This handoff does not verify accuracy or establish a causal speedup.

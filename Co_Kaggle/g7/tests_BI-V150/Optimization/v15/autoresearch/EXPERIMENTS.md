@@ -277,3 +277,16 @@ Prior one candidate-first 16K 128-output screen gave +0.46% throughput, zero pre
 - PR-preserved small benchmark CSVs: none (external backup required)
 - Next action: Do not promote allocator mode on these screens. Restore original source, back up logs and continue future work only on a new confirmed allocation.
 - Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
+
+## 2026-11-17 UTC: fused SwiGLU with weight-reuse tile ordering (planned)
+Prior fused 256x128 two-accumulator kernel had exact BF16 output but took 1.895 ms versus 1.547 ms for original MM plus explicit single-launch activation. Previous v7/v11 grouping tested unfused GEMM, not the dual-accumulator fusion; v15 grouped serving was inconclusive. New causal hypothesis: the fused kernel loads separate gate/up weight tiles per row-major M tile; grouping M tiles can increase weight reuse while still avoiding the intermediate. Test one fused grouped layout against the production-like original chain using identical inputs and alternating warm event timings; skip broad grouping sweeps. Reject if incorrect or not faster than the production-like baseline. This does not rerun earlier unfused grouped MM benchmarks.
+
+### Research checkpoint 2026-11-17T19:30:54+00:00: rejected
+
+- HEAD before checkpoint: 5a59283f98443a08fc7c49b9b1431f050bbb4790
+- Budget remaining: unknown
+- Finding: Grouped fused SwiGLU is slower than original chain
+- Evidence and artifact paths: User granted two additional hours; same host, budget extended to 2026-11-17T21:29:00Z preserving old deadline history. Original v15 production trees; grouped fused 256x128 two-accumulator BF16 kernel with 16 warps, 2 stages vs original MM plus explicit single-launch activation proxy. Alternating 12-event median production shape M2048 K2048 N6144: grouped fused 2.04581 ms, control 1.54150 ms (+32.7% latency); M33 K96 N257 0.01316/0.00986 ms. Outputs exactly match for both sampled BF16 cases; FP16, graph, full stride coverage and production serving not tested. The activation proxy is not the exact compiled production kernel. Reject candidate, no production change.
+- PR-preserved small benchmark CSVs: none (external backup required)
+- Next action: Investigate a distinct source-owned projection, memory-lifetime or small-M dataflow mechanism; preserve 25-minute reserve and do not attempt unadmitted half-runs.
+- Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
