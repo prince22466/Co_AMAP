@@ -10,20 +10,20 @@ Original source commit: 1b680a7781ff0ba07c12d681708695fd5ccda55e. Grouped MM can
 
 ## Latest checkpoint
 
-Updated UTC: 2026-11-17T19:42:50+00:00
+Updated UTC: 2026-11-17T19:48:40+00:00
 
-Status: rejected (researcher-reported)
+Status: provisional (researcher-reported)
 
-Source HEAD before checkpoint: 369af371168c7acf69b128ba0ae2679c13231639
+Source HEAD before checkpoint: 300c3fa7df988894c197001e99b198927e42e6f8
 
 Remaining GPU time: unknown
 
-Finding: Reject smaller-N fusion and record resource attribution
+Finding: Promising isolated division-argmax fusion requires serving validation
 
-Evidence/provenance: Original v15 source; native profile fused dual-dot 256x128 LSU 78.31%, TCU 55.77%, 102 vector registers/thread, 65536 shared bytes/block, no local memory; archived original MM 54.59%, 76.41%, 97 and 65536 respectively. Independent profiler captures, no causality established. Profiler forced termination after capture triggered pybind shutdown error; report completed. Smaller-N fused 256x64 eight warps 2 stages exact sampled BF16 on production and ragged shapes; production M2048 K2048 N6144 median 2.59466 ms vs original MM plus activation proxy 1.53635 ms (+68.9%); ragged 0.01366 vs 0.01196 ms. Reject; proxy differs from actual compiled production activation; no production serving claim.
+Evidence/provenance: Same FP32 probs and exponential noise, original softmax and RNG outside prototype, two-stage divide with round-to-nearest and first-index NaN/tie reduction. 256x130560 median preallocated torch div plus argmax 1.27503 ms vs fused 0.41023 ms (16 alternating event samples; approximately 68% lower operation latency). Repeat 1.27517 vs 0.40996 ms. Compared against native in-place div_ plus argmax: zero token mismatches for 65536x16 constructed finite near-tie rows, 2048x2047/2048/2049 and 256x130560 with zeros/zero, NaNs, infinities and ties; three CUDA graph replays each passed. Timing reference uses preallocated out= division rather than in-place div_; no RNG, integration, fallback, FP64, noncontiguous, seeded generator or production serving validation; no end-to-end gain claimed. Temporary workspace is small; no KV-block claim. Code in autoresearch/probes/sampler_divargmax_*.py, raw logs archived separately.
 
 Small CSV evidence committed when --push works: none (external backup required)
 
-Next action: Leave fusion absent a materially distinct mechanism; investigate other priorities within session budget.
+Next action: Audit exact division and mutation contract; implement isolated backend integration with fallback only if legal, then test seeded sampling, multiple layouts, graph, and short balanced serving screens. Do not use half-runs without budget admission.
 
 Incomplete half-runs are never verified results. Ignored raw artifacts must be backed up outside the rented instance. This handoff does not verify accuracy or establish a causal speedup.

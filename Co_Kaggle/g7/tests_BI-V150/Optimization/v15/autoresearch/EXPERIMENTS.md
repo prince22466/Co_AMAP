@@ -332,3 +332,19 @@ Nearest prior 256x128 dual-dot fused kernel: 1.895 ms versus MM plus pointwise p
 - PR-preserved small benchmark CSVs: none (external backup required)
 - Next action: Leave fusion absent a materially distinct mechanism; investigate other priorities within session budget.
 - Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
+
+## 2026-11-17 UTC: exact division-argmax sampling fusion (planned)
+Prior log-domain sampler fusion was faster but failed finite near-tie and nonfinite exactness; prior in-place softmax preserved sampled tokens but failed serving screens. New mechanism keeps original softmax and exponential RNG unchanged and fuses only FP32 division and argmax in a two-stage reduction, avoiding the scores write/read. Must match native torch div rounding, first-index tie, NaN propagation, infinities and zero noise; FP64 Gumbel falls back. Compare precomputed same probs/noise with native div and argmax, edge and random cases, and alternating CUDA-event timing on actual vocabulary size. Reject if any mismatch or no speedup; no claim on startup KV capacity until integration and profiling. This is distinct from log-domain rewrite and does not alter RNG.
+
+## 2026-11-17 UTC: division-argmax adversarial correctness and graph screen (planned)
+Prior same-noise FP32 fusion matched sampled NaN, infinity, zero/zero and exact tie cases and random rows; production vocabulary 256x130560 median 0.41023 ms versus native preallocated div plus argmax 1.27503 ms. The reference uses an out buffer instead of native div_ but same arithmetic; source inputs and allocations differ from production, and there is no serving result. Missing evidence is near-tie rounding at scale, broader chunk boundaries, signed zeros/NaNs and CUDA graph replay. Compare native in-place div_ and argmax with identical buffers on large adversarial batches and repeated graph replay; reject on any mismatch, retain FP64 and unsupported layouts fallback.
+
+### Research checkpoint 2026-11-17T19:48:40+00:00: provisional
+
+- HEAD before checkpoint: 300c3fa7df988894c197001e99b198927e42e6f8
+- Budget remaining: unknown
+- Finding: Promising isolated division-argmax fusion requires serving validation
+- Evidence and artifact paths: Same FP32 probs and exponential noise, original softmax and RNG outside prototype, two-stage divide with round-to-nearest and first-index NaN/tie reduction. 256x130560 median preallocated torch div plus argmax 1.27503 ms vs fused 0.41023 ms (16 alternating event samples; approximately 68% lower operation latency). Repeat 1.27517 vs 0.40996 ms. Compared against native in-place div_ plus argmax: zero token mismatches for 65536x16 constructed finite near-tie rows, 2048x2047/2048/2049 and 256x130560 with zeros/zero, NaNs, infinities and ties; three CUDA graph replays each passed. Timing reference uses preallocated out= division rather than in-place div_; no RNG, integration, fallback, FP64, noncontiguous, seeded generator or production serving validation; no end-to-end gain claimed. Temporary workspace is small; no KV-block claim. Code in autoresearch/probes/sampler_divargmax_*.py, raw logs archived separately.
+- PR-preserved small benchmark CSVs: none (external backup required)
+- Next action: Audit exact division and mutation contract; implement isolated backend integration with fallback only if legal, then test seeded sampling, multiple layouts, graph, and short balanced serving screens. Do not use half-runs without budget admission.
+- Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
