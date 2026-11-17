@@ -216,3 +216,19 @@ The fused 256x128 prototype measured 1.893/1.887 ms vs MM plus FlagGems pointwis
 - PR-preserved small benchmark CSVs: none (external backup required)
 - Next action: Investigate a different resource mechanism or small-M/vocabulary bottleneck; do not promote this fused tile or count the wrapper result as a production gain.
 - Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
+
+## 2026-11-17 UTC: vocabulary Linear resource attribution (planned)
+Prior v7 covered small-M grouping and direct accumulation and observed M=1/256 K2048 N130560 but did not establish a serving improvement. v14 4K middle rank0 trace includes 37 linear_kernel events totaling 42.05 ms; late graph window has visibility gaps and is not representative. New missing evidence: native cache/bandwidth, registers, shared memory and occupancy for the actual original vocabulary Linear at M1 and M256 with contiguous N-by-K weights. Smallest probe: standalone unmodified operator native counters for one representative launch each; no grouping, edge-mask, direct-dot experiment or shape sweep. Decision: only design a different output/epilogue or work-partition mechanism if counters show a concrete bottleneck.
+
+## 2026-11-17 UTC: non-Torch growth by worker initialization phase (planned)
+Prior v15 snapshots showed initial non-Torch 153092096 bytes, before-profile 1092616192, after-profile 1153433600; most growth (939524096 bytes) occurred before profiling. The responsible operation and reclaimability remain unknown. Novel targeted evidence: read-only MemorySnapshot calls immediately after runner construction and model loading, compared with existing initial and before-profile points, under unchanged server configuration. Stop after allocation profiling; do not change accounting. Decision: investigate only an identified reclaimable resource, never reduce safety reserves based on unproven free memory.
+
+### Research checkpoint 2026-11-17T13:23:35+00:00: provisional
+
+- HEAD before checkpoint: 8461eb2a6dbe6251cad9134a4dba84a728bf5ed6
+- Budget remaining: unknown
+- Finding: Attribute vocabulary Linear and non-Torch growth
+- Evidence and artifact paths: Original v15 production trees. Native vocabulary Linear M1 K2048 N130560 selected 1x256x32 8 warps: 0.818 ms profiler duration, DRAM read efficiency 88.04%, TCU 10.77%, occupancy 24.83%; M256 selected 256x256x32 16 warps: 1.826 ms, DRAM 40.20%, TCU 76.27%, occupancy 24.56%. Profiler captures are diagnostic, warmup and serving impact unknown; no speedup. Initial worker snapshots: runner created non-Torch 264241152 bytes, model loaded 1096810496, profiling done 1157627904. Thus 832569344 bytes (~794 MiB) accumulated during model loading, with 60817408 bytes (~58 MiB) during profiling; it is not yet proven reclaimable. Instrumented server stopped and worker restored. Raw logs preserved off-instance after checkpoint.
+- PR-preserved small benchmark CSVs: none (external backup required)
+- Next action: Split model loading into initialization, weight loading and post-processing snapshots; design a genuine memory-lifetime candidate only if evidence identifies one.
+- Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
