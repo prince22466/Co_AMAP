@@ -101,3 +101,7 @@ Prior: grouped kernel isolated gain, serving pressure -7.08% candidate-first and
 - PR-preserved small benchmark CSVs: none (external backup required)
 - Next action: On a fresh allocation with confirmed deadline, verify actual candidate worker kernel execution, then balanced matched serving and guarded half-runs; investigate larger real non-KV workspace reductions and preserve exact sampling semantics.
 - Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
+
+## Review correction: baseline commit identifier
+
+The earlier 4K shape-attribution checkpoint contains a mistyped baseline identifier beginning `1b680a77` and ending `5ccbf5eea18787d`. The correct original v15 commit is `1b680a7781ff0ba07c12d681708695fd5ccda55e`; the original FlagGems tree is `7cdae638186b8dba929cbfb1a4ccbf5eea18787d`. The affected checkpoint itself also states the correct commit. This correction does not change the recorded measurements.
