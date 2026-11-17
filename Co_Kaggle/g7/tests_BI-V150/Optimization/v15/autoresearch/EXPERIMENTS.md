@@ -261,3 +261,19 @@ Prior synthetic standalone 5GB split across 500 x 10MB allocations grew non-Torc
 - PR-preserved small benchmark CSVs: none (external backup required)
 - Next action: Preserve raw logs; independently verify allocator graph/lifetime correctness and evaluate cache-growth pressure only if budget allows; organizer approval required for any scored allocator-policy candidate.
 - Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
+
+## 2026-11-17 UTC: expandable allocator correctness stress (planned)
+Prior: allocator mode added 21760 KV tokens and completed graph startup; 16K pressure showed +0.46% in one candidate-first 128-output diagnostic with no preemptions. Missing: baseline/candidate behavior for allocation reuse, streams, graph replay and data isolation; production KV cancellation/preemption integrity remains untested. Test fixed-seed standalone Torch allocation/free/reuse and graph replay in fresh default and expandable processes, identical operations. Treat this as allocator-level smoke only; exact output and no errors are necessary but not sufficient for production or competition eligibility.
+
+## 2026-11-17 UTC: expandable allocation longer 16K pressure diagnostic (planned)
+Prior one candidate-first 16K 128-output screen gave +0.46% throughput, zero preemptions and 130944 prefix hits in each mode; insufficient to measure cache-growth effect. New control-first test uses unchanged server flags and model, 16384 input, 1024 output, concurrency/prompts 64, seed42; fresh servers, no preceding short workload. Sample live KV, preemptions and running/waiting; compare allocation, completion, TTFT/TPOT, throughput. It is not an official half-run and allocator mode has unconfirmed competition eligibility.
+
+### Research checkpoint 2026-11-17T19:27:29+00:00: rejected
+
+- HEAD before checkpoint: ecc9fee944c2d107d7ba7962b9cc69429b062f2d
+- Budget remaining: unknown
+- Finding: Expandable allocator long 16K diagnostic regresses
+- Evidence and artifact paths: Original v15 production control 063f1fb7, unchanged server flags. Fresh control-first 16K diagnostic: 16384 input, 1024 output, 64 prompts/concurrency, seed42. Expandable/control 1678.40/1878.24 total tok/s (-10.64%), TTFT 228617.09/218196.08 ms (+4.78%), TPOT 264.75/222.17 ms (+19.17%). Both completed 64 requests, zero failures, zero prefix hits, and two preemptions each. Single pair is not causal proof or official half-run, but fails throughput and latency guardrails; no verified gain. Standalone allocation smoke: 80 reuse iterations, ten graph replays and matching output SHA256 9fb6b2c687b0d115530224460470c3cd950842303acb0c6f636ae44b403cc227 for both modes. This does not prove full KV lifecycle correctness. Allocator-policy eligibility remains unresolved; diagnostic only. Confirmed allocation expired 2026-11-17 16:00 UTC. Raw evidence backup required.
+- PR-preserved small benchmark CSVs: none (external backup required)
+- Next action: Do not promote allocator mode on these screens. Restore original source, back up logs and continue future work only on a new confirmed allocation.
+- Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
