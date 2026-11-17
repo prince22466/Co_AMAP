@@ -10,20 +10,20 @@ Original source commit: 1b680a7781ff0ba07c12d681708695fd5ccda55e. Grouped MM can
 
 ## Latest checkpoint
 
-Updated UTC: 2026-11-17T13:23:35+00:00
+Updated UTC: 2026-11-17T13:27:40+00:00
 
 Status: provisional (researcher-reported)
 
-Source HEAD before checkpoint: 8461eb2a6dbe6251cad9134a4dba84a728bf5ed6
+Source HEAD before checkpoint: 586252064ff732956b43b29c02265e194e4ac597
 
 Remaining GPU time: unknown
 
-Finding: Attribute vocabulary Linear and non-Torch growth
+Finding: Localize model non-Torch growth to allocation granularity
 
-Evidence/provenance: Original v15 production trees. Native vocabulary Linear M1 K2048 N130560 selected 1x256x32 8 warps: 0.818 ms profiler duration, DRAM read efficiency 88.04%, TCU 10.77%, occupancy 24.83%; M256 selected 256x256x32 16 warps: 1.826 ms, DRAM 40.20%, TCU 76.27%, occupancy 24.56%. Profiler captures are diagnostic, warmup and serving impact unknown; no speedup. Initial worker snapshots: runner created non-Torch 264241152 bytes, model loaded 1096810496, profiling done 1157627904. Thus 832569344 bytes (~794 MiB) accumulated during model loading, with 60817408 bytes (~58 MiB) during profiling; it is not yet proven reclaimable. Instrumented server stopped and worker restored. Raw logs preserved off-instance after checkpoint.
+Evidence/provenance: Baseline unmodified v15: non-Torch 264241152 bytes before initialize_model and 1096810496 immediately after (+832569344); weight loading and postprocessing did not change it. Fresh synthetic processes allocating 5GB: one 5GB allocation non-Torch unchanged; 50 x 100MB unchanged; 500 x 10MB raised non-Torch 394264576 bytes and released it when all tensors/cache freed. With PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True, 500 x 10MB raised non-Torch by 0 and torch reserved 5012193280 vs default 5242880000. This is a synthetic feasibility result, not evidence of actual model KV blocks or throughput. Changing allocator policy may have unclear competition eligibility; diagnostic only until organizer approval. No flags, model data, cache accounting or official benchmark modified.
 
 Small CSV evidence committed when --push works: none (external backup required)
 
-Next action: Split model loading into initialization, weight loading and post-processing snapshots; design a genuine memory-lifetime candidate only if evidence identifies one.
+Next action: Measure actual model allocation, KV blocks, graph capture and reliability with the same server flags under allocator A/B; assess eligibility independently.
 
 Incomplete half-runs are never verified results. Ignored raw artifacts must be backed up outside the rented instance. This handoff does not verify accuracy or establish a causal speedup.

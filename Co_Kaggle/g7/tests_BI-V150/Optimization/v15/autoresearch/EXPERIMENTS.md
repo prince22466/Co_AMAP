@@ -232,3 +232,22 @@ Prior v15 snapshots showed initial non-Torch 153092096 bytes, before-profile 109
 - PR-preserved small benchmark CSVs: none (external backup required)
 - Next action: Split model loading into initialization, weight loading and post-processing snapshots; design a genuine memory-lifetime candidate only if evidence identifies one.
 - Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
+
+## 2026-11-17 UTC: model-loader non-Torch attribution (planned)
+Prior targeted snapshots show non-Torch bytes 264241152 after runner creation and 1096810496 after model loading, a growth of 832569344 bytes. Missing attribution: model object initialization, actual weight loading, and post-processing. Temporarily wrap those already existing loader calls inside v15-owned runner code to log CUDA free/total and torch allocated/reserved before and after each; no installed package edits, no allocation-policy change. Decision: identify the exact stage responsible before considering any real resource/lifetime optimization.
+
+## 2026-11-17 UTC: device allocator overhead isolation (planned)
+Prior targeted loader snapshots placed 832569344 bytes of non-Torch growth entirely inside initialize_model, before any weight loading or processing, but cannot distinguish driver allocator overhead from lazy library initialization or hidden model allocations. Novel minimal synthetic probe: compare free-device memory versus PyTorch reserved/allocated during one large and many smaller equally sized allocations in fresh standalone processes, synchronized with unchanged allocator configuration. Decision: if extra non-Torch growth tracks model-like allocation count/size, inspect safe buffer coalescing; if not, investigate initialization side effects. This does not alter production accounting or weights.
+
+## 2026-11-17 UTC: expandable allocator feasibility (planned)
+Prior synthetic standalone 5GB split across 500 x 10MB allocations grew non-Torch device use by 394264576 bytes; one 5GB allocation and 50 x 100MB did not. Model initialization alone increased the non-Torch estimate by 832569344 bytes. Missing: whether allocator segment expansion genuinely reduces this overhead without changing model computation, and whether the vendor runtime supports it. Smallest test: identical 500-allocation probe in a fresh process with PyTorch expandable_segments enabled, compare actual free/reserved bytes and allocation failures against existing default; no admission, cache, workload or server flag changes. If unsupported or no real savings, reject; before any integration establish runtime safety and competition eligibility.
+
+### Research checkpoint 2026-11-17T13:27:40+00:00: provisional
+
+- HEAD before checkpoint: 586252064ff732956b43b29c02265e194e4ac597
+- Budget remaining: unknown
+- Finding: Localize model non-Torch growth to allocation granularity
+- Evidence and artifact paths: Baseline unmodified v15: non-Torch 264241152 bytes before initialize_model and 1096810496 immediately after (+832569344); weight loading and postprocessing did not change it. Fresh synthetic processes allocating 5GB: one 5GB allocation non-Torch unchanged; 50 x 100MB unchanged; 500 x 10MB raised non-Torch 394264576 bytes and released it when all tensors/cache freed. With PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True, 500 x 10MB raised non-Torch by 0 and torch reserved 5012193280 vs default 5242880000. This is a synthetic feasibility result, not evidence of actual model KV blocks or throughput. Changing allocator policy may have unclear competition eligibility; diagnostic only until organizer approval. No flags, model data, cache accounting or official benchmark modified.
+- PR-preserved small benchmark CSVs: none (external backup required)
+- Next action: Measure actual model allocation, KV blocks, graph capture and reliability with the same server flags under allocator A/B; assess eligibility independently.
+- Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
