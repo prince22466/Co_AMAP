@@ -1,10 +1,10 @@
 # v15 latest research handoff
 
-Status: setup only. No Codex session, GPU run, measured v15 gain or accuracy test has been performed.
+Status: GPU research completed for the November 16 allocation; no verified end-to-end throughput improvement or final accuracy result. The sampler candidate remains research-only and failed the current serving guardrails.
 
 ## Research state (maintained by Codex; checkpoint helper preserves this section)
 
-Original production trees: see AGENTS.md. Pin checkout SHA and verified GPU deadline at session start. First action: read the v0–v14 prior-work register and reuse existing profiling/capacity evidence. Run offline helper preflight, verify actual worker imports, then select the single highest-value missing resource or allocation-lifetime measurement. No historical experiment, rejected stack or generic baseline survey. Screen only a genuinely new justified candidate. No candidate source SHA or raw v15 results yet.
+Original source commit: 1b680a7781ff0ba07c12d681708695fd5ccda55e. Sampler candidate source commit: 1fd9d417. Startup probes observed a 128 MiB lower activation peak and approximately 3,000 more KV tokens, but the short and long 16K pressure comparisons did not show a serving gain. See EXPERIMENTS.md and draft PR #256 for measurements, correctness limits and evidence locations. The rejected log-domain fusion changes token selections and must not be integrated.
 
 <!-- latest-checkpoint -->
 
