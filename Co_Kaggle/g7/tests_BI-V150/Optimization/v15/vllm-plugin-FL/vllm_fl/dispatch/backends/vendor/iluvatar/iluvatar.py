@@ -218,6 +218,28 @@ def patch_sampler_compile_for_iluvatar() -> None:
             _orig = _tts.compiled_random_sample
             _tts.compiled_random_sample = getattr(_orig, '__wrapped__', _orig)
             _tts._iluvatar_compile_patched = True
+            _original_native = _tts.TopKTopPSampler.forward_native
+
+            def _divargmax_native(self, logits, generators, k, p):
+                import torch
+                if (self.logprobs_mode not in ("raw_logits", "raw_logprobs")
+                        or self.use_fp64_gumbel or logits.ndim != 2
+                        or not logits.is_contiguous() or logits.requires_grad
+                        or logits.shape[0] == 0 or logits.shape[1] == 0):
+                    return _original_native(self, logits, generators, k, p)
+                filtered = _tts.apply_top_k_top_p(logits, k, p)
+                probs = filtered.softmax(dim=-1, dtype=torch.float32)
+                if not probs.is_contiguous():
+                    return _tts.random_sample(probs, generators, False), None
+                q = _tts.empty_exponential_noise_like(probs, False)
+                if len(generators) != probs.shape[0]:
+                    q.exponential_()
+                for i, generator in generators.items():
+                    q[i].exponential_(generator=generator)
+                from vllm_fl.ops.divargmax import sample
+                return sample(probs, q), None
+
+            _tts.TopKTopPSampler.forward_native = _divargmax_native
             logger.info('patch_sampler_compile_for_iluvatar: unwrapped topk_topp_sampler.compiled_random_sample')
     except Exception as e:
         logger.warning('patch_sampler_compile_for_iluvatar (topk_topp): %s', e)
