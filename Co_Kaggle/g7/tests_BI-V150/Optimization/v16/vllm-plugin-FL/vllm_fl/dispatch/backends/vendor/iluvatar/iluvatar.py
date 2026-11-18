@@ -235,6 +235,20 @@ def patch_sampler_compile_for_iluvatar() -> None:
 patch_sampler_compile_for_iluvatar()
 
 
+def patch_top_p_row_grid_for_iluvatar() -> None:
+    # Keep vLLM's sampler selection unchanged; optimize only its native
+    # Triton filtering call on the verified upstream implementation.
+    try:
+        from vllm_fl.ops.topk_topp import install_top_p_row_grid
+
+        install_top_p_row_grid()
+    except Exception as e:
+        logger.warning("patch_top_p_row_grid_for_iluvatar: %s", e)
+
+
+patch_top_p_row_grid_for_iluvatar()
+
+
 def patch_torch_inductor_for_iluvatar() -> None:
     """Patch torch._inductor GPUTarget to use the correct triton backend name.
 
