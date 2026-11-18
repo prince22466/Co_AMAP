@@ -387,3 +387,16 @@ Prior candidate 9b870223 passed direct seeded/graph tests and improved full-path
 - PR-preserved small benchmark CSVs: none (external backup required)
 - Next action: Run matched original source control with identical order, flags, seeds and metrics; assess screening guardrails before any half-run.
 - Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
+
+## 2026-11-18 UTC: clean reverse-order sampler serving repeat (planned)
+Prior candidate-first pair used temporary first-shape worker logging and control without logging. All requests succeeded. 4K pressure candidate/control 2300.91/2169.98 total tok/s (+6.03%); TTFT 13211.58/13286.78ms and TPOT 625.04/691.31ms; prefix hits 32640 each, zero new preemptions. 16K candidate/control 3476.71/3382.25 (+2.79%); TTFT 122484.05/129160.66ms, TPOT 612.82/603.53ms; prefix hits 196448/184160, zero new preemptions. Different 16K cache hits and candidate instrumentation confound comparison, one pair only, not a score. Repeat candidate without logging immediately after the clean control, same server flags, workload order, seed and metric snapshots. Decision: require promising 4K and no material 16K regression plus eligibility/correctness/budget before half-runs.
+
+### Research checkpoint 2026-11-18T10:51:05+00:00: provisional
+
+- HEAD before checkpoint: 0c6598327d4620696520ae73b55dd4e1e2101eeb
+- Budget remaining: unknown
+- Finding: First sampler serving pair promising; clean reverse order in progress
+- Evidence and artifact paths: Instrumented candidate-first, original control second, same model/server/benchmark flags, seed and 4K8/16K8/4K64/16K64 sequence. All cases 8/8,8/8,64/64 succeeded. Candidate/control 4K64 2300.91/2169.98 tok/s (+6.03%), TTFT13211.58/13286.78 ms, TPOT625.04/691.31 ms, prefix hits32640/32640, zero new preemptions. 16K64 3476.71/3382.25 (+2.79%), TTFT122484.05/129160.66, TPOT612.82/603.53, prefix hits196448/184160, zero new preemptions. Candidate attribution logger was enabled, control was not; 16K prefix-hit counts differ. Diagnostic only, no half-run or verified improvement; raw archive SHA256 fcf90fbf92bb29c4b304bd95be6b5e84f489d56d419f2fbcda1dbd7e470d02f5 backed up locally. Uninstrumented candidate repeat running after clean control.
+- PR-preserved small benchmark CSVs: none (external backup required)
+- Next action: Complete clean repeat, compare both workloads and cache state, then check two-run budget and all correctness/rules gates before half-run.
+- Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.

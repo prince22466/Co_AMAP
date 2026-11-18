@@ -10,20 +10,20 @@ Original source commit: 1b680a7781ff0ba07c12d681708695fd5ccda55e. Grouped MM can
 
 ## Latest checkpoint
 
-Updated UTC: 2026-11-18T10:33:23+00:00
+Updated UTC: 2026-11-18T10:51:05+00:00
 
 Status: provisional (researcher-reported)
 
-Source HEAD before checkpoint: 710a53911af4827830d830a0ae94c38d7500a9f6
+Source HEAD before checkpoint: 0c6598327d4620696520ae73b55dd4e1e2101eeb
 
 Remaining GPU time: unknown
 
-Finding: Candidate serving diagnostics completed; matched control pending
+Finding: First sampler serving pair promising; clean reverse order in progress
 
-Evidence/provenance: Candidate source 9b870223 plus temporary first-shape logging in divargmax.sample; worker log observed 1..8x130560 during live 4K requests and 256x130560 during startup. Candidate 4K/16K low and 4K/16K concurrency64 screens completed 8/8,8/8,64/64,64/64. Candidate 4K pressure 2300.91 tok/s TTFT13211.58 TPOT625.04 ms; 16K pressure 3476.71 tok/s TTFT122484.05 TPOT612.82 ms. Logging and warmed cache make these diagnostic; no control, no comparison and no causal gain yet. Live monitor began after 4K pressure started. Candidate server stopped and temporary logging restored.
+Evidence/provenance: Instrumented candidate-first, original control second, same model/server/benchmark flags, seed and 4K8/16K8/4K64/16K64 sequence. All cases 8/8,8/8,64/64 succeeded. Candidate/control 4K64 2300.91/2169.98 tok/s (+6.03%), TTFT13211.58/13286.78 ms, TPOT625.04/691.31 ms, prefix hits32640/32640, zero new preemptions. 16K64 3476.71/3382.25 (+2.79%), TTFT122484.05/129160.66, TPOT612.82/603.53, prefix hits196448/184160, zero new preemptions. Candidate attribution logger was enabled, control was not; 16K prefix-hit counts differ. Diagnostic only, no half-run or verified improvement; raw archive SHA256 fcf90fbf92bb29c4b304bd95be6b5e84f489d56d419f2fbcda1dbd7e470d02f5 backed up locally. Uninstrumented candidate repeat running after clean control.
 
 Small CSV evidence committed when --push works: none (external backup required)
 
-Next action: Run matched original source control with identical order, flags, seeds and metrics; assess screening guardrails before any half-run.
+Next action: Complete clean repeat, compare both workloads and cache state, then check two-run budget and all correctness/rules gates before half-run.
 
 Incomplete half-runs are never verified results. Ignored raw artifacts must be backed up outside the rented instance. This handoff does not verify accuracy or establish a causal speedup.
