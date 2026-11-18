@@ -1,5 +1,6 @@
 import importlib.util,torch,triton,json
-spec=importlib.util.spec_from_file_location('probe','.autoresearch-work/sampler-divargmax/probe.py')
+from pathlib import Path
+spec=importlib.util.spec_from_file_location('probe',Path(__file__).with_name('sampler_divargmax_probe.py'))
 m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
 torch.manual_seed(318)
 for rows,n in [(65536,16),(2048,2047),(2048,2048),(2048,2049),(256,130560)]:
