@@ -12,6 +12,8 @@ def modules():
 
     from vllm_fl.platform import PlatformFL
 
+    if PlatformFL.vendor_name != "iluvatar":
+        pytest.skip("Requires the Iluvatar platform")
     PlatformFL.pre_register_and_update()
     from vllm.v1.sample.ops import topk_topp_sampler as sampler
     from vllm.v1.sample.ops import topk_topp_triton as upstream
@@ -29,7 +31,8 @@ def modules():
     assert install_top_p_row_grid()
     assert sampler.apply_top_k_top_p_triton is selected
     assert upstream.apply_top_k_top_p_triton is original
-    return upstream, sampler, selected
+    yield upstream, sampler, selected
+    sampler.apply_top_k_top_p_triton = original
 
 
 def _same(a, b):
@@ -76,13 +79,19 @@ def test_grid_and_mask(modules, monkeypatch, rows, mode):
 
 def test_noncontiguous_and_no_filter(modules):
     upstream, _, selected = modules
-    logits = torch.randn((64, 16386), device="cuda")[:, ::2]
+    storage = torch.randn((64, 16386), device="cuda")
+    reference = storage.clone()[:, ::2]
+    logits = storage[:, ::2]
     p = torch.full((64,), .95, device="cuda")
     assert selected(logits, None, None) is logits
-    expected = upstream.apply_top_k_top_p_triton(logits.clone(), None, p)
+    expected = upstream.apply_top_k_top_p_triton(reference, None, p)
     actual = selected(logits, None, p)
     torch.cuda.synchronize()
     _same(expected, actual)
+    _same(reference, logits)
+    assert (actual.data_ptr() == logits.data_ptr()) == (
+        expected.data_ptr() == reference.data_ptr()
+    )
 
 
 def test_native_rng_and_processed_outputs(modules, monkeypatch):
@@ -120,28 +129,24 @@ def test_graph_replay_across_batch_sizes(modules):
     # A distinct vocab avoids reusing a large cache from earlier tests.
     vocab = 8201
     units = upstream.num_compute_units(torch.cuda.current_device())
-    small, large = units + 1, 4 * units
+    small, large = max(8, units + 1), max(8, 4 * units)
     if large > 512:
         pytest.skip("Limit graph test workspace on large GPUs")
     graphs = []
-    workspace = None
     for rows in (small, large):
         x = torch.randn((rows, vocab), device="cuda")
         p = torch.full((rows,), .95, device="cuda")
-        sampler.apply_top_k_top_p(x, None, p)
-        torch.cuda.synchronize()
-        key = (x.device, x.dtype, vocab, "fl_row_grid")
-        current = upstream._TRITON_BUFFER_CACHE[key]
-        assert current.shape == (large, vocab)
-        if workspace is None:
-            workspace = current
-        else:
-            assert current is workspace
+        # Warm up on a side stream before graph capture.
+        warmup = torch.cuda.Stream()
+        warmup.wait_stream(torch.cuda.current_stream())
+        with torch.cuda.stream(warmup):
+            sampler.apply_top_k_top_p(x.clone(), None, p)
+        torch.cuda.current_stream().wait_stream(warmup)
         graph = torch.cuda.CUDAGraph()
         with torch.cuda.graph(graph):
             sampler.apply_top_k_top_p(x, None, p)
         graphs.append((graph, x, p))
-    # Replay the smaller graph after capture of a larger batch.
+    # Replay both graphs after capture; each owns its expanded scratch.
     for graph, x, p in graphs:
         for _ in range(3):
             new = torch.randn_like(x)
@@ -150,3 +155,47 @@ def test_graph_replay_across_batch_sizes(modules):
             graph.replay()
             torch.cuda.synchronize()
             _same(expected, x)
+
+
+def test_concurrent_expanded_grid_launches(modules, monkeypatch):
+    upstream, sampler, _ = modules
+    units = upstream.num_compute_units(torch.cuda.current_device())
+    rows = max(8, units + 1)
+    if rows > 512:
+        pytest.skip("Limit concurrent test workspace on large GPUs")
+    vocab = 8201
+    p = torch.full((rows,), .95, device="cuda")
+    inputs = [torch.randn((rows, vocab), device="cuda") * 3 for _ in range(2)]
+    expected = [
+        upstream.apply_top_k_top_p_triton(x.clone(), None, p) for x in inputs
+    ]
+    streams = [torch.cuda.Stream(), torch.cuda.Stream()]
+    current = torch.cuda.current_stream()
+    actual = [x.clone() for x in inputs]
+    # Keep references to scratch until both launches finish, so pointer
+    # comparison is meaningful independent of allocator reuse.
+    buffers = []
+    kernel = upstream._topk_topp_kernel
+
+    class KernelSpy:
+        def __getitem__(self, grid):
+            launch = kernel[grid]
+
+            def run(*args, **kwargs):
+                buffers.append(args[2])
+                return launch(*args, **kwargs)
+
+            return run
+
+    monkeypatch.setattr(upstream, "_topk_topp_kernel", KernelSpy())
+    for stream, x in zip(streams, actual):
+        stream.wait_stream(current)
+        with torch.cuda.stream(stream):
+            sampler.apply_top_k_top_p(x, None, p)
+    for stream in streams:
+        current.wait_stream(stream)
+    torch.cuda.synchronize()
+    assert len(buffers) == 2
+    assert buffers[0].data_ptr() != buffers[1].data_ptr()
+    for ref, got in zip(expected, actual):
+        _same(ref, got)
