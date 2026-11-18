@@ -10,20 +10,20 @@ Original source commit: 1b680a7781ff0ba07c12d681708695fd5ccda55e. Grouped MM can
 
 ## Latest checkpoint
 
-Updated UTC: 2026-11-17T19:48:40+00:00
+Updated UTC: 2026-11-18T10:18:41+00:00
 
 Status: provisional (researcher-reported)
 
-Source HEAD before checkpoint: 300c3fa7df988894c197001e99b198927e42e6f8
+Source HEAD before checkpoint: b5e80789bea59511040ab2433ece3cdbbe66e6de
 
 Remaining GPU time: unknown
 
-Finding: Promising isolated division-argmax fusion requires serving validation
+Finding: Integrated sampler passes initial correctness and full-path GPU screen
 
-Evidence/provenance: Same FP32 probs and exponential noise, original softmax and RNG outside prototype, two-stage divide with round-to-nearest and first-index NaN/tie reduction. 256x130560 median preallocated torch div plus argmax 1.27503 ms vs fused 0.41023 ms (16 alternating event samples; approximately 68% lower operation latency). Repeat 1.27517 vs 0.40996 ms. Compared against native in-place div_ plus argmax: zero token mismatches in a 65536x16 batch comprising 65532 constructed finite near-tie rows and four overwritten edge-case rows, 2048x2047/2048/2049 and 256x130560 with zeros/zero, NaNs, infinities and ties; three CUDA graph replays with unchanged inputs passed for each shape. Timing reference uses preallocated out= division rather than in-place div_; no RNG, integration, fallback, FP64, noncontiguous, seeded generator or production serving validation; no end-to-end gain claimed. Temporary workspace is small; no KV-block claim. Code in autoresearch/probes/sampler_divargmax_*.py, raw logs archived separately.
+Evidence/provenance: Candidate source 9b870223; nine full native sampler cases passed exact tokens, default and per-row generator state for no/top-k/top-p filtering, mixed/all/no row RNG, FP64 fallback, truly noncontiguous input fallback, processed outputs and sampled NaN/inf. Six graph replays with changing input data matched in-place native division and argmax. Alternating 14 CUDA-event samples, vocab 130560, full softmax+noise+selection baseline/candidate medians: batch8 0.41853/0.13910 ms; batch64 1.10934/0.45963 ms; batch256 2.45832/1.59297 ms. Baseline is a hand-constructed native path with no filtering, not a measured production worker or end-to-end result; correctness coverage is limited. Candidate does not alter shared helper mutation behavior, and FP64/processed modes fall back. Raw logs and tests saved; actual worker dispatch, serving, MATH-500 and competition eligibility remain unverified.
 
 Small CSV evidence committed when --push works: none (external backup required)
 
-Next action: Audit exact division and mutation contract; implement isolated backend integration with fallback only if legal, then test seeded sampling, multiple layouts, graph, and short balanced serving screens. Do not use half-runs without budget admission.
+Next action: Verify actual worker candidate dispatch and run matched short 4K/16K pressure screens before considering an admitted half-run. Retain original source as control.
 
 Incomplete half-runs are never verified results. Ignored raw artifacts must be backed up outside the rented instance. This handoff does not verify accuracy or establish a causal speedup.
