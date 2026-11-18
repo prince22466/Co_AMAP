@@ -1,0 +1,13 @@
+# Top-p search-pass fusion — proposed scratch experiment
+
+Prior: exponent reuse added global-buffer writes and barriers and did not materially improve the top-p kernel; it is rejected. The unchanged top-p kernel measured ~3.61 ms on synthetic Gaussian logits at batch 64/vocabulary 130560, with input-dependent variation; this does not establish its serving contribution or explain the 4K tail.
+
+Distinct mechanism: in the top-p outlier-buffer binary-search path, speculatively calculate threshold statistics for the current midpoint and both possible next midpoints in one buffer traversal. After reductions, apply the exact existing midpoint decision and, only if it has not terminated, the appropriate second decision. This could eliminate one buffer traversal per two search steps while preserving the original comparison, reduction and stopping order. It adds two sets of per-element comparisons/reductions and could increase resource use or alter FP rounding; there is no measured gain.
+
+Smallest decisive test: scratch-copy the exact installed source, modify only that search path, then compare bitwise masked logits to the unchanged kernel for random/near-tie/nonfinite/tail and top-k+top-p samples. Alternate warmed timings at batch 1, 8 and 64, vocabulary 130560 and top-p 0.95, including full kernel cost. Reject any mismatch, compilation failure or lack of material improvement. If promising, prove actual worker path/frequency, correctness for broader cases and graph replay, then run matched 4K and required 16K screens; operator integration and rule eligibility remain unresolved. No installed package edits, benchmark tuning, or production source changes.
+
+## Result: rejected
+
+Exit code 0. Thirteen named sampled cases matched bitwise masked logits against the unchanged kernel twice each, including random and top-p=1 cases, top-k plus top-p, tails, sampled ties/near-ties and non-finite inputs. This is limited coverage; no graph, production dispatch, complete correctness or accuracy result.
+
+Alternating warmed GPU-event medians, 12 samples per side, top-p 0.95 with synthetic Gaussian logits and vocabulary 130560, baseline/candidate: batch 1 0.88901/1.16194 ms (+30.7% latency), batch 8 1.05373/1.34723 ms (+27.9%), batch 64 3.63621/4.67490 ms (+28.6%). Extra comparisons/reductions and resource costs are a plausible explanation, not independently measured. Reject this specific speculative-search implementation; no serving or integration. Full probe log SHA-256 `995512ca5409e96b66f333d79f4915fcb1e0775d3c7cbb8e352438125c2de69c` and scratch kernel SHA-256 `af9b633004844ab42d17898d44ac551c5a8153ff4fdf12ede3016c996e19ce41` are backed up off-host.
