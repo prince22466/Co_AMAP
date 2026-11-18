@@ -64,16 +64,17 @@ def _build_wrapper(upstream):
         k_ptr = k.to(torch.int32) if k is not None else logits
         p_ptr = p.to(torch.float32)
 
-        # Use the same cache as upstream (including its reset_buffer_cache
-        # lifecycle), rather than retaining a second full-size workspace.
-        buf_key = (logits.device, logits.dtype, vocab_size)
+        # Keep a separate, stable workspace for the expanded grid. A graph
+        # captured using a smaller grid must not lose its scratch allocation
+        # when a larger batch arrives. The original 3-tuple cache entry is
+        # untouched, and upstream reset_buffer_cache clears both entries.
+        # Allocate only on first expanded-grid use, not for small batches.
+        buf_key = (logits.device, logits.dtype, vocab_size, "fl_row_grid")
         buffer = upstream._TRITON_BUFFER_CACHE.get(buf_key)
-        if buffer is None or buffer.shape[0] < num_programs:
-            size = min(upstream.next_power_of_2(num_programs), max_programs)
-            buffer = logits.new_empty((size, vocab_size))
+        if buffer is None:
+            buffer = logits.new_empty((max_programs, vocab_size))
             upstream._TRITON_BUFFER_CACHE[buf_key] = buffer
-        if buffer.shape[0] > num_programs:
-            buffer = buffer[:num_programs]
+        buffer = buffer[:num_programs]
 
         tables = upstream._TRITON_TABLE_CACHE.get(logits.device)
         if tables is None:
