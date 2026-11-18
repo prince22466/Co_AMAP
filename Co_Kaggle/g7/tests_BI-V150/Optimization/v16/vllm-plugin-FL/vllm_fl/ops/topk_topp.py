@@ -4,8 +4,8 @@
 
 PR #261 measured the original kernel with 16 programs on BI-V150.
 Expose up to four programs per compute unit instead, with corresponding
-per-program scratch. The upstream kernel, lookup tables, cache lifecycle,
-and sampler selection are unchanged.
+per-program scratch. The upstream kernel, lookup tables and sampler
+selection are unchanged. Expanded-grid scratch is private to each call.
 """
 
 from __future__ import annotations
@@ -44,12 +44,14 @@ def _build_wrapper(upstream):
             or logits.shape[0] == 0
             or logits.shape[1] == 0
             or logits.stride(1) != 1
+            or logits.stride(0) < logits.shape[1]
             or p.ndim != 1
             or p.shape[0] != logits.shape[0]
             or p.device != logits.device
+            or p.stride(0) != 1
             or (k is not None and (
                 k.ndim != 1 or k.shape[0] != logits.shape[0]
-                or k.device != logits.device
+                or k.device != logits.device or k.stride(0) != 1
             ))
         ):
             return original(logits, k, p, mask_value)
@@ -64,17 +66,12 @@ def _build_wrapper(upstream):
         k_ptr = k.to(torch.int32) if k is not None else logits
         p_ptr = p.to(torch.float32)
 
-        # Keep a separate, stable workspace for the expanded grid. A graph
-        # captured using a smaller grid must not lose its scratch allocation
-        # when a larger batch arrives. The original 3-tuple cache entry is
-        # untouched, and upstream reset_buffer_cache clears both entries.
-        # Allocate only on first expanded-grid use, not for small batches.
-        buf_key = (logits.device, logits.dtype, vocab_size, "fl_row_grid")
-        buffer = upstream._TRITON_BUFFER_CACHE.get(buf_key)
-        if buffer is None:
-            buffer = logits.new_empty((max_programs, vocab_size))
-            upstream._TRITON_BUFFER_CACHE[buf_key] = buffer
-        buffer = buffer[:num_programs]
+        # Scratch is private to this launch. PyTorch's caching allocator
+        # reuses storage in stream order and owns allocations made during
+        # graph capture. Do not retain a shared mutable tensor across streams
+        # or graphs, or replace an address captured by an older graph.
+        # Allocate only the rows actually used; no extra persistent cache.
+        buffer = logits.new_empty((num_programs, vocab_size))
 
         tables = upstream._TRITON_TABLE_CACHE.get(logits.device)
         if tables is None:
@@ -128,11 +125,12 @@ def install_top_p_row_grid() -> bool:
     if getattr(selected, "_fl_row_grid_original", None) is original:
         return True
     if selected is not original:
+        logger.debug("Top-p row grid: sampler uses a different Triton wrapper")
         return False
 
     try:
         digest = hashlib.sha256(Path(upstream.__file__).read_bytes()).hexdigest()
-    except (OSError, TypeError):
+    except (OSError, TypeError, AttributeError):
         logger.warning("Top-p row grid: cannot verify upstream source")
         return False
     if digest != _SUPPORTED_SOURCE_SHA256:
