@@ -4,7 +4,9 @@ Original v16 control is the exact v14 production baseline (commit c0e5b3d37f7073
 
 The candidate is enabled by the existing Iluvatar backend hook only for the exact tested upstream vLLM 0.24.0 source. Existing backend selection, top-k-only and small-batch paths remain unchanged. The launch cap is 4 × detected compute units, not a fixed model or benchmark shape. Unlike the isolated probe's persistent workspace, the expanded-grid wrapper allocates only the rows needed by each launch via PyTorch's caching allocator. This avoids shared mutable scratch between streams or captured graphs, without adding a permanent plugin cache. At 16 compute units and vocabulary 130560, the expanded launch requires up to 31.88 MiB of temporary scratch; allocator reservations and graph pools may retain memory. The original upstream cache is unchanged. Allocation overhead, graph replay, peak/reserved memory, KV capacity and 16K non-regression must be measured on BI-V150.
 
-Run focused validation with the original v16 environment (from this directory):
+CPU-only launch and fallback contract tests: `python3 -m pytest -q --noconftest vllm-plugin-FL/tests/functional_tests/test_top_p_row_grid_contract.py` (13 passed in a local CPU environment against the committed source; mocked kernel, not GPU validation).
+
+Run focused GPU validation with the original v16 environment (from this directory):
 
 ```bash
 export PYTHONPATH="$PWD/FlagGems/src:$PWD/vllm-plugin-FL"
