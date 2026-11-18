@@ -25,6 +25,7 @@ def modules():
         patch_top_p_row_grid_for_iluvatar,
     )
 
+    previous = sampler.apply_top_k_top_p_triton
     patch_top_p_row_grid_for_iluvatar()
     selected = sampler.apply_top_k_top_p_triton
     assert getattr(selected, "_fl_row_grid_original", None) is original
@@ -32,7 +33,7 @@ def modules():
     assert sampler.apply_top_k_top_p_triton is selected
     assert upstream.apply_top_k_top_p_triton is original
     yield upstream, sampler, selected
-    sampler.apply_top_k_top_p_triton = original
+    sampler.apply_top_k_top_p_triton = previous
 
 
 def _same(a, b):
@@ -126,9 +127,10 @@ def test_native_rng_and_processed_outputs(modules, monkeypatch):
 
 def test_graph_replay_across_batch_sizes(modules):
     upstream, sampler, _ = modules
-    # A distinct vocab avoids reusing a large cache from earlier tests.
+    # A distinct vocab exercises independent graph scratch allocations.
     vocab = 8201
     units = upstream.num_compute_units(torch.cuda.current_device())
+    assert units > 0
     small, large = max(8, units + 1), max(8, 4 * units)
     if large > 512:
         pytest.skip("Limit graph test workspace on large GPUs")
@@ -147,8 +149,8 @@ def test_graph_replay_across_batch_sizes(modules):
             sampler.apply_top_k_top_p(x, None, p)
         graphs.append((graph, x, p))
     # Replay both graphs after capture; each owns its expanded scratch.
-    for graph, x, p in graphs:
-        for _ in range(3):
+    for _ in range(3):
+        for graph, x, p in graphs:
             new = torch.randn_like(x)
             expected = upstream.apply_top_k_top_p_triton(new.clone(), None, p)
             x.copy_(new)
