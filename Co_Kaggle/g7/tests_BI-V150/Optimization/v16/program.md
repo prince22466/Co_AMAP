@@ -18,7 +18,7 @@ export PYTHONPATH="$PWD/FlagGems/src:$PWD/vllm-plugin-FL"
 export VLLM_PLUGINS=fl
 ixsmi
 ```
-Match tree hashes in AGENTS.md; pin original SHA. Use the actual checkout path in every command below. Verify worker imports and execution from v16, not just shell imports. Record runtime/model/config, GPU, flags and script hash. Read external half-run script to confirm RUNS=2, SKIP_FIRST=0, CLI and output path; if not matching, stop, never edit. Initialize once with actual operator-confirmed UTC deadline (placeholder below); never reset same allocation. Archive prior state only on confirmed new allocation.
+For the original control, match the tree hashes in AGENTS.md and pin its SHA. For a candidate, record its own committed SHA and production tree hashes separately; verify the diff against the pinned control instead of requiring the candidate plugin tree to equal the original. Use the actual checkout path in every command below. Verify worker imports and execution from v16, not just shell imports. Record runtime/model/config, GPU, flags and script hash. Read external half-run script to confirm RUNS=2, SKIP_FIRST=0, CLI and output path; if not matching, stop, never edit. Initialize once with actual operator-confirmed UTC deadline (placeholder below); never reset same allocation. Archive prior state only on confirmed new allocation.
 ```bash
 python3 autoresearch/session_budget.py init --deadline-utc 'ACTUAL-ISO8601-UTC-DEADLINE'
 python3 autoresearch/session_budget.py status
