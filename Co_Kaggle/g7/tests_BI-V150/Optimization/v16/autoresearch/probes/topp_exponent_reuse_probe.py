@@ -56,6 +56,7 @@ edge[2, :] = float('-inf')
 edge[3, 0] = float('inf')
 edge[4, 0] = float('nan')
 edge[5, :64] = 1.0
+edge[6, :64] = torch.linspace(1.0 - 1e-6, 1.0 + 1e-6, 64, device=device)
 cases.append(('edge', edge, None, torch.tensor([.95, .5, .95, .95, .95, .2, 0.0, 1.0], device=device)))
 for name, logits, k, p in cases:
     for repeat in range(2):
