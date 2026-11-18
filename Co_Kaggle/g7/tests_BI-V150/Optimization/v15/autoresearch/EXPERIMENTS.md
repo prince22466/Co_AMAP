@@ -374,3 +374,16 @@ Prior isolated division-argmax improved latency, and candidate 9b870223 passed n
 - PR-preserved small benchmark CSVs: none (external backup required)
 - Next action: Verify actual worker candidate dispatch and run matched short 4K/16K pressure screens before considering an admitted half-run. Retain original source as control.
 - Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
+
+## 2026-11-18 UTC: candidate worker attribution and short serving screen (planned)
+Prior candidate 9b870223 passed direct seeded/graph tests and improved full-path sampling latency on sampled sizes, but actual worker execution and serving impact are unknown. Temporarily log the first call for each shape in the candidate-owned reduction, start the standard server and run 4K then 16K 8-request diagnostic and 4K/16K concurrency-64 pressure screens, with matched control restart and identical seed/flags/cache order. Logging is diagnostic and may perturb timing; any apparent gain requires uninstrumented replication and a fresh matched half-run. Capture actual worker source path/marker, successes, throughput, TTFT/TPOT, preemptions and prefix counts. Remove instrumentation after stopping the owned server; no official benchmark changes.
+
+### Research checkpoint 2026-11-18T10:33:23+00:00: provisional
+
+- HEAD before checkpoint: 710a53911af4827830d830a0ae94c38d7500a9f6
+- Budget remaining: unknown
+- Finding: Candidate serving diagnostics completed; matched control pending
+- Evidence and artifact paths: Candidate source 9b870223 plus temporary first-shape logging in divargmax.sample; worker log observed 1..8x130560 during live 4K requests and 256x130560 during startup. Candidate 4K/16K low and 4K/16K concurrency64 screens completed 8/8,8/8,64/64,64/64. Candidate 4K pressure 2300.91 tok/s TTFT13211.58 TPOT625.04 ms; 16K pressure 3476.71 tok/s TTFT122484.05 TPOT612.82 ms. Logging and warmed cache make these diagnostic; no control, no comparison and no causal gain yet. Live monitor began after 4K pressure started. Candidate server stopped and temporary logging restored.
+- PR-preserved small benchmark CSVs: none (external backup required)
+- Next action: Run matched original source control with identical order, flags, seeds and metrics; assess screening guardrails before any half-run.
+- Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
