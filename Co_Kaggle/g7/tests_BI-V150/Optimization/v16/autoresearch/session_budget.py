@@ -71,11 +71,23 @@ def read_state(path: Path = STATE) -> dict:
 
 
 def decision(state: dict, runs: int = 1, now: float | None = None) -> dict:
+    # Malformed state must never shorten the initial safety estimates/reserve.
+    for key, minimum in (("baseline_run_minutes", 105),
+                         ("per_run_margin_minutes", 20),
+                         ("preservation_reserve_minutes", 25)):
+        value = state.get(key)
+        if (type(value) not in (int, float) or not math.isfinite(value)
+                or value < minimum):
+            raise ValueError(f"Invalid budget safety field: {key}")
+    durations = state.get("observed_runs_minutes")
+    if (not isinstance(durations, list) or
+            any(type(x) not in (int, float) or not math.isfinite(x) or x <= 0
+                for x in durations)):
+        raise ValueError("Invalid observed run durations")
     if runs < 1:
         raise ValueError("Runs must be positive")
     now = time.time() if now is None else now
     remaining = max(0.0, (state["deadline_epoch"] - now) / 60)
-    durations = state.get("observed_runs_minutes", [])
     estimate = max([state["baseline_run_minutes"], *durations])
     per_run = estimate + state["per_run_margin_minutes"]
     required = runs * per_run + state["preservation_reserve_minutes"]
@@ -164,7 +176,7 @@ def execute_half(state: dict, state_path: Path, push: bool = False) -> int:
         save(run_dir / "run.json", record)
         raise ValueError("Production source changed during preflight; stop")
     hard_seconds = int(state["deadline_epoch"] - time.time()
-                       - 60 * state["preservation_reserve_minutes"])
+                       - 60 * state["preservation_reserve_minutes"] - 10)  # allow termination grace
     if hard_seconds <= 0:
         return 2
     timed_out = False

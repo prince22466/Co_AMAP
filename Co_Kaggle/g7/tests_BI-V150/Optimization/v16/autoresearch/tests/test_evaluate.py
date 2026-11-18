@@ -5,7 +5,7 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
 
-from autoresearch.evaluate import evaluate, MATCHED_4K_RATIO
+from autoresearch.evaluate import evaluate
 
 
 class CsvEvaluatorTests(unittest.TestCase):
@@ -123,6 +123,39 @@ class CsvEvaluatorTests(unittest.TestCase):
                 self.assertTrue(report["numeric_goal_4k"])
                 self.assertFalse(report[key])
                 self.assertFalse(report["numeric_screen_pass"])
+
+    def test_rounded_summary_cannot_hide_16k_loss(self):
+        a = self.args(cand4=3100, cand16=2073.92)
+        with a.candidate_summary.open(newline="") as f:
+            rows = list(csv.DictReader(f))
+        rows[1]["Total tok/s"] = 2073.93  # within summary tolerance
+        with a.candidate_summary.open("w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=list(rows[0]))
+            writer.writeheader()
+            writer.writerows(rows)
+        report = evaluate(a)
+        self.assertEqual(report["comparison"]["16K"]["candidate_tok_s"], 2073.92)
+        self.assertFalse(report["throughput_regression_screen_pass"])
+        self.assertFalse(report["numeric_screen_pass"])
+
+    def test_rounded_summary_cannot_create_4k_goal(self):
+        a = self.args(cand4=3011.11)
+        self.change_cell(a.candidate_summary, "Total tok/s", 3011.12)
+        self.assertFalse(evaluate(a)["numeric_goal_4k"])
+
+    def test_raw_repeat_mean_is_used(self):
+        a = self.args(cand4=3100)
+        with a.candidate_raw.open(newline="") as f:
+            rows = list(csv.DictReader(f))
+        rows[0]["Total tok/s"] = 3000
+        rows[1]["Total tok/s"] = 3200
+        with a.candidate_raw.open("w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=list(rows[0]))
+            writer.writeheader()
+            writer.writerows(rows)
+        report = evaluate(a)
+        self.assertEqual(report["comparison"]["4K"]["candidate_tok_s"], 3100)
+        self.assertEqual(report["comparison"]["4K"]["candidate_raw_tok_s"], [3000, 3200])
 
     def test_tpot_summary_mismatch(self):
         a = self.args()

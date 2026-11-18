@@ -35,6 +35,16 @@ def checkpoint(root: Path, summary: str, evidence: str, next_step: str,
         raise ValueError("summary, evidence, and next_step are mandatory")
     if status not in ("hypothesis", "provisional", "verified", "rejected", "blocked"):
         raise ValueError("Unknown status")
+    try:
+        source = git(root, "rev-parse", "HEAD")
+    except subprocess.CalledProcessError:
+        if push:
+            raise
+        source = "not available"
+    if push:
+        branch = git(root, "branch", "--show-current")
+        if not branch or branch in ("main", "master"):
+            raise RuntimeError("Refusing push from detached HEAD or main/master")
     directory = root / "autoresearch"
     directory.mkdir(parents=True, exist_ok=True)
     ledger = directory / "EXPERIMENTS.md"
@@ -75,10 +85,6 @@ def checkpoint(root: Path, summary: str, evidence: str, next_step: str,
         preserved.append(f"{stored.relative_to(root)} (sha256 {sha256})")
         evidence_paths.append(str(stored.relative_to(root)))
     timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    try:
-        source = git(root, "rev-parse", "HEAD")
-    except subprocess.CalledProcessError:
-        source = "not available"
     left = f"{remaining_minutes:.1f} minutes" if remaining_minutes is not None else "unknown"
     csv_details = "; ".join(preserved) if preserved else "none (external backup required)"
     entry = (
@@ -112,9 +118,6 @@ def checkpoint(root: Path, summary: str, evidence: str, next_step: str,
         encoding="utf-8",
     )
     if push:
-        branch = git(root, "branch", "--show-current")
-        if not branch or branch in ("main", "master"):
-            raise RuntimeError("Refusing push from detached HEAD or main/master")
         changed_paths = ["autoresearch/EXPERIMENTS.md", "autoresearch/HANDOFF.md", *evidence_paths]
         git(root, "add", "--", *changed_paths)
         # --only prevents committing unrelated staged experiments/source edits.

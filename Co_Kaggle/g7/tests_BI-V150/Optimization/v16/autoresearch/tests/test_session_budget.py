@@ -1,5 +1,4 @@
 """Offline safety tests for the v16 GPU session guard and checkpoint writer."""
-import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -33,6 +32,18 @@ class SessionBudgetTests(unittest.TestCase):
         self.assertTrue(report["admitted"])
         report = budget.decision(state, runs=2, now=1120)
         self.assertFalse(report["admitted"])
+
+    def test_invalid_safety_estimate_never_admitted(self):
+        for key, value in (("baseline_run_minutes", 0),
+                           ("per_run_margin_minutes", -1),
+                           ("preservation_reserve_minutes", 0),
+                           ("observed_runs_minutes", [float("nan")]),
+                           ("observed_runs_minutes", [-1])):
+            with self.subTest(key=key, value=value):
+                state = budget.start_session(330, None, now=1000)
+                state[key] = value
+                with self.assertRaises(ValueError):
+                    budget.decision(state, now=1000)
 
     def test_expired_session_never_admitted(self):
         state = budget.start_session(330, None, now=1000)
@@ -186,7 +197,7 @@ class CheckpointTests(unittest.TestCase):
                 if args[:2] == ("rev-parse", "HEAD"):
                     return "123"
                 if args[:2] == ("branch", "--show-current"):
-                    return "codex/v16-terra61-autoresearch-setup"
+                    return "codex/v16-4k-throughput-autoresearch"
                 return ""
             with patch.object(checkpoints, "git", side_effect=fake_git):
                 checkpoints.checkpoint(root, "gain", "raw.csv", "repeat", push=True)
@@ -200,6 +211,7 @@ class CheckpointTests(unittest.TestCase):
                     checkpoints.checkpoint(
                         Path(folder), "gain", "raw.csv", "repeat", push=True,
                     )
+            self.assertFalse((Path(folder) / "autoresearch").exists())
 
 
 if __name__ == "__main__":

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Read-only v16 half-run CSV integrity and matched A/B numeric comparison.
 
-This does not run benchmarks or certify repeatability, accuracy, or eligibility.
+Uses the two reported raw repeats for numeric decisions, with summary consistency checks.
+This does not run benchmarks or certify matched provenance, repeatability, accuracy, or eligibility.
 """
 from __future__ import annotations
 
@@ -72,12 +73,14 @@ def load_pair(summary_path: Path, raw_path: Path) -> dict[int, dict]:
     raw = read_rows(raw_path, raw=True)
     result = {}
     for size in CASES:
+        means = {}
         for metric in METRICS:
-            avg = sum(row[metric] for row in raw[size]) / 2
+            avg = math.fsum(row[metric] for row in raw[size]) / 2
+            means[metric] = avg
             if abs(summary[size][0][metric] - avg) > 0.05:
                 raise ValueError(f"{size} {metric}: summary disagrees with raw runs")
         result[size] = {
-            **summary[size][0],
+            **means,
             "raw": {metric: [r[metric] for r in raw[size]] for metric in METRICS},
         }
     return result
@@ -104,9 +107,8 @@ def evaluate(args: argparse.Namespace) -> dict:
                 100 * (trial["ttft"] / base["ttft"] - 1), 4
             ),
             "tpot_change_pct": round(100 * (trial["tpot"] / base["tpot"] - 1), 4),
-            "numeric_goal_4k": size == 4096 and gain + 1e-12 >= MATCHED_4K_RATIO - 1,
         }
-    goal = rows["4K"]["numeric_goal_4k"]
+    goal = candidate[4096]["tok"] / control[4096]["tok"] + 1e-12 >= MATCHED_4K_RATIO
     throughput_ok = candidate[16384]["tok"] >= control[16384]["tok"] - 1e-9
     ttft_ok = all(candidate[s]["ttft"] <= control[s]["ttft"] * 1.05 + 1e-9 for s in CASES)
     tpot_ok = all(candidate[s]["tpot"] <= control[s]["tpot"] * 1.05 + 1e-9 for s in CASES)
@@ -117,7 +119,7 @@ def evaluate(args: argparse.Namespace) -> dict:
         "historical_full_run_4k_target_tok_s": 3011.12,
         "historical_full_run_16k_floor_tok_s": 2073.93,
         "historical_full_run_targets_verified": False,
-        "throughput_regression_screen_pass": throughput_ok,
+        "throughput_regression_screen_pass": throughput_ok,  # 16K only
         "ttft_regression_screen_pass": ttft_ok,
         "tpot_regression_screen_pass": tpot_ok,
         "numeric_screen_pass": goal and throughput_ok and ttft_ok and tpot_ok,
@@ -125,7 +127,8 @@ def evaluate(args: argparse.Namespace) -> dict:
         "model_quality_verified": False,
         "production_kernel_verified": False,
         "comparison": rows,
-        "warning": "Numeric screen only; matched conditions, independent replication, competition score/latency limits, kernel provenance, "
+        "warning": "Numeric target screen on means of reported raw repeats; zero exit only validates CSVs. "
+                   "Matched conditions, independent replication, competition score/latency limits, kernel provenance, "
                    "model ability and unchanged MATH-500 remain unverified.",
     }
 
