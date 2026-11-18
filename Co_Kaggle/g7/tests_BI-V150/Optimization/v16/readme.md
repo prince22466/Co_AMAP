@@ -2,7 +2,7 @@
 
 Original v16 control is the exact v14 production baseline (commit c0e5b3d37f7073ef04ec95c50207b5543ffdf626). This branch adds the provisional bounded native Triton top-p row-grid candidate from [PR #261](https://github.com/prince22466/Co_AMAP/pull/261). No v15 candidate is inherited. The scratch probe measured 3.631 → 1.007 ms at batch 64; the production integration, 4K/16K serving and MATH-500 are unverified.
 
-The candidate is enabled by the existing Iluvatar backend hook only for the exact tested upstream vLLM 0.24.0 source. Existing backend selection, top-k-only and small-batch paths remain unchanged. The launch cap is 4 × detected compute units, not a fixed model or benchmark shape. Persistent workspace may grow by ~24 MiB at the tested vocabulary; check KV capacity, graph replay and 16K non-regression before acceptance.
+The candidate is enabled by the existing Iluvatar backend hook only for the exact tested upstream vLLM 0.24.0 source. Existing backend selection, top-k-only and small-batch paths remain unchanged. The launch cap is 4 × detected compute units, not a fixed model or benchmark shape. Unlike the isolated probe's growing workspace, the candidate lazily allocates one full-capacity expanded-grid workspace per device/dtype/vocabulary, retaining the upstream workspace separately so previously captured graphs keep their addresses. At the tested vocabulary and 16 compute units this adds up to 31.88 MiB beyond the baseline (rather than the probe's 23.9 MiB increase); check peak memory, graph replay, KV capacity and 16K non-regression before acceptance. The upstream reset clears both entries.
 
 Run focused validation with the original v16 environment (from this directory):
 
