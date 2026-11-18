@@ -1,0 +1,241 @@
+"""Library for creating SmartDevices.
+
+A SmartDevice allows for observable and action fields to be defined
+easily and in an extensible way. SmartDevices are meant to be used by the
+simulator to produce observations and actions for an RL environment.
+
+Any device that wants to expose observable or action fields should extend
+the SmartDevice class, supplying the appropriate information to the SmartDevice
+constructor.
+"""
+
+import abc
+import enum
+from collections.abc import Collection, Mapping
+from typing import Any, Final, NamedTuple
+
+import pandas as pd
+
+from smart_buildings.smart_control.proto import smart_control_building_pb2
+
+SUPPLY_WATER_TEMPERATURE_SETPOINT: Final[str] = (
+    'supply_water_temperature_setpoint'
+)
+SUPPLY_WATER_TEMPERATURE_SENSOR: Final[str] = 'supply_water_temperature_sensor'
+HEATING_REQUEST_COUNT: Final[str] = 'heating_request_count'
+SUPERVISOR_RUN_COMMAND: Final[str] = 'supervisor_run_command'
+RUN_STATUS: Final[str] = 'run_status'
+RUN_COMMAND: Final[str] = 'run_command'
+DIFFERENTIAL_PRESSURE_SENSOR: Final[str] = 'differential_pressure_sensor'
+DIFFERENTIAL_PRESSURE_SETPOINT: Final[str] = 'differential_pressure_setpoint'
+
+
+class RunStatus(enum.IntEnum):
+  """Run status of a device (ON or OFF)."""
+  ON = 1
+  OFF = 0
+
+
+class AttributeInfo(NamedTuple):
+  """PODO containing information about an attribute.
+
+  The attribute_name is the literal attribute name of an object. This name
+  will be used with setattr/getattr.
+
+  Attributes:
+    attribute_name: Name of the internal attribute.
+    clazz: Class of the attribute.
+  """
+
+  attribute_name: str
+  clazz: type[object]
+
+
+class SmartDevice(metaclass=abc.ABCMeta):
+  """Represents a SmartDevice which exposes observable/action fields."""
+
+  def __init__(
+      self,
+      observable_fields: Mapping[str, AttributeInfo],
+      action_fields: Mapping[str, AttributeInfo],
+      device_type: smart_control_building_pb2.DeviceInfo.DeviceType.ValueType,
+      device_id: str,
+      zone_id: str | None = None,
+  ):
+    """Creates SmartDevice.
+
+    Args:
+      observable_fields: Fields that will be exposed as observables.
+      action_fields: Fields that will be exposed as actions.
+      device_type: Type of device.
+      device_id: Id of device.
+      zone_id: Which zone the device is in.
+    """
+    self._observable_fields = observable_fields
+    self._action_fields = action_fields
+    self._device_type = device_type
+    self._device_id = device_id
+    self._zone_id = zone_id
+    self._action_timestamp = None
+    self._observation_timestamp = None
+
+  def device_id(self) -> str:
+    """Returns device id."""
+    return self._device_id
+
+  def zone_id(self) -> str | None:
+    """Returns zone_id."""
+    return self._zone_id
+
+  def device_type(
+      self,
+  ) -> smart_control_building_pb2.DeviceInfo.DeviceType.ValueType:
+    """Returns device type."""
+    return self._device_type
+
+  def observable_field_names(self) -> Collection[str]:
+    """Returns all observable field names."""
+    return self._observable_fields.keys()
+
+  def action_field_names(self) -> Collection[str]:
+    """Returns all action field names."""
+    return self._action_fields.keys()
+
+  def get_observable_type(self, field_name: str) -> type[object]:
+    """Returns class type expected for field_name.
+
+    Args:
+      field_name: Name of the observable field.
+    """
+    return self._existing_attribute_info(field_name, is_observable=True).clazz
+
+  def get_action_type(self, field_name: str) -> type[object]:
+    """Returns class type expected for field_name.
+
+    Args:
+      field_name: Name of the action field.
+    """
+    return self._existing_attribute_info(field_name, is_observable=False).clazz
+
+  def _attribute_info(
+      self, field_name: str, is_observable: bool
+  ) -> AttributeInfo:
+    """Returns the attribute info declared for field_name.
+
+    Args:
+      field_name: Name of the observable field.
+      is_observable: Whether field_name is for an observable. If not it is for
+        an action.
+
+    Raises:
+      AttributeError: If requested field was not declared.
+    """
+    if is_observable:
+      field_type_name = 'observable'
+      field_mapping = self._observable_fields
+    else:
+      field_type_name = 'action'
+      field_mapping = self._action_fields
+
+    if field_name not in field_mapping:
+      raise AttributeError(
+          f'Requested field: {field_name}, not set as an'
+          f' {field_type_name} field.'
+      )
+
+    return field_mapping[field_name]
+
+  def _existing_attribute_info(
+      self, field_name: str, is_observable: bool
+  ) -> AttributeInfo:
+    """Returns the attribute info, having checked the attribute really exists.
+
+    A declaration that names an attribute the device does not have is a typo,
+    and it is worth catching. Reading the attribute catches it for free, so only
+    callers that never read one need to ask here: the two type accessors, which
+    is what makes a bad declaration fail when the device is built rather than
+    whenever the field is first touched, and set_action, whose setattr would
+    otherwise cheerfully create the misspelling.
+
+    Args:
+      field_name: Name of the observable field.
+      is_observable: Whether field_name is for an observable. If not it is for
+        an action.
+
+    Raises:
+      AttributeError: If requested field was not declared or does not exist.
+    """
+    attribute_info = self._attribute_info(field_name, is_observable)
+    if not hasattr(self, attribute_info.attribute_name):
+      raise AttributeError(
+          f'Requested field {field_name} maps to nonexistent attribute:'
+          f' {attribute_info.attribute_name}.'
+      )
+    return attribute_info
+
+  def get_observation(
+      self, observable_field_name: str, observation_timestamp: pd.Timestamp
+  ) -> Any:
+    """Returns the value of an observable field.
+
+    Args:
+      observable_field_name: Name of the observable field.
+      observation_timestamp: validity time of the observation.
+
+    Raises:
+      AttributeError: If requested field was not declared observable or does not
+      exist.
+    """
+    attribute_info = self._attribute_info(
+        observable_field_name, is_observable=True
+    )
+    attribute_name = attribute_info.attribute_name
+    self._observation_timestamp = observation_timestamp
+
+    # This is the hot path - a few hundred reads per simulator timestep - so it
+    # asks forgiveness rather than permission. Checking up front that the
+    # attribute exists would only repeat, expensively, what getattr is about to
+    # do anyway.
+    try:
+      return getattr(self, attribute_name)
+    except AttributeError as e:
+      if attribute_name in dir(self):
+        # The attribute is there; its own getter is what failed. Reporting that
+        # as a bad declaration would send the reader hunting for a typo that
+        # does not exist.
+        raise
+      raise AttributeError(
+          f'Requested field {observable_field_name} maps to nonexistent'
+          f' attribute: {attribute_name}.'
+      ) from e
+
+  def set_action(
+      self, action_field_name: str, value: Any, action_timestamp: pd.Timestamp
+  ) -> None:
+    """Sets an action field with a given value.
+
+    Args:
+      action_field_name: Name of the observable field.
+      value: Value to set action field to.
+      action_timestamp: Timestamp of the action
+
+    Raises:
+      AttributeError: If requested field was not declared action or does
+      not exist.
+
+      ValueError: If given value is not the declared type.
+    """
+    attribute_info = self._existing_attribute_info(
+        action_field_name, is_observable=False
+    )
+    attribute_name = attribute_info.attribute_name
+    attribute_type = attribute_info.clazz
+    self._action_timestamp = action_timestamp
+
+    if not isinstance(value, attribute_type):
+      raise ValueError(
+          f'Tried to set field: {action_field_name} with an incorrect value'
+          f' type: {type(value)} is not instance of {attribute_type}.'
+      )
+
+    setattr(self, attribute_name, value)

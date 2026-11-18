@@ -1,0 +1,352 @@
+"""Shared test utiltiles for environment tests."""
+
+import collections
+from collections.abc import Mapping, Sequence
+
+import pandas as pd
+
+from smart_buildings.smart_control.models import base_building, base_reward_function
+from smart_buildings.smart_control.proto import (
+  smart_control_building_pb2,
+  smart_control_reward_pb2,
+)
+from smart_buildings.smart_control.utils import conversion_utils
+
+#
+# BUILDING
+#
+
+_FLOOR_KEY = "floor"
+
+# A zone entry maps each device id to its field names, plus an optional
+# "floor" entry holding the zone's floor number.
+type ZoneLayout = Mapping[str, Sequence[str] | int]
+type BuildingLayout = Mapping[str, ZoneLayout]
+
+
+def _zone_floor(zone_layout: ZoneLayout) -> int:
+  """Returns the zone's floor number, defaulting to the ground floor."""
+  floor = zone_layout.get(_FLOOR_KEY, 0)
+  if not isinstance(floor, int):
+    raise TypeError(
+        f"Layout entry {_FLOOR_KEY!r} must be an int, got {floor!r}."
+    )
+  return floor
+
+
+def _zone_devices(zone_layout: ZoneLayout) -> dict[str, Sequence[str]]:
+  """Returns device id -> field names, dropping the zone's floor entry."""
+  return {
+      device: fields
+      for device, fields in zone_layout.items()
+      if not isinstance(fields, int)
+  }
+
+
+DEFAULT_LAYOUT: BuildingLayout = {
+    "zone_1": {
+        "boiler_1": ["setpoint_1", "measurement_1"],
+        "vav_2": [
+            "setpoint_2",
+            "setpoint_3",
+            "setpoint_4",
+            "measurement_2",
+        ],
+    },
+    "zone_2": {
+        "boiler_3": ["measurement_3", "measurement_4"],
+        "vav_4": ["setpoint_5", "measurement_5"],
+        "air_handler_5": ["setpoint_6"],
+    },
+}
+
+
+class SimpleBuilding(base_building.BaseBuilding):
+  """Building implementation for unit tests."""
+
+  def __init__(
+      self,
+      layout: BuildingLayout | None = None,
+      initial_values: Mapping[str, float] | None = None,
+      start_timestamp: pd.Timestamp | None = None,
+      zones: Sequence[smart_control_building_pb2.ZoneInfo] | None = None,
+      zone_reward_configs: (
+          Mapping[str, Mapping[str, int | float]] | None
+      ) = None,
+  ):
+    """Initializes the SimpleBuilding.
+
+    Args:
+      layout: A mapping defining the building structure,
+        {zone_id: {device_id: [field_name1, ...], "floor": floor_number}}.
+        The "floor" entry is optional and defaults to 0. Defaults to
+        DEFAULT_LAYOUT.
+      initial_values: Initial continuous values for measurements and setpoints.
+      start_timestamp: The starting timestamp for the environment.
+      zones: A sequence of pre-defined ZoneInfo protos. If None, ZoneInfo protos
+        will be generated based on the provided or default `layout`. Each zone
+        in the layout will result in a ZoneInfo, with devices populated from the
+        layout's device keys.
+      zone_reward_configs: Optional per-zone configurations used to populate
+        the reward_info.
+    """
+    self.layout = layout or DEFAULT_LAYOUT
+
+    if not zones:
+      zones = []
+      for zone, info in self.layout.items():
+        zone_id = zone
+        zone_info = smart_control_building_pb2.ZoneInfo(
+            zone_id=zone_id,
+            building_id="SimpleBuilding",
+            zone_description=zone_id,
+            floor=_zone_floor(info),
+            devices=_zone_devices(info).keys(),
+        )
+        zones.append(zone_info)
+    super().__init__(zones=zones)
+
+    self.values: collections.defaultdict[str, float] = collections.defaultdict(
+        float
+    )
+    if initial_values:
+      self.values.update(initial_values)
+
+    self._start_timestamp = start_timestamp or pd.Timestamp(
+        "2021-06-07 12:00:01"
+    )
+    self.zone_reward_configs = zone_reward_configs
+    self.reset_called = False
+    self.step_count = 0
+
+  @property
+  def start_timestamp(self) -> pd.Timestamp:
+    return self._start_timestamp
+
+  @property
+  def reward_info(self) -> smart_control_reward_pb2.RewardInfo:
+    """Returns a message with data to compute the instantaneous reward."""
+    reward_info = smart_control_reward_pb2.RewardInfo()
+    for zone_id, device_info in self.layout.items():
+      for device_id in _zone_devices(device_info):
+        if "air_handler" in device_id:
+          ahu_reward_info = reward_info.air_handler_reward_infos[device_id]
+          ahu_reward_info.blower_electrical_energy_rate = 100.0
+          ahu_reward_info.air_conditioning_electrical_energy_rate = 200.0
+        elif "boiler" in device_id:
+          boiler_reward_info = reward_info.boiler_reward_infos[device_id]
+          boiler_reward_info.pump_electrical_energy_rate = 50.0
+          boiler_reward_info.natural_gas_heating_energy_rate = 500.0
+        elif "heat_pump" in device_id:
+          heat_pump_reward_info = reward_info.heat_pump_reward_infos[device_id]
+          heat_pump_reward_info.pump_electrical_energy_rate = 100.0
+          heat_pump_reward_info.electricity_heating_energy_rate = 1000.0
+
+      zone_reward_info = reward_info.zone_reward_infos[zone_id]
+      config = (self.zone_reward_configs or {}).get(zone_id, {})
+      zone_reward_info.average_occupancy = config.get("average_occupancy", 5)
+      zone_reward_info.zone_air_temperature = config.get(
+          "zone_air_temperature", 295.0
+      )
+      zone_reward_info.heating_setpoint_temperature = config.get(
+          "heating_setpoint_temperature", 290.0
+      )
+      zone_reward_info.cooling_setpoint_temperature = config.get(
+          "cooling_setpoint_temperature", 300.0
+      )
+      zone_reward_info.air_flow_rate_setpoint = 10.0
+      zone_reward_info.air_flow_rate = 5.0
+
+    return reward_info
+
+  def request_observations_within_time_interval(
+      self,
+      observation_request: smart_control_building_pb2.ObservationRequest,
+      start_timestamp: pd.Timestamp,
+      end_timestamp: pd.Timestamp,
+  ) -> Sequence[smart_control_building_pb2.ObservationResponse]:
+    """Queries the building for observations between start and end times."""
+    raise NotImplementedError()
+
+  def request_observations(
+      self, observation_request: smart_control_building_pb2.ObservationRequest
+  ) -> smart_control_building_pb2.ObservationResponse:
+    """Queries the building for its current state."""
+    response = smart_control_building_pb2.ObservationResponse(
+        request=observation_request
+    )
+    for (
+        single_observation_request
+    ) in observation_request.single_observation_requests:
+      response.single_observation_responses.append(
+          smart_control_building_pb2.SingleObservationResponse(
+              single_observation_request=single_observation_request,
+              observation_valid=True,
+              continuous_value=self.values[
+                  single_observation_request.measurement_name
+              ],
+          )
+      )
+    return response
+
+  def request_action(
+      self, action_request: smart_control_building_pb2.ActionRequest
+  ) -> smart_control_building_pb2.ActionResponse:
+    """Issues a command to the building to change one or more setpoints."""
+    timestamp = conversion_utils.pandas_to_proto_timestamp(
+        pd.Timestamp.utcnow()
+    )
+    response = smart_control_building_pb2.ActionResponse(
+        request=action_request, timestamp=timestamp
+    )
+    for single_action_request in action_request.single_action_requests:
+      self.values[single_action_request.setpoint_name] = (
+          single_action_request.continuous_value
+      )
+      response.single_action_responses.append(
+          smart_control_building_pb2.SingleActionResponse(
+              request=single_action_request,
+              response_type=smart_control_building_pb2.SingleActionResponse.ActionResponseType.ACCEPTED,  # pylint: disable=line-too-long
+              additional_info="test",
+          )
+      )
+    return response
+
+  def reset(self) -> None:
+    self.reset_called = True
+
+  def wait_time(self) -> None:
+    """Returns after a certain amount of time."""
+    self.step_count += 1
+
+  @property
+  def current_timestamp(self) -> pd.Timestamp:
+    return pd.Timestamp(self.start_timestamp) + pd.Timedelta(
+        self.step_count * self.time_step_sec, unit="seconds"
+    )
+
+  def render(self, path: str) -> None:
+    """Renders the current state of the building."""
+    raise NotImplementedError()
+
+  @property
+  def devices(self) -> Sequence[smart_control_building_pb2.DeviceInfo]:
+    """Lists the devices that can be queried and/or controlled."""
+    devices = []
+    for zone, info in self.layout.items():
+      for device, fields in _zone_devices(info).items():
+        zone_id = zone
+        device_id = device
+        if "boiler" in device or "hws" in device:
+          device_type = smart_control_building_pb2.DeviceInfo.DeviceType.BLR
+        elif "vav" in device:
+          device_type = smart_control_building_pb2.DeviceInfo.DeviceType.VAV
+        elif "air_handler" in device or "ahu" in device:
+          device_type = smart_control_building_pb2.DeviceInfo.DeviceType.AHU
+        else:
+          raise ValueError(
+              f"Cannot infer a DeviceType for device {device!r} in zone"
+              f" {zone!r}: the name matches none of boiler/hws/vav/air_handler"
+              "/ahu."
+          )
+
+        observable_fields = {}
+        action_fields = {}
+        for field in fields:
+          if "setpoint" in field or "command" in field:
+            action_fields[field] = (
+                smart_control_building_pb2.DeviceInfo.ValueType.VALUE_CONTINUOUS
+            )
+          if "measurement" in field or "sensor" in field:
+            observable_fields[field] = (
+                smart_control_building_pb2.DeviceInfo.ValueType.VALUE_CONTINUOUS
+            )
+
+        device_info = smart_control_building_pb2.DeviceInfo(
+            zone_id=zone_id,
+            device_id=device_id,
+            device_type=device_type,
+            observable_fields=observable_fields,
+            action_fields=action_fields,
+        )
+        devices.append(device_info)
+    return devices
+
+  @property
+  def zones(self) -> Sequence[smart_control_building_pb2.ZoneInfo]:
+    """Lists the zones in the building managed by the RL agent."""
+    zones = []
+    for zone, info in self.layout.items():
+      zone_id = zone
+      zone_info = smart_control_building_pb2.ZoneInfo(
+          zone_id=zone_id,
+          building_id="SimpleBuilding",
+          zone_description=zone_id,
+          floor=_zone_floor(info),
+      )
+      zone_info.devices.extend(_zone_devices(info))
+      zones.append(zone_info)
+    return zones
+
+  def is_comfort_mode(self, current_time: pd.Timestamp) -> bool:
+    """Returns True if building is in comfort mode."""
+    return True
+
+  @property
+  def num_occupants(self) -> int:
+    return 10
+
+  @property
+  def time_step_sec(self) -> float:
+    return 300.0
+
+
+class SimpleBuildingHybridAction(SimpleBuilding):
+  """Building implementation for unit tests."""
+
+  def __init__(self):
+    layout = {
+        "zone_1": {
+            "boiler_1": [
+                "setpoint_1",
+                "measurement_1",
+                "supervisor_run_command",
+            ],
+            "vav_2": [
+                "setpoint_2",
+                "setpoint_3",
+                "setpoint_4",
+                "measurement_2",
+            ],
+        },
+        "zone_2": {
+            "boiler_3": ["measurement_3", "measurement_4"],
+            "vav_4": ["setpoint_5", "measurement_5"],
+            "air_handler_5": ["setpoint_6", "supervisor_run_command"],
+        },
+    }
+    super().__init__(layout=layout, initial_values=None, start_timestamp=None)
+
+
+#
+# REWARD FUNCTION
+#
+
+
+class SimpleRewardFunction(base_reward_function.BaseRewardFunction):
+  """Test reward function."""
+
+  def __init__(self):
+    self.counter = 0
+    self.values = [0, 1, 6, 43, 0.8, -1, 54, 12, -50]
+
+  def compute_reward(
+      self, reward_info: smart_control_reward_pb2.RewardInfo
+  ) -> smart_control_reward_pb2.RewardResponse:
+    """Returns the real-valued reward for the current state of the building."""
+    value = self.values[self.counter]
+    self.counter = (self.counter + 1) % len(self.values)
+    reward_response = smart_control_reward_pb2.RewardResponse(
+        agent_reward_value=value
+    )
+    return reward_response

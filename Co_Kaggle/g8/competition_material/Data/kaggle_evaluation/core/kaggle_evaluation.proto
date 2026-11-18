@@ -1,0 +1,102 @@
+// Defines the proto service for KaggleEvaluation communication, aiming to provide native
+// support for passing a variety of python primitives + common data science
+// objects, and nested objects thereof.
+
+syntax = "proto3";
+
+package kaggle_evaluation_client;
+
+service KaggleEvaluationService {
+  rpc Send(KaggleEvaluationRequest) returns (KaggleEvaluationResponse) {};
+}
+
+message KaggleEvaluationRequest {
+  string name = 1;
+  // Support generic python method calls using standard args / kwargs format.
+  repeated Payload args = 2;
+  map<string, Payload> kwargs = 3;
+}
+
+message KaggleEvaluationResponse {
+  Payload payload = 1;
+}
+
+// Core object representing a python value.
+message Payload {
+  oneof value {
+    // Primitives
+    string str_value = 1;
+    bool bool_value = 2;
+    sint64 int_value = 3;
+    // `double`, not `float`: proto3's `float` is 32 bits, but a Python float is 64.
+    double float_value = 4;
+    // Value is ignored, being set at all means `None`
+    bool none_value = 5;
+
+    // Iterables for nested types
+    PayloadList list_value = 6;
+    PayloadList tuple_value = 7;
+    // Only supports dict with keys of type str and values that are serializable
+    // to Payload as well.
+    PayloadMap dict_value = 8;
+    // The one case the receiver has to rebuild rather than take as it arrives; see RebuildableObject.
+    // Separate from the cases above precisely so a value can never be mistaken for one: a receiver
+    // that declares a model refuses a dict that merely happens to have matching keys, and one that
+    // declares an enum refuses a string that merely happens to match a member's value. It refuses a
+    // rebuildable object naming a different class for the same reason; only class_name says which.
+    RebuildableObject rebuildable_object_value = 16;
+
+    // Allowlisted special types
+    // pandas.DataFrame
+    bytes pandas_dataframe_value = 9;
+    // polars.DataFrame
+    bytes polars_dataframe_value = 10;
+    // pandas.Series
+    bytes pandas_series_value = 11;
+    // polars.Series
+    bytes polars_series_value = 12;
+    // numpy.ndarray
+    bytes numpy_array_value = 13;
+    // numpy.scalar. Distinct from numpy.ndarray to avoid issues with dimensionless numpy arrays
+    bytes numpy_scalar_value = 14;
+    // io.BytesIO
+    bytes bytes_io_value = 15;
+    // Python bytes
+    bytes bytes_value = 17;
+    // Iterables for nested types (unordered)
+    PayloadList set_value = 18;
+    PayloadList frozenset_value = 19;
+  }
+}
+
+// A value the receiver has to rebuild from the type it declared, rather than one the wire hands
+// over finished. Deliberately carries no module path and nothing else the receiver could import:
+// it rebuilds the class it declared itself, or none at all.
+//
+// Every other case in Payload arrives as exactly the Python object it names. This one does not, so
+// it is the only case whose handling depends on what the receiver declared -- and the only one that
+// requires a receiver to have declared anything at all: a rebuildable object no declared type
+// accounts for is refused, rather than delivered as the fields or the value it was taken apart into.
+message RebuildableObject {
+  // The sender's __qualname__ for the class. Never imported, only looked up: the receiver keys it
+  // against the classes its own declared type names, which is what keeps a class that merely fits
+  // from standing in for the one that was sent. The scope __qualname__ prefixes it with is dropped
+  // before matching, so the two sides need not define the class in the same place.
+  string class_name = 1;
+  oneof content {
+    // Anything the receiver can build out of its fields: dataclasses and Pydantic models today.
+    // Each field is serialized in its own right, so a field may hold anything the wire carries.
+    PayloadMap fields = 2;
+    // A single value standing for the whole object: an enum member's value, which must be a
+    // str, an int, a float, or a bool.
+    Payload value = 3;
+  }
+}
+
+message PayloadList {
+  repeated Payload payloads = 1;
+}
+
+message PayloadMap {
+  map<string, Payload> payload_map = 1;
+}

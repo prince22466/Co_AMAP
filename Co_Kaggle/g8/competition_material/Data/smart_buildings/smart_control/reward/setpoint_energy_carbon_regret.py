@@ -1,0 +1,346 @@
+"""Reward (Regret) Function for Smart Buildings.
+
+The reward function provides a feedback signal to the reinforcement learning
+agent that indicates the benefit of the action taken. During training, the
+agent learns an action policy to maximize the cumulative, or long-term reward.
+
+For this pilot there are three principal factors that contribute to the
+reward function:
+  * Setpoint: Maintaining the zone temperatures within heating and cooling
+  setpoints  results in a positive reward, and any temperature outside of
+  setpoints may also result in a negative reward (i.e., penalty).
+  * Cost: The cost of electricity and natural gas is a negative reward (cost).
+  Then by minimizing negative rewards/maximizing positive reward, the agent
+  will reduce overall energy cost. To compute the cost, both energy consumption
+  and the energy cost schedules are required.
+  * Carbon: By receiving negative reward for consuming natural gas, the agent
+  will learn to shift energy use to renewable sources. This factor requires an
+  energy-to-carbon conversion formula/table.
+
+The three factors can be scaled and combined into a single regret function:
+        r_i = [u x (s(setpoint) - s_max)/s_max
+            - v x f(cost)/f_max - w x g(carbon)/g_max]
+            / [u + v + w]
+
+        r_i -> [-1, 0]
+where:
+  r_i is the incremental reward at step i
+  s(setpoint) is the reward for maintining temperature inside setpoint
+  s_max = occupancy x productivity, the maximum possible reward
+  f(cost) is the cost of consuming electrical and natural gas energy
+  f_max: maximum momentary cost that occurs at max energy use
+  g(carbon) is the cost of emitting carbon,
+  g_max
+  and u, w, w are weighing factors for the policy.
+
+Actual energy rates are not clipped to the configured maxima: f_max and g_max
+serve only as normalization denominators. When consumption exceeds those
+maxima, the normalized energy cost and carbon terms exceed 1 and r_i falls
+below -1. This is intentional, so that the agent keeps receiving a stronger
+penalty as consumption grows past the nominal maximum, rather than a flat
+signal that is blind to further increases.
+
+The fundamental metric unit of energy is the Joule (J), and the unit of energy
+applied over a fixed time interval (energy rate) is power measured in J/sec or
+Watts. However, energy is expressed based on diverse traditional units.
+For example, electrical energy unit is one hour of 1,000 W, or kWh.
+However, natural gas energy is measured in British thermal units (Btu) or
+cubic feet. So coordinate conversions are necessary.
+
+Notes on Setpoint Reward:
+Setpoint reward is the incremental reward (beneficial feedback) for maintaining
+comfort conditions inside the zone.
+
+We postulate that productivity is adversely affected when the zone air
+temperature is outside the deadband. Near the deadband, individual productivity
+decreases a little, but decreases smoothly and monotonically the farther the
+zone air temperature is away from the deadband.
+
+Cumulative productivity is the maximum potential reward, and is parameterized by
+how many persons occupy the zones, and the average hourly per-person
+productivity.
+
+One parameter describes how productivity decays outside the deadband.
+
+productivity_deviation_ref (w): the deviation outside the deadband, in K, at
+which productivity reaches zero.
+
+Full productivity occurs when the zone is occupied and inside its deadband.
+Outside it, the shortfall grows in two stages:
+
+    deviation <= w:  shortfall = deviation / w             (linear, 0 -> 1)
+    deviation >  w:  shortfall = 1 + ((deviation - w)/w)^2 (quadratic)
+
+The second branch is deliberately **unbounded**, so productivity goes negative
+for large excursions. A bounded curve cannot distinguish an uncomfortable
+building from an unusable one: under the previous saturating form, a zone 5 K
+outside the band and one 34 K outside scored identically, which let a
+do-nothing policy score well by abandoning comfort entirely.
+
+Note the first branch is linear, not squared. 1 K outside the band costs 20% of
+productivity where a squared form charged 4%, so small excursions are judged
+more harshly than before.
+"""
+
+from typing import Any
+
+import gin
+
+from smart_buildings.smart_control.models import base_energy_cost
+from smart_buildings.smart_control.proto import smart_control_reward_pb2
+from smart_buildings.smart_control.reward import base_setpoint_energy_carbon_reward
+from smart_buildings.smart_control.utils import conversion_utils
+
+_HOUR_SEC = 3600.0
+
+
+@gin.configurable()
+class SetpointEnergyCarbonRegretFunction(
+    base_setpoint_energy_carbon_reward.BaseSetpointEnergyCarbonRewardFunction
+):
+  """Reward function based on productivity, energy cost and carbon emission.
+
+  Attributes:
+    max_productivity_personhour_usd: max occupant hourly productivity in $
+    min_productivity_personhour_usd: min occupant hourly productivity in $
+    productivity_deviation_ref: deviation outside the comfort band at which
+      productivity reaches zero, in K
+    electricity_energy_cost: cost and carbon model for electricity
+    natural_gas_energy_cost: cost and carbon model for natural gas
+    energy_cost_weight: u-coefficient described above
+    carbon_emission_weight: w-coefficient described above
+    carbon_cost_factor: cost value in $ per kg carbon emitted
+  """
+
+  @gin.configurable()
+  def __init__(
+      self,
+      max_productivity_personhour_usd: float,
+      min_productivity_personhour_usd: float,
+      max_electricity_rate: float,
+      max_natural_gas_rate: float,
+      productivity_deviation_ref: float,
+      electricity_energy_cost: base_energy_cost.BaseEnergyCost,
+      natural_gas_energy_cost: base_energy_cost.BaseEnergyCost,
+      productivity_weight: float,
+      energy_cost_weight: float,
+      carbon_emission_weight: float,
+  ):
+    super().__init__(
+        max_productivity_personhour_usd=max_productivity_personhour_usd,
+        productivity_deviation_ref=productivity_deviation_ref,
+    )
+    self._min_productivity_personhour_usd = min_productivity_personhour_usd
+    self._max_electricity_rate = max_electricity_rate
+    self._max_natural_gas_rate = max_natural_gas_rate
+    self._electricity_energy_cost = electricity_energy_cost
+    self._natural_gas_energy_cost = natural_gas_energy_cost
+    self._productivity_weight = productivity_weight
+    self._energy_cost_weight = energy_cost_weight
+    self._carbon_emission_weight = carbon_emission_weight
+
+    assert (
+        self._max_productivity_personhour_usd
+        > self._min_productivity_personhour_usd
+    )
+
+  @property
+  def energy_cost_weight(self) -> float:
+    """Returns the energy cost weight of the reward function."""
+    return self._energy_cost_weight
+
+  @property
+  def carbon_emission_weight(self) -> float:
+    """Returns the carbon emission weight of the reward function."""
+    return self._carbon_emission_weight
+
+  @property
+  def productivity_weight(self) -> float:
+    """Returns the productivity weight of the reward function."""
+    return self._productivity_weight
+
+  @property
+  def weights(self) -> dict[str, float]:
+    """Returns the weights of the reward function."""
+    return {
+        "energy_cost_weight": self._energy_cost_weight,
+        "carbon_emission_weight": self._carbon_emission_weight,
+        "productivity_weight": self._productivity_weight,
+    }
+
+  @property
+  def json_metadata(self) -> dict[str, Any]:
+    """Info to write into a JSON file. Needs to be serializable."""
+    return {
+        "max_productivity_personhour_usd": self._max_productivity_personhour_usd,  # pylint: disable=line-too-long
+        "min_productivity_personhour_usd": self._min_productivity_personhour_usd,  # pylint: disable=line-too-long
+        "max_electricity_rate": self._max_electricity_rate,
+        "max_natural_gas_rate": self._max_natural_gas_rate,
+        "productivity_deviation_ref": self._productivity_deviation_ref,
+        "productivity_weight": self._productivity_weight,
+        "energy_cost_weight": self._energy_cost_weight,
+        "carbon_emission_weight": self._carbon_emission_weight,
+    }
+
+  def compute_reward(
+      self, reward_info: smart_control_reward_pb2.RewardInfo
+  ) -> smart_control_reward_pb2.RewardResponse:
+    """Returns the real-valued reward for the current state of the building."""
+
+    start_time = conversion_utils.proto_to_pandas_timestamp(
+        reward_info.start_timestamp
+    )
+    end_time = conversion_utils.proto_to_pandas_timestamp(
+        reward_info.end_timestamp
+    )
+
+    delta_time_sec = (end_time - start_time).total_seconds()
+
+    actual_productivity, total_occupancy = self._sum_zone_productivities(
+        reward_info
+    )
+
+    max_productivity = (
+        self._max_productivity_personhour_usd
+        * total_occupancy
+        * delta_time_sec
+        / _HOUR_SEC
+    )
+    min_productivity = (
+        self._min_productivity_personhour_usd
+        * total_occupancy
+        * delta_time_sec
+        / _HOUR_SEC
+    )
+
+    if total_occupancy > 0.0:
+      normalized_productivity_regret = (
+          actual_productivity - min_productivity
+      ) / (max_productivity - min_productivity) - 1.0
+    else:
+      normalized_productivity_regret = 0.0
+
+    # NOT clipped to _max_electricity_rate. That rate is a normalisation scale
+    # (the denominator below), not a ceiling on what the plant may draw. Using
+    # it as both froze the energy term: measured draw runs 2x to 10x the
+    # 160 kW setting, so the clip pinned normalized_energy_cost at a constant
+    # for most steps, which removed its gradient and made marginal electricity
+    # free. See also the uncapped gas rate below.
+    actual_electricity_energy_rate = self._sum_electricity_energy_rate(
+        reward_info
+    )
+
+    actual_electricity_energy_cost = self._electricity_energy_cost.cost(
+        start_time=start_time,
+        end_time=end_time,
+        energy_rate=actual_electricity_energy_rate,
+    )
+
+    max_electricity_energy_cost = self._electricity_energy_cost.cost(
+        start_time=start_time,
+        end_time=end_time,
+        energy_rate=self._max_electricity_rate,
+    )
+
+    actual_electricity_carbon_emission = self._electricity_energy_cost.carbon(
+        start_time=start_time,
+        end_time=end_time,
+        energy_rate=actual_electricity_energy_rate,
+    )
+
+    max_electricity_carbon_emission = self._electricity_energy_cost.carbon(
+        start_time=start_time,
+        end_time=end_time,
+        energy_rate=self._max_electricity_rate,
+    )
+
+    # Uncapped for the same reason as electricity above: _max_natural_gas_rate
+    # is the normalisation denominator, not a ceiling. Leaving gas clipped
+    # while electricity is not would also bias the reward between the two
+    # fuels, since a policy could shed capped gas for uncapped electricity.
+    actual_natural_gas_energy_rate = self._sum_natural_gas_energy_rate(
+        reward_info
+    )
+
+    actual_natural_gas_energy_cost = self._natural_gas_energy_cost.cost(
+        start_time=start_time,
+        end_time=end_time,
+        energy_rate=actual_natural_gas_energy_rate,
+    )
+
+    max_natural_gas_energy_cost = self._natural_gas_energy_cost.cost(
+        start_time=start_time,
+        end_time=end_time,
+        energy_rate=self._max_natural_gas_rate,
+    )
+
+    actual_natural_gas_carbon_emission = self._natural_gas_energy_cost.carbon(
+        start_time=start_time,
+        end_time=end_time,
+        energy_rate=actual_natural_gas_energy_rate,
+    )
+
+    max_natural_gas_carbon_emission = self._natural_gas_energy_cost.carbon(
+        start_time=start_time,
+        end_time=end_time,
+        energy_rate=self._max_natural_gas_rate,
+    )
+
+    response = smart_control_reward_pb2.RewardResponse()
+    response.productivity_reward = actual_productivity
+    response.natural_gas_energy_cost = actual_natural_gas_energy_cost
+    response.electricity_energy_cost = actual_electricity_energy_cost
+
+    combined_energy_cost = (
+        actual_electricity_energy_cost + actual_natural_gas_energy_cost
+    )
+    if max_electricity_energy_cost + max_natural_gas_energy_cost > 0.0:
+      normalized_energy_cost = combined_energy_cost / (
+          max_electricity_energy_cost + max_natural_gas_energy_cost
+      )
+    else:
+      normalized_energy_cost = 0.0
+
+    combined_carbon_emission = (
+        actual_electricity_carbon_emission + actual_natural_gas_carbon_emission
+    )
+
+    if max_electricity_carbon_emission + max_natural_gas_carbon_emission > 0.0:
+      normalized_carbon_emission = combined_carbon_emission / (
+          max_electricity_carbon_emission + max_natural_gas_carbon_emission
+      )
+    else:
+      normalized_carbon_emission = 0.0
+
+    response.carbon_emitted = combined_carbon_emission
+
+    response.productivity_weight = self._productivity_weight
+    response.energy_cost_weight = self._energy_cost_weight
+    response.carbon_emission_weight = self._carbon_emission_weight
+
+    response.person_productivity = self._max_productivity_personhour_usd
+    response.total_occupancy = total_occupancy
+
+    response.reward_scale = 1.0
+    response.reward_shift = 0.0
+    response.productivity_regret = actual_productivity - max_productivity
+    response.normalized_productivity_regret = normalized_productivity_regret
+    response.normalized_energy_cost = normalized_energy_cost
+    response.normalized_carbon_emission = normalized_carbon_emission
+    response.start_timestamp.CopyFrom(reward_info.start_timestamp)
+    response.end_timestamp.CopyFrom(reward_info.end_timestamp)
+
+    raw_reward_value = (
+        normalized_productivity_regret * self._productivity_weight
+        - normalized_energy_cost * self._energy_cost_weight
+        - normalized_carbon_emission * self._carbon_emission_weight
+    )
+
+    # Return a weighted average.
+    response.agent_reward_value = raw_reward_value / (
+        self._productivity_weight
+        + self._energy_cost_weight
+        + self._carbon_emission_weight
+    )
+
+    return response

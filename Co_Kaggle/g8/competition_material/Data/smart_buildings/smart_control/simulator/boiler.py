@@ -1,0 +1,302 @@
+"""Models a boiler for the simulation."""
+
+import uuid
+
+import gin
+import numpy as np
+import pandas as pd
+
+from smart_buildings.smart_control.proto import smart_control_building_pb2
+from smart_buildings.smart_control.simulator import hot_water_heat_source, smart_device
+from smart_buildings.smart_control.utils import constants
+
+
+@gin.configurable
+class Boiler(hot_water_heat_source.HotWaterHeatSource):
+  """Models a boiler that is part of a hot water system.
+
+  Attributes:
+    supply_water_temperature_setpoint: Temperature in K that the boiler will
+      maintain.
+    device_id: unique name of the device.
+    supply_water_temperature_sensor: temp [K] of water being supplied to VAVs.
+    return_water_temperature_sensor: temp [K] of return water
+    heating_rate: degrees C / minute a boiler can heat
+    cooling_rate: degrees C / minute the boiler temp will drop
+    convection_coefficient: convection (airflow) loss external to the boiler
+      [W/m^2/K]
+    water_capacity: boiler water capacity [m^3]
+    tank_length: tank interior length [m]
+    tank_radius: tank interior radius [m]
+    insulation_conductivity: conductivity of the insulating walls [W/m/K]
+    insulation_thickness: thickness of the cylindrical insulating wall [m]
+  """
+
+  def __init__(
+      self,
+      supply_water_temperature_setpoint: float,
+      device_id: str | None = None,
+      heating_rate: float = 0,
+      cooling_rate: float = 0,
+      convection_coefficient: float = 5.6,
+      tank_length: float = 2.0,
+      tank_radius: float = 0.5,
+      water_capacity: float = 1.5,
+      insulation_conductivity: float = 0.067,
+      insulation_thickness: float = 0.06,
+      init_return_water_temperature_sensor: float = 295.0,
+  ):
+    observable_fields = {
+        'supply_water_temperature_setpoint': smart_device.AttributeInfo(
+            'supply_water_temperature_setpoint', float
+        ),
+        'supply_water_temperature_sensor': smart_device.AttributeInfo(
+            'supply_water_temperature_sensor', float
+        ),
+    }
+
+    action_fields = {
+        'supply_water_temperature_setpoint': smart_device.AttributeInfo(
+            'supply_water_temperature_setpoint', float
+        ),
+    }
+
+    if device_id is None:
+      device_id = f'boiler_id_{uuid.uuid4()}'
+
+    super().__init__(
+        observable_fields,
+        action_fields,
+        device_type=smart_control_building_pb2.DeviceInfo.DeviceType.BLR,
+        device_id=device_id,
+    )
+
+    self._init_supply_water_temperature_setpoint = (
+        supply_water_temperature_setpoint
+    )
+    self._init_return_water_temperature_sensor = (
+        init_return_water_temperature_sensor
+    )
+
+    self._has_tank = tank_radius > 0.0
+
+    # these values are only relevant for a boiler with a tank
+    self._heating_rate = heating_rate
+    self._cooling_rate = cooling_rate
+    self._convection_coefficient = convection_coefficient
+    self._tank_length = tank_length
+    self._tank_radius = tank_radius
+    self._water_capacity = water_capacity
+    self._insulation_conductivity = insulation_conductivity
+    self._insulation_thickness = insulation_thickness
+
+    self.reset()
+
+  def reset(self):
+    self._supply_water_temperature_setpoint = (
+        self._init_supply_water_temperature_setpoint
+    )
+    self._return_water_temperature_sensor = (
+        self._init_return_water_temperature_sensor
+    )
+    self._current_temperature = self._init_supply_water_temperature_setpoint
+    self._step_tank_temperature_change = 0.0
+    self._last_step_duration = pd.Timedelta(0, unit='second')
+    self._run_command = smart_device.RunStatus.OFF
+
+  @property
+  def return_water_temperature_sensor(self) -> float:
+    return self._return_water_temperature_sensor
+
+  @return_water_temperature_sensor.setter
+  def return_water_temperature_sensor(self, value: float) -> None:
+    self._return_water_temperature_sensor = value
+
+  @property
+  def supply_water_temperature_setpoint(self) -> float:
+    return self._supply_water_temperature_setpoint
+
+  @supply_water_temperature_setpoint.setter
+  def supply_water_temperature_setpoint(self, value: float) -> None:
+    self._supply_water_temperature_setpoint = value
+
+  @property
+  def supply_water_temperature_sensor(self) -> float:
+    self._set_current_temperature()
+    return self._current_temperature
+
+  @property
+  def run_command(self) -> smart_device.RunStatus:
+    return self._run_command
+
+  @run_command.setter
+  def run_command(self, value: smart_device.RunStatus) -> None:
+    self._run_command = value
+
+  def _set_current_temperature(self):
+    """Adjusts the temperature based on time elapsed after setpoint change."""
+
+    # Retain instantaneous behavior if rates aren't set, or if there is no tank.
+    # If no action has been applied, setpoint and measured temps are equal.
+    if self._action_timestamp:
+      self._last_step_duration = (
+          self._observation_timestamp - self._action_timestamp
+      )
+    else:
+      self._action_timestamp = self._observation_timestamp
+    if (
+        self._action_timestamp
+        and self._cooling_rate > 0.0
+        and self._heating_rate > 0.0
+        and self._has_tank
+    ):
+      begin_step_temp = self._current_temperature
+      self._current_temperature = self._adjust_temperature(
+          self._supply_water_temperature_setpoint,
+          begin_step_temp,
+          self._last_step_duration,
+      )
+
+      self._step_tank_temperature_change = (
+          self._current_temperature - begin_step_temp
+      )
+    else:
+      self._current_temperature = self._supply_water_temperature_setpoint
+
+  def _adjust_temperature(
+      self,
+      setpoint_temperature: float,
+      actual_temperature: float,
+      time_difference: pd.Timedelta,
+  ) -> float:
+    """Adjusts the current temp to match setpoints at a heating/cooling rate.
+
+    Args:
+      setpoint_temperature: setpoint temp
+      actual_temperature: temperature of the boiling water
+      time_difference: amount of time the setpoint has been applied
+
+    Returns:
+      temperature with linear heating and cooling.
+    """
+
+    if setpoint_temperature > actual_temperature:
+      return min(
+          actual_temperature
+          + self._heating_rate * time_difference.total_seconds() / 60.0,
+          setpoint_temperature,
+      )
+
+    elif setpoint_temperature < actual_temperature:
+      return max(
+          actual_temperature
+          - self._cooling_rate * time_difference.total_seconds() / 60.0,
+          setpoint_temperature,
+      )
+
+    else:
+      return setpoint_temperature
+
+  def compute_thermal_energy_rate(
+      self,
+      return_water_temp: float,
+      outside_temp: float,
+      total_flow_rate: float,
+  ) -> float:
+    """Returns energy rate in W consumed by boiler to heat water.
+
+    Args:
+      return_water_temp: Temperature in K that water is received at.
+      outside_temp: Temperature in K that the water tank is in.
+      total_flow_rate: The total flow rate of water through the HWS in m3/s.
+    """
+    # If return_water_temp is greater than the setpoint,
+    # the boiler should not be cooling.
+    if self._supply_water_temperature_setpoint > return_water_temp:
+      supply_water_temp = self._supply_water_temperature_setpoint
+    else:
+      supply_water_temp = return_water_temp
+
+    flow_heating_energy_rate = (
+        constants.WATER_HEAT_CAPACITY
+        * constants.WATER_DENSITY
+        * total_flow_rate
+        * (supply_water_temp - return_water_temp)
+    )
+
+    dissipation_energy_rate = self.compute_thermal_dissipation_rate(
+        supply_water_temp, outside_temp
+    )
+    if self._last_step_duration.total_seconds() > 0:
+      tank_heating_energy_rate = (
+          constants.WATER_HEAT_CAPACITY
+          * constants.WATER_DENSITY
+          * self._water_capacity
+          * self._step_tank_temperature_change
+          / self._last_step_duration.total_seconds()
+      )
+    else:
+      tank_heating_energy_rate = 0
+
+    # A gas boiler cannot burn a negative amount of gas. When the tank is
+    # cooling it releases stored heat, which offsets the flow and dissipation
+    # terms; if it releases more than they need, no gas burns at all and the
+    # tank simply cools further. Without this floor the total goes negative,
+    # and natural_gas_energy_cost then clamps it to zero anyway while logging a
+    # warning every step, so the gas term silently dies for whole scenarios.
+    return max(
+        0.0,
+        flow_heating_energy_rate
+        + dissipation_energy_rate
+        + tank_heating_energy_rate,
+    )
+
+  def compute_thermal_dissipation_rate(
+      self, water_temp: float, outside_temp: float
+  ) -> float:
+    """Returns the amount of thermal loss in W from a boiler tank.
+
+    Thermal dissipation is the loss of heat due from the tank to the environment
+    due to imperfect insulation, measured in Watts.
+
+    The tank is assumed to be a cylindrical annulus, with an internal radius
+    internal length, and an insulation thickness. Heat is dissapated only
+    through the cylinder walls, and no heat is lost through the ends/caps.
+
+    The equation is computed by applying an energy balance of:
+    Q = Q_conduction = Q_convection, where Q_condition is the heat transferred
+    from water at water_temp (T1) to the exterior surface temp (T2), and
+    Q_convection is the transfer of the heat from the external surface at T2
+    to the outside at T_inf.
+
+    Q_conduction = (T1 - T2) / (ln(R2/R1) / 2 x pi x L x k), and
+    Q_convection = (T2 - Tinf) / (1 / h x A), where
+      A = the area of the annulus = 2 x pi x R2 x L
+
+    Solving for Q:
+    Q = (T1 - Tinf) / [ln(R2/R1) / 2pi / L / k + 1 / h / A]
+
+    Source: Heat Transfer, E. M. Sparrow, 1993
+
+    Args:
+      water_temp: average temperature of the water [K]
+      outside_temp: temperature outside of the tank, can be ambient [K]
+
+    Returns:
+      thermal loss rate of the tank in Watts
+    """
+    # If the water temperature is less than the outside temperature,
+    # there should be no heat transfer.
+    if water_temp < outside_temp:
+      return 0.0
+
+    delta_temp = water_temp - outside_temp
+    numerator = self._tank_length * 2.0 * np.pi * delta_temp
+    interior_radius = self._tank_radius
+    exterior_radius = interior_radius + self._insulation_thickness
+    conduction_factor = (
+        np.log(exterior_radius / interior_radius)
+        / self._insulation_conductivity
+    )
+    convection_factor = 1.0 / self._convection_coefficient / exterior_radius
+    return numerator / (conduction_factor + convection_factor)

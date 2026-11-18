@@ -1,0 +1,160 @@
+"""Models HVAC for simulation.
+
+The model assumes a hot water system with a single boiler, and a single air
+handler, with one VAV per zone in the building.
+"""
+
+import abc
+from collections.abc import Mapping
+
+import gin
+import pandas as pd
+
+from smart_buildings.smart_control.proto import smart_control_building_pb2
+from smart_buildings.smart_control.simulator import air_handler as air_handler_py
+from smart_buildings.smart_control.simulator import (
+  hot_water_system as hot_water_system_py,
+)
+from smart_buildings.smart_control.simulator import setpoint_schedule, thermostat, vav
+from smart_buildings.smart_control.utils import conversion_utils
+
+
+class BaseHvac[ZoneKeyT](abc.ABC):
+  """The HVAC surface the Simulator drives, common to both zone keyings.
+
+  Mirrors BaseSimulatorBuilding's ZoneKeyT: Hvac keys zones by grid
+  coordinates, FloorPlanBasedHvac by room name.
+  """
+
+  @abc.abstractmethod
+  def reset(self) -> None:
+    """Returns every HVAC device to its initial state."""
+
+  @abc.abstractmethod
+  def is_comfort_mode(self, current_time: pd.Timestamp) -> bool:
+    """Returns True if building is in comfort mode."""
+
+  @property
+  @abc.abstractmethod
+  def vavs(self) -> Mapping[ZoneKeyT, vav.Vav]:
+    """Returns the VAVs, keyed by the zone each one serves."""
+
+  @property
+  @abc.abstractmethod
+  def air_handler(
+      self,
+  ) -> air_handler_py.AirHandler | air_handler_py.AirHandlerSystem:
+    """Returns the air handler, or the system of them, for the building."""
+
+  @property
+  @abc.abstractmethod
+  def hot_water_system(self) -> hot_water_system_py.HotWaterSystem:
+    """Returns the hot water system for the building."""
+
+  @property
+  @abc.abstractmethod
+  def zone_infos(
+      self,
+  ) -> Mapping[ZoneKeyT, smart_control_building_pb2.ZoneInfo]:
+    """Returns information about each zone in the building."""
+
+
+@gin.configurable
+class Hvac(BaseHvac[tuple[int, int]]):
+  """Model for the HVAC components of the building.
+
+  Creates a single hot water system and air handler, along with one vav for each
+  zone.
+
+  Attributes:
+    vavs: Mapping from zone_coordinates to VAV.
+    air_handler: AirHandler
+    hot_water_system: HotWaterSystem
+    zone_infos: information about each zone in the building.
+  """
+
+  def __init__(
+      self,
+      zone_coordinates: list[tuple[int, int]],
+      air_handler: air_handler_py.AirHandler,
+      hot_water_system: hot_water_system_py.HotWaterSystem,
+      schedule: setpoint_schedule.SetpointSchedule,
+      vav_max_air_flow_rate: float,
+      vav_reheat_max_water_flow_rate: float,
+      # A VAV duct system reaches design airflow at roughly 1 to 2 kPa.
+      # This is the denominator of sqrt(P / P_design) in the flow demand,
+      # so it must move together with the static-pressure action range.
+      vav_max_air_flow_static_pressure: float = 2000.0,
+  ):
+    """Initialize HVAC.
+
+    Args:
+      zone_coordinates: List of 2-tuple containing zone coordinates to service.
+      air_handler: the air handler for hte HVAC
+      hot_water_system: the hot water system for the HVAC
+      schedule: the setpoint_schedule for the thermostats
+      vav_max_air_flow_rate: the max airflow rate for the vavs
+      vav_reheat_max_water_flow_rate: the max water reheat flowrate for the vavs
+      vav_max_air_flow_static_pressure: the  air flow static pressure for the
+        vavs at which the max air flow rate can be reached.
+    """
+    self._air_handler = air_handler
+    self._hot_water_system = hot_water_system
+    self._vav_max_air_flow_rate = vav_max_air_flow_rate
+    self._vav_reheat_max_water_flow_rate = vav_reheat_max_water_flow_rate
+    self._zone_coordinates = zone_coordinates
+    self._vavs = {}
+    self._schedule = schedule
+    self._zone_infos = {}
+
+    for z in self._zone_coordinates:
+      zone_id = conversion_utils.zone_coordinates_to_id(z)
+      therm = thermostat.Thermostat(self._schedule)
+      device_id = f'vav_{z[0]}_{z[1]}'
+      self._vavs[z] = vav.Vav(
+          self._vav_max_air_flow_rate,
+          self._vav_reheat_max_water_flow_rate,
+          therm,
+          self._hot_water_system,
+          self._air_handler,
+          device_id=device_id,
+          zone_id=zone_id,
+          max_air_flow_static_pressure=vav_max_air_flow_static_pressure,
+      )
+      self._zone_infos[z] = smart_control_building_pb2.ZoneInfo(
+          zone_id=zone_id,
+          building_id='US-SIM-001',
+          zone_description='Simulated zone',
+          devices=[device_id],
+          zone_type=smart_control_building_pb2.ZoneInfo.ROOM,
+          floor=0,
+      )
+    self.reset()
+
+  def reset(self) -> None:
+    self.air_handler.reset()
+    self.hot_water_system.reset()
+    for z in self._zone_coordinates:
+      self._vavs[z].reset()
+
+  @property
+  def vavs(self) -> Mapping[tuple[int, int], vav.Vav]:
+    return self._vavs
+
+  @property
+  def air_handler(self) -> air_handler_py.AirHandler:
+    return self._air_handler
+
+  @property
+  def hot_water_system(self) -> hot_water_system_py.HotWaterSystem:
+    return self._hot_water_system
+
+  def is_comfort_mode(self, current_time: pd.Timestamp) -> bool:
+    """Returns True if building is in comfort mode."""
+    return self._schedule.is_comfort_mode(current_time)
+
+  @property
+  def zone_infos(
+      self,
+  ) -> Mapping[tuple[int, int], smart_control_building_pb2.ZoneInfo]:
+    return self._zone_infos

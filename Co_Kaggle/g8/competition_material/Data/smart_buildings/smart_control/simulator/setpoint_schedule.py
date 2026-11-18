@@ -1,0 +1,281 @@
+"""Stores and maintains setpoint schedule of HVAC in simulator."""
+
+import datetime
+
+import gin
+import pandas as pd
+import pytz
+from pandas.tseries import holiday
+
+TemperatureWindow = tuple[int, int]
+
+
+@gin.configurable
+class SetpointSchedule:
+  """Represents the desired temperature bounds of the building for each day.
+
+  Building setpoint schedules have temperature windows for day (comfort) and
+  night (eco).
+  Weekends are treated as nights. Additionally specific weekdays can be set
+  to the night windows as well to account for holidays.
+
+  Temperature windows are a tuple: (heating_setpoint, cooling_setpoint)
+  where heating < cooling.
+
+  Attributes:
+    morning_start_hour: The hour (0-23) that the building turns to comfort mode.
+    evening_start_hour: The hour (0-23) that the building turns to eco mode.
+    comfort_temp_window: 2-Tuple containing heating and cooling setpoints in K
+      for comfort mode.
+    eco_temp_window: 2-Tuple containing heating and cooling setpoints in K for
+      eco mode.
+    holidays: Set of days of year (1-365) to set as eco mode.
+    time_zone: Time zone of the schedule.
+  """
+
+  # TODO(judahg): make holidays a set of Timestamps
+
+  def __init__(
+      self,
+      morning_start_hour: int,
+      evening_start_hour: int,
+      comfort_temp_window: TemperatureWindow,
+      eco_temp_window: TemperatureWindow,
+      holidays: set[int] | None = None,
+      time_zone: datetime.tzinfo = pytz.UTC,
+  ):
+    if morning_start_hour > evening_start_hour:
+      raise ValueError(
+          'morning_start_hour must be less than evening_start_hour'
+      )
+
+    if comfort_temp_window[0] > comfort_temp_window[1]:
+      raise ValueError(
+          'comfort_temp_window[0] must be less than comfort_temp_window[1]'
+      )
+
+    if eco_temp_window[0] > eco_temp_window[1]:
+      raise ValueError(
+          'eco_temp_window[0] must be less than eco_temp_window[1]'
+      )
+
+    self.morning_start_hour = morning_start_hour
+    self.evening_start_hour = evening_start_hour
+    self.comfort_temp_window = comfort_temp_window
+    self.eco_temp_window = eco_temp_window
+    self._time_zone = time_zone
+    if holidays:
+      self.holidays = holidays
+    else:
+      self.holidays = set()
+
+  @property
+  def time_zone(self) -> datetime.tzinfo:
+    """Returns the schedule's time zone."""
+    return self._time_zone
+
+  def is_comfort_mode(self, current_timestamp: pd.Timestamp) -> bool:
+    """Returns whether setpoint schedule dictates comfort mode.
+
+    Args:
+      current_timestamp: Pandas Timestamp to get mode for.
+    """
+    local_timestamp = self._localize_or_convert_timezone(current_timestamp)
+    # is_weekend takes the ORIGINAL timestamp, not the localized one. Passing
+    # local_timestamp converts it twice: _localize_or_convert_timezone puts a
+    # naive timestamp in UTC, then is_weekend sees a tz-aware value, takes the
+    # other branch, and converts UTC -> self._time_zone. The hour of day was
+    # then judged on one clock and the day of week on another, seven hours
+    # apart, so Monday 06:00 came back as a weekend.
+    return (
+        local_timestamp.hour >= self.morning_start_hour
+        and local_timestamp.hour < self.evening_start_hour
+        and local_timestamp.dayofyear not in self.holidays
+        and not self.is_weekend(current_timestamp)
+    )
+
+  def _localize_or_convert_timezone(
+      self, current_timestamp: pd.Timestamp
+  ) -> pd.Timestamp:
+    if current_timestamp.tz is not None:
+      return current_timestamp.tz_convert(self._time_zone)
+    else:
+      return current_timestamp.tz_localize(pytz.UTC)
+
+  def is_weekend(self, current_timestamp: pd.Timestamp) -> bool:
+    """Returns whether current day is a weekend.
+
+    Args:
+      current_timestamp: Pandas Timestamp.
+    """
+    local_timestamp = self._localize_or_convert_timezone(current_timestamp)
+    return local_timestamp.day_name() in ['Saturday', 'Sunday']
+
+  def get_temperature_window(
+      self, current_timestamp: pd.Timestamp
+  ) -> TemperatureWindow:
+    """Returns tuple containing low and high setpoints.
+
+    Args:
+      current_timestamp: Pandas timestamp to get window for.
+    """
+    if self.is_comfort_mode(current_timestamp):
+      return self.comfort_temp_window
+    else:
+      return self.eco_temp_window
+
+  def get_plot_data(
+      self, start_timestamp: pd.Timestamp, end_timestamp: pd.Timestamp
+  ) -> pd.DataFrame:
+    """Returns DataFrame of all transition events in the time window.
+
+    Can be used for plotting purposes.
+
+    Columns: comfort_mode (True/False), start time, end time, heating,
+      cooling setpoints.
+
+    Gets the time windows for drawing day/night setpoint rectangles.
+
+    Enables plotting the schedule on the temp timeline chart. Each entry is
+    converted to a rectangle, where the x-coordinates are times, and the
+    y-coordinates are temps.
+
+    Args:
+      start_timestamp: Pandas Timestamp representing start time of the time
+        window to be plotted.
+      end_timestamp: Pandas Timestamp representing end time of the time window
+        to be plotted.
+    """
+
+    comfort_modes = []
+    start_times = []
+    end_times = []
+    heating_setpoints = []
+    cooling_setpoints = []
+
+    current_timestamp = start_timestamp
+
+    # Start with the start time and increment until the end time.
+    # The increment is determined by the next schedule event.
+    while current_timestamp < end_timestamp:
+      current_comfort_mode = self.is_comfort_mode(current_timestamp)
+      local_timestamp = self._localize_or_convert_timezone(current_timestamp)
+      comfort_modes.append(current_comfort_mode)
+
+      if current_comfort_mode:
+        heating_setpoints.append(self.comfort_temp_window[0])
+        cooling_setpoints.append(self.comfort_temp_window[1])
+
+        te = pd.Timestamp(
+            year=current_timestamp.year,
+            month=current_timestamp.month,
+            day=current_timestamp.day,
+            hour=self.evening_start_hour,
+        )
+
+      else:  # eco mode
+        heating_setpoints.append(self.eco_temp_window[0])
+        cooling_setpoints.append(self.eco_temp_window[1])
+
+        if local_timestamp.hour >= self.morning_start_hour:
+          te = pd.Timestamp(
+              year=current_timestamp.year,
+              month=current_timestamp.month,
+              day=current_timestamp.day,
+              hour=self.morning_start_hour,
+          ) + pd.Timedelta(days=1)
+        else:
+          te = pd.Timestamp(
+              year=current_timestamp.year,
+              month=current_timestamp.month,
+              day=current_timestamp.day,
+              hour=self.morning_start_hour,
+          )
+
+      if te.tz is not None:
+        local_timestamp = te.tz_convert(self._time_zone)
+      else:
+        local_timestamp = te
+      if local_timestamp.dayofyear in self.holidays or self.is_weekend(te):
+        while te.dayofyear in self.holidays or self.is_weekend(te):
+          te = te + pd.Timedelta(days=1)
+
+      if (te - end_timestamp).total_seconds() > 0:
+        te = end_timestamp
+
+      end_times.append(te)
+      start_times.append(current_timestamp)
+      current_timestamp = te
+
+    return pd.DataFrame({
+        'comfort_mode': comfort_modes,
+        'start_time': start_times,
+        'end_time': end_times,
+        'heating_setpoint': heating_setpoints,
+        'cooling_setpoint': cooling_setpoints,
+    })
+
+
+class HolidaySchedule(SetpointSchedule):
+  """Holiday-aware building operational schedule.
+
+  Implements reasonable default values for holidays, operational hours, and
+  temperatures, to improve usability.
+
+  Currently requires a year, due to limitations of the parent class (which
+  require the holidays to be represented as day numbers in the current year,
+  instead of timestamps. However if we update the parent class to be more
+  flexible and accept timestamps instead, this class should be able to handle
+  multiple years worth of holidays, and therefore will be able to be used in
+  trials that span multiple years (e.g. a trial that covers the last week of one
+  year and continues onto the first week of the next year).
+
+  Attributes:
+    year: Designates the year to get holidays for.
+    calendar_class: The holiday calendar class from `pandas.tseries.holiday`.
+      Default is `USFederalHolidayCalendar` for US holidays.
+    cal: An instance of the holiday calendar class, used to get the holidays.
+    holidays_df: Pandas DataFrame with columns "date", "holiday", and
+      "day_of_year". The "holiday" column references the holiday name (e.g.
+      "New Year's Day"). The "day_of_year" column provides the day number of the
+      holiday within the given year (1-365), which is used to interface with the
+      parent class.
+  """
+
+  def __init__(
+      self,
+      year: int,  # required param for now, due to limitations of parent class
+      morning_start_hour=6,
+      evening_start_hour=19,
+      comfort_temp_window=(294, 297),  # 'ON' mode
+      eco_temp_window=(289, 298),  # 'OFF' mode
+      calendar_class: type[
+          holiday.AbstractHolidayCalendar
+      ] = holiday.USFederalHolidayCalendar,
+      time_zone=pytz.UTC,
+  ):
+    self.cal = calendar_class()
+
+    self.year = year
+
+    # holidays for a specific year:
+    holidays_df = self.cal.holidays(
+        start=pd.Timestamp(f'{year}-01-01 00:00:00'),
+        end=pd.Timestamp(f'{year}-12-31 23:59:59'),
+        return_name=True
+    ).reset_index()
+
+    holidays_df.columns = ['date', 'holiday']
+    # shim for current setpoint schedule interface, add day of year (1-365):
+    holidays_df['day_of_year'] = holidays_df['date'].dt.dayofyear
+
+    holiday_numbers_this_year = set(holidays_df['day_of_year'])
+    super().__init__(
+        morning_start_hour=morning_start_hour,
+        evening_start_hour=evening_start_hour,
+        comfort_temp_window=comfort_temp_window,
+        eco_temp_window=eco_temp_window,
+        holidays=holiday_numbers_this_year,
+        time_zone=time_zone,
+    )
+    self.holidays_df = holidays_df

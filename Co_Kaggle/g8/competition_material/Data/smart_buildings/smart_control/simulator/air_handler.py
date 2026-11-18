@@ -1,0 +1,572 @@
+"""A model of an air handler in an HVAC system."""
+
+import uuid
+from collections.abc import Mapping
+
+import gin
+
+from smart_buildings.smart_control.proto import smart_control_building_pb2
+from smart_buildings.smart_control.simulator import (
+  constants,
+  smart_device,
+  weather_controller,
+)
+
+
+@gin.configurable
+class AirHandler(smart_device.SmartDevice):
+  """An air handler with heating/cooling, input/exhaust, recirculation.
+
+  Attributes:
+    recirculation: Proportion of air recirculated. The complement is outside
+      air, so this is the economizer: low recirculation buys free cooling from
+      cold ambient air at the price of exhaust fan work, and high recirculation
+      keeps conditioned air in the building.
+    air_flow_rate: Flow rate produced by fan in m^3/s.
+    supply_air_temperature_setpoint: Average temperature in K of air output from
+      the air handler. This is reduced to the heating or cooling setpoint.
+      Either this, or those two, can be used. For backwards compatibility, the
+      heating and cooling setpoints are here, but in the real building, only the
+      supply_air_temperature_setpoint exists.
+    fan_static_pressure: Amount of pressure in Pa needed to push air
+      effectively.
+    fan_efficiency: Electrical efficiency of fan (0 - 1).
+    cooling_request_count: count of VAVs that have requested cooling in this
+      cycle.
+    max_air_flow_rate: max air flow rate in m^3/s
+    min_supply_air_static_pressure: Static pressure the fan holds whenever it is
+      running, whatever it is asked for.
+    max_recirculation: Most of the supply air that may be recirculated, so its
+      complement is the least outside air the unit may draw.
+  """
+
+  def __init__(
+      self,
+      recirculation: float,
+      supply_air_temperature_setpoint: int,
+      fan_static_pressure: float,
+      fan_efficiency: float,
+      max_air_flow_rate: float = 8.67,
+      device_id: str | None = None,
+      sim_weather_controller: weather_controller.WeatherController | None = None,
+      run_command=smart_device.RunStatus.ON,
+      # Zone airflow goes as sqrt(static pressure), so a damper floor at the VAV
+      # is worth nothing if the fan can be turned down to nothing underneath it.
+      # 200 Pa against the 2000 Pa design point is about 30% of design flow,
+      # which is roughly what a VAV box at its damper floor needs to meet a
+      # ventilation minimum. Turning the unit off is still off: this is the
+      # floor for a unit that is running, not a requirement that it run.
+      min_supply_air_static_pressure: float = 200.0,
+      # Recirculating everything would deliver no outside air at all, which the
+      # economizer action would otherwise make free.
+      max_recirculation: float = 0.7,
+      # Cooling is delivered by a vapour compression cycle, which moves several
+      # units of heat per unit of electricity consumed. Billing the raw thermal
+      # load as electricity would imply a COP of 1.0 and overstate the cost of
+      # cooling by this factor. 3.5 is mid range for a commercial chiller.
+      cooling_coefficient_of_performance: float = 3.5,
+  ):
+
+    observable_fields = {
+        'cooling_request_count': smart_device.AttributeInfo(
+            'cooling_request_count', float
+        ),
+        'supply_air_static_pressure_setpoint': smart_device.AttributeInfo(
+            'supply_air_static_pressure_setpoint', float
+        ),
+        'supply_air_static_pressure_sensor': smart_device.AttributeInfo(
+            'supply_air_static_pressure_sensor', float
+        ),
+        'supply_air_flowrate_setpoint': smart_device.AttributeInfo(
+            'air_flow_rate', float
+        ),
+        'supply_air_flowrate_sensor': smart_device.AttributeInfo(
+            'air_flow_rate', float
+        ),
+        'supply_air_temperature_sensor': smart_device.AttributeInfo(
+            'supply_air_temperature_sensor', float
+        ),
+        'supply_air_temperature_setpoint': smart_device.AttributeInfo(
+            'supply_air_temperature_setpoint', float
+        ),
+        'supply_fan_run_command': smart_device.AttributeInfo(
+            'run_command', int
+        ),
+        'exhaust_fan_run_command': smart_device.AttributeInfo(
+            'run_command', int
+        ),
+        'supply_fan_speed_percentage_command': smart_device.AttributeInfo(
+            'supply_fan_speed_percentage', float
+        ),
+        'discharge_fan_speed_percentage_command': smart_device.AttributeInfo(
+            'supply_fan_speed_percentage', float
+        ),
+        'outside_air_flowrate_sensor': smart_device.AttributeInfo(
+            'ambient_flow_rate', float
+        ),
+        'supervisor_run_command': smart_device.AttributeInfo(
+            'run_command', int
+        ),
+        'recirculation_percentage_command': smart_device.AttributeInfo(
+            'recirculation', float
+        ),
+    }
+    if sim_weather_controller:
+      observable_fields['outside_air_temperature_sensor'] = (
+          smart_device.AttributeInfo('outside_air_temperature_sensor', float)
+      )
+
+    action_fields = {
+        'supervisor_run_command': smart_device.AttributeInfo(
+            'run_command', int
+        ),
+        'supply_air_static_pressure_setpoint': smart_device.AttributeInfo(
+            'supply_air_static_pressure_setpoint', float
+        ),
+        'supply_air_temperature_setpoint': smart_device.AttributeInfo(
+            'supply_air_temperature_setpoint', float
+        ),
+        'recirculation_percentage_command': smart_device.AttributeInfo(
+            'recirculation', float
+        ),
+    }
+
+    if device_id is None:
+      device_id = f'air_handler_id_{uuid.uuid4()}'
+
+    super().__init__(
+        observable_fields,
+        action_fields,
+        device_type=smart_control_building_pb2.DeviceInfo.DeviceType.AHU,
+        device_id=device_id,
+    )
+
+    self._init_recirculation = recirculation
+    self._init_air_flow_rate = 0.0
+
+    self._init_cooling_air_temp_setpoint = supply_air_temperature_setpoint
+    self._init_fan_static_pressure = fan_static_pressure
+    self._init_fan_efficiency = fan_efficiency
+    self._init_cooling_request_count = 0
+    self._init_max_air_flow_rate = max_air_flow_rate
+    self._sim_weather_controller = sim_weather_controller
+    self._init_run_command = run_command
+    self._min_supply_air_static_pressure = min_supply_air_static_pressure
+    if max_recirculation < 0.0 or max_recirculation > 1.0:
+      raise ValueError('max_recirculation must be in [0, 1]')
+    self._max_recirculation = max_recirculation
+    if cooling_coefficient_of_performance <= 0.0:
+      raise ValueError('cooling_coefficient_of_performance must be positive')
+    self._cooling_cop = cooling_coefficient_of_performance
+    self.reset()
+
+  def reset(self):
+    self.recirculation = self._init_recirculation
+    self._air_flow_rate = self._init_air_flow_rate
+    self._supply_air_temperature_setpoint = self._init_cooling_air_temp_setpoint
+    self._fan_static_pressure = self._init_fan_static_pressure
+    self._fan_efficiency = self._init_fan_efficiency
+    self._cooling_request_count = self._init_cooling_request_count
+    self._max_air_flow_rate = self._init_max_air_flow_rate
+    self._run_command = self._init_run_command
+
+  def get_vav_air_handler(self, _):
+    return self
+
+  @property
+  def outside_air_temperature_sensor(self) -> float:
+    if not self._sim_weather_controller:
+      raise RuntimeError(
+          'Outside air temperature requested, but air handler has no weather'
+          ' controller.'
+      )
+    return self._sim_weather_controller.get_current_temp(
+        self._observation_timestamp
+    )
+
+  @property
+  def recirculation(self) -> float:
+    return self._recirculation
+
+  @property
+  def run_command(self) -> smart_device.RunStatus:
+    return self._run_command
+
+  @run_command.setter
+  def run_command(self, value: smart_device.RunStatus):
+    self._run_command = value
+
+  @recirculation.setter
+  def recirculation(self, value: float):
+    # Clamped, not rejected: this is an action field, so see the note on
+    # Vav.damper_command about actions arriving a tolerance out of range.
+    self._recirculation = min(max(value, 0.0), self._max_recirculation)
+
+  @property
+  def air_flow_rate(self) -> float:
+    if self._run_command == smart_device.RunStatus.OFF:
+      return 0.0
+    return self._air_flow_rate
+
+  @air_flow_rate.setter
+  def air_flow_rate(self, value: float):
+    self._air_flow_rate = value
+
+  @property
+  def supply_air_temperature_setpoint(self) -> float:
+    return self._supply_air_temperature_setpoint
+
+  @supply_air_temperature_setpoint.setter
+  def supply_air_temperature_setpoint(self, value: float):
+    self._supply_air_temperature_setpoint = value
+
+  @property
+  def supply_air_temperature_sensor(self) -> float:
+    return self._supply_air_temperature_setpoint
+
+  @property
+  def supply_air_static_pressure_setpoint(self) -> float:
+    if self._run_command == smart_device.RunStatus.OFF:
+      return 0.0
+    return max(self._fan_static_pressure, self._min_supply_air_static_pressure)
+
+  @supply_air_static_pressure_setpoint.setter
+  def supply_air_static_pressure_setpoint(self, value: float):
+    self._fan_static_pressure = value
+
+  @property
+  def fan_efficiency(self) -> float:
+    return self._fan_efficiency
+
+  @property
+  def supply_air_static_pressure_sensor(self) -> float:
+    return self.supply_air_static_pressure_setpoint
+
+  @fan_efficiency.setter
+  def fan_efficiency(self, value: float):
+    self._fan_efficiency = value
+
+  @property
+  def cooling_request_count(self) -> int:
+    return self._cooling_request_count
+
+  @property
+  def max_air_flow_rate(self) -> float:
+    return self._max_air_flow_rate
+
+  def get_mixed_air_temp(
+      self, recirculation_temp: float, ambient_temp: float
+  ) -> float:
+    """Returns temperature in K of air after recirculation.
+
+    Args:
+      recirculation_temp: Temperature in K of recirculated air.
+      ambient_temp: Temperature in K of ambient/outside air.
+    """
+    return (
+        self._recirculation * recirculation_temp
+        + (1 - self._recirculation) * ambient_temp
+    )
+
+  def get_supply_air_temp(
+      self, recirculation_temp: float, ambient_temp: float
+  ) -> float:
+    """Returns temperature of air output from air handler after A/C or heat.
+
+    Temperatures are measured in Kelvin.
+
+    Args:
+      recirculation_temp: Temperature in K of recirculated air.
+      ambient_temp: Temperature in K of ambient/outside air.
+    """
+    mixed_air_temp = self.get_mixed_air_temp(recirculation_temp, ambient_temp)
+    if (
+        mixed_air_temp > self.supply_air_temperature_setpoint
+        and self._run_command == smart_device.RunStatus.ON
+    ):
+      return self.supply_air_temperature_setpoint
+    else:
+      return mixed_air_temp
+
+  @property
+  def ambient_flow_rate(self) -> float:
+    """Returns rate of flow coming from outside."""
+    return (1.0 - self._recirculation) * self._air_flow_rate
+
+  @property
+  def recirculation_flow_rate(self) -> float:
+    """Returns rate of flow from recirculated air."""
+    return self._recirculation * self._air_flow_rate
+
+  @property
+  def supply_fan_speed_percentage(self) -> float:
+    """Returns supply fan speed percentage."""
+    return self._air_flow_rate / self.max_air_flow_rate
+
+  def reset_demand(self):
+    self._air_flow_rate = 0.0
+    self._cooling_request_count = 0
+
+  def add_demand(self, flow_rate: float):
+    """Adds to current flow rate demand.
+
+    Args:
+      flow_rate: Flow rate to add.
+
+    Raises:
+      ValueError: If flow_rate is not positive.
+    """
+    if flow_rate <= 0:
+      raise ValueError('Flow rate must be positive')
+    self._air_flow_rate += flow_rate
+    self._air_flow_rate = min(self._air_flow_rate, self.max_air_flow_rate)
+    self._cooling_request_count += 1
+
+  def compute_thermal_energy_rate(
+      self, recirculation_temp: float, ambient_temp: float
+  ) -> float:
+    """Returns energy in W needed by the air handler to meet supply temp.
+
+    This is the heat moved, not the electricity used to move it. The VAVs
+    account for the same air against this figure, so it must stay raw; see
+    compute_cooling_electrical_energy_rate for the metered quantity.
+
+    Args:
+      recirculation_temp: Temperature in K of recirculated air.
+      ambient_temp: Temperature in K of outside air.
+    """
+    mixed_air_temp = self.get_mixed_air_temp(recirculation_temp, ambient_temp)
+    supply_air_temp = self.get_supply_air_temp(recirculation_temp, ambient_temp)
+    return (
+        self._air_flow_rate
+        * constants.AIR_DENSITY
+        * constants.AIR_HEAT_CAPACITY
+        * (supply_air_temp - mixed_air_temp)
+    )
+
+  def compute_cooling_electrical_energy_rate(
+      self, recirculation_temp: float, ambient_temp: float
+  ) -> float:
+    """Returns the electricity in W drawn to move that heat.
+
+    A vapour compression cycle moves several units of heat per unit of
+    electricity. Billing the raw thermal load, which is a COP of 1.0,
+    overstates the cost of cooling by that factor. The handler only ever cools,
+    so there is no heating branch to treat differently.
+
+    Args:
+      recirculation_temp: Temperature in K of recirculated air.
+      ambient_temp: Temperature in K of outside air.
+    """
+    return (
+        self.compute_thermal_energy_rate(recirculation_temp, ambient_temp)
+        / self._cooling_cop
+    )
+
+  def compute_fan_power(
+      self,
+      flow_rate: float,
+      fan_static_pressure: float,
+      fan_efficiency: float,
+  ) -> float:
+    """Returns power in W consumed by fan.
+
+    Derived from:
+    https://www.engineeringtoolbox.com/fans-efficiency-power-consumption-d_197.html
+
+    Args:
+      flow_rate: Rate of air flow in m^3/s.
+      fan_static_pressure: Pressure difference in Pa between fan intake and fan
+        output.
+      fan_efficiency: Electrical efficiency of fan (0-1).
+    """
+    return flow_rate * fan_static_pressure / fan_efficiency
+
+  def compute_intake_fan_energy_rate(self) -> float:
+    """Returns power in W consumed by the intake fan."""
+    return self.compute_fan_power(
+        self.air_flow_rate,
+        self.supply_air_static_pressure_setpoint,
+        self._fan_efficiency,
+    )
+
+  def compute_exhaust_fan_energy_rate(self) -> float:
+    """Returns power in W consumed by the exhaust fan."""
+    return self.compute_fan_power(
+        self.air_flow_rate * (1.0 - self._recirculation),
+        self.supply_air_static_pressure_setpoint,
+        self._fan_efficiency,
+    )
+
+  def set_action(self, action_field_name, value, action_timestamp):
+    if 'supervisor_run_command' in action_field_name:
+      if value == 1:
+        value = smart_device.RunStatus.ON
+      else:
+        value = smart_device.RunStatus.OFF
+    super().set_action(action_field_name, value, action_timestamp)
+
+
+@gin.configurable
+class AirHandlerSystem(smart_device.SmartDevice):
+  """A system controller that manages multiple AirHandler units."""
+
+  def __init__(
+      self,
+      ahus,
+      device_id: str | None = None,
+  ):
+    if not ahus:
+      raise ValueError('AirHandlerSystem requires at least one AirHandler.')
+
+    self._ahus = list(ahus.keys())
+    self._map = ahus
+
+    if device_id is None:
+      device_id = f'ahu_system_{uuid.uuid4()}'
+
+    system_actions = {}
+    system_observables = {}
+    for i, ahu in enumerate(self._ahus):
+      prefix = f'ahu_{i+1}_'
+
+      for key, info in ahu._action_fields.items():
+        system_actions[prefix + key] = smart_device.AttributeInfo(
+            prefix + key, info.clazz
+        )
+        setattr(self, prefix + key, None)
+      for key, info in ahu._observable_fields.items():
+        system_observables[prefix + key] = smart_device.AttributeInfo(
+            prefix + key, info.clazz
+        )
+        setattr(self, prefix + key, None)
+
+    super().__init__(
+        observable_fields=system_observables,
+        action_fields=system_actions,
+        device_type=smart_control_building_pb2.DeviceInfo.DeviceType.AHU,
+        device_id=device_id or f'ahu_system_{uuid.uuid4()}',
+    )
+
+  def _get_target(self, name):
+    """Parses 'ahu_1_run_command' -> returns (ahu_object, 'run_command')."""
+    parts = name.split('_', 2)  # Splits into ['ahu', '1', 'run_command']
+
+    if len(parts) >= 3 and parts[0] == 'ahu':
+      index = int(parts[1]) - 1  # Convert '1' to 0 (list index)
+      field_name = parts[2]  # 'run_command'
+      return self._ahus[index], field_name
+
+    raise ValueError(f'Could not find child for field: {name}')
+
+  @property
+  def ahus(self) -> list[AirHandler]:
+    return self._ahus
+
+  @property
+  def ahu_zones_map(self) -> Mapping[AirHandler, list[str]]:
+    """The mapping of AirHandler units to the zones they serve."""
+    return self._map
+
+  def set_action(self, action_field_name, value, action_timestamp):
+    """Send an action to the target AHU.
+
+    Args:
+      action_field_name: The name of the action field to set (e.g.,
+        'ahu_1_supervisor_run_command').
+      value: The value to set for the action field.
+      action_timestamp: The timestamp of when the action is being set.
+    """
+    if 'supervisor_run_command' in action_field_name:
+      if value == 1:
+        value = smart_device.RunStatus.ON
+      else:
+        value = smart_device.RunStatus.OFF
+    target_ahu, target_field = self._get_target(action_field_name)
+    target_ahu.set_action(target_field, value, action_timestamp)
+
+  def get_observation(self, observable_field_name, observation_timestamp):
+    """Gets an observation from a specific AirHandler unit.
+
+    Args:
+      observable_field_name: The name of the observable field (e.g.,
+        'ahu_1_supply_air_flowrate_sensor').
+      observation_timestamp: The timestamp of when the observation is requested.
+
+    Returns:
+      The value of the requested observable field from the target AHU.
+    """
+    target_ahu, target_field = self._get_target(observable_field_name)
+    return target_ahu.get_observation(target_field, observation_timestamp)
+
+  def reset(self):
+    for ahu in self._ahus:
+      ahu.reset()
+
+  def reset_demand(self):
+    for ahu in self._ahus:
+      ahu.reset_demand()
+
+  @property
+  def air_flow_rate(self) -> float:
+    return sum(ahu.air_flow_rate for ahu in self._ahus)
+
+  @property
+  def cooling_request_count(self) -> int:
+    return sum(ahu.cooling_request_count for ahu in self._ahus)
+
+  def compute_thermal_energy_rate(
+      self, recirculation_temps: Mapping[str, float], ambient_temp: float
+  ) -> float:
+    return sum(
+        ahu.compute_thermal_energy_rate(
+            recirculation_temps[ahu.device_id()], ambient_temp
+        )
+        for ahu in self._ahus
+        if ahu.device_id() in recirculation_temps
+    )
+
+  def compute_cooling_electrical_energy_rate(
+      self, recirculation_temps: Mapping[str, float], ambient_temp: float
+  ) -> float:
+    return sum(
+        ahu.compute_cooling_electrical_energy_rate(
+            recirculation_temps[ahu.device_id()], ambient_temp
+        )
+        for ahu in self._ahus
+        if ahu.device_id() in recirculation_temps
+    )
+
+  def compute_intake_fan_energy_rate(self) -> float:
+    return sum(ahu.compute_intake_fan_energy_rate() for ahu in self._ahus)
+
+  def compute_exhaust_fan_energy_rate(self) -> float:
+    return sum(ahu.compute_exhaust_fan_energy_rate() for ahu in self._ahus)
+
+  def get_supply_air_temp(
+      self, recirculation_temps, ambient_temperature
+  ) -> dict[str, float]:
+    temps = {}
+    for ahu in self._ahus:
+      ahu_id = ahu.device_id()
+      temps[ahu_id] = ahu.get_supply_air_temp(
+          recirculation_temps[ahu_id], ambient_temperature
+      )
+    return temps
+
+  def get_vav_air_handler(self, zone_id):
+    """Gets the AirHandler associated with a given zone.
+
+    Args:
+      zone_id: The ID of the zone.
+
+    Returns:
+      The AirHandler instance responsible for the given zone.
+
+    Raises:
+      ValueError: If no AirHandler is found for the specified zone.
+    """
+    for ahu, zones in self._map.items():
+      if zone_id in zones:
+        return ahu
+    raise ValueError(f'No VAV found for zone {zone_id}')

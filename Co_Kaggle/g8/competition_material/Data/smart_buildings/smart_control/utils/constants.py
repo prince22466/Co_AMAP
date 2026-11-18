@@ -1,0 +1,74 @@
+"""Constants related to the simulation and RL environment."""
+
+import os
+from typing import Final
+
+# --------- Thermal Constants ---------------
+
+AIR_HEAT_CAPACITY = 1006.0  # J/kg/K, standard atmosphere
+WATER_HEAT_CAPACITY = 4180.0  # J/kg/K
+WATER_VAPOR_HEAT_CAPACITY = 1863.8  # J/kg/K
+
+# --------- Energy Constants ---------------
+BTU_PER_KWH: Final[float] = 3412.4
+JOULES_PER_KWH: float = 3.6e6
+JOULES_PER_BTU: float = 1055.06
+W_PER_KW: float = 1000.0  # Number of Watts in a kW.
+WATTS_PER_BTU_HR: float = 0.29307107  # Number of Watts in a BTU/hr
+HZ_PERCENT: float = 100.0 / 60.0  # Converts blower/pump Hz to Percentage Power
+
+# --------- Pressure Constants ---------------
+PASCALS_PER_BAR: float = 100000.0  # Number of Pascals in a bar.
+
+# https://www.rapidtables.com/convert/power/hp-to-watt.html
+WATTS_PER_HORSEPOWER = 746.0
+
+# Natural gas energy conversion.
+# Sources:
+# http://www.kylesconverter.com/energy,-work,-and-heat/kilowatt--hours-to-cubic-feet-of-natural-gas#293.07
+# https://www.traditionaloven.com/tutorials/energy/convert-cubic-foot-natural-gas-to-kilo-watt-hr-kwh.html
+# Despite the name, 293.07107 is kWh per MMBtu (1e6 Btu), not per 1000 cubic
+# feet: 1 MMBtu is 293.07 kWh exactly. A thousand cubic feet of pipeline gas is
+# about 1.037 MMBtu, so the per-Mcf figure would be ~303.9.
+KWH_PER_KFT3_GAS = 293.07107  # kWh / MMBtu
+
+# Natural gas CO2 emission.
+# Source: https://www.eia.gov/environment/emissions/co2_vol_mass.php
+# Also per MMBtu rather than per Mcf, matching the constant above. Because both
+# are mislabelled the same way, the derived carbon intensity
+# (GAS_CO2 / KWH_PER_KFT3_GAS = 0.181 kg CO2/kWh) is correct; only a price
+# quoted in $/Mcf would be off, by ~3.7%.
+GAS_CO2 = 53.12  # kg CO2 / MMBtu
+
+WATER_DENSITY = 1000.0  # kg/m3
+GRAVITY = 9.8  # m/s2
+
+# ------------ File Name Convention -----------------
+NORMALIZATION_FILENAME = 'normalization_info'
+OBSERVATION_RESPONSE_FILE_PREFIX = 'observation_response'
+ACTION_RESPONSE_FILE_PREFIX = 'action_response'
+IMAGES_DIR = 'images'
+BUILDING_IMAGE_CSV_FILE = 'building_images.csv'
+REWARD_INFO_PREFIX = 'reward_info'
+REWARD_RESPONSE_PREFIX = 'reward_response'
+DEVICE_INFO_PREFIX = 'device_info'
+ZONE_INFO_PREFIX = 'zone_info'
+
+
+# ------------ File Paths -----------------
+
+# Reference file paths in a way that works both internally and externally.
+# Look for environment variable used by blaze / bazel internally.
+# See: https://bazel.build/concepts/dependencies#data-dependencies
+TEST_SRCDIR = os.environ.get('TEST_SRCDIR')
+if TEST_SRCDIR:
+  REPO_DIRPATH = os.path.join(
+      TEST_SRCDIR,
+      'google3',
+      'third_party',
+      'py',
+      'smart_buildings',
+      'smart_control',
+  )
+else:
+  REPO_DIRPATH = os.path.join(os.path.dirname(__file__), '..')
