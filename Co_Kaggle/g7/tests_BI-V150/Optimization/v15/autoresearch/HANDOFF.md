@@ -10,20 +10,20 @@ Original source commit: 1b680a7781ff0ba07c12d681708695fd5ccda55e. Grouped MM can
 
 ## Latest checkpoint
 
-Updated UTC: 2026-11-17T19:48:40+00:00
+Updated UTC: 2026-11-18T10:51:05+00:00
 
 Status: provisional (researcher-reported)
 
-Source HEAD before checkpoint: 300c3fa7df988894c197001e99b198927e42e6f8
+Source HEAD before checkpoint: 0c6598327d4620696520ae73b55dd4e1e2101eeb
 
 Remaining GPU time: unknown
 
-Finding: Promising isolated division-argmax fusion requires serving validation
+Finding: Clean sampler serving screen completed; half-runs and accuracy remain outstanding
 
-Evidence/provenance: Same FP32 probs and exponential noise, original softmax and RNG outside prototype, two-stage divide with round-to-nearest and first-index NaN/tie reduction. 256x130560 median preallocated torch div plus argmax 1.27503 ms vs fused 0.41023 ms (16 alternating event samples; approximately 68% lower operation latency). Repeat 1.27517 vs 0.40996 ms. Compared against native in-place div_ plus argmax: zero token mismatches in a 65536x16 batch comprising 65532 constructed finite near-tie rows and four overwritten edge-case rows, 2048x2047/2048/2049 and 256x130560 with zeros/zero, NaNs, infinities and ties; three CUDA graph replays with unchanged inputs passed for each shape. Timing reference uses preallocated out= division rather than in-place div_; no RNG, integration, fallback, FP64, noncontiguous, seeded generator or production serving validation; no end-to-end gain claimed. Temporary workspace is small; no KV-block claim. Code in autoresearch/probes/sampler_divargmax_*.py, raw logs archived separately.
+Evidence/provenance: Instrumented candidate-first, original control second, same model/server/benchmark flags, seed and 4K8/16K8/4K64/16K64 sequence. All cases 8/8,8/8,64/64 succeeded. Candidate/control 4K64 2300.91/2169.98 tok/s (+6.03%), TTFT13211.58/13286.78 ms, TPOT625.04/691.31 ms, prefix hits32640/32640, zero new preemptions. 16K64 3476.71/3382.25 (+2.79%), TTFT122484.05/129160.66, TPOT612.82/603.53, prefix hits196448/184160, zero new preemptions. Candidate attribution logger was enabled, control was not; 16K prefix-hit counts differ. Diagnostic only, no half-run or verified improvement; raw archive SHA256 fcf90fbf92bb29c4b304bd95be6b5e84f489d56d419f2fbcda1dbd7e470d02f5 backed up locally. Uninstrumented candidate after clean control: 4K 2236.28/2169.98 tok/s (+3.06%); 16K 3468.66/3382.25 (+2.55%). All 64 requests succeeded in each pressure case; prefix hits matched within each pair, no new preemptions. 16K TPOT 613.15/603.53 ms (+1.59%). One clean candidate and one control, short 128-output screens; no verified half-run gain.
 
 Small CSV evidence committed when --push works: none (external backup required)
 
-Next action: Audit exact division and mutation contract; implement isolated backend integration with fallback only if legal, then test seeded sampling, multiple layouts, graph, and short balanced serving screens. Do not use half-runs without budget admission.
+Next action: Run matched unchanged control and candidate half-runs, independently replicate any gain, complete sampler correctness/eligibility review and require MATH-500 before final acceptance. The user intends to run the half-runs manually.
 
 Incomplete half-runs are never verified results. Ignored raw artifacts must be backed up outside the rented instance. This handoff does not verify accuracy or establish a causal speedup.
