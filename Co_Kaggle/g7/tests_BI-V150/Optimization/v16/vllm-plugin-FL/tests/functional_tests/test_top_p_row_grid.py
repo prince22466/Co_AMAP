@@ -115,7 +115,7 @@ def test_native_rng_and_processed_outputs(modules, monkeypatch):
                     assert torch.equal(left, right)
 
 
-def test_graph_replay_after_workspace_growth(modules):
+def test_graph_replay_across_batch_sizes(modules):
     upstream, sampler, _ = modules
     # A distinct vocab avoids reusing a large cache from earlier tests.
     vocab = 8201
@@ -124,16 +124,24 @@ def test_graph_replay_after_workspace_growth(modules):
     if large > 512:
         pytest.skip("Limit graph test workspace on large GPUs")
     graphs = []
+    workspace = None
     for rows in (small, large):
         x = torch.randn((rows, vocab), device="cuda")
         p = torch.full((rows,), .95, device="cuda")
         sampler.apply_top_k_top_p(x, None, p)
         torch.cuda.synchronize()
+        key = (x.device, x.dtype, vocab, "fl_row_grid")
+        current = upstream._TRITON_BUFFER_CACHE[key]
+        assert current.shape == (large, vocab)
+        if workspace is None:
+            workspace = current
+        else:
+            assert current is workspace
         graph = torch.cuda.CUDAGraph()
         with torch.cuda.graph(graph):
             sampler.apply_top_k_top_p(x, None, p)
         graphs.append((graph, x, p))
-    # Replay the smaller graph after the larger workspace has been allocated.
+    # Replay the smaller graph after capture of a larger batch.
     for graph, x, p in graphs:
         for _ in range(3):
             new = torch.randn_like(x)
