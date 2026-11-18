@@ -187,3 +187,168 @@ Prior: grouped kernel isolated gain, serving pressure -7.08% candidate-first and
 ## Review correction: baseline commit identifier
 
 The earlier 4K shape-attribution checkpoint contains a mistyped baseline identifier beginning `1b680a77` and ending `5ccbf5eea18787d`. The correct original v15 commit is `1b680a7781ff0ba07c12d681708695fd5ccda55e`; the original FlagGems tree is `7cdae638186b8dba929cbfb1a4ccbf5eea18787d`. The affected checkpoint itself also states the correct commit. This correction does not change the recorded measurements.
+
+### Research checkpoint 2026-11-17T11:50:03+00:00: provisional
+
+- HEAD before checkpoint: 063f1fb7d079cb276106af81fcc4c3b64dbc3793
+- Budget remaining: unknown
+- Finding: Start continuation allocation with original v15 production control
+- Evidence and artifact paths: User confirmed 2026-11-17 16:00 UTC deadline on new host 2309343dd3b8; BI-V150 32GiB idle. Production control commit 063f1fb7d079cb276106af81fcc4c3b64dbc3793, identical source trees to original 1b680a7781ff0ba07c12d681708695fd5ccda55e: FlagGems 7cdae638186b8dba929cbfb1a4ccbf5eea18787d and plugin b481b8fa8b41712267262ce678adba8132a3043f. Parent includes merged 255/256 evidence; candidates isolated out of control. Prior session budget archived; benchmark SHA256 873f17f932d4643222be9903ba3b569c1863c4e2d246ceafbe6f75ebe7163ffc, RUNS=2 SKIP_FIRST=0 and helper supplies exact cases. Fresh matched half-run pair not admitted at 250 minutes; reserve 25 minutes.
+- PR-preserved small benchmark CSVs: none (external backup required)
+- Next action: Inspect production MLP projection/activation execution and choose a novel fused epilogue probe.
+- Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
+
+## 2026-11-17 UTC: fused gate/up projection plus SwiGLU feasibility (planned)
+Closest prior: v7 grouped MM/edge-mask/direct-accumulation, v11 selective grouping, and v15 grouped A/B did not establish a serving win; none fused gate/up GEMM with SwiGLU. Archived 4K trace shows mm_kernel plus a separate silu/multiply pointwise kernel; installed LlamaMLP executes merged gate_up_proj followed by SiluAndMul. Missing: whether two dot accumulators with a BF16-rounding-preserving activation epilogue save enough time and intermediate storage to offset resource pressure. Smallest decisive probe: compare original v15 MM plus fused activation against one two-accumulator Triton GEMM epilogue, identical weights/layout, warmed alternating events, M=2048 K=2048 output=2x6144 and a small ragged correctness case. Preserve BF16 rounding before activation. Reject if reference fails or chain time regresses. This is an isolated new operator/dataflow, not a change to dispatch, official flags, or benchmark.
+
+## 2026-11-17 UTC: resource-matched fused SwiGLU tile (planned)
+Prior immediate probe used 128x128, 8-warps, two accumulators and was exact on two BF16 cases but production-shaped chain 3.38967 vs baseline 1.94357 ms (+74.4%). This doubles the output program count relative to selected original wide 256x256 tile. New specific test: 256x128 with 16 warps and two 256x128 accumulators, preserving the original 256x256 output footprint, 384 programs, and equivalent A/B tile volume while fusing the activation. Same original MM+activation control and BF16 checks, alternating timings; reject if it does not outperform the full original chain. No generic tile sweep.
+
+## 2026-11-17 UTC: production-like activation baseline check (planned)
+The fused 256x128 prototype measured 1.893/1.887 ms vs MM plus FlagGems pointwise wrapper 1.938/1.938 ms in two screens, but v14 production uses a distinct compiler-generated triton_poi_fused_mul_silu_slice_1 (1764 calls, 241.05 ms, about 0.137 ms/call across observed early trace). Missing: whether wrapper overhead exaggerates the activation cost. Compare against original MM plus an explicit single-launch Triton slice/silu/mul kernel on the same inputs. This is a proxy, not proof of exact production generated kernel behavior.
+
+### Research checkpoint 2026-11-17T11:54:44+00:00: rejected
+
+- HEAD before checkpoint: bd666241cce6f861c285643a6ea21fa86a32b177
+- Budget remaining: unknown
+- Finding: Reject fused SwiGLU after production-like baseline check
+- Evidence and artifact paths: Original production control 063f1fb7 with original source trees. Fused BF16 output exactly matched baseline on M33 K96 N257 and M2048 K2048 N6144. First 128x128 8-warp fused tile was 3.38967 ms vs MM plus FlagGems wrapper 1.94357 ms. Resource-matched 256x128 16-warp fused tile measured 1.89325 and 1.88678 ms vs wrapper baseline 1.93786 and 1.93790 ms in two alternating screens, but wrapper exaggerates production activation cost: original MM plus explicit single-launch Triton activation proxy measured 1.54745 ms vs fused 1.89528 ms (+22.48% latency), BF16 outputs exact. v14 real compiled activation averaged 241.05 ms /1764 calls =0.137 ms/call; proxy is not proof of identical production kernel, but rules out initial gain claim. No integration, no serving, FP16/strides/graph/accuracy not tested. Exact scripts and raw logs preserved.
+- PR-preserved small benchmark CSVs: none (external backup required)
+- Next action: Investigate a different resource mechanism or small-M/vocabulary bottleneck; do not promote this fused tile or count the wrapper result as a production gain.
+- Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
+
+## 2026-11-17 UTC: vocabulary Linear resource attribution (planned)
+Prior v7 covered small-M grouping and direct accumulation and observed M=1/256 K2048 N130560 but did not establish a serving improvement. v14 4K middle rank0 trace includes 37 linear_kernel events totaling 42.05 ms; late graph window has visibility gaps and is not representative. New missing evidence: native cache/bandwidth, registers, shared memory and occupancy for the actual original vocabulary Linear at M1 and M256 with contiguous N-by-K weights. Smallest probe: standalone unmodified operator native counters for one representative launch each; no grouping, edge-mask, direct-dot experiment or shape sweep. Decision: only design a different output/epilogue or work-partition mechanism if counters show a concrete bottleneck.
+
+## 2026-11-17 UTC: non-Torch growth by worker initialization phase (planned)
+Prior v15 snapshots showed initial non-Torch 153092096 bytes, before-profile 1092616192, after-profile 1153433600; most growth (939524096 bytes) occurred before profiling. The responsible operation and reclaimability remain unknown. Novel targeted evidence: read-only MemorySnapshot calls immediately after runner construction and model loading, compared with existing initial and before-profile points, under unchanged server configuration. Stop after allocation profiling; do not change accounting. Decision: investigate only an identified reclaimable resource, never reduce safety reserves based on unproven free memory.
+
+### Research checkpoint 2026-11-17T13:23:35+00:00: provisional
+
+- HEAD before checkpoint: 8461eb2a6dbe6251cad9134a4dba84a728bf5ed6
+- Budget remaining: unknown
+- Finding: Attribute vocabulary Linear and non-Torch growth
+- Evidence and artifact paths: Original v15 production trees. Native vocabulary Linear M1 K2048 N130560 selected 1x256x32 8 warps: 0.818 ms profiler duration, DRAM read efficiency 88.04%, TCU 10.77%, occupancy 24.83%; M256 selected 256x256x32 16 warps: 1.826 ms, DRAM 40.20%, TCU 76.27%, occupancy 24.56%. Profiler captures are diagnostic, warmup and serving impact unknown; no speedup. Initial worker snapshots: runner created non-Torch 264241152 bytes, model loaded 1096810496, profiling done 1157627904. Thus 832569344 bytes (~794 MiB) accumulated during model loading, with 60817408 bytes (~58 MiB) during profiling; it is not yet proven reclaimable. Instrumented server stopped and worker restored. Raw logs preserved off-instance after checkpoint.
+- PR-preserved small benchmark CSVs: none (external backup required)
+- Next action: Split model loading into initialization, weight loading and post-processing snapshots; design a genuine memory-lifetime candidate only if evidence identifies one.
+- Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
+
+## 2026-11-17 UTC: model-loader non-Torch attribution (planned)
+Prior targeted snapshots show non-Torch bytes 264241152 after runner creation and 1096810496 after model loading, a growth of 832569344 bytes. Missing attribution: model object initialization, actual weight loading, and post-processing. Temporarily wrap those already existing loader calls inside v15-owned runner code to log CUDA free/total and torch allocated/reserved before and after each; no installed package edits, no allocation-policy change. Decision: identify the exact stage responsible before considering any real resource/lifetime optimization.
+
+## 2026-11-17 UTC: device allocator overhead isolation (planned)
+Prior targeted loader snapshots placed 832569344 bytes of non-Torch growth entirely inside initialize_model, before any weight loading or processing, but cannot distinguish driver allocator overhead from lazy library initialization or hidden model allocations. Novel minimal synthetic probe: compare free-device memory versus PyTorch reserved/allocated during one large and many smaller equally sized allocations in fresh standalone processes, synchronized with unchanged allocator configuration. Decision: if extra non-Torch growth tracks model-like allocation count/size, inspect safe buffer coalescing; if not, investigate initialization side effects. This does not alter production accounting or weights.
+
+## 2026-11-17 UTC: expandable allocator feasibility (planned)
+Prior synthetic standalone 5GB split across 500 x 10MB allocations grew non-Torch device use by 394264576 bytes; one 5GB allocation and 50 x 100MB did not. Model initialization alone increased the non-Torch estimate by 832569344 bytes. Missing: whether allocator segment expansion genuinely reduces this overhead without changing model computation, and whether the vendor runtime supports it. Smallest test: identical 500-allocation probe in a fresh process with PyTorch expandable_segments enabled, compare actual free/reserved bytes and allocation failures against existing default; no admission, cache, workload or server flag changes. If unsupported or no real savings, reject; before any integration establish runtime safety and competition eligibility.
+
+### Research checkpoint 2026-11-17T13:27:40+00:00: provisional
+
+- HEAD before checkpoint: 586252064ff732956b43b29c02265e194e4ac597
+- Budget remaining: unknown
+- Finding: Localize model non-Torch growth to allocation granularity
+- Evidence and artifact paths: Baseline unmodified v15: non-Torch 264241152 bytes before initialize_model and 1096810496 immediately after (+832569344); weight loading and postprocessing did not change it. Fresh synthetic processes allocating 5GB: one 5GB allocation non-Torch unchanged; 50 x 100MB unchanged; 500 x 10MB raised non-Torch 394264576 bytes and released it when all tensors/cache freed. With PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True, 500 x 10MB raised non-Torch by 0 and torch reserved 5012193280 vs default 5242880000. This is a synthetic feasibility result, not evidence of actual model KV blocks or throughput. Changing allocator policy may have unclear competition eligibility; diagnostic only until organizer approval. No flags, model data, cache accounting or official benchmark modified.
+- PR-preserved small benchmark CSVs: none (external backup required)
+- Next action: Measure actual model allocation, KV blocks, graph capture and reliability with the same server flags under allocator A/B; assess eligibility independently.
+- Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
+
+### Research checkpoint 2026-11-17T13:49:07+00:00: provisional
+
+- HEAD before checkpoint: a06e86030e0fb0ef25f008f6e5a6c9928e466fce
+- Budget remaining: unknown
+- Finding: Expandable allocation adds KV capacity; short serving near neutral
+- Evidence and artifact paths: Diagnostic allocator policy only; original source 063f1fb7 production trees, unchanged model/server/benchmark flags. Candidate-first matched startup default/expandable: non-Torch increase 1000341504/67108864 bytes, activation peak 656424960/654032896, KV bytes 22447777996/23383402700, token capacity 521936/543696 (+21760, +1360 blocks, +4.17%). Both full decode graph captures completed. 4K 8/8 candidate/control 1785.25/1786.35 tok/s, TTFT 10508.31/10466.80 ms, TPOT 65.11/65.38 ms; 16K 8/8 3545.67/3529.18, TTFT 16755.13/16798.55, TPOT 156.60/157.63. 16K pressure 64/64 3662.88/3646.08 (+0.46%), TTFT 122457.78/122507.27, TPOT 541.53/544.34, zero failed requests, zero new preemptions and 130944 prefix hits each. One pair; no independent throughput replication, correctness or MATH-500; pressure uses warmed prefix cache and 128 output tokens. Allocator-policy eligibility requires organizer approval; never count as competition win merely from diagnostic. Server instrumentation removed and processes stopped.
+- PR-preserved small benchmark CSVs: none (external backup required)
+- Next action: Preserve raw logs; independently verify allocator graph/lifetime correctness and evaluate cache-growth pressure only if budget allows; organizer approval required for any scored allocator-policy candidate.
+- Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
+
+## 2026-11-17 UTC: expandable allocator correctness stress (planned)
+Prior: allocator mode added 21760 KV tokens and completed graph startup; 16K pressure showed +0.46% in one candidate-first 128-output diagnostic with no preemptions. Missing: baseline/candidate behavior for allocation reuse, streams, graph replay and data isolation; production KV cancellation/preemption integrity remains untested. Test fixed-seed standalone Torch allocation/free/reuse and graph replay in fresh default and expandable processes, identical operations. Treat this as allocator-level smoke only; exact output and no errors are necessary but not sufficient for production or competition eligibility.
+
+## 2026-11-17 UTC: expandable allocation longer 16K pressure diagnostic (planned)
+Prior one candidate-first 16K 128-output screen gave +0.46% throughput, zero preemptions and 130944 prefix hits in each mode; insufficient to measure cache-growth effect. New control-first test uses unchanged server flags and model, 16384 input, 1024 output, concurrency/prompts 64, seed42; fresh servers, no preceding short workload. Sample live KV, preemptions and running/waiting; compare allocation, completion, TTFT/TPOT, throughput. It is not an official half-run and allocator mode has unconfirmed competition eligibility.
+
+### Research checkpoint 2026-11-17T19:27:29+00:00: rejected
+
+- HEAD before checkpoint: ecc9fee944c2d107d7ba7962b9cc69429b062f2d
+- Budget remaining: unknown
+- Finding: Expandable allocator long 16K diagnostic regresses
+- Evidence and artifact paths: Original v15 production control 063f1fb7, unchanged server flags. Fresh control-first 16K diagnostic: 16384 input, 1024 output, 64 prompts/concurrency, seed42. Expandable/control 1678.40/1878.24 total tok/s (-10.64%), TTFT 228617.09/218196.08 ms (+4.78%), TPOT 264.75/222.17 ms (+19.17%). Both completed 64 requests, zero failures, zero prefix hits, and two preemptions each. Single pair is not causal proof or official half-run, but fails throughput and latency guardrails; no verified gain. Standalone allocation smoke: 80 reuse iterations, ten graph replays and matching output SHA256 9fb6b2c687b0d115530224460470c3cd950842303acb0c6f636ae44b403cc227 for both modes. This does not prove full KV lifecycle correctness. Allocator-policy eligibility remains unresolved; diagnostic only. Confirmed allocation expired 2026-11-17 16:00 UTC. Raw evidence backup required.
+- PR-preserved small benchmark CSVs: none (external backup required)
+- Next action: Do not promote allocator mode on these screens. Restore original source, back up logs and continue future work only on a new confirmed allocation.
+- Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
+
+## 2026-11-17 UTC: fused SwiGLU with weight-reuse tile ordering (planned)
+Prior fused 256x128 two-accumulator kernel had exact BF16 output but took 1.895 ms versus 1.547 ms for original MM plus explicit single-launch activation. Previous v7/v11 grouping tested unfused GEMM, not the dual-accumulator fusion; v15 grouped serving was inconclusive. New causal hypothesis: the fused kernel loads separate gate/up weight tiles per row-major M tile; grouping M tiles can increase weight reuse while still avoiding the intermediate. Test one fused grouped layout against the production-like original chain using identical inputs and alternating warm event timings; skip broad grouping sweeps. Reject if incorrect or not faster than the production-like baseline. This does not rerun earlier unfused grouped MM benchmarks.
+
+### Research checkpoint 2026-11-17T19:30:54+00:00: rejected
+
+- HEAD before checkpoint: 5a59283f98443a08fc7c49b9b1431f050bbb4790
+- Budget remaining: unknown
+- Finding: Grouped fused SwiGLU is slower than original chain
+- Evidence and artifact paths: User granted two additional hours; same host, budget extended to 2026-11-17T21:29:00Z preserving old deadline history. Original v15 production trees; grouped fused 256x128 two-accumulator BF16 kernel with 16 warps, 2 stages vs original MM plus explicit single-launch activation proxy. Alternating 12-event median production shape M2048 K2048 N6144: grouped fused 2.04581 ms, control 1.54150 ms (+32.7% latency); M33 K96 N257 0.01316/0.00986 ms. Outputs exactly match for both sampled BF16 cases; FP16, graph, full stride coverage and production serving not tested. The activation proxy is not the exact compiled production kernel. Reject candidate, no production change.
+- PR-preserved small benchmark CSVs: none (external backup required)
+- Next action: Investigate a distinct source-owned projection, memory-lifetime or small-M dataflow mechanism; preserve 25-minute reserve and do not attempt unadmitted half-runs.
+- Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
+
+## 2026-11-17 UTC: grouped MM production kernel attribution (planned)
+Prior v15 grouped candidate wide GEMM direct latency 1.39-1.41 to 1.17ms, but serving A/B -7.08% and +1.02% by order; previous worker-attribution attempt stopped before request. Missing evidence: an actual production 4K worker launches a grouped-specialized MM kernel. Diagnostic uses the existing candidate commit 342e8d35 in isolation against original v15, duplicates its kernel with a distinct profiling name only for the existing grouped shape/layout predicate, and captures a short torch profiler window during a 4K diagnostic. Kernel naming and profiler are diagnostic changes, not scoring; no repeated microbenchmarks or serving performance claims. Decision: establish or disprove production execution before considering further grouped work. Remove temporary source changes and profiler after capture.
+
+### Research checkpoint 2026-11-17T19:37:09+00:00: provisional
+
+- HEAD before checkpoint: 1e8cc4a87dc83e3225c8bbb6f2b6bfc0130ccdfb
+- Budget remaining: unknown
+- Finding: Verify grouped MM GPU execution in 4K worker
+- Evidence and artifact paths: Diagnostic original v15 control source plus isolated grouped candidate 342e8d35; duplicate identical grouped kernel renamed mm_kernel_grouped_probe and selected only for M>=1024 N>=8192 stride_bk=1, profiler enabled, no performance claim. A 4K random diagnostic with 8/8 successful requests generated 672 rank0 GPU kernel events matching mm_kernel_grouped_probe, summed duration 784050.465 microseconds in profiler window; this establishes grouped-specialized worker execution in that diagnostic. Async frontend trace has zero GPU events; correct worker rank0 trace SHA256 8f46da15738f8063bc94aef4c12bb00738af80001a3e0e1f28175cacc2ef4a57; 4k client log SHA256 1241260ebaeeac420a9d3e1577f4bc94d3ef4efbbd58514740a3f9aba21e9313. Trace perturbed timings and excludes unseen graph replay; no claim of throughput or accuracy gain. Temporary source restored, owned server stopped.
+- PR-preserved small benchmark CSVs: none (external backup required)
+- Next action: Analyze new independent GEMM/epilogue mechanism and preserve baseline; prior balanced serving remains inconclusive and half-runs are not admitted in remaining time.
+- Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
+
+## 2026-11-17 UTC: interleaved single-dot fused SwiGLU (planned)
+Previous fused SwiGLU dual-dot variants were exact but slower: row-major 1.895 ms and grouped 2.046 ms vs original MM plus single-launch activation 1.547 ms. New mechanism: load gate/up weight columns interleaved into a single 256-wide tensor-core dot, reshape and split its accumulator into gate/up lanes after BF16 rounding, then fuse activation. This preserves the original 256x256 accumulator footprint while using one dot per K-step instead of two. Compare 256x128, 16-warp implementation against original chain on production and ragged BF16 shapes with alternating warmed timings. Reject on mismatches or no improvement; proxy activation still requires production validation.
+
+### Research checkpoint 2026-11-17T19:39:21+00:00: rejected
+
+- HEAD before checkpoint: f103820d6efd88521527a5993a49a9979163208a
+- Budget remaining: unknown
+- Finding: Reject interleaved single-dot SwiGLU fusion
+- Evidence and artifact paths: Original v15 source; interleaved gate/up columns, single 256-wide dot and split BF16-rounded accumulator vs original MM plus one-launch pointwise proxy. For M2048 K2048 N6144, alternating 12-event median fused 3.01379 ms vs baseline 1.53813 ms (+95.9%); M33 K96 N257 0.01843 vs 0.01199 ms. Sampled BF16 outputs exactly matched, but FP16/strides/graph/production integration were not tested. Reject this kernel; no serving or accuracy result.
+- PR-preserved small benchmark CSVs: none (external backup required)
+- Next action: Find a genuinely different mechanism; do not retest this interleaved fusion without new causal evidence.
+- Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
+
+## 2026-11-17 UTC: fused SwiGLU native resource attribution (planned)
+Prior dual-dot fused 256x128 latency 1.895 ms vs original MM plus activation proxy 1.547 ms; interleaving and grouped scheduling also regressed. Missing evidence: hardware resource and utilization measurements for the production-sized fused kernel, which may explain the regression and identify whether a distinct dataflow is plausible. Profile one existing fused launch on M2048 K2048 N6144 with native analyzer; compare qualitatively with the archived original MM profile. Diagnostic only: profiler replay perturbs timing, no source or serving modifications. Stop fusion exploration if measurements expose no actionable bottleneck.
+
+## 2026-11-17 UTC: smaller-N dual-dot fusion resource test (planned)
+Nearest prior 256x128 dual-dot fused kernel: 1.895 ms versus MM plus pointwise proxy 1.547 ms. Native profile showed 78.31% LSU utilization, 55.77% TCU efficiency, 102 vector registers/thread and 65536 bytes shared/block, vs archived original MM 54.59%, 76.41%, 97 and 65536 respectively (separate profiler captures; counters are diagnostic, not a causality proof). New single variant halves N tile to 64 and warps to 8, reducing per-block accumulators and potentially improving resident blocks; 256 M and 2-stage K32 unchanged. Test exact sampled BF16 outputs and alternating timings vs the production-like original proxy, on ragged and production shapes. Reject if no speedup; no broad sweep.
+
+### Research checkpoint 2026-11-17T19:42:50+00:00: rejected
+
+- HEAD before checkpoint: 369af371168c7acf69b128ba0ae2679c13231639
+- Budget remaining: unknown
+- Finding: Reject smaller-N fusion and record resource attribution
+- Evidence and artifact paths: Original v15 source; native profile fused dual-dot 256x128 LSU 78.31%, TCU 55.77%, 102 vector registers/thread, 65536 shared bytes/block, no local memory; archived original MM 54.59%, 76.41%, 97 and 65536 respectively. Independent profiler captures, no causality established. Profiler forced termination after capture triggered pybind shutdown error; report completed. Smaller-N fused 256x64 eight warps 2 stages exact sampled BF16 on production and ragged shapes; production M2048 K2048 N6144 median 2.59466 ms vs original MM plus activation proxy 1.53635 ms (+68.9%); ragged 0.01366 vs 0.01196 ms. Reject; proxy differs from actual compiled production activation; no production serving claim.
+- PR-preserved small benchmark CSVs: none (external backup required)
+- Next action: Leave fusion absent a materially distinct mechanism; investigate other priorities within session budget.
+- Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
+
+## 2026-11-17 UTC: exact division-argmax sampling fusion (planned)
+Prior log-domain sampler fusion was faster but failed finite near-tie and nonfinite exactness; prior in-place softmax preserved sampled tokens but failed serving screens. New mechanism keeps original softmax and exponential RNG unchanged and fuses only FP32 division and argmax in a two-stage reduction, avoiding the scores write/read. Must match native torch div rounding, first-index tie, NaN propagation, infinities and zero noise; FP64 Gumbel falls back. Compare precomputed same probs/noise with native div and argmax, edge and random cases, and alternating CUDA-event timing on actual vocabulary size. Reject if any mismatch or no speedup; no claim on startup KV capacity until integration and profiling. This is distinct from log-domain rewrite and does not alter RNG.
+
+## 2026-11-17 UTC: division-argmax adversarial correctness and graph screen (planned)
+Prior same-noise FP32 fusion matched sampled NaN, infinity, zero/zero and exact tie cases and random rows; production vocabulary 256x130560 median 0.41023 ms versus native preallocated div plus argmax 1.27503 ms. The reference uses an out buffer instead of native div_ but same arithmetic; source inputs and allocations differ from production, and there is no serving result. Missing evidence is near-tie rounding at scale, broader chunk boundaries, signed zeros/NaNs and CUDA graph replay. Compare native in-place div_ and argmax with identical buffers on large adversarial batches and repeated graph replay; reject on any mismatch, retain FP64 and unsupported layouts fallback.
+
+### Research checkpoint 2026-11-17T19:48:40+00:00: provisional
+
+- HEAD before checkpoint: 300c3fa7df988894c197001e99b198927e42e6f8
+- Budget remaining: unknown
+- Finding: Promising isolated division-argmax fusion requires serving validation
+- Evidence and artifact paths: Same FP32 probs and exponential noise, original softmax and RNG outside prototype, two-stage divide with round-to-nearest and first-index NaN/tie reduction. 256x130560 median preallocated torch div plus argmax 1.27503 ms vs fused 0.41023 ms (16 alternating event samples; approximately 68% lower operation latency). Repeat 1.27517 vs 0.40996 ms. Compared against native in-place div_ plus argmax: zero token mismatches for 65536x16 constructed finite near-tie rows, 2048x2047/2048/2049 and 256x130560 with zeros/zero, NaNs, infinities and ties; three CUDA graph replays each passed. Timing reference uses preallocated out= division rather than in-place div_; no RNG, integration, fallback, FP64, noncontiguous, seeded generator or production serving validation; no end-to-end gain claimed. Temporary workspace is small; no KV-block claim. Code in autoresearch/probes/sampler_divargmax_*.py, raw logs archived separately.
+- PR-preserved small benchmark CSVs: none (external backup required)
+- Next action: Audit exact division and mutation contract; implement isolated backend integration with fallback only if legal, then test seeded sampling, multiple layouts, graph, and short balanced serving screens. Do not use half-runs without budget admission.
+- Verification status is researcher-reported; this tool does NOT certify benchmark validity, model accuracy, or independently replicated gains.
+
+## 2026-11-18 UTC: review correction for division-argmax evidence
+
+The 65536-by-16 adversarial batch contained **65532 constructed finite near-tie rows and four deliberately overwritten edge-case rows** (zero divided by zero, an exact tie, NaNs, and infinities), not 65536 finite near-tie rows. All 65536 rows matched the native result in the recorded run. Three graph replays per shape used unchanged input buffers; they do not establish correctness when graph inputs or request lifecycles change. The second timing pair was a repeated screen in the same test process, not an independent serving replication. Raw archive v15-divargmax.tgz SHA256 f698c51144b7f59f98108fa66c2649a1afee2a348d5027eb06f02ea46595bb8e is backed up outside the PR. The benchmark used preallocated out= division; production uses in-place division. No end-to-end throughput gain, complete exactness proof, FP64 support, or eligibility is established. The self-contained probe import was repaired after the run without rerunning GPU tests; the original executed scripts remain in the archive.
