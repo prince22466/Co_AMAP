@@ -9,8 +9,12 @@
 
 | 测试场景 | 优化前（tokens/s） | 本方案（tokens/s） | 绝对增益（tokens/s） | 相对增益 |
 |---|---:|---:|---:|---:|
-| 4K | 1,881.95 | 3097.45 | +1215.5 | **+64.6%** |
-| 16K | 861.88 | 2232.7 | +1370.82 | **+159.1%** |
+| 4K | 1,881.95 | 3,097.45 | +1,215.50 | **+64.59%** |
+| 16K | 861.88 | 2,232.70 | +1,370.82 | **+159.05%** |
+
+![图 1：4K 与 16K 端到端推理吞吐量对比](figures/throughput_comparison.svg)
+
+相对增益按表中显示的吞吐量计算，图中横轴从零开始。
 
 **精度测试：**  达到 MATH-500 Level 3 的 95% 门槛。
 
@@ -80,7 +84,9 @@ $$
 | `num_stages` | Triton 默认 | 1 |
 | `num_warps` | Triton 默认 | Triton 默认 |
 
-![图 1：单个 KV Head 的 Prefill 分块及 KV Tile 复用示意图](figures/prefill_gqa.svg)
+![图 2：相同 Query 工作量下的 Prefill 分块及 KV Tile 复用示意图](figures/prefill_gqa.svg)
+
+图 2 固定一个 KV Head 和 8 个 Query 位置，比较四个小 Query Block 与一个大 Query Block 对同一完整历史 KV Tile 的逻辑读取；各 Query 均可访问该 Tile。
 
 **数据移动效率。** 更多 Query 位置可共享同一已加载的 KV Tile，减少不同 Query Block 重复加载 K/V 的需求。完整分块的复用位置数由 2 增至 8，即 4 倍的理论复用能力，而非 4 倍实测吞吐量或显存流量降至 1/4。
 
@@ -114,7 +120,9 @@ $$
 | 2D Decode | 32 | 32 | 2 | Gather |
 | 3D Segmented Decode | 16 | 16 | 1 | Broadcast |
 
-![图 2：Decode 分页 KV 索引复用示意图](figures/decode_page_lookup.svg)
+![图 3：相同 Tile 大小下的 2D / 3D Decode 页表索引复用示意图](figures/decode_page_lookup.svg)
+
+图 3 分别比较 32-Token Tile 和 16-Token Tile 的优化前后逻辑页表加载元素数；Gather / Broadcast 后的 Lane 索引与原始实现一致。
 
 **数据移动效率。** 对于完整 Tile，上例的页表逻辑加载元素数降至原来的 1/16。此比例不代表实际显存事务数或吞吐量加速比；编译器访存合并及缓存命中仍会影响实际收益。有效 K/V 数据本身的读取范围不变。
 
@@ -133,7 +141,14 @@ $$
 
 #### 4. Decode：KV Cache 读取流水线
 
-**瓶颈依据。** 独立 Decode 算子 Profiling 中，ixKN 在 4K（32 条序列、每条 4096 Token）/ 16K（24 条序列、每条 16384 Token）的 2D Decode 乱序物理页探针中分别记录到 55.65% / 56.14% 的 Memory Dependency Stall，以及 1.71% / 1.55% 的 Pipeline Busy Stall。这些是 ixKN 报告的 Warp Stall 原因指标（`issue_stall_reason_memory_dependency`、`issue_stall_reason_pipeline_busy`），不是端到端运行时间占比，也不能直接换算成吞吐量增益。该数据来自开发阶段的独立算子 Profiling，并非优化前与本方案的匹配 A/B 对照；其用途是识别 K/V 数据读取等待这一优化机会。
+**瓶颈依据。** 独立 Decode 算子 Profiling 使用乱序物理页的 2D Decode 探针。ixKN 的硬件计数器结果如下：
+
+| 探针场景 | 序列数 | 每条序列长度（Token） | Memory Dependency Stall | Pipeline Busy Stall |
+|---|---:|---:|---:|---:|
+| 4K Decode | 32 | 4096 | 55.65% | 1.71% |
+| 16K Decode | 24 | 16384 | 56.14% | 1.55% |
+
+这些是 ixKN 报告的 Warp Stall 原因指标（`issue_stall_reason_memory_dependency`、`issue_stall_reason_pipeline_busy`），不是端到端运行时间占比；Pipeline Busy Stall 也不是计算单元利用率。该数据用于识别 K/V 读取等待这一优化机会，并非优化前与本方案的匹配 A/B 对照，不能直接换算成吞吐量增益。
 
 **优化原理。** 在 `kernel_unified_attention` 中引入编译期参数 `PIPELINE_DECODE_KV`，将 K/V 读取从当前迭代移至前一迭代，形成单 Tile 前瞻（One-Tile Lookahead）。新辅助函数 `_load_decode_kv_tile` 复用按页索引方式，并按 K/V 各自的 Stride 计算实际地址。
 
@@ -151,6 +166,10 @@ $$
       Online Softmax[j]
       PV[j]                          # 仍使用当前 V
 ```
+
+![图 4：Decode KV Cache 单 Tile 前瞻读取的源码级执行顺序](figures/decode_kv_pipeline.svg)
+
+图 4 以两轮迭代为例，展示循环前预加载、下一 Tile 的循环携带以及最后一轮的掩码保护。箭头表示源码执行顺序，不表示 GPU 指令的实测时间或已实现的异步重叠。
 
 当前 K 已参与 QK 矩阵乘法后，发起下一 Tile 的 K/V 读取，再执行当前 Tile 的在线 Softmax 与 PV 累加。下一 Tile 的 K/V 作为循环携带值进入下一轮。由此在读取与消费之间插入独立计算，为编译器及硬件调度提供更多访存与计算重叠的机会，以期减少关键路径上暴露的访存等待；并不减少有效 K/V 数据的读取范围或改变 Tile 遍历次序。
 
@@ -208,19 +227,26 @@ PlatformFL.get_attn_backend_cls
         OptimizedTritonAttentionBackend / Impl
             |
             v
-        unified_attention
+        unified_attention（启动器）
             |
-            |-- 满足 Prefill 特化条件：BLOCK_M=64，num_stages=1
-            |       --> 数据复用 / 计算粒度与资源控制
-            |-- 满足页表复用条件（Pure Decode）：按页加载索引
-            |       --> 减少页表访存 / 复用索引生成
-            |       |-- 满足流水线条件：单 Tile KV 前瞻
-            |       |       --> 尝试隐藏访存延迟 / 减少潜在计算等待
-            |       |-- 否则：保持原有读取时序
-            |-- 其他配置：原有 Kernel 分支
+            |-- Prefill 特化条件成立？
+            |       是：BLOCK_M=64，num_stages=1
+            |       否：原有分块及启动参数
+            |
+            |-- 原有 use_3d 逻辑：确定 2D/3D、Grid 与 KV Tile
+            |
+            |-- 页表复用条件成立？
+            |       是：DECODE_PAGE_LOOKUP=True
+            |           |-- 流水线条件成立？
+            |               是：PIPELINE_DECODE_KV=True
+            |               否：保持原有 KV 读取时序
+            |       否：保留原有页表查询及加载路径
+            |
+            v
+        kernel_unified_attention（同一共享 Kernel）
             |
             |-- 2D：直接输出
-            |-- 3D：原有 reduce_segments 分段归约
+            |-- 3D：写入中间结果 -> reduce_segments -> 输出
 ```
 
 2D/3D 的选择仍由原有 `use_3d` 逻辑决定，而非由页表复用或前瞻读取决定；上述执行分支均使用同一个 `kernel_unified_attention`，3D 路径另调用原有 `reduce_segments`。
