@@ -27,12 +27,12 @@
 
 本方案从**计算效率（Compute Efficiency）**与**数据移动效率（Data Movement Efficiency）**两个维度出发，以数据移动效率优化为核心、计算效率优化为辅助，在同一个 Triton Unified Attention 算子中实施三项互补优化。
 
-- **计算效率：** 改善计算分块粒度，控制寄存器及片上资源压力，减少冗余页索引生成工作，并为计算单元减少访存等待创造条件。不改变稠密注意力所需的有效 QK / PV 数学运算量。
-- **数据移动效率：** 提高 KV Tile 的数据复用率，减少重复页表访存，通过前瞻读取尝试隐藏 KV Cache 访问延迟。分别针对数据传输量、冗余元数据访问和访存等待三个方面。
+- **计算效率：** 改善计算分块粒度，控制潜在寄存器及片上资源压力，减少源码层面的冗余页表地址生成工作，并为计算单元减少访存等待创造条件。不改变稠密注意力所需的有效 QK / PV 数学运算量。
+- **数据移动效率：** 提高 KV Tile 的数据复用率，减少重复页表访存，通过前瞻读取尝试隐藏 KV Cache 访问延迟。分别针对重复 K/V 加载、冗余元数据访问和访存等待三个方面。
 
 | 优化措施 | 计算效率（辅助收益） | 数据移动效率（主要收益） |
 |---|---|---|
-| Prefill：扩大 Query 分块，设置 `num_stages=1` | 改善计算粒度，减少 Query Block 数量，控制片上资源压力 | 提高 KV Tile 复用率，减少不同 Query Block 重复读取 K/V |
+| Prefill：扩大 Query 分块，设置 `num_stages=1` | 改善计算粒度，减少 Query Block 数量，控制潜在片上资源压力 | 提高 KV Tile 复用率，减少不同 Query Block 重复读取 K/V |
 | Decode：按页复用物理页索引 | 复用页索引生成工作，保留逐 Token 实际地址计算 | 减少同一页内重复的页表逻辑加载 |
 | Decode：KV Cache 读取流水线 | 为减少计算单元等待数据的时间创造条件 | 提前读取下一 KV Tile，尝试隐藏访存延迟 |
 
@@ -65,7 +65,7 @@ $$
 
 #### 2. Prefill：扩大 Query 分块，提高 KV Tile 复用
 
-**优化原理。** 优化前使用的原生 Triton 算子在一个 KV Head 对应 8 个 Query Head 时，使用 `BLOCK_M = 16`，即每个 Query Block 处理 2 个 Query 位置。本方案将 `BLOCK_M` 增至 64，使同一计算块处理 8 个 Query 位置。
+**优化原理。** 在目标 BF16 GQA、无 Sliding Window 的配置下，优化前使用的原生 Triton 算子在一个 KV Head 对应 8 个 Query Head 时，使用 `BLOCK_M = 16`，即每个 Query Block 处理 2 个 Query 位置。本方案将 `BLOCK_M` 增至 64，使同一计算块处理 8 个 Query 位置。
 
 $$
 \mathrm{BLOCK\_Q}=\frac{\mathrm{BLOCK\_M}}{8}
@@ -84,7 +84,7 @@ $$
 
 **数据移动效率。** 更多 Query 位置可共享同一已加载的 KV Tile，减少不同 Query Block 重复加载 K/V 的需求。完整分块的复用位置数由 2 增至 8，即 4 倍的理论复用能力，而非 4 倍实测吞吐量或显存流量降至 1/4。
 
-**计算效率。** 更大的 Query Block 减少长序列所需的 Query Block 数量，提高单个计算块的有效计算粒度，有利于摊薄分块执行及调度开销。但矩阵乘法的有效数学运算量不变，实际计算单元利用率仍取决于编译结果、掩码和资源占用。
+**计算效率。** 更大的 Query Block 提高单个计算块的计算粒度，有利于摊薄分块执行开销。对于同一输入，启动的 Query Block 数量上界仍按原公式 `total_num_q_blocks = q.shape[0] // BLOCK_Q + num_seqs` 计算，因此随 `BLOCK_Q` 增大而减少或保持不变。有效 Query 的数学运算量不变，但因果 Tile 边界与无效行填充会影响实际执行的运算量，计算单元利用率仍取决于编译结果及资源占用。
 
 **计算效率与资源控制。** 更大的 Query 分块也会增加累加器和中间状态的规模。因此，本方案显式设置 `launch_num_stages = 1`（传入 Triton 的 `num_stages = 1`），以控制多级流水线可能带来的寄存器及片上资源压力。KV Tile 大小不变，`num_warps` 仍由 Triton 默认决定。实际收益取决于编译器、硬件及输入形状。
 
@@ -118,7 +118,7 @@ $$
 
 **数据移动效率。** 对于完整 Tile，上例的页表逻辑加载元素数降至原来的 1/16。此比例不代表实际显存事务数或吞吐量加速比；编译器访存合并及缓存命中仍会影响实际收益。有效 K/V 数据本身的读取范围不变。
 
-**计算效率。** 按页生成物理页索引并在 Token Lane 之间复用，减少源码层面的冗余索引生成工作；各 Token 的页内偏移和实际 K/V 地址仍需计算，Broadcast / Gather 也可能产生额外指令。实际整数指令数的变化需结合编译结果验证。各 Token 的物理页、有效性掩码及 K/V 读取语义保持不变。
+**计算效率。** 按页计算页表地址、加载物理页索引并在 Token Lane 之间复用，减少源码层面的重复页表地址生成工作；各 Token 的页内偏移和实际 K/V 地址仍需计算，Broadcast / Gather 也可能产生额外指令。实际整数指令数的变化需结合编译结果验证。各 Token 的物理页、有效性掩码及 K/V 读取语义保持不变。
 
 **启用条件。** `decode_page_lookup` 必须同时满足：
 
@@ -127,13 +127,13 @@ $$
 - KV 页大小为正的 2 的幂，且页大小与 Tile 大小中较大者为较小者的整数倍。
 - 非量化 KV Cache（`KVQuantMode.NONE`），不使用 Tensor Descriptor。
 
-该优化不改变 Decode 的 Query 分块、Tile 大小或流水线配置。2D/3D 路径仍由原有 `use_3d` 逻辑选择：3D 需要分段参数与三个 Softmax 中间缓冲区均存在，序列数量不超过阈值，`max_seqlen_q <= 1`，且未启用 Batch Invariance。其他配置的 Tile 大小仍遵循原有选择规则，例如 Gemma3 Sliding Window 特化。
+页表复用本身不改变 Decode 的 Query 分块、Tile 大小或 Triton 启动参数。2D/3D 路径仍由原有 `use_3d` 逻辑选择：3D 需要分段参数与三个 Softmax 中间缓冲区均存在，序列数量不超过阈值，`max_seqlen_q <= 1`，且未启用 Batch Invariance。其他配置的 Tile 大小仍遵循原有选择规则，例如 Gemma3 Sliding Window 特化。
 
-不满足 Decode 特化条件时，Kernel 保留原有逐 Token 页表查询路径。
+不满足页表复用条件时，Kernel 保留原有页表查询及 K/V 加载逻辑，包括上游 Tensor Descriptor 等既有特化路径。
 
 #### 4. Decode：KV Cache 读取流水线
 
-**瓶颈依据。** 独立 Decode 算子 Profiling 中，ixKN 在 4K / 16K 场景分别记录到 55.65% / 56.14% 的 Memory Dependency Stall，以及 1.71% / 1.55% 的 Pipeline Busy Stall。这些是 Warp Stall 原因计数的比例，不是端到端运行时间占比，也不能直接换算成吞吐量增益。该数据来自开发阶段的独立算子 Profiling，并非优化前与本方案的匹配 A/B 对照；其用途是识别 K/V 数据读取等待这一优化机会。
+**瓶颈依据。** 独立 Decode 算子 Profiling 中，ixKN 在 4K（32 条序列、每条 4096 Token）/ 16K（24 条序列、每条 16384 Token）的 2D Decode 乱序物理页探针中分别记录到 55.65% / 56.14% 的 Memory Dependency Stall，以及 1.71% / 1.55% 的 Pipeline Busy Stall。这些是 ixKN 报告的 Warp Stall 原因指标（`issue_stall_reason_memory_dependency`、`issue_stall_reason_pipeline_busy`），不是端到端运行时间占比，也不能直接换算成吞吐量增益。该数据来自开发阶段的独立算子 Profiling，并非优化前与本方案的匹配 A/B 对照；其用途是识别 K/V 数据读取等待这一优化机会。
 
 **优化原理。** 在 `kernel_unified_attention` 中引入编译期参数 `PIPELINE_DECODE_KV`，将 K/V 读取从当前迭代移至前一迭代，形成单 Tile 前瞻（One-Tile Lookahead）。新辅助函数 `_load_decode_kv_tile` 复用按页索引方式，并按 K/V 各自的 Stride 计算实际地址。
 
@@ -152,9 +152,9 @@ $$
       PV[j]                          # 仍使用当前 V
 ```
 
-当前 K 已参与 QK 矩阵乘法后，发起下一 Tile 的 K/V 读取，再执行当前 Tile 的在线 Softmax 与 PV 累加。下一 Tile 的 K/V 作为循环携带值进入下一轮。由此在读取与消费之间插入独立计算，为编译器及硬件调度提供更多访存与计算重叠的机会，减少关键路径上暴露的访存等待；并不减少有效 K/V 数据的读取范围或改变 Tile 遍历次序。
+当前 K 已参与 QK 矩阵乘法后，发起下一 Tile 的 K/V 读取，再执行当前 Tile 的在线 Softmax 与 PV 累加。下一 Tile 的 K/V 作为循环携带值进入下一轮。由此在读取与消费之间插入独立计算，为编译器及硬件调度提供更多访存与计算重叠的机会，以期减少关键路径上暴露的访存等待；并不减少有效 K/V 数据的读取范围或改变 Tile 遍历次序。
 
-**边界保护与正确性。** 对于 16-Token 页，16-Token Tile 使用单页 Broadcast，32-Token Tile 使用两页 Gather；页表读取同时受 `j < loop_hi` 和有效页数限制，K/V 读取同时受 `j < loop_hi` 与 `seq_offset < max_seq_prefix_len` 限制，无效元素填零。因此，最后一次迭代的前瞻读取不会访问下一序列段或越界页，空段和部分尾页也受到保护。在线 Softmax、因果掩码、PV 累加及 3D 分段归约保持原有计算顺序。`tl.static_assert` 用于检查编译期形状与模式约束，并非流水线本身。
+**边界保护与正确性。** 对于 16-Token 页，16-Token Tile 使用单页 Broadcast，32-Token Tile 使用两页 Gather；页表读取同时受 `j < loop_hi` 和有效页数限制，K/V 读取同时受 `j < loop_hi` 与 `seq_offset < max_seq_prefix_len` 限制，无效元素填零。因此，最后一次迭代的越界前瞻被掩码屏蔽，部分尾页的无效 Token 不参与实际读取；超出有效序列范围的 3D 空段由原有提前返回逻辑处理。在线 Softmax、因果掩码、PV 累加及 3D 分段归约保持原有计算顺序。`tl.static_assert` 用于检查编译期形状与模式约束，并非流水线本身。
 
 **启用条件。** `pipeline_decode_kv` 必须首先满足上一节的 `decode_page_lookup` 条件，并同时满足：
 
@@ -163,7 +163,7 @@ $$
 - 未启用多模态前缀、ALiBi 或 QQ Bias，且 `sinks is None`、`softcap == 0`、`output_scale is None`。
 - 输出与 Query 的数据类型一致，且未启用 Batch Invariance。
 
-上述条件满足时，2D Decode 和 3D Segmented Decode 均可启用流水线，原有 Grid、Tile 大小、`num_stages` / `num_warps` 选择及 2D/3D 路径选择保持不变。否则不启用前瞻读取：若仍满足页表复用条件，则保留按页查询；若不满足，则沿用原生逐 Token 查询路径。
+上述条件满足时，2D Decode 和 3D Segmented Decode 均可启用流水线，原有 Grid、Tile 大小、`num_stages` / `num_warps` 选择及 2D/3D 路径选择保持不变。否则不启用前瞻读取：若仍满足页表复用条件，则保留按页查询；若不满足，则沿用原有页表查询及加载路径。
 
 **数据移动效率。** 该优化调整加载时序，尝试隐藏内存访问延迟，而不是减少有效 K/V 数据的传输量。
 
@@ -178,7 +178,7 @@ $$
 | Prefill 或 Prefill/Decode 混合批次 | 扩大 Query 分块，采用单级流水线 |
 | Pure Decode 批次（满足流水线条件） | 按页复用物理页索引，并提前读取下一 KV Tile |
 | Pure Decode 批次（仅满足页表复用条件） | 复用物理页索引，保持原有 KV 读取时序 |
-| 不满足任一特化条件 | 同一共享 Kernel 中的原有执行逻辑 |
+| 未满足对应特化条件的其他批次 | 同一共享 Kernel 中的原有执行逻辑 |
 
 Prefill 分块与 Pure Decode 特化在单次算子调用中互斥，由批次最大 Query 长度及其他资格条件决定；Decode 的 KV 读取流水线建立在页表索引复用之上，两者可同时启用。混合批次不会单独启用 Pure Decode 页表或流水线特化，原有 Query 有效性掩码继续保护其中的单 Token 请求。
 
@@ -210,18 +210,20 @@ PlatformFL.get_attn_backend_cls
             v
         unified_attention
             |
-            |-- Prefill 特化：BLOCK_M=64，num_stages=1
+            |-- 满足 Prefill 特化条件：BLOCK_M=64，num_stages=1
             |       --> 数据复用 / 计算粒度与资源控制
-            |-- Pure Decode：按页加载索引并复用
+            |-- 满足页表复用条件（Pure Decode）：按页加载索引
             |       --> 减少页表访存 / 复用索引生成
             |       |-- 满足流水线条件：单 Tile KV 前瞻
-            |       |       --> 隐藏访存延迟 / 减少潜在计算等待
-            |       |-- 其他：保持原有读取时序
+            |       |       --> 尝试隐藏访存延迟 / 减少潜在计算等待
+            |       |-- 否则：保持原有读取时序
             |-- 其他配置：原有 Kernel 分支
             |
             |-- 2D：直接输出
             |-- 3D：原有 reduce_segments 分段归约
 ```
+
+2D/3D 的选择仍由原有 `use_3d` 逻辑决定，而非由页表复用或前瞻读取决定；上述执行分支均使用同一个 `kernel_unified_attention`，3D 路径另调用原有 `reduce_segments`。
 
 适配层继承原生 Triton Backend 和 Impl，复用 Attention Metadata、KV Cache 更新机制及接口，仅将分页注意力的调用接入优化后的统一算子。Encoder Attention 仍使用继承的原有处理方法。
 
@@ -237,7 +239,7 @@ PlatformFL.get_attn_backend_cls
 | `vllm_fl/dispatch/backends/triton_attention.py` | 新增 | 共享 Backend / Impl 适配层，调用统一注意力算子 |
 | `vllm_fl/dispatch/backends/triton_unified_attention.py` | 新增 | Prefill 分块与单级流水线；Decode 页表索引复用及 KV Tile 前瞻读取 |
 
-相对于优化前，整个 `FlagGems/` 源码树完全一致；`flaggems/flaggems.py`、GEMM / Linear、RMSNorm、KV Cache 写入算子及调度策略均未修改。三项优化集中在新增的共享 Triton Attention 实现中。官方 benchmark 与模型、服务启动参数也保持不变。
+相对于优化前，整个 `FlagGems/` 源码树完全一致；`vllm_fl/dispatch/backends/flaggems/flaggems.py`、GEMM / Linear、RMSNorm、KV Cache 写入算子及调度策略均未修改。三项优化集中在新增的共享 Triton Attention 实现中。官方 benchmark 与模型、服务启动参数也保持不变。
 
 #### 3. 功能测试与运行流程
 
@@ -250,7 +252,7 @@ PlatformFL.get_attn_backend_cls
 | `test_biv150_mixed_paging.py` | 检查混合批次和乱序分页；目标形状无 Sliding Window 时验证 `BLOCK_M=64`、`num_stages=1`，启用 Sliding Window 时验证 `BLOCK_M=16` 且不显式设置 `num_stages` |
 | `test_v17_kv_pipeline.py` | 对照关闭前瞻的同一算子及上游 Triton，并对小规模用例使用独立 FP32 Dense 参考；覆盖 2D/3D、乱序物理页、NHD/HND 与独立 K/V、尾页、空段、精确页表宽度、Graph Replay、特化回退；提供 Eager / Graph Replay 的匹配 A/B 计时 |
 
-本方案另外提供 `memory_profile/` 诊断工具（独立算子探针、ixKN 计数器采集、Serving Trace 与离线分析）及 `KV_PIPELINE.md` 验证说明，均不参与生产推理或改变官方 benchmark。测试中的流水线开关仅用于诊断对照，不是生产环境新增配置。
+开发与验证目录另外提供 `memory_profile/` 诊断工具（独立算子探针、ixKN 计数器采集、Serving Trace 与离线分析）及 `KV_PIPELINE.md` 验证说明，均不参与生产推理或改变官方 benchmark，也不属于提交压缩包的生产源码。测试中的流水线开关仅用于诊断对照，不是生产环境新增配置。
 
 独立算子测试在导入 Triton 模块前调用 `PlatformFL.pre_register_and_update()`，保留原有平台兼容性初始化流程。厂商模拟测试不等同于跨设备 GPU 实测；与原生 Triton 的数值对照也不替代独立数学参考验证及官方吞吐量、精度测试。
 
