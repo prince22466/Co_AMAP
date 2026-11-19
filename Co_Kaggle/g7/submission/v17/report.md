@@ -25,7 +25,7 @@
 
 #### 2. 方案选择
 
-本方案以**数据移动效率**为核心，在 v14 的注意力分块与页表索引复用基础上，进一步优化 Decode 阶段 KV Cache 的读取时序。在同一个 Triton Unified Attention 算子中实施三项互补优化：
+本报告统一以 **v0（未优化基线）** 为对照，描述 v17 相对于 v0 的全部生产代码优化。本方案以**数据移动效率**为核心，在同一个 Triton Unified Attention 算子中实施三项互补优化：
 
 | 推理阶段 | 主要问题 | 优化策略 |
 |---|---|---|
@@ -33,7 +33,7 @@
 | Pure Decode | 同一 KV 页内的 Token 重复查询物理页索引 | 按页加载索引，在 Tile 内广播或 Gather 复用 |
 | Pure Decode | 当前 Tile 的计算依赖 KV 读取，存在访存等待 | 提前发起下一 KV Tile 的读取，使独立访存有机会与当前 Tile 的 Softmax / PV 计算重叠 |
 
-优化以原生 Triton Attention 为基础，仅改变算子内部的分块、索引复用及读取时序，不改变注意力计算范围、模型结构或服务调度策略。v17 新增的 KV 读取流水线与 Prefill 的 `num_stages=1` 是不同的机制：前者调整 Decode 循环内的加载顺序，后者控制 Prefill 的编译启动配置。
+优化以原生 Triton Attention 为基础，仅改变算子内部的分块、索引复用及读取时序，不改变注意力计算范围、模型结构或服务调度策略。Decode KV 读取流水线与 Prefill 的 `num_stages=1` 是不同的机制：前者调整 Decode 循环内的加载顺序，后者控制 Prefill 的编译启动配置。
 
 ### 算法原理及优化策略
 
@@ -60,14 +60,14 @@ $$
 
 #### 2. Prefill：扩大 Query 分块，提高 KV Tile 复用
 
-**优化原理。** 原有算子在一个 KV Head 对应 8 个 Query Head 时，使用 `BLOCK_M = 16`，即每个 Query Block 处理 2 个 Query 位置。本方案 将 `BLOCK_M` 增至 64，使同一计算块处理 8 个 Query 位置。
+**优化原理。** v0 使用的原生 Triton 算子在一个 KV Head 对应 8 个 Query Head 时，使用 `BLOCK_M = 16`，即每个 Query Block 处理 2 个 Query 位置。本方案 将 `BLOCK_M` 增至 64，使同一计算块处理 8 个 Query 位置。
 
 $$
 \mathrm{BLOCK\_Q}=\frac{\mathrm{BLOCK\_M}}{8}
 \qquad (2\rightarrow8)
 $$
 
-| 参数 | 优化前 | 本方案（满足特化条件） |
+| 参数 | v0 基线 | v17（满足特化条件） |
 |---|---:|---:|
 | `BLOCK_M`（Query 行数） | 16 | 64 |
 | `BLOCK_Q`（Query 位置数） | 2 | 8 |
@@ -93,7 +93,7 @@ $$
 
 #### 3. Decode：复用分页 KV 物理页索引
 
-**优化原理。** 原有算子为每个 Token Lane 查询页表。同一物理页中的多个 Token 共享同一页索引，因此无须分别加载该索引。本方案 在统一 Kernel 中加入编译期参数 `DECODE_PAGE_LOOKUP`，按页加载索引后分配给对应的 Token Lane。
+**优化原理。** v0 使用的原生 Triton 算子为每个 Token Lane 查询页表。同一物理页中的多个 Token 共享同一页索引，因此无须分别加载该索引。本方案 在统一 Kernel 中加入编译期参数 `DECODE_PAGE_LOOKUP`，按页加载索引后分配给对应的 Token Lane。
 
 设 KV 页大小为 $B$、Tile 大小为 $T$。在二者满足整倍数对齐关系时：
 
@@ -102,7 +102,7 @@ $$
 
 以 16-Token KV 页和目标 BF16、无 Sliding Window 配置为例：
 
-| 执行路径 | KV Tile | 优化前  逻辑加载元素数 | 本方案 逻辑加载元素数 | 复用方式 |
+| 执行路径 | KV Tile | v0 逻辑加载元素数 | v17 逻辑加载元素数 | 复用方式 |
 |---|---:|---:|---:|---|
 | 2D Decode | 32 | 32 | 2 | Gather |
 | 3D Segmented Decode | 16 | 16 | 1 | Broadcast |
@@ -122,14 +122,14 @@ $$
 
 不满足 Decode 特化条件时，Kernel 保留原有逐 Token 页表查询路径。
 
-#### 4. Decode：KV Cache 读取流水线（v17 新增）
+#### 4. Decode：KV Cache 读取流水线
 
-**瓶颈依据。** v17 的独立 Decode 算子 Profiling 中，ixKN 在 4K / 16K 场景分别记录到 55.65% / 56.14% 的 Memory Dependency Stall，以及 1.71% / 1.55% 的 Pipeline Busy Stall。这些是 Warp Stall 原因计数的比例，不是端到端运行时间占比，也不能直接换算成吞吐量增益。该现象提示在减少页表查询后，仍有优化 K/V 数据读取等待的空间。
+**瓶颈依据。** v17 的独立 Decode 算子 Profiling 中，ixKN 在 4K / 16K 场景分别记录到 55.65% / 56.14% 的 Memory Dependency Stall，以及 1.71% / 1.55% 的 Pipeline Busy Stall。这些是 Warp Stall 原因计数的比例，不是端到端运行时间占比，也不能直接换算成吞吐量增益。该数据来自开发阶段的独立算子 Profiling，不是 v0 与 v17 的匹配 A/B 对照；其用途是识别 K/V 数据读取等待这一优化机会。
 
 **优化原理。** 在 `kernel_unified_attention` 中引入编译期参数 `PIPELINE_DECODE_KV`，将 K/V 读取从当前迭代移至前一迭代，形成单 Tile 前瞻（One-Tile Lookahead）。新辅助函数 `_load_decode_kv_tile` 复用按页索引方式，并按 K/V 各自的 Stride 计算实际地址。
 
 ```text
-原有执行顺序：
+v0 原生算子执行顺序（源码级）：
   Load KV[j] -> QK[j] -> Online Softmax[j] -> PV[j]
   Load KV[j+1] -> QK[j+1] -> Online Softmax[j+1] -> PV[j+1]
 
@@ -154,7 +154,7 @@ v17 执行顺序（源码级）：
 - 未启用多模态前缀、ALiBi 或 QQ Bias，且 `sinks is None`、`softcap == 0`、`output_scale is None`。
 - 输出与 Query 的数据类型一致，且未启用 Batch Invariance。
 
-上述条件满足时，2D Decode 和 3D Segmented Decode 均可启用流水线，原有 Grid、Tile 大小、`num_stages` / `num_warps` 选择及 2D/3D 路径选择保持不变。否则保留 v14 原有路径，包括仍满足条件的页表索引复用。
+上述条件满足时，2D Decode 和 3D Segmented Decode 均可启用流水线，原有 Grid、Tile 大小、`num_stages` / `num_warps` 选择及 2D/3D 路径选择保持不变。否则不启用前瞻读取：若仍满足页表复用条件，则保留按页查询；若不满足，则沿用原生逐 Token 查询路径。
 
 **预期收益与限制。** 该优化通过调整加载时序尝试隐藏内存访问延迟，而不是减少数学运算量。源码中的 `tl.load` 不保证实际异步执行或硬件重叠；额外的活跃 Tile 可能增加寄存器压力或溢出。实际流水线效果须通过匹配输入的算子 A/B、编译后资源占用及硬件计数器验证，不能把整体 benchmark 增益全部归因于此项优化。
 
@@ -213,15 +213,15 @@ PlatformFL.get_attn_backend_cls
 
 #### 2. 核心代码及职责
 
-相对于 v0 基线，生产代码仅涉及以下三个文件（路径相对于 `vllm-plugin-FL/`）：
+v17 相对于 v0 基线的全部生产代码差异仅涉及以下三个文件（路径相对于 `vllm-plugin-FL/`）：
 
-| 文件 | 变化 | 职责 |
+| 文件 | v17 相对于 v0 | 职责 |
 |---|---|---|
 | `vllm_fl/platform.py` | 修改 | 保留原有 Dispatch，映射选中的原生 dense Triton Backend |
 | `vllm_fl/dispatch/backends/triton_attention.py` | 新增 | 共享 Backend / Impl 适配层，调用统一注意力算子 |
 | `vllm_fl/dispatch/backends/triton_unified_attention.py` | 新增 | Prefill 分块与单级流水线；Decode 页表索引复用及 KV Tile 前瞻读取 |
 
-相对于 v14，v17 的生产代码仅修改 `triton_unified_attention.py`，新增 `_load_decode_kv_tile`、`PIPELINE_DECODE_KV` 及其启用逻辑。`flaggems/flaggems.py`、整个 `FlagGems/` 源码树、GEMM / Linear、RMSNorm、KV Cache 写入算子及调度策略均未修改。官方 benchmark 与模型、服务启动参数也保持不变。
+相对于 v0，整个 `FlagGems/` 源码树完全一致；`flaggems/flaggems.py`、GEMM / Linear、RMSNorm、KV Cache 写入算子及调度策略均未修改。三项优化集中在新增的共享 Triton Attention 实现中。官方 benchmark 与模型、服务启动参数也保持不变。
 
 #### 3. 功能测试与运行流程
 
