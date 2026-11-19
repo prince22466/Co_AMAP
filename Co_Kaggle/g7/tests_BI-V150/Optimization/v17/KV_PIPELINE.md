@@ -30,9 +30,13 @@ Use this branch's v17 sources and exclusive GPU access:
 
 Tests compare against the same v17 operator with lookahead disabled only
 inside the diagnostic spy, and pinned upstream. They cover shuffled physical
-pages, interleaved K/V strides, separate K/V, partial tiles, short/empty
-segments, exact page-table width, graph replay and sliding-window fallback.
-Matched event timing covers realistic decode concurrency and context lengths.
+pages, NHD/HND interleaved strides, separate K/V, partial tiles, short/empty
+segments, exact page-table width, and fallback for sliding-window, prefill,
+mixed, batch-invariant and other GQA geometry. Small cases also use an
+independent dense FP32 reference. Graph capture uses seq_len=1 as vLLM does,
+then replays with changing sequence lengths, physical page IDs and queries.
+Matched event timing covers both 2D/3D at realistic decode concurrency and
+context lengths, in eager and graph replay; all timing samples are printed.
 Inspect per-case timings; do not promote a regression. The timing test is
 diagnostic and never changes the official benchmark or production launch gate.
 
@@ -41,7 +45,7 @@ using the existing diagnostic probe, with identical seed, shape, physical
 pages and K/V strides. Run from v17 with the environment above:
 
     cd memory_profile
-    set -o pipefail
+    set -euo pipefail
     for arm in control candidate; do
       ixkn-cli --profile-from-start off --page details --csv \
         --cache-control none --kernel-name kernel_unified_attention \
@@ -51,7 +55,8 @@ pages and K/V strides. Run from v17 with the environment above:
         2>&1 | tee "decode_4k_${arm}.csv"
     done
 
-Check the PROBE_JSON marker and actual override in each report. Repeat for
+Check the PROBE_JSON marker, actual override, actual 2D/3D mode and
+K/V strides in each report. Repeat for
 attn_16k_decode and attn_4k_decode_3d (for the latter, use the regex
 'kernel_unified_attention|reduce_segments' to include both kernels).
 Inspect register/shared storage and spills in a separate LaunchStats/Occupancy

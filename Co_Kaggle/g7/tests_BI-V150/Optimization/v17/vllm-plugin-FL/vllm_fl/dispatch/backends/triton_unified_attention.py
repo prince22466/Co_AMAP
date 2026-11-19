@@ -476,6 +476,8 @@ def kernel_unified_attention(
         tl.static_assert(DECODE_PAGE_LOOKUP and not USE_TD)
         tl.static_assert(KV_QUANT_MODE == 0 and not Q_IS_FP8)
         tl.static_assert(HEAD_SIZE == HEAD_SIZE_PADDED)
+        tl.static_assert(HEAD_SIZE == 128 and BLOCK_SIZE == 16)
+        tl.static_assert(TILE_SIZE == 16 or TILE_SIZE == 32)
         # Prime the loop-carried tile. The next tile is issued after QK
         # below, before the current softmax/PV dependency chain.
         prefetched_k, prefetched_v = _load_decode_kv_tile(

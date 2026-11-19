@@ -84,6 +84,7 @@ def main():
         from vllm_fl.dispatch.backends import triton_unified_attention as attention
         qlens, lengths, segments = ATTN[a.case]
         actual_pipeline = None
+        actual_3d = None
         if a.decode_pipeline != "default":
             # This process is an isolated probe, not a serving process.
             # Require the real production gate to be eligible in both arms.
@@ -94,7 +95,10 @@ def main():
                     launch = original[grid]
 
                     def call(**kwargs):
-                        nonlocal actual_pipeline
+                        nonlocal actual_pipeline, actual_3d
+                        actual_3d = bool(kwargs["IS_3D"])
+                        if actual_3d != bool(segments):
+                            raise RuntimeError("Unexpected 2D/3D probe dispatch")
                         if not kwargs["PIPELINE_DECODE_KV"]:
                             raise RuntimeError("Decode pipeline gate is not eligible")
                         actual_pipeline = a.decode_pipeline == "candidate"
@@ -174,6 +178,7 @@ def main():
             info["event_ms_per_call"] = start.elapsed_time(end)/a.repeats
     if a.case in ATTN:
         info["decode_pipeline_override_actual"] = actual_pipeline
+        info["decode_pipeline_probe_is_3d"] = actual_3d
     print("PROBE_JSON " + json.dumps(dict(case=a.case, **info)), flush=True)
 
 
