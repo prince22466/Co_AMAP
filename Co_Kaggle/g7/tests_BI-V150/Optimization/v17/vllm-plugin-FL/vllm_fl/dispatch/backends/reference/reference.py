@@ -1,0 +1,218 @@
+# Copyright (c) 2026 BAAI. All rights reserved.
+
+"""
+Reference backend implementation using PyTorch.
+
+This backend provides reference operator implementations using native PyTorch
+operations. These implementations are always available when PyTorch is installed
+and serve as fallback implementations.
+"""
+
+from __future__ import annotations
+
+from typing import Optional, Union
+
+import torch
+
+from vllm_fl.dispatch.backends.base import Backend
+
+
+class ReferenceBackend(Backend):
+    """
+    Reference backend for operator implementations.
+
+    This backend uses native PyTorch operations to provide reference
+    implementations that are always available as fallbacks.
+    """
+
+    _available: Optional[bool] = None
+
+    @property
+    def name(self) -> str:
+        return "reference"
+
+    def is_available(self) -> bool:
+        """Check if PyTorch is available."""
+        if ReferenceBackend._available is None:
+            try:
+                import torch
+
+                ReferenceBackend._available = True
+            except ImportError:
+                ReferenceBackend._available = False
+        return ReferenceBackend._available
+
+    # ==================== Operator Implementations ====================
+
+    def dynamic_per_token_quant_int8(
+        self,
+        x: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        from .impl.quantization import dynamic_per_token_quant_int8_torch
+
+        return dynamic_per_token_quant_int8_torch(x)
+
+    def silu_and_mul(self, obj, x: torch.Tensor) -> torch.Tensor:
+        """
+        SiLU activation followed by element-wise multiplication.
+
+        Args:
+            obj: The calling obj (for interface consistency)
+            x: Input tensor of shape [..., 2*d]
+
+        Returns:
+            Output tensor of shape [..., d]
+        """
+        from .impl.activation import silu_and_mul_torch
+
+        return silu_and_mul_torch(obj, x)
+
+    def gelu_and_mul(self, obj, x: torch.Tensor) -> torch.Tensor:
+        """
+        GELU activation followed by element-wise multiplication.
+
+        Args:
+            obj: The calling obj (for interface consistency)
+            x: Input tensor of shape [..., 2*d]
+
+        Returns:
+            Output tensor of shape [..., d]
+        """
+        from .impl.activation import gelu_and_mul_torch
+
+        return gelu_and_mul_torch(obj, x)
+
+    def rms_norm(
+        self,
+        obj,
+        x: torch.Tensor,
+        residual: Optional[torch.Tensor] = None,
+    ) -> Union[torch.Tensor, tuple[torch.Tensor, torch.Tensor]]:
+        """
+        RMS normalization.
+
+        Args:
+            obj: The calling obj (e.g., RMSNorm layer)
+            x: Input tensor
+            residual: Optional residual tensor
+
+        Returns:
+            Normalized tensor, or tuple of (normalized, residual) if residual is provided
+        """
+        from .impl.normalization import rms_norm_torch
+
+        return rms_norm_torch(obj, x, residual)
+
+    def rotary_embedding(
+        self,
+        obj,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        cos: torch.Tensor,
+        sin: torch.Tensor,
+        position_ids: torch.Tensor,
+        rotary_interleaved: bool = False,
+        inplace: bool = True,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Apply rotary position embedding.
+
+        Args:
+            obj: The calling obj (for interface consistency)
+            query: Query tensor
+            key: Key tensor
+            cos: Cosine cache
+            sin: Sine cache
+            position_ids: Position indices
+            rotary_interleaved: Whether to use interleaved rotary
+            inplace: Whether to modify tensors in-place (ignored in reference impl)
+
+        Returns:
+            Tuple of (embedded_query, embedded_key)
+        """
+        from .impl.rotary import rotary_embedding_torch
+
+        return rotary_embedding_torch(
+            obj,
+            query,
+            key,
+            cos,
+            sin,
+            position_ids,
+            rotary_interleaved=rotary_interleaved,
+            inplace=inplace,
+        )
+
+    def attention_backend(self, use_mla: bool = False, use_sparse: bool = False) -> str:
+        """
+        Get the attention backend class path for reference (vLLM native).
+
+        This method returns the vLLM native flash attention backend path,
+        which serves as a fallback implementation.
+
+        Args:
+            use_mla: Whether to use Multi-head Latent Attention (MLA)
+            use_sparse: Whether to use Deepseek Sparse Attention (DSA)
+
+        Returns:
+            Fully qualified class path string (vLLM native backend)
+        """
+        # Return vLLM's native flash attention backend as reference
+        from vllm.v1.attention.backends.registry import AttentionBackendEnum
+
+        if use_mla:
+            # vLLM native MLA backend
+            if use_sparse:
+                return AttentionBackendEnum.FLASHMLA_SPARSE.get_path()
+            return AttentionBackendEnum.FLASHMLA.get_path()
+        return AttentionBackendEnum.FLASH_ATTN.get_path()
+
+    def invoke_fused_moe_triton_kernel(
+        self,
+        A,
+        B,
+        C,
+        A_scale,
+        B_scale,
+        topk_weights,
+        sorted_token_ids,
+        expert_ids,
+        num_tokens_post_padded,
+        mul_routed_weight,
+        top_k,
+        config,
+        compute_type,
+        use_fp8_w8a8,
+        use_int8_w8a8,
+        use_int8_w8a16,
+        use_int4_w4a16,
+        per_channel_quant,
+        block_shape=None,
+        B_bias=None,
+    ):
+        from vllm.model_executor.layers.fused_moe.fused_moe import (
+            invoke_fused_moe_triton_kernel,
+        )
+
+        invoke_fused_moe_triton_kernel(
+            A,
+            B,
+            C,
+            A_scale,
+            B_scale,
+            topk_weights,
+            sorted_token_ids,
+            expert_ids,
+            num_tokens_post_padded,
+            mul_routed_weight,
+            top_k,
+            config,
+            compute_type,
+            use_fp8_w8a8,
+            use_int8_w8a8,
+            use_int8_w8a16,
+            use_int4_w4a16,
+            per_channel_quant,
+            block_shape=block_shape,
+            B_bias=B_bias,
+        )
