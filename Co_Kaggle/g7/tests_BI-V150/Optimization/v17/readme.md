@@ -1,1 +1,1 @@
-# v14 — device-independent refactor of v12
+# v17 —  copy of v14 first, then work on code
