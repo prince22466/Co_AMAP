@@ -30,7 +30,7 @@ Separate runs (each creates a new output directory):
     python3 run.py --stage analyze --out /path/to/v17_memory_run
 
 Use --out for an explicitly chosen **new** output directory outside v17. Keep raw logs.
-An incomplete native collection, missing serving trace, or missing boundary
+An incomplete native collection, missing serving GPU-kernel trace, missing requested batch metadata, or missing boundary
 metrics returns a nonzero status after preserving results; inspect status.jsonl.
 The serving driver also validates both raw benchmark rows per workload, because
 the unchanged half-run benchmark can exit zero even on failed requests.

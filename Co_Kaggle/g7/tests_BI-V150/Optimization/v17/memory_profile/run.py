@@ -16,7 +16,7 @@ import threading
 import time
 import urllib.request
 
-from analyze import summarize, native_rows
+from analyze import summarize, native_rows, trace_summary, jsonl
 from probe import CASES, ATTN
 
 HERE = Path(__file__).resolve().parent
@@ -110,9 +110,12 @@ def native(a, out):
         for layout in layouts:
             stem=case+"_"+layout if case in ATTN else case
             cmd=[sys.executable,str(HERE/"probe.py"),case,"--layout",layout]
-            rc=logged(cmd,d/(stem+".timing.log"),env,a.probe_timeout)
-            append(out/"status.jsonl",dict(stage="probe_timing",case=stem,returncode=rc))
-            if rc or not cli:
+            timing=d/(stem+".timing.log")
+            rc=logged(cmd,timing,env,a.probe_timeout)
+            timed=any(line.startswith("PROBE_JSON ") for line in timing.read_text(errors="replace").splitlines())
+            append(out/"status.jsonl",dict(stage="probe_timing",case=stem,returncode=rc,
+                   probe_completion_marker=timed))
+            if rc or not timed or not cli:
                 incomplete = True
                 continue
             # Keep raw vendor values/units. Never substitute NVIDIA metrics.
@@ -246,11 +249,16 @@ def serve(a,out):
                     row=dict(workload=label,timestamp=time.time(),boundary=boundary)
                     try:
                         row["metrics"]=api(a.port,"/metrics")
+                        running=[]
                         for line in row["metrics"].splitlines():
                             if line.startswith(("vllm:num_requests_running{","vllm:num_requests_running ")):
-                                if float(line.rsplit(None,1)[-1])>0:
-                                    active.set()
+                                running.append(float(line.rsplit(None,1)[-1]))
+                        if any(x>0 for x in running):
+                            active.set()
+                        else:
+                            active.clear()
                     except Exception as e:
+                        active.clear()
                         row["metrics_error"]=str(e)
                     if boundary is None:
                         try:
@@ -259,7 +267,9 @@ def serve(a,out):
                         except Exception as e:
                             row["ixsmi_error"]=str(e)
                     append(out/"metrics.jsonl",row)
-                    return "metrics" in row
+                    return ("metrics_error" not in row and any(
+                        line.startswith(("vllm:kv_cache_usage_perc{","vllm:kv_cache_usage_perc "))
+                        for line in row.get("metrics","").splitlines()))
 
                 # Synchronous bookends: polling alone misses edge increments.
                 before_ok=snapshot("before")
@@ -270,12 +280,12 @@ def serve(a,out):
                         snapshot()
                         stop_event.wait(a.sample_seconds)
                 thread=threading.Thread(target=telemetry,daemon=True)
-                thread.start()
                 client=None
                 successful_windows=0
                 workdir=out/label
                 workdir.mkdir()
                 case=[n,1024,64,prompts]
+                thread.start()
                 try:
                     bcmd=[sys.executable,str(benchmark),"--model",a.model,
                           "--served-model-name","minicpm","--port",str(a.port),
@@ -319,20 +329,35 @@ def serve(a,out):
                         if client.returncode:
                             raise RuntimeError("Benchmark failed: "+label)
                         verified_runs=verify_benchmark(workdir,case)
-                        incomplete |= successful_windows==0
+                        worker_traces=[]
+                        for w in jsonl(out/"windows.jsonl"):
+                            if w["workload"]!=label or not (w.get("start_ok") and w.get("stop_ok")):
+                                continue
+                            for file in w["files"]:
+                                try:
+                                    overview,_,_=trace_summary(out/file)
+                                except Exception:
+                                    continue  # analyzer records parsing errors later
+                                if overview["kernel_events"]:
+                                    worker_traces.append(file)
+                        incomplete |= not worker_traces
                         append(out/"status.jsonl",dict(stage="serve",workload=label,
                                returncode=client.returncode,verified_runs=verified_runs,
                                profile_windows_attempted=captured,
-                               profile_windows_with_files=successful_windows))
+                               profile_windows_with_files=successful_windows,
+                               traces_with_observed_kernels=worker_traces))
                 finally:
                     if client is not None:
                         stop(client)
                     stop_event.set()
                     thread.join()
                     after_ok=snapshot("after")
-                    incomplete |= not (before_ok and after_ok)
-                    append(out/"workloads.jsonl",dict(workload=label,start=start,end=time.time(),
-                           metrics_before_ok=before_ok,metrics_after_ok=after_ok))
+                    end=time.time()
+                    metadata_steps=sum(start<=r["timestamp"]<=end for r in jsonl(out/"batch_metadata.jsonl"))
+                    incomplete |= not (before_ok and after_ok) or (not a.no_metadata and metadata_steps==0)
+                    append(out/"workloads.jsonl",dict(workload=label,start=start,end=end,
+                           metrics_before_ok=before_ok,metrics_after_ok=after_ok,
+                           metadata_steps=metadata_steps))
         finally:
             stop(server)
     return not incomplete
