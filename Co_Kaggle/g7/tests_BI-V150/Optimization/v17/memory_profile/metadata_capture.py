@@ -21,14 +21,13 @@ def capture(runner, scheduler_output, num_scheduled_tokens):
     prompt = [int(x) for x in runner.input_batch.num_prompt_tokens_cpu_tensor[:n]]
     ids = runner.input_batch.req_ids[:n]
     s = [a+b for a,b in zip(q,old)]
-    if not q or min(q) < 1:
-        return
-
     # Track scheduled positions, not completed GPU work. IDs remain in memory
     # only. Resumption with an older position indicates planned replay.
     for req in scheduler_output.finished_req_ids:
         _highwater.pop(req,None)
         _replay_until.pop(req,None)
+    if not q or min(q) < 1:
+        return
     resumed = scheduler_output.scheduled_cached_reqs.resumed_req_ids
     replay = repeated = resumed_count = 0
     for req, lo, hi in zip(ids,old,s):

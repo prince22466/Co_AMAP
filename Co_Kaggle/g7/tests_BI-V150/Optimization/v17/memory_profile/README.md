@@ -29,7 +29,12 @@ Separate runs (each creates a new output directory):
     python3 run.py --stage serve
     python3 run.py --stage analyze --out /path/to/v17_memory_run
 
-Use --out for an explicitly chosen **new** output directory. Keep raw logs.
+Use --out for an explicitly chosen **new** output directory outside v17. Keep raw logs.
+An incomplete native collection, missing serving trace, or missing boundary
+metrics returns a nonzero status after preserving results; inspect status.jsonl.
+The serving driver also validates both raw benchmark rows per workload, because
+the unchanged half-run benchmark can exit zero even on failed requests.
+Raw benchmark CSVs are kept separately under 4k/ and 16k/.
 Do not run on an occupied GPU or in parallel with another profiling job.
 
 ## What is collected
@@ -52,7 +57,12 @@ region; this can take time. Use --native-sections with an identifier from the
 local list, or --native-metrics with comma-separated exact names from the
 local query. See https://developer.iluvatar.com/doc-booklets/5.0.0/booklets/ixkn/page_02.html.
 
-The offline analyzer also writes native_metrics.csv (recognized vendor CSV metric rows with original units), native_report_coverage.csv (reports without a recognized header remain unverified), and probe_payloads.csv (logical bytes and event timings). Inspect raw rows for device memory read/write bytes (or transactions with
+The offline analyzer recognizes long-form and supported wide raw CSV headers.
+It writes native_metrics.csv (original metric names, values and units),
+native_report_coverage.csv and probe_payloads.csv. Unknown formats remain
+unverified; a recognized numeric memory-related metric is only coverage,
+not validation of HBM bytes. Missing intended kernel coverage or a missing
+probe completion marker produces an incomplete status. Inspect raw rows for device memory read/write bytes (or transactions with
 documented byte size), L2 hit/miss rate, memory throughput, memory dependency
 stalls, occupancy and matrix utilization, where supported. A successful exit
 without metric rows is not proof of measurement. Never use ixsmi GPU utilization
@@ -84,6 +94,9 @@ visibility is incomplete: never call those gaps idle time. CPU scope sums
 overlap. Allocator events are allocation traffic, not physical HBM bytes.
 Shape recording can extend tensor lifetime and memory profiling can perturb
 capacity. Compare profiler-off telemetry before treating any result as causal.
+Each workload has separate before/after Prometheus snapshots; exact counter
+deltas require both boundaries and no observed reset. Sampled deltas are
+reported separately. Trace CSVs are labeled by workload and capture window.
 
 Both prompt-progress phase and query-length classification are recorded; a
 single-token prefill can look like decode to the attention launch gate.

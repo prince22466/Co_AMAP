@@ -111,6 +111,7 @@ def jsonl(path):
 def metric_summary(path):
     # Keep series labels separate; no combining gauges/counters across engines.
     metrics = collections.defaultdict(list)
+    boundaries = collections.defaultdict(dict)
     wanted = ("kv_cache_usage", "num_preemptions", "num_requests_running",
               "num_requests_waiting", "prefix_cache", "prompt_tokens",
               "generation_tokens")
@@ -127,49 +128,90 @@ def metric_summary(path):
                 try:
                     value = float(match[2])
                     if math.isfinite(value):
-                        metrics[(row["workload"],key)].append(value)
+                        group=(row["workload"],key)
+                        if row.get("boundary") in ("before","after"):
+                            boundaries[group][row["boundary"]]=value
+                        else:
+                            metrics[group].append(value)
                 except ValueError:
                     pass
-    return [dict(workload=k[0], series=k[1], samples=len(v), minimum=min(v),
-                 maximum=max(v), mean=statistics.fmean(v), first=v[0], last=v[-1],
-                 counter_delta=(v[-1]-v[0] if len(v)>1 and
-                                (k[1].split("{")[0].endswith("_total")) and
-                                all(a<=b for a,b in zip(v,v[1:])) else None))
-            for k,v in metrics.items()]
+    result=[]
+    for k in sorted(set(metrics)|set(boundaries)):
+        v=metrics[k]
+        before=boundaries[k].get("before")
+        after=boundaries[k].get("after")
+        counter=k[1].split("{")[0].endswith("_total")
+        ordered=[x for x in [before,*v,after] if x is not None]
+        monotonic=all(a<=b for a,b in zip(ordered,ordered[1:]))
+        exact=counter and before is not None and after is not None and monotonic
+        result.append(dict(workload=k[0],series=k[1],samples=len(v),
+            minimum=min(v) if v else None,maximum=max(v) if v else None,
+            mean=statistics.fmean(v) if v else None,
+            first=v[0] if v else None,last=v[-1] if v else None,
+            before=before,after=after,
+            counter_delta=after-before if exact else None,
+            sampled_counter_delta=v[-1]-v[0] if counter and monotonic and len(v)>1 else None))
+    return result
 
+
+
+def numeric_metric(value):
+    try:
+        return math.isfinite(float(value.replace(",","")))
+    except ValueError:
+        return False
 
 
 def native_rows(path):
-    """Extract explicit metric rows from ixKN CSV, preserving units and values.
-
-    Vendor versions differ. No positional guesses; retain the raw report
-    even if a header is not recognized.
+    """Recognize explicit long CSV or raw wide CSV with a units row.
+    Do not infer units, metric columns or kernel IDs from arbitrary log lines.
     """
-    header = None
+    header = units = mode = None
+    memory = re.compile(r"dram|hbm|memory|cache|l2|l1|stall|bandwidth|throughput|occupancy|matrix|tensor", re.I)
+
+    def record(row, name, value, unit, section=""):
+        return dict(report=path.name, kernel=row.get("kernel name",""),
+                    launch_id=row.get("id",""), section=section,
+                    metric=name, value=value, unit=unit,
+                    memory_related=bool(memory.search(name)),
+                    numeric_value=numeric_metric(value))
+
     for line in path.read_text(errors="replace").splitlines():
-        if not line.strip() or line.startswith("COMMAND "):
+        if not line.strip() or line.startswith(("COMMAND ","==","PROBE_JSON ")):
             continue
         try:
             fields = next(csv.reader([line]))
         except csv.Error:
             continue
         norm = [x.strip().lower().replace("_", " ") for x in fields]
-        if "metric name" in norm and "metric value" in norm:
+        if "kernel name" in norm and "id" in norm:
             header = norm
+            original = [x.strip() for x in fields]
+            mode = "long" if "metric name" in norm and "metric value" in norm else "wide"
+            units = None
             continue
         if header is None or len(fields) != len(header):
             continue
-        row = dict(zip(header, fields))
-        name = row["metric name"].strip()
-        value = row["metric value"].strip()
-        if not name or not value:
-            continue
-        yield dict(report=path.name, kernel=row.get("kernel name",""),
-                   launch_id=row.get("id",""), section=row.get("section name",""),
-                   metric=name, value=value, unit=row.get("metric unit",""),
-                   memory_related=bool(re.search(
-                       r"dram|hbm|memory|cache|l2|l1|stall|bandwidth|throughput|occupancy|matrix|tensor",
-                       name,re.I)))
+        row = dict(zip(header,fields))
+        if mode=="long":
+            name,value=row["metric name"].strip(),row["metric value"].strip()
+            if name and value and row.get("kernel name","").strip():
+                yield record(row,name,value,row.get("metric unit",""),row.get("section name",""))
+        elif not row.get("id","").strip() and not row.get("kernel name","").strip():
+            # Raw reports can include an explicit unit row. Do not assume
+            # a unit when the header has no such row.
+            units=fields
+        elif row.get("id","").strip().isdigit() and row.get("kernel name","").strip():
+            # Raw wide reports identify metric columns by metric syntax or
+            # a recognizable metric name. Skip launch metadata fields.
+            metadata={"id","process id","process name","host name","kernel name","context",
+                      "stream","device","device id","grid size","block size","section name",
+                      "kernel time","gpu name","cc","invocations","grid","block","context id","stream id"}
+            for i,(name,value) in enumerate(zip(original,fields)):
+                if header[i] in metadata or not value.strip():
+                    continue
+                if ("__" in name or "." in name or memory.search(name)) and numeric_metric(value):
+                    yield record(row,name,value,units[i] if units else "")
 
 
 def native_summary(root):
@@ -178,7 +220,7 @@ def native_summary(root):
         rows = list(native_rows(path))
         metrics.extend(rows)
         reports.append(dict(report=path.name, parsed_rows=len(rows),
-                            memory_related_rows=sum(r["memory_related"] for r in rows),
+                            memory_related_rows=sum(r["memory_related"] and r["numeric_value"] for r in rows),
                             status="parsed" if rows else "unverified_no_recognized_metric_rows"))
     for path in sorted((root/"native").glob("*.timing.log")):
         for line in path.read_text(errors="replace").splitlines():
@@ -196,12 +238,18 @@ def native_summary(root):
 
 def summarize(root):
     overviews, allgroups, allshapes, errors = [],[],[],[]
+    capture_map={}
+    for window in jsonl(root/"windows.jsonl"):
+        for file in window.get("files",[]):
+            capture_map[str(root/file)]=(window["workload"],window["index"])
     for path in sorted((root/"traces").rglob("*.json*")):
         try:
             overview, groups, shapes = trace_summary(path)
-            overviews.append(overview)
-            allgroups.extend(dict(trace=str(path), **r) for r in groups)
-            allshapes.extend(dict(trace=str(path), **r) for r in shapes)
+            workload,index=capture_map.get(str(path),("unknown",None))
+            label=dict(workload=workload,window_index=index)
+            overviews.append(dict(**overview,**label))
+            allgroups.extend(dict(trace=str(path),**label,**r) for r in groups)
+            allshapes.extend(dict(trace=str(path),**label,**r) for r in shapes)
         except Exception as e:
             errors.append(dict(path=str(path), error=str(e)))
     write_csv(root/"trace_overview.csv", overviews)

@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Sequential v17 diagnostic orchestrator; requires exclusive GPU access."""
 import argparse
+import csv
+import math
 import hashlib
 import json
 import os
@@ -14,7 +16,7 @@ import threading
 import time
 import urllib.request
 
-from analyze import summarize
+from analyze import summarize, native_rows
 from probe import CASES, ATTN
 
 HERE = Path(__file__).resolve().parent
@@ -61,15 +63,27 @@ def logged(cmd, path, env, timeout):
 
 
 def stop(p):
-    if p.poll() is None:
+    # Every child is launched with start_new_session=True. Clean up the
+    # owned process group even if its leader exited before its workers.
+    try:
+        os.killpg(p.pid,signal.SIGTERM)
+    except ProcessLookupError:
+        p.wait()
+        return
+    deadline=time.monotonic()+20
+    while time.monotonic()<deadline:
+        p.poll()
         try:
-            os.killpg(p.pid,signal.SIGTERM)
-            p.wait(timeout=20)
-        except subprocess.TimeoutExpired:
+            os.killpg(p.pid,0)
+        except ProcessLookupError:
+            break
+        time.sleep(.1)
+    else:
+        try:
             os.killpg(p.pid,signal.SIGKILL)
-            p.wait()
         except ProcessLookupError:
             pass
+    p.wait()
 
 
 def assert_port_free(port):
@@ -90,6 +104,7 @@ def native(a, out):
             logged([cli,flag],d/(flag[2:]+".txt"),env,60)
     else:
         append(out/"status.jsonl",dict(stage="native_counters",status="unavailable",reason="ixkn-cli not on PATH"))
+    incomplete = not bool(cli)
     for case in a.cases:
         layouts=["shuffled","contiguous"] if case in ATTN and a.compare_layouts else ["shuffled"]
         for layout in layouts:
@@ -98,6 +113,7 @@ def native(a, out):
             rc=logged(cmd,d/(stem+".timing.log"),env,a.probe_timeout)
             append(out/"status.jsonl",dict(stage="probe_timing",case=stem,returncode=rc))
             if rc or not cli:
+                incomplete = True
                 continue
             # Keep raw vendor values/units. Never substitute NVIDIA metrics.
             section=(["--metrics",a.native_metrics] if a.native_metrics else
@@ -106,9 +122,25 @@ def native(a, out):
                     ("linear_kernel" if case.startswith("linear") else "mm_kernel"))
             args=[cli,"--profile-from-start","off","--csv","--page","raw",
                   "--kernel-name",kernel,*section,*cmd,"--native"]
-            rc=logged(args,d/(stem+".counters.csv"),env,a.probe_timeout)
+            report=d/(stem+".counters.csv")
+            rc=logged(args,report,env,a.probe_timeout)
+            rows=list(native_rows(report))
+            expected=("kernel_unified_attention","reduce_segments") if case.endswith("_3d") else (
+                ("kernel_unified_attention",) if case in ATTN else
+                ("linear_kernel",) if case.startswith("linear") else ("mm_kernel",))
+            # Require recognizable finite numeric memory metrics for each
+            # intended kernel. This is coverage, not proof of HBM byte semantics.
+            missing=[k for k in expected if not any(
+                k in r["kernel"] and r["memory_related"] and r["numeric_value"]
+                for r in rows)]
+            completed="PROBE_JSON " in report.read_text(errors="replace")
+            incomplete |= bool(rc or missing or not completed)
             append(out/"status.jsonl",dict(stage="native_counters",case=stem,returncode=rc,
-                   note="Inspect actual metric rows and kernel names; exit 0 alone does not prove collection."))
+                   parsed_rows=len(rows),missing_kernel_memory_metrics=missing,
+                   probe_completion_marker=completed,
+                   status="incomplete" if rc or missing or not completed else "collected_unvalidated",
+                   note="Inspect metric units and semantics before interpreting HBM traffic."))
+    return not incomplete
 
 
 def api(port,path,post=False,timeout=10):
@@ -134,6 +166,29 @@ def instrument(out):
         original_sha256=sha(V17/"vllm-plugin-FL/vllm_fl/worker/model_runner.py"),
         diagnostic_sha256=sha(path), anchor=anchor, insertion=insert),indent=2))
     return plugin
+
+
+def verify_benchmark(directory, case, expected_runs=2):
+    """Half-run script swallows failures and may return zero without valid rows."""
+    raw=list((directory/"benchmark_results").glob("raw_runs_*.csv"))
+    if len(raw)!=1:
+        raise RuntimeError("Expected exactly one benchmark raw CSV")
+    with raw[0].open(newline="") as f:
+        rows=list(csv.DictReader(f))
+    if len(rows)!=expected_runs:
+        raise RuntimeError("Unexpected number of benchmark runs: "+str(len(rows)))
+    for row in rows:
+        try:
+            actual=tuple(int(float(row[k])) for k in ("Prefill","Decode","Conc","Num Prompts"))
+            successful=float(row["Successful Requests"])
+            throughput=float(row["Total tok/s"])
+        except (ValueError,TypeError,KeyError) as e:
+            raise RuntimeError("Missing/invalid benchmark result fields") from e
+        if (actual!=tuple(case) or successful!=case[3] or
+                row["Run Status"]!="SUCCESS" or
+                not math.isfinite(throughput) or throughput<=0):
+            raise RuntimeError("Failed/incomplete benchmark result: "+repr(row))
+    return len(rows)
 
 
 def serve(a,out):
@@ -179,6 +234,7 @@ def serve(a,out):
                     if time.monotonic()>until:
                         raise RuntimeError("Server readiness timeout")
                     time.sleep(2)
+            incomplete=False
             for label,n,prompts in (("4k",4096,256),("16k",16384,128)):
                 if label not in a.workloads:
                     continue
@@ -186,34 +242,47 @@ def serve(a,out):
                 stop_event=threading.Event()
                 active=threading.Event()
 
-                def telemetry():
-                    while not stop_event.is_set():
-                        row=dict(workload=label,timestamp=time.time())
-                        try:
-                            row["metrics"]=api(a.port,"/metrics")
-                            for line in row["metrics"].splitlines():
-                                if line.startswith(("vllm:num_requests_running{","vllm:num_requests_running ")):
-                                    if float(line.rsplit(None,1)[-1])>0:
-                                        active.set()
-                        except Exception as e:
-                            row["metrics_error"]=str(e)
+                def snapshot(boundary=None):
+                    row=dict(workload=label,timestamp=time.time(),boundary=boundary)
+                    try:
+                        row["metrics"]=api(a.port,"/metrics")
+                        for line in row["metrics"].splitlines():
+                            if line.startswith(("vllm:num_requests_running{","vllm:num_requests_running ")):
+                                if float(line.rsplit(None,1)[-1])>0:
+                                    active.set()
+                    except Exception as e:
+                        row["metrics_error"]=str(e)
+                    if boundary is None:
                         try:
                             r=subprocess.run(["ixsmi"],capture_output=True,text=True,timeout=5)
                             row.update(ixsmi=r.stdout,ixsmi_returncode=r.returncode)
                         except Exception as e:
                             row["ixsmi_error"]=str(e)
-                        append(out/"metrics.jsonl",row)
+                    append(out/"metrics.jsonl",row)
+                    return "metrics" in row
+
+                # Synchronous bookends: polling alone misses edge increments.
+                before_ok=snapshot("before")
+                active.clear()
+
+                def telemetry():
+                    while not stop_event.is_set():
+                        snapshot()
                         stop_event.wait(a.sample_seconds)
                 thread=threading.Thread(target=telemetry,daemon=True)
                 thread.start()
                 client=None
+                successful_windows=0
+                workdir=out/label
+                workdir.mkdir()
+                case=[n,1024,64,prompts]
                 try:
                     bcmd=[sys.executable,str(benchmark),"--model",a.model,
                           "--served-model-name","minicpm","--port",str(a.port),
-                          "--test-cases",json.dumps([[n,1024,64,prompts]])]
+                          "--test-cases",json.dumps([case])]
                     with (out/("bench_"+label+".log")).open("w") as bf:
                         client=subprocess.Popen(bcmd,stdout=bf,stderr=subprocess.STDOUT,
-                                                cwd=out,env=env,start_new_session=True)
+                                                cwd=workdir,env=env,start_new_session=True)
                         deadline=time.monotonic()+a.workload_timeout
                         next_window=0
                         captured=0
@@ -242,21 +311,31 @@ def serve(a,out):
                                     rec["end"]=time.time()
                                     rec["files"]=[str(p.relative_to(out)) for p in sorted(set(traces.rglob("*.json*"))-before)]
                                     append(out/"windows.jsonl",rec)
+                                if rec.get("start_ok") and rec.get("stop_ok") and rec["files"]:
+                                    successful_windows+=1
                                 captured+=1
                                 next_window=time.monotonic()+a.window_gap
                             time.sleep(1)
-                        append(out/"status.jsonl",dict(stage="serve",workload=label,
-                               returncode=client.returncode,profile_windows_attempted=captured))
                         if client.returncode:
                             raise RuntimeError("Benchmark failed: "+label)
+                        verified_runs=verify_benchmark(workdir,case)
+                        incomplete |= successful_windows==0
+                        append(out/"status.jsonl",dict(stage="serve",workload=label,
+                               returncode=client.returncode,verified_runs=verified_runs,
+                               profile_windows_attempted=captured,
+                               profile_windows_with_files=successful_windows))
                 finally:
                     if client is not None:
                         stop(client)
                     stop_event.set()
-                    thread.join(timeout=20)
-                    append(out/"workloads.jsonl",dict(workload=label,start=start,end=time.time()))
+                    thread.join()
+                    after_ok=snapshot("after")
+                    incomplete |= not (before_ok and after_ok)
+                    append(out/"workloads.jsonl",dict(workload=label,start=start,end=time.time(),
+                           metrics_before_ok=before_ok,metrics_after_ok=after_ok))
         finally:
             stop(server)
+    return not incomplete
 
 
 def main():
@@ -290,8 +369,13 @@ def main():
                                     "windows","window_seconds","window_gap","sample_seconds",
                                     "metadata_every")):
         p.error("timeouts, windows and sampling intervals must be positive")
+    if not 1<=a.port<=65535:
+        p.error("port must be in 1..65535")
     assert_port_free(a.port)
+    a.model=str(Path(a.model).expanduser().resolve())
     out=(a.out or (V17.parent/("v17_memory_"+time.strftime("%Y%m%d_%H%M%S")+"_"+str(os.getpid())))).resolve()
+    if out.is_relative_to(V17):
+        p.error("--out must be outside v17 (avoid recursive diagnostic copies and source pollution)")
     out.mkdir(parents=True,exist_ok=False)
     print("Diagnostic output:",out,flush=True)
     (out/"manifest.json").write_text(json.dumps(dict(
@@ -300,16 +384,20 @@ def main():
             V17/"vllm-plugin-FL/vllm_fl/platform.py",
             V17/"vllm-plugin-FL/vllm_fl/dispatch/backends/triton_unified_attention.py",
             V17/"FlagGems/src/flag_gems/runtime/backend/_iluvatar/ops/mm.py"]}),default=str,indent=2))
+    complete=True
     try:
         if a.stage in ("all","native"):
-            native(a,out)
+            complete=native(a,out) and complete
         if a.stage in ("all","serve"):
-            serve(a,out)
+            complete=serve(a,out) and complete
+        append(out/"status.jsonl",dict(stage="overall",status="collected_unvalidated" if complete else "incomplete"))
     except BaseException as e:
         append(out/"status.jsonl",dict(stage=a.stage,error=repr(e)))
         raise
     finally:
         summarize(out)
+    if not complete:
+        raise SystemExit("Incomplete diagnostic evidence; inspect status.jsonl and analysis_status.json")
 
 
 if __name__=="__main__":
