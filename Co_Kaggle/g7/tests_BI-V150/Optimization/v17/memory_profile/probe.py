@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Isolated BF16 probes of the existing v17 kernels; no tuning or A/B changes."""
+"""Isolated BF16 diagnostics; optional matched control for decode lookahead."""
 import argparse
 import itertools
 import json
@@ -41,7 +41,18 @@ def main():
     p.add_argument("--warmup", type=int, default=2)
     p.add_argument("--repeats", type=int, default=5)
     p.add_argument("--native", action="store_true")
+    p.add_argument("--decode-pipeline", choices=["default", "control", "candidate"],
+                   default="default",
+                   help="Diagnostic-only override of the decode lookahead constexpr.")
+    p.add_argument("--interleaved-kv", action="store_true",
+                   help="Use K/V views of a combined page allocation.")
     a = p.parse_args()
+    if a.decode_pipeline != "default" and (
+        a.case not in ATTN or max(ATTN[a.case][0]) != 1
+    ):
+        p.error("--decode-pipeline control/candidate requires a pure decode probe")
+    if a.interleaved_kv and a.case not in ATTN:
+        p.error("--interleaved-kv requires an attention probe")
     if a.warmup < 1 or a.repeats < 1:
         p.error("warmup and repeats must be positive")
 
@@ -70,14 +81,39 @@ def main():
                     compulsory_tensor_bytes=unique, flops=2*m*k*n,
                     ideal_flops_per_byte=2*m*k*n/unique)
     else:
-        from vllm_fl.dispatch.backends.triton_unified_attention import unified_attention
+        from vllm_fl.dispatch.backends import triton_unified_attention as attention
         qlens, lengths, segments = ATTN[a.case]
+        actual_pipeline = None
+        if a.decode_pipeline != "default":
+            # This process is an isolated probe, not a serving process.
+            # Require the real production gate to be eligible in both arms.
+            original = attention.kernel_unified_attention
+
+            class Spy:
+                def __getitem__(self, grid):
+                    launch = original[grid]
+
+                    def call(**kwargs):
+                        nonlocal actual_pipeline
+                        if not kwargs["PIPELINE_DECODE_KV"]:
+                            raise RuntimeError("Decode pipeline gate is not eligible")
+                        actual_pipeline = a.decode_pipeline == "candidate"
+                        kwargs["PIPELINE_DECODE_KV"] = actual_pipeline
+                        return launch(**kwargs)
+
+                    return call
+
+            attention.kernel_unified_attention = Spy()
         page, h, qh, kh = 16, 128, 16, 2
         counts = [math.ceil(s/page)+1 for s in lengths]  # padded page-table tail
         pages = sum(counts)
         q = torch.randn((sum(qlens), qh, h), device=device, dtype=dtype)
-        k = torch.randn((pages, page, kh, h), device=device, dtype=dtype)
-        v = torch.randn_like(k)
+        if a.interleaved_kv:
+            kv = torch.randn((pages, 2, page, kh, h), device=device, dtype=dtype)
+            k, v = kv.unbind(1)
+        else:
+            k = torch.randn((pages, page, kh, h), device=device, dtype=dtype)
+            v = torch.randn_like(k)
         order = (torch.randperm(pages, device=device) if a.layout == "shuffled"
                  else torch.arange(pages, device=device)).to(torch.int32)
         table = torch.zeros((len(counts), max(counts)), dtype=torch.int32, device=device)
@@ -103,10 +139,12 @@ def main():
                                                      dtype=torch.float32),
                         softmax_segm_expsum=torch.empty(shape, device=device,
                                                         dtype=torch.float32))
-        fn = lambda: unified_attention(**args)
+        fn = lambda: attention.unified_attention(**args)
         bq = 8 if max(qlens)>1 else 2
         info = dict(query_lengths=qlens, seq_lengths=lengths, layout=a.layout,
                     segments_requested=segments, unique_kv_payload_bytes=1024*sum(lengths),
+                    kv_strides=[list(k.stride()), list(v.stride())],
+                    decode_pipeline_requested=a.decode_pipeline,
                     causal_query_block_payload_proxy_bytes=attention_payload(qlens, lengths, bq),
                     query_block_size_proxy=bq,
                     padded_query_positions_proxy=sum(math.ceil(qi/bq)*bq-qi for qi in qlens),
@@ -134,6 +172,8 @@ def main():
             end.record()
             end.synchronize()
             info["event_ms_per_call"] = start.elapsed_time(end)/a.repeats
+    if a.case in ATTN:
+        info["decode_pipeline_override_actual"] = actual_pipeline
     print("PROBE_JSON " + json.dumps(dict(case=a.case, **info)), flush=True)
 
 

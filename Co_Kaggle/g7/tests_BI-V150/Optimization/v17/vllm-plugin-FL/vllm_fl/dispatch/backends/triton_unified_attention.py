@@ -176,6 +176,77 @@ def _store_output_td(
 
 
 @triton.jit
+def _load_decode_kv_tile(
+    key_cache_ptr,
+    value_cache_ptr,
+    block_tables_ptr,
+    block_table_offset,
+    kv_head_idx,
+    j,
+    loop_hi,
+    seq_len,
+    max_seq_prefix_len,
+    stride_k_cache_0,
+    stride_k_cache_1,
+    stride_k_cache_2,
+    stride_k_cache_3: tl.constexpr,
+    stride_v_cache_0,
+    stride_v_cache_1,
+    stride_v_cache_2,
+    stride_v_cache_3: tl.constexpr,
+    BLOCK_SIZE: tl.constexpr,
+    TILE_SIZE: tl.constexpr,
+    HEAD_SIZE: tl.constexpr,
+):
+    # One whole-page lookup per page, as in the existing v14 decode path.
+    # Mask both page-table and data loads for the one-past-end lookahead,
+    # including at a 3D segment boundary and on a partial last page.
+    tl.static_assert(BLOCK_SIZE == 16)
+    tl.static_assert(TILE_SIZE == 16 or TILE_SIZE == 32)
+    valid_tile = j < loop_hi
+    offs_t = tl.arange(0, TILE_SIZE)
+    offs_d = tl.arange(0, HEAD_SIZE)
+    seq_offset = j * TILE_SIZE + offs_t
+    page_start = (j * TILE_SIZE) // BLOCK_SIZE
+    if TILE_SIZE == BLOCK_SIZE:
+        page = tl.load(
+            block_tables_ptr + block_table_offset + page_start,
+            mask=valid_tile & (page_start < tl.cdiv(seq_len, BLOCK_SIZE)),
+            other=0,
+        ).to(tl.int64)
+        physical = tl.broadcast_to(page, (TILE_SIZE,))
+    else:
+        page_offs = tl.arange(0, TILE_SIZE // BLOCK_SIZE)
+        pages = tl.load(
+            block_tables_ptr + block_table_offset + page_start + page_offs,
+            mask=valid_tile & (page_start + page_offs < tl.cdiv(seq_len, BLOCK_SIZE)),
+            other=0,
+        ).to(tl.int64)
+        physical = tl.gather(pages, offs_t // BLOCK_SIZE, axis=0)
+
+    token_mask = valid_tile & (seq_offset < max_seq_prefix_len)
+    k_offset = (
+        physical[None, :] * stride_k_cache_0
+        + kv_head_idx * stride_k_cache_2
+        + offs_d[:, None] * stride_k_cache_3
+        + (seq_offset % BLOCK_SIZE)[None, :] * stride_k_cache_1
+    )
+    v_offset = (
+        physical[:, None] * stride_v_cache_0
+        + kv_head_idx * stride_v_cache_2
+        + offs_d[None, :] * stride_v_cache_3
+        + (seq_offset % BLOCK_SIZE)[:, None] * stride_v_cache_1
+    )
+    k_tile = tl.load(
+        key_cache_ptr + k_offset, mask=token_mask[None, :], other=0.0
+    )
+    v_tile = tl.load(
+        value_cache_ptr + v_offset, mask=token_mask[:, None], other=0.0
+    )
+    return k_tile, v_tile
+
+
+@triton.jit
 def kernel_unified_attention(
     # Output destination for the 2D path.  In 3D mode per-segment partials
     # go to the ``segm_*`` tensors (see bottom of signature) and
@@ -275,6 +346,7 @@ def kernel_unified_attention(
     USE_TD_QO: tl.constexpr = False,
     Q_IS_FP8: tl.constexpr = False,
     DECODE_PAGE_LOOKUP: tl.constexpr = False,
+    PIPELINE_DECODE_KV: tl.constexpr = False,
 ):
     USE_PER_TOKEN_HEAD_SCALES: tl.constexpr = KV_QUANT_MODE >= 2
     USE_FP8_Q_DESCALE: tl.constexpr = KV_QUANT_MODE == 1 and Q_IS_FP8
@@ -399,113 +471,132 @@ def kernel_unified_attention(
         CHUNK_SIZE,
     )
 
+    if PIPELINE_DECODE_KV:
+        # Only the ordinary BF16 decode pointer path can use this schedule.
+        tl.static_assert(DECODE_PAGE_LOOKUP and not USE_TD)
+        tl.static_assert(KV_QUANT_MODE == 0 and not Q_IS_FP8)
+        tl.static_assert(HEAD_SIZE == HEAD_SIZE_PADDED)
+        # Prime the loop-carried tile. The next tile is issued after QK
+        # below, before the current softmax/PV dependency chain.
+        prefetched_k, prefetched_v = _load_decode_kv_tile(
+            key_cache_ptr, value_cache_ptr, block_tables_ptr,
+            block_table_offset, kv_head_idx, loop_lo, loop_hi,
+            seq_len, max_seq_prefix_len,
+            stride_k_cache_0, stride_k_cache_1, stride_k_cache_2, stride_k_cache_3,
+            stride_v_cache_0, stride_v_cache_1, stride_v_cache_2, stride_v_cache_3,
+            BLOCK_SIZE, TILE_SIZE, HEAD_SIZE,
+        )
+
     # iterate through tiles (now limited to the sliding window range)
     for j in range(loop_lo, loop_hi):
         seq_offset = j * TILE_SIZE + offs_t
         tile_mask = seq_offset < max_seq_prefix_len
 
-        if DECODE_PAGE_LOOKUP:
-            # Decode-only optimization: look up each physical page once
-            # per KV tile, then reuse it for all token lanes in that page.
-            # The 2D (32-token) and 3D (16-token) decode paths both benefit
-            # with the standard 16-token vLLM KV cache pages.
-            if BLOCK_SIZE >= TILE_SIZE:
-                # The tile fits entirely in a single aligned KV page.
-                physical_block_scalar = tl.load(
-                    block_tables_ptr
-                    + block_table_offset
-                    + (j * TILE_SIZE) // BLOCK_SIZE
+        if PIPELINE_DECODE_KV:
+            K_load, V_load = prefetched_k, prefetched_v
+        else:
+            if DECODE_PAGE_LOOKUP:
+                # Decode-only optimization: look up each physical page once
+                # per KV tile, then reuse it for all token lanes in that page.
+                # The 2D (32-token) and 3D (16-token) decode paths both benefit
+                # with the standard 16-token vLLM KV cache pages.
+                if BLOCK_SIZE >= TILE_SIZE:
+                    # The tile fits entirely in a single aligned KV page.
+                    physical_block_scalar = tl.load(
+                        block_tables_ptr
+                        + block_table_offset
+                        + (j * TILE_SIZE) // BLOCK_SIZE
+                    ).to(tl.int64)
+                    # The K/V pointer expressions below index this as a
+                    # vector ([:, None] / [None, :]). A scalar cannot be
+                    # indexed in Triton; broadcast it across all tile lanes.
+                    physical_block_idx = tl.broadcast_to(
+                        physical_block_scalar, (TILE_SIZE,)
+                    )
+                else:
+                    # KV tile comprises whole pages (e.g. 32 tokens / 16 per page).
+                    page_start = (j * TILE_SIZE) // BLOCK_SIZE
+                    page_offs = tl.arange(0, TILE_SIZE // BLOCK_SIZE)
+                    physical_pages = tl.load(
+                        block_tables_ptr + block_table_offset + page_start + page_offs,
+                        # Last tile can contain fewer valid pages than TILE_SIZE.
+                        mask=page_start + page_offs < tl.cdiv(seq_len, BLOCK_SIZE),
+                        other=0,
+                    ).to(tl.int64)
+                    physical_block_idx = tl.gather(
+                        physical_pages, offs_t // BLOCK_SIZE, axis=0
+                    )
+            else:
+                # Keep the stock per-token address path for prefill and
+                # unsupported decode shapes.
+                physical_block_idx = tl.load(
+                    block_tables_ptr + block_table_offset + seq_offset // BLOCK_SIZE
                 ).to(tl.int64)
-                # The K/V pointer expressions below index this as a
-                # vector ([:, None] / [None, :]). A scalar cannot be
-                # indexed in Triton; broadcast it across all tile lanes.
-                physical_block_idx = tl.broadcast_to(
-                    physical_block_scalar, (TILE_SIZE,)
+
+            if USE_TD:
+                # All TILE_SIZE slots within a single KV tile map to one
+                # physical block (guaranteed by ``BLOCK_SIZE % TILE_SIZE == 0``
+                # from the static_assert above), so load the block index as
+                # a scalar instead of a broadcast reduction.
+                offset_in_block = (j * TILE_SIZE) % BLOCK_SIZE
+                physical_block_scalar = tl.load(
+                    block_tables_ptr + block_table_offset + (j * TILE_SIZE) // BLOCK_SIZE
+                ).to(tl.int64)
+                # K : (HEAD_SIZE, TILE_SIZE)
+                K_load = _load_kv_tile_td(
+                    key_cache_ptr,
+                    physical_block_scalar,
+                    kv_head_idx,
+                    offset_in_block,
+                    stride_k_cache_0,
+                    stride_k_cache_1,
+                    stride_k_cache_2,
+                    stride_k_cache_3,
+                    BLOCK_SIZE,
+                    TILE_SIZE,
+                    HEAD_SIZE,
+                    HEAD_SIZE_PADDED,
+                ).T
+                # V : (TILE_SIZE, HEAD_SIZE)
+                V_load = _load_kv_tile_td(
+                    value_cache_ptr,
+                    physical_block_scalar,
+                    kv_head_idx,
+                    offset_in_block,
+                    stride_v_cache_0,
+                    stride_v_cache_1,
+                    stride_v_cache_2,
+                    stride_v_cache_3,
+                    BLOCK_SIZE,
+                    TILE_SIZE,
+                    HEAD_SIZE,
+                    HEAD_SIZE_PADDED,
                 )
             else:
-                # KV tile comprises whole pages (e.g. 32 tokens / 16 per page).
-                page_start = (j * TILE_SIZE) // BLOCK_SIZE
-                page_offs = tl.arange(0, TILE_SIZE // BLOCK_SIZE)
-                physical_pages = tl.load(
-                    block_tables_ptr + block_table_offset + page_start + page_offs,
-                    # Last tile can contain fewer valid pages than TILE_SIZE.
-                    mask=page_start + page_offs < tl.cdiv(seq_len, BLOCK_SIZE),
-                    other=0,
-                ).to(tl.int64)
-                physical_block_idx = tl.gather(
-                    physical_pages, offs_t // BLOCK_SIZE, axis=0
+                v_offset = (
+                    physical_block_idx[:, None] * stride_v_cache_0
+                    + kv_head_idx * stride_v_cache_2
+                    + offs_d[None, :] * stride_v_cache_3
+                    + (seq_offset % BLOCK_SIZE)[:, None] * stride_v_cache_1
                 )
-        else:
-            # Keep the stock per-token address path for prefill and
-            # unsupported decode shapes.
-            physical_block_idx = tl.load(
-                block_tables_ptr + block_table_offset + seq_offset // BLOCK_SIZE
-            ).to(tl.int64)
-
-        if USE_TD:
-            # All TILE_SIZE slots within a single KV tile map to one
-            # physical block (guaranteed by ``BLOCK_SIZE % TILE_SIZE == 0``
-            # from the static_assert above), so load the block index as
-            # a scalar instead of a broadcast reduction.
-            offset_in_block = (j * TILE_SIZE) % BLOCK_SIZE
-            physical_block_scalar = tl.load(
-                block_tables_ptr + block_table_offset + (j * TILE_SIZE) // BLOCK_SIZE
-            ).to(tl.int64)
-            # K : (HEAD_SIZE, TILE_SIZE)
-            K_load = _load_kv_tile_td(
-                key_cache_ptr,
-                physical_block_scalar,
-                kv_head_idx,
-                offset_in_block,
-                stride_k_cache_0,
-                stride_k_cache_1,
-                stride_k_cache_2,
-                stride_k_cache_3,
-                BLOCK_SIZE,
-                TILE_SIZE,
-                HEAD_SIZE,
-                HEAD_SIZE_PADDED,
-            ).T
-            # V : (TILE_SIZE, HEAD_SIZE)
-            V_load = _load_kv_tile_td(
-                value_cache_ptr,
-                physical_block_scalar,
-                kv_head_idx,
-                offset_in_block,
-                stride_v_cache_0,
-                stride_v_cache_1,
-                stride_v_cache_2,
-                stride_v_cache_3,
-                BLOCK_SIZE,
-                TILE_SIZE,
-                HEAD_SIZE,
-                HEAD_SIZE_PADDED,
-            )
-        else:
-            v_offset = (
-                physical_block_idx[:, None] * stride_v_cache_0
-                + kv_head_idx * stride_v_cache_2
-                + offs_d[None, :] * stride_v_cache_3
-                + (seq_offset % BLOCK_SIZE)[:, None] * stride_v_cache_1
-            )
-            k_offset = (
-                physical_block_idx[None, :] * stride_k_cache_0
-                + kv_head_idx * stride_k_cache_2
-                + offs_d[:, None] * stride_k_cache_3
-                + (seq_offset % BLOCK_SIZE)[None, :] * stride_k_cache_1
-            )
-            # K : (HEAD_SIZE, TILE_SIZE)
-            K_load = tl.load(
-                key_cache_ptr + k_offset,
-                mask=dim_mask[:, None] & tile_mask[None, :],
-                other=0.0,
-            )
-            # V : (TILE_SIZE, HEAD_SIZE)
-            V_load = tl.load(
-                value_cache_ptr + v_offset,
-                mask=dim_mask[None, :] & tile_mask[:, None],
-                other=0.0,
-            )
+                k_offset = (
+                    physical_block_idx[None, :] * stride_k_cache_0
+                    + kv_head_idx * stride_k_cache_2
+                    + offs_d[:, None] * stride_k_cache_3
+                    + (seq_offset % BLOCK_SIZE)[None, :] * stride_k_cache_1
+                )
+                # K : (HEAD_SIZE, TILE_SIZE)
+                K_load = tl.load(
+                    key_cache_ptr + k_offset,
+                    mask=dim_mask[:, None] & tile_mask[None, :],
+                    other=0.0,
+                )
+                # V : (TILE_SIZE, HEAD_SIZE)
+                V_load = tl.load(
+                    value_cache_ptr + v_offset,
+                    mask=dim_mask[None, :] & tile_mask[:, None],
+                    other=0.0,
+                )
         K = _cast_kv_tile(K_load, Q, k_scale, KV_QUANT_MODE)
         V = _cast_kv_tile(V_load, Q, v_scale, KV_QUANT_MODE)
 
@@ -553,6 +644,21 @@ def kernel_unified_attention(
             S += tl.dot(Q, K) * (score_scale * k_token_head_scales[None, :])
         else:
             S += score_scale * tl.dot(Q, K)
+
+        if PIPELINE_DECODE_KV:
+            # Current K has been consumed by QK. Issue the next tile
+            # before softmax and PV so independent memory work can overlap
+            # the current tile's computation. The compiler/backend decides
+            # the realized schedule; do not claim asynchronous overlap
+            # without measuring the generated kernel.
+            prefetched_k, prefetched_v = _load_decode_kv_tile(
+                key_cache_ptr, value_cache_ptr, block_tables_ptr,
+                block_table_offset, kv_head_idx, j + 1, loop_hi,
+                seq_len, max_seq_prefix_len,
+                stride_k_cache_0, stride_k_cache_1, stride_k_cache_2, stride_k_cache_3,
+                stride_v_cache_0, stride_v_cache_1, stride_v_cache_2, stride_v_cache_3,
+                BLOCK_SIZE, TILE_SIZE, HEAD_SIZE,
+            )
 
         if USE_SOFTCAP:
             S = apply_softcap(S, softcap)
@@ -1100,6 +1206,28 @@ def unified_attention(
         and not use_td
     )
 
+    # A real load-scheduling specialization of the existing operator.
+    # Preserve the 2D/3D choice, grid, tile geometry and math. The initial
+    # candidate is intentionally limited to the profiled dense BF16 GQA
+    # geometry with whole 16-token pages and ordinary causal semantics.
+    pipeline_decode_kv = (
+        decode_page_lookup
+        and block_size == 16
+        and tile_size in (16, 32)
+        and use_causal
+        and not use_per_seq_causal
+        and sliding_window_val == 0
+        and chunk_lookback == -1
+        and not use_mm_prefix
+        and not use_alibi_slopes
+        and not use_qq_bias
+        and sinks is None
+        and softcap == 0
+        and output_scale is None
+        and out.dtype == q.dtype
+        and not is_batch_invariant
+    )
+
     kernel_unified_attention[grid](
         output_ptr=out,
         segm_output_ptr=segm_output_ptr,
@@ -1173,6 +1301,7 @@ def unified_attention(
         USE_TD=use_td,
         USE_TD_QO=use_td_qo,
         DECODE_PAGE_LOOKUP=decode_page_lookup,
+        PIPELINE_DECODE_KV=pipeline_decode_kv,
         **launch_kwargs,
     )
 
