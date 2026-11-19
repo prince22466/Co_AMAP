@@ -12,9 +12,7 @@
 | 4K | 1,881.95 | 3,097.45 | +1,215.50 | **+64.59%** |
 | 16K | 861.88 | 2,232.70 | +1,370.82 | **+159.05%** |
 
-![图 1：4K 与 16K 端到端推理吞吐量对比](figures/throughput_comparison.svg)
-
-相对增益按表中显示的吞吐量计算，图中横轴从零开始。
+相对增益按表中显示的吞吐量计算。
 
 **精度测试：**  达到 MATH-500 Level 3 的 95% 门槛。
 
@@ -84,9 +82,9 @@ $$
 | `num_stages` | Triton 默认 | 1 |
 | `num_warps` | Triton 默认 | Triton 默认 |
 
-![图 2：相同 Query 工作量下的 Prefill 分块及 KV Tile 复用示意图](figures/prefill_gqa.svg)
+![图 1：相同 Query 工作量下的 Prefill 分块及 KV Tile 复用示意图](figures/prefill_gqa.svg)
 
-图 2 固定一个 KV Head 和 8 个 Query 位置，比较四个小 Query Block 与一个大 Query Block 对同一完整历史 KV Tile 的逻辑读取；各 Query 均可访问该 Tile。
+图 1 固定一个 KV Head 和 8 个 Query 位置，比较四个小 Query Block 与一个大 Query Block 对同一完整历史 KV Tile 的逻辑读取；各 Query 均可访问该 Tile。
 
 **数据移动效率。** 更多 Query 位置可共享同一已加载的 KV Tile，减少不同 Query Block 重复加载 K/V 的需求。完整分块的复用位置数由 2 增至 8，即 4 倍的理论复用能力，而非 4 倍实测吞吐量或显存流量降至 1/4。
 
@@ -120,9 +118,9 @@ $$
 | 2D Decode | 32 | 32 | 2 | Gather |
 | 3D Segmented Decode | 16 | 16 | 1 | Broadcast |
 
-![图 3：相同 Tile 大小下的 2D / 3D Decode 页表索引复用示意图](figures/decode_page_lookup.svg)
+![图 2：相同 Tile 大小下的 2D / 3D Decode 页表索引复用示意图](figures/decode_page_lookup.svg)
 
-图 3 分别比较 32-Token Tile 和 16-Token Tile 的优化前后逻辑页表加载元素数；Gather / Broadcast 后的 Lane 索引与原始实现一致。
+图 2 分别比较 32-Token Tile 和 16-Token Tile 的优化前后逻辑页表加载元素数；Gather / Broadcast 后的 Lane 索引与原始实现一致。
 
 **数据移动效率。** 对于完整 Tile，上例的页表逻辑加载元素数降至原来的 1/16。此比例不代表实际显存事务数或吞吐量加速比；编译器访存合并及缓存命中仍会影响实际收益。有效 K/V 数据本身的读取范围不变。
 
@@ -167,9 +165,9 @@ $$
       PV[j]                          # 仍使用当前 V
 ```
 
-![图 4：Decode KV Cache 单 Tile 前瞻读取的源码级执行顺序](figures/decode_kv_pipeline.svg)
+![图 3：Decode KV Cache 单 Tile 前瞻读取的源码级执行顺序](figures/decode_kv_pipeline.svg)
 
-图 4 以两轮迭代为例，展示循环前预加载、下一 Tile 的循环携带以及最后一轮的掩码保护。箭头表示源码执行顺序，不表示 GPU 指令的实测时间或已实现的异步重叠。
+图 3 以两轮迭代为例，展示循环前预加载、下一 Tile 的循环携带以及最后一轮的掩码保护。箭头表示源码执行顺序，不表示 GPU 指令的实测时间或已实现的异步重叠。
 
 当前 K 已参与 QK 矩阵乘法后，发起下一 Tile 的 K/V 读取，再执行当前 Tile 的在线 Softmax 与 PV 累加。下一 Tile 的 K/V 作为循环携带值进入下一轮。由此在读取与消费之间插入独立计算，为编译器及硬件调度提供更多访存与计算重叠的机会，以期减少关键路径上暴露的访存等待；并不减少有效 K/V 数据的读取范围或改变 Tile 遍历次序。
 
