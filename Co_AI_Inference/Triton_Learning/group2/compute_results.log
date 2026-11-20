@@ -1,0 +1,39 @@
+{"torch": "2.10.0", "triton": "3.6.0", "device": "Iluvatar BI-V150", "dtype": "fp32 + bf16 GEMM"}
+
+--- C01: Separate MUL+ADD vs explicit FMA ---
+CORRECT C01: max_abs=0, max_rel=0
+C01 vanilla       28.16 us  ±MAD   0.01 us     9.531 useful TFLOP/s  AI=64.0 FLOP/B
+C01 candidate     28.14 us  ±MAD   0.01 us     9.538 useful TFLOP/s  AI=64.0 FLOP/B
+C01 candidate/vanilla speedup = 1.001x (faster)
+
+--- C02: Serial vs interleaved independent FMA chains ---
+CORRECT C02: max_abs=0, max_rel=0
+C02 vanilla       28.74 us  ±MAD   0.14 us     9.339 useful TFLOP/s  AI=64.0 FLOP/B
+C02 candidate     28.30 us  ±MAD   0.03 us     9.484 useful TFLOP/s  AI=64.0 FLOP/B
+C02 candidate/vanilla speedup = 1.016x (faster)
+
+--- C03: Horner vs Estrin polynomial ---
+CORRECT C03: max_abs=1.118e-08, max_rel=1.921e-07
+C03 vanilla       44.43 us  ±MAD   0.01 us    10.572 useful TFLOP/s  AI=224.0 FLOP/B
+C03 candidate     55.39 us  ±MAD   0.01 us     8.481 useful TFLOP/s  AI=224.0 FLOP/B
+C03 candidate/vanilla speedup = 0.802x (slower or equal)
+
+--- C04: 4 vs 8 warps per program ---
+CORRECT C04: max_abs=0, max_rel=0
+C04 vanilla       28.15 us  ±MAD   0.01 us     9.535 useful TFLOP/s  AI=64.0 FLOP/B
+C04 candidate     51.02 us  ±MAD   0.02 us     5.262 useful TFLOP/s  AI=64.0 FLOP/B
+C04 candidate/vanilla speedup = 0.552x (slower or equal)
+
+--- C05: Rolled loop vs loop unroll=4 ---
+CORRECT C05: max_abs=0, max_rel=0
+C05 vanilla       28.15 us  ±MAD   0.02 us     9.536 useful TFLOP/s  AI=64.0 FLOP/B
+C05 candidate     28.16 us  ±MAD   0.03 us     9.532 useful TFLOP/s  AI=64.0 FLOP/B
+C05 candidate/vanilla speedup = 1.000x (slower or equal)
+
+--- C06: tl.dot partial + add vs tl.dot with accumulator ---
+CORRECT C06: max_abs=0, max_rel=0
+CORRECT C06: both variants agree with independent FP32 torch.matmul
+C06 vanilla      276.88 us  ±MAD   1.21 us    15.512 useful TFLOP/s  AI=341.3 FLOP/B
+C06 candidate    278.96 us  ±MAD   1.80 us    15.396 useful TFLOP/s  AI=341.3 FLOP/B
+C06 candidate/vanilla speedup = 0.993x (slower or equal)
+CSV saved: compute_results.csv
