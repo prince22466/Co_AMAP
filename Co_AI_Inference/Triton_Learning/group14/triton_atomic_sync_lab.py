@@ -36,7 +36,7 @@ def grouped_lane_atomic(VALUES, OUT, N: tl.constexpr,
     pos = pid*BLOCK + tl.arange(0, BLOCK)
     val = tl.load(VALUES+pos, mask=pos<N, other=0)
     # Every active lane in one CTA updates the same bin.
-    destinations = tl.full((BLOCK,), pid % BINS, tl.int32)
+    destinations = tl.zeros((BLOCK,), tl.int32) + (pid % BINS)
     tl.atomic_add(OUT+destinations, val, mask=pos<N, sem="relaxed")
 
 
