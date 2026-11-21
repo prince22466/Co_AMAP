@@ -207,7 +207,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="WSP Compiler & Kaggle CLI Evaluation Bridge")
     parser.add_argument("--iter", required=True, help="Iteration identifier (e.g., iter_01)")
     parser.add_argument("--split", type=int, default=15, choices=(15, 30), help="Evaluation task split (15 or 30)")
-    parser.add_argument("--accelerator", default="NvidiaL4x4", help="Kaggle accelerator machine shape (default: NvidiaL4x4)")
+    parser.add_argument("--accelerator", default="NvidiaL4", help="Kaggle accelerator machine shape (default: NvidiaL4)")
     parser.add_argument("--compile-only", action="store_true", help="Only run recipe.py and validate local package without pushing to Kaggle")
     parser.add_argument("--package-zip", type=str, default=None, help="Optional output path to package a clean submission_x.zip locally")
     args = parser.parse_args()

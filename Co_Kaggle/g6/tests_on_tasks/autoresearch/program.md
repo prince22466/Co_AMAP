@@ -84,7 +84,7 @@ making **ONLY** these surgical modifications:
 ### Rules
 1. **Zero Wasted GPU Runs:** Do NOT run a dummy/random smoke-test evaluation over 15 tasks.
    Start Iteration 1 directly with `MODE = "basis_r1"` (`RANK = 1`).
-2. **Use L4x4 for Remote Runs:** Pass `--accelerator NvidiaL4x4` for `--split 15` and `--split 30` runs
+2. **Use L4x4 for Remote Runs:** Pass `--accelerator NvidiaL4` (Kaggle's L4x4 machine_shape) for `--split 15` and `--split 30` runs
    (matching `tests_on_tasks/gemma-4-developer-agent-testing_v11.ipynb`).
 3. **Change 1–2 Geometric Knobs per Iteration:**
    - **Iter 1:** Read `basis_diagnostics.json`, set `KEY_PREFIX_FMT`/`D_IN`/`D_OUT`,
@@ -106,7 +106,7 @@ making **ONLY** these surgical modifications:
 2. **Hypothesize:** Write a 1-sentence mechanistic weight-space hypothesis.
 3. **Program Weights:** Edit `recipe.py` (1–2 knobs only).
 4. **Verify via Kaggle CLI:**
-   `python eval_bridge.py --iter iter_XX --split 15 --accelerator NvidiaL4x4`
+   `python eval_bridge.py --iter iter_XX --split 15 --accelerator NvidiaL4`
    Verify returned `adapter_sha256` matches compiled `adapter_model.safetensors` and
    `enable_lora == true`.
 5. **Keep / Discard Gate:**
@@ -125,6 +125,6 @@ making **ONLY** these surgical modifications:
         and verify its zip entries contain ONLY `agent.yaml`, `eval_config.yaml`,
         `instruction.md`, and `adapters/wsp_r1/{adapter_config.json,adapter_model.safetensors}`.
      2. Run one final holdout check:
-        `python eval_bridge.py --iter iter_XX_holdout --split 30 --accelerator NvidiaL4x4`
+        `python eval_bridge.py --iter iter_XX_holdout --split 30 --accelerator NvidiaL4`
      3. Log the 30-task result in `results.tsv`, **STOP the loop**, and report the kept zip
         path and scores to the user.
