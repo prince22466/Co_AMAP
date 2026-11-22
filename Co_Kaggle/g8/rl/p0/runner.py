@@ -36,7 +36,11 @@ def run_scenario(task: tuple[str, str, int, int | None]) -> dict:
         raise FileNotFoundError(config_path)
 
     # The competition's data mount can be read-only. Keep all caches elsewhere.
-    cache_root = Path(tempfile.gettempdir()) / "g8_rl_p0_cache"
+    # Separate Numba and matplotlib caches prevent concurrent compilation
+    # workers from racing on the same cache files.
+    cache_root = (
+        Path(tempfile.gettempdir()) / "g8_rl_p0_cache" / f"worker_{os.getpid()}"
+    )
     cache_root.mkdir(parents=True, exist_ok=True)
     for key, subdir in (
         ("NUMBA_CACHE_DIR", "numba"),
