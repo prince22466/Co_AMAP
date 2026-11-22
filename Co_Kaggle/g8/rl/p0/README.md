@@ -80,15 +80,19 @@ as a completed episode.
 - Each scenario gets a fresh environment and policy.
 - Gin config and current working directory are process-global. Parallelism
   uses separate spawned processes, never threads.
-- Match competition gateway: set env.metrics_path = None (not the typo
-  env._metrics_path) and occupancy normalization = 125.0.
+- Match the competition gateway: set env.metrics_path = None (not
+  env._metrics_path), and preserve its assignment
+  env._occupancy_normalization_constant = 125.0. This second assignment is
+  an upstream typo: actual observations use env.occupancy_normalization_constant,
+  which remains 0.0 under the shipped config. Do not silently fix it in only
+  this benchmarking harness; that would destroy gateway parity.
 - Do not allocate SimulationTracker full-grid snapshots: 8640-step runs
   otherwise require multiple GB of memory per scenario.
 - Reward diagnostics recompute the normalized components post-step.
   Simulator timing excludes the diagnostic overhead.
 - Check that the official returned reward equals the sum of the negative
-  weighted loss components, to 1e-5 tolerance.
-- Respect the 30-scenario, 8640-step scoring contract.
+  weighted loss components, to 1e-9 tolerance.
+- Respect the 30-scenario training manifest and run to actual gateway termination.
 
 ## Next steps
 
