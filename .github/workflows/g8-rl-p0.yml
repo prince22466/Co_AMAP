@@ -1,0 +1,51 @@
+name: g8 RL P0 checks
+
+on:
+  push:
+    paths:
+      - "Co_Kaggle/g8/rl/**"
+      - ".github/workflows/g8-rl-p0.yml"
+  pull_request:
+    paths:
+      - "Co_Kaggle/g8/rl/**"
+      - ".github/workflows/g8-rl-p0.yml"
+
+jobs:
+  p0-contract-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install numpy pyyaml
+      - name: Compile research Python sources
+        run: python -m compileall -q Co_Kaggle/g8/rl
+      - name: Contract and scoring tests
+        run: python -m unittest discover -s Co_Kaggle/g8/rl/p0/tests -v
+      - name: Inventory uploaded training scenarios
+        run: python -m Co_Kaggle.g8.rl.p0.benchmark --list
+
+  p0-physics-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install organizer-pinned simulator dependencies
+        run: python -m pip install -r Co_Kaggle/g8/rl/p0/requirements-simulator.txt
+      - name: Verify gateway-equivalent episode termination behavior
+        run: python -m Co_Kaggle.g8.rl.p0.physics_terminal_check
+      - name: Run 24 simulated hours for V7, V23, and V25
+        run: python -m Co_Kaggle.g8.rl.p0.benchmark --steps 288 --versions 7 23 25 --out /tmp/g8-p0-smoke
+      - name: Test independent spawned simulator workers
+        run: python -m Co_Kaggle.g8.rl.p0.benchmark --steps 6 --limit 2 --versions 23 --workers 2 --out /tmp/g8-p0-parallel
+      - name: Upload local simulator diagnostics
+        uses: actions/upload-artifact@v4
+        with:
+          name: g8-p0-physics-smoke
+          path: |
+            /tmp/g8-p0-smoke/
+            /tmp/g8-p0-parallel/
