@@ -38,6 +38,10 @@ def score_one(
         raise ValueError(f"Incomplete episode: {count}/{requested_steps} steps")
     if requested_steps is None and not episode_terminated:
         raise ValueError("Full episode did not reach simulator termination")
+    if episode_terminated and count < configured_episode_steps:
+        raise ValueError(
+            f"Premature simulator termination: {count}/{configured_episode_steps}"
+        )
     if not all(math.isfinite(float(r)) for r in rewards):
         raise ValueError("Nonfinite simulator reward")
     mean_reward = sum(rewards) / count
