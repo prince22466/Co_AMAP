@@ -32,8 +32,8 @@ D_OUT = 2560
 RANK = 1
 ORTHOGONALIZE_B = True
 
-# Drop highest-index layer 39 (adjacent to unembedding, caused syntax_leaks=4 in iter_02) and keep mid-late band [31, 34, 37, 38]
-ACTIVE_LAYERS = [31, 34, 37, 38]
+# Iter 4: shift window slightly earlier into middle-late band [29, 31, 34, 37, 38] and scale gains 1.35x
+ACTIVE_LAYERS = [29, 31, 34, 37, 38]
 
 # Slot configurations (Slot 0 active when RANK >= 1; Slot 1 active when RANK >= 2)
 SLOTS = [
@@ -42,10 +42,11 @@ SLOTS = [
         "top_k": 64,
         "sign": 1.0,
         "gains": {
-            31: 0.12,
-            34: 0.08,
-            37: 0.12,
-            38: 0.11,
+            29: 0.14,
+            31: 0.16,
+            34: 0.12,
+            37: 0.16,
+            38: 0.14,
             39: 0.09,
         },
     },
