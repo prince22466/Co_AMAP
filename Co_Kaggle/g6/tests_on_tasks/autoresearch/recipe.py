@@ -1,16 +1,11 @@
-"""recipe.py — Weight-Space Programming (WSP) Low-Rank Adapter Compiler.
+"""recipe.py — Weight-Space Programming (WSP) Multi-Module Low-Rank Adapter Compiler.
 
 THIS IS THE ONLY MUTABLE FILE IN PHASE B (per tests_on_tasks/autoresearch/program.md).
-Directly programs the PEFT LoRA weights (`lora_A`, `lora_B`) of
+Directly programs PEFT LoRA weights (`lora_A`, `lora_B`) of
 `base_submission/adapters/wsp_r1/{adapter_config.json,adapter_model.safetensors}`
-targeting selected `mlp.down_proj` residual-stream write heads:
-
-    \Delta W_l = B_l A_l = \sum_{i=1}^r \lambda_{l,i} u_{l,i} v_{l,i}^T  (with \alpha = r)
-
-- Rows of lora_A (v_{l,i} in R^{10240}): Top-k sparsified MLP neuron detectors from
-  contrastive failure-vs-healthy basis_cache.pt (conditional trigger gate).
-- Columns of lora_B (\lambda_{l,i} u_{l,i} in R^{2560}): Orthogonalized residual-stream
-  steering directions pushing out of localized failure modes (`edit_file_loop`, `premature_submit`).
+across BOTH:
+  - `mlp.down_proj` (proven iter_04 edit_file_loop circuit on [29, 31, 34, 37, 38])
+  - `self_attn.o_proj` (DLA + AlphaEdit null-space premature_submit interceptor on [28, 31, 36])
 """
 from __future__ import annotations
 
@@ -21,59 +16,40 @@ import torch
 from safetensors.torch import save_file
 
 # ==============================================================================
-# GEOMETRIC KNOBS (Iteration 19: Disjoint-Layer Rank-1: iter_04 + one_sided_submit_interceptor)
+# GEOMETRIC KNOBS (Iteration 20: Multi-Module AlphaEdit o_proj + iter_04 down_proj)
 # ==============================================================================
-MODE = "disjoint_layer_r1"
+MODE = "alphaedit_multimodule_r1"
 BASE_MODEL_NAME = "google/gemma-4-e4b-it-qat-w4a16-ct"
-KEY_PREFIX_FMT = "base_model.model.model.language_model.layers.{layer}.mlp.down_proj"
-D_IN = 10240
+DOWN_PREFIX_FMT = "base_model.model.model.language_model.layers.{layer}.mlp.down_proj"
+OPROJ_PREFIX_FMT = "base_model.model.model.language_model.layers.{layer}.self_attn.o_proj"
+D_IN_DOWN = 10240
 D_OUT = 2560
 
 RANK = 1
-ORTHOGONALIZE_B = True
 
-# Iter 19: Preserve iter_04 EXACT on [29,31,34,37,38] (5/15, edit_err=68, leaks=0)
-# AND add one-sided orthogonal submit interceptor on DISJOINT layers [30,32,35,40] (zero Rank-2 interference!)
-ACTIVE_LAYERS = [29, 30, 31, 32, 34, 35, 37, 38, 40]
+# Exact iter_04 mlp.down_proj circuit (5/15, edit_err=68, leaks=0 — UNTOUCHED)
+DOWN_PROJ_GAINS = {
+    29: 0.14,
+    31: 0.16,
+    34: 0.12,
+    37: 0.16,
+    38: 0.14,
+}
+DOWN_PROJ_TOP_K = 64
 
-# Per-layer fault routing (overrides SLOTS[0]["fault"] when layer is in LAYER_FAULT_MAP)
-LAYER_FAULT_MAP = {
-    29: "edit_file_loop",
-    31: "edit_file_loop",
-    34: "edit_file_loop",
-    37: "edit_file_loop",
-    38: "edit_file_loop",
-    30: "one_sided_submit_interceptor",
-    32: "one_sided_submit_interceptor",
-    35: "one_sided_submit_interceptor",
-    40: "one_sided_submit_interceptor",
+# DLA + AlphaEdit Null-Space self_attn.o_proj circuit (11.8x prem vs valid selectivity on GPU!)
+# Top 3 positive Leave-Task-Out CV layers: L36 (gap=+0.146), L31 (gap=+0.063), L28 (gap=+0.027)
+OPROJ_PREM_GAINS = {
+    28: 1.2,
+    31: 1.6,
+    36: 2.2,
 }
 
-# Slot configurations (Slot 0 active when RANK >= 1; Slot 1 active when RANK >= 2)
-SLOTS = [
-    {
-        "fault": "edit_file_loop",
-        "top_k": 64,
-        "sign": 1.0,
-        "gains": {
-            # Proven iter_04 edit_file_loop circuit (untouched)
-            29: 0.14,
-            31: 0.16,
-            34: 0.12,
-            37: 0.16,
-            38: 0.14,
-            # Disjoint one-sided submit -> run/pytest interceptor
-            30: 0.10,
-            32: 0.12,
-            35: 0.12,
-            40: 0.10,
-        },
-    },
-]
+ACTIVE_LAYERS = sorted(set(DOWN_PROJ_GAINS.keys()) | set(OPROJ_PREM_GAINS.keys()))
 
 
 def sparsify_topk(v: torch.Tensor, top_k: int) -> torch.Tensor:
-    """Keep only the top_k largest-magnitude entries of v in R^{D_IN} and unit-normalize."""
+    """Keep only the top_k largest-magnitude entries of v and unit-normalize."""
     v_f32 = v.detach().to(torch.float32).clone()
     if 0 < top_k < v_f32.numel():
         _, idx = torch.topk(v_f32.abs(), k=top_k, largest=True, sorted=False)
@@ -89,54 +65,50 @@ def sparsify_topk(v: torch.Tensor, top_k: int) -> torch.Tensor:
 def compile_adapter() -> dict:
     root = Path(__file__).resolve().parent
     basis = torch.load(root / "basis_cache.pt", map_location="cpu", weights_only=True)
-    assert basis["d_in"] == D_IN and basis["d_out"] == D_OUT, "Dimension mismatch against basis_cache.pt"
+    ae = torch.load(root / "alphaedit_basis.pt", map_location="cpu", weights_only=True)
+    assert basis["d_in"] == D_IN_DOWN and basis["d_out"] == D_OUT
 
-    active_slots = SLOTS[:RANK]
-    assert len(active_slots) == RANK, f"Expected {RANK} slot configs, got {len(active_slots)}"
+    u_run_minus_sub = ae["u_run_minus_sub"].to(torch.float32)
+    u_run_minus_sub = u_run_minus_sub / (u_run_minus_sub.norm() + 1e-8)
 
     tensors: dict[str, torch.Tensor] = {}
-    layer_norms: dict[int, list[float]] = {}
+    layer_norms: dict[str, float] = {}
 
-    for layer in sorted(ACTIVE_LAYERS):
-        A_rows = []
-        B_cols = []
-        u_prev_unit = []
+    for layer in ACTIVE_LAYERS:
+        # 1. mlp.down_proj (exact iter_04 on [29,31,34,37,38], exact zeros on other layers)
+        if layer in DOWN_PROJ_GAINS:
+            entry = basis["faults"]["edit_file_loop"]["layers"][layer]
+            v_sparse = sparsify_topk(entry["v"].to(torch.float32), DOWN_PROJ_TOP_K)
+            u_dir = entry["u"].to(torch.float32)
+            u_dir = u_dir / (u_dir.norm() + 1e-8)
+            gain = float(DOWN_PROJ_GAINS[layer])
+            lora_A_d = v_sparse.unsqueeze(0).to(torch.bfloat16).contiguous()
+            lora_B_d = (gain * u_dir).unsqueeze(1).to(torch.bfloat16).contiguous()
+            layer_norms[f"L{layer}.down_proj"] = round(lora_B_d.float().norm().item(), 5)
+        else:
+            lora_A_d = torch.zeros((RANK, D_IN_DOWN), dtype=torch.bfloat16)
+            lora_B_d = torch.zeros((D_OUT, RANK), dtype=torch.bfloat16)
 
-        for slot_idx, slot in enumerate(active_slots):
-            fault = LAYER_FAULT_MAP.get(layer, slot["fault"]) if slot_idx == 0 else slot["fault"]
-            layer_entry = basis["faults"][fault]["layers"][layer]
-            v_raw = layer_entry["v"].to(torch.float32)
-            u_raw = layer_entry["u"].to(torch.float32)
+        dp = DOWN_PREFIX_FMT.format(layer=layer)
+        tensors[f"{dp}.lora_A.weight"] = lora_A_d
+        tensors[f"{dp}.lora_B.weight"] = lora_B_d
 
-            # Row of lora_A: top-k sparsified MLP neuron detector gate
-            v_sparse = sparsify_topk(v_raw, int(slot["top_k"]))
+        # 2. self_attn.o_proj (AlphaEdit null-space prem_submit interceptor on [28,31,36], zeros elsewhere)
+        o_entry = ae["o_proj"][layer]
+        d_in_o = int(o_entry["d_in"])
+        if layer in OPROJ_PREM_GAINS:
+            vp = o_entry["v_prem"].to(torch.float32) * float(o_entry["scale_prem"])
+            gain_o = float(OPROJ_PREM_GAINS[layer])
+            lora_A_o = vp.unsqueeze(0).to(torch.bfloat16).contiguous()
+            lora_B_o = (gain_o * u_run_minus_sub).unsqueeze(1).to(torch.bfloat16).contiguous()
+            layer_norms[f"L{layer}.o_proj"] = round((lora_B_o.float().norm() * lora_A_o.float().norm()).item(), 5)
+        else:
+            lora_A_o = torch.zeros((RANK, d_in_o), dtype=torch.bfloat16)
+            lora_B_o = torch.zeros((D_OUT, RANK), dtype=torch.bfloat16)
 
-            # Column of lora_B: unit steering direction, optionally Gram-Schmidt orthogonalized
-            u_dir = u_raw / (u_raw.norm() + 1e-8)
-            if ORTHOGONALIZE_B and u_prev_unit:
-                for u_p in u_prev_unit:
-                    u_dir = u_dir - torch.dot(u_dir, u_p) * u_p
-                u_dir = u_dir / (u_dir.norm() + 1e-8)
-            u_prev_unit.append(u_dir)
-
-            gain = float(slot["gains"].get(layer, 0.0)) * float(slot.get("sign", 1.0))
-            b_col = gain * u_dir
-
-            A_rows.append(v_sparse)
-            B_cols.append(b_col)
-            layer_norms.setdefault(layer, []).append(round(b_col.norm().item(), 5))
-
-        # lora_A.weight: shape [r, D_IN], BF16
-        lora_A = torch.stack(A_rows, dim=0).to(torch.bfloat16).contiguous()
-        # lora_B.weight: shape [D_OUT, r], BF16
-        lora_B = torch.stack(B_cols, dim=1).to(torch.bfloat16).contiguous()
-
-        assert lora_A.shape == (RANK, D_IN), f"Unexpected lora_A shape: {lora_A.shape}"
-        assert lora_B.shape == (D_OUT, RANK), f"Unexpected lora_B shape: {lora_B.shape}"
-
-        prefix = KEY_PREFIX_FMT.format(layer=layer)
-        tensors[f"{prefix}.lora_A.weight"] = lora_A
-        tensors[f"{prefix}.lora_B.weight"] = lora_B
+        op = OPROJ_PREFIX_FMT.format(layer=layer)
+        tensors[f"{op}.lora_A.weight"] = lora_A_o
+        tensors[f"{op}.lora_B.weight"] = lora_B_o
 
     out_dir = root / "base_submission" / "adapters" / "wsp_r1"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -153,7 +125,7 @@ def compile_adapter() -> dict:
         "init_lora_weights": True,
         "layer_replication": None,
         "layers_pattern": "layers",
-        "layers_to_transform": sorted(ACTIVE_LAYERS),
+        "layers_to_transform": ACTIVE_LAYERS,
         "loftq_config": {},
         "lora_alpha": RANK,
         "lora_dropout": 0.0,
@@ -164,7 +136,7 @@ def compile_adapter() -> dict:
         "r": RANK,
         "rank_pattern": {},
         "revision": None,
-        "target_modules": ["down_proj"],
+        "target_modules": ["down_proj", "o_proj"],
         "task_type": "CAUSAL_LM",
         "use_dora": False,
         "use_rslora": False,
@@ -177,8 +149,9 @@ def compile_adapter() -> dict:
         "mode": MODE,
         "rank": RANK,
         "lora_alpha": RANK,
-        "active_layers": sorted(ACTIVE_LAYERS),
-        "layer_b_norms": layer_norms,
+        "active_layers": ACTIVE_LAYERS,
+        "target_modules": ["down_proj", "o_proj"],
+        "effective_norms": layer_norms,
         "adapter_sha256": sha,
         "safetensors_bytes": safetensors_path.stat().st_size,
     }
