@@ -50,10 +50,28 @@ separate controller, simulator and reward-diagnostics execution times.
 Throughput is measured using overall wall-clock time across all workers.
 
 IMPORTANT: Scores from short episodes are not leaderboard scores.
-Only a full 8640-step evaluation on all 30 uploaded training scenarios
-is labelled TRAINING score comparable in definition to the competition.
+Only a run to actual simulator termination on all 30 uploaded training
+scenarios is labelled TRAINING score comparable to the competition gateway.
 It is NOT a hidden leaderboard score, and the V23 public 0.03706 does not
 necessarily match the uploaded training scenarios.
+
+## Episode length: important gateway-vs-documentation discrepancy
+
+The episode is configured for 30 days, or 8640 five-minute intervals.
+In the uploaded Environment.step implementation, the terminal flag is tested
+against the current step counter *before* incrementing it. Starting from
+counter zero, this makes the current gateway consume **8641 rewards** and
+score the mean over the actual number of completed steps.
+
+The organizer's standalone score_leaderboard.py helper instead assumes
+**8640 rewards**. P0 deliberately follows the *competition gateway* for
+--full by stepping until termination and dividing by the actual reward count.
+The full benchmark verifies its scenario set against training_set.yaml.
+Do not divide the gateway-equivalent 8641-step return by 8640, or silently
+label 8640 collected steps as a complete gateway run.
+
+A short smoke run (e.g. --steps 72) is purely diagnostic and is never marked
+as a completed episode.
 
 ## Design constraints
 
