@@ -10,7 +10,7 @@ import unittest
 import numpy as np
 
 from Co_Kaggle.g8.rl.p0.benchmark import (
-    aggregate, default_data_root, discover_scenarios
+    aggregate, default_data_root, discover_scenarios, verify_training_manifest
 )
 from Co_Kaggle.g8.rl.p0.controllers import (
     LocalPolicy, VERSIONS, load_controller, validate_action
@@ -137,6 +137,11 @@ class ControllerTests(unittest.TestCase):
         scenarios = discover_scenarios(default_data_root())
         self.assertEqual(len(scenarios), 30)
         self.assertEqual(len(set(scenarios)), 30)
+        verify_training_manifest(default_data_root(), scenarios)
+        with self.assertRaises(ValueError):
+            verify_training_manifest(default_data_root(), scenarios[:-1])
+        with self.assertRaises(ValueError):
+            verify_training_manifest(default_data_root(), scenarios[1:] + ["fake/fake"])
 
 
 if __name__ == "__main__":
