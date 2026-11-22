@@ -66,7 +66,7 @@ def main() -> None:
     parser.add_argument("--all", action="store_true",
                         help="Use all shipped training scenarios")
     parser.add_argument("--full", action="store_true",
-                        help="Force 8640 steps and all 30 scenarios")
+                        help="Run all 30 shipped scenarios to actual simulator termination")
     parser.add_argument("--workers", type=int, default=1,
                         help="Independent processes (never threads)")
     parser.add_argument("--list", action="store_true",
