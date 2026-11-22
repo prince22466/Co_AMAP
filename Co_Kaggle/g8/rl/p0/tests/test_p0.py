@@ -39,6 +39,41 @@ class ScoreTests(unittest.TestCase):
         self.assertFalse(result["full_30_day_episode"])
         self.assertAlmostEqual(result["simulator_ms_per_step"], 2)
 
+    def test_gateway_complete_episode_uses_termination_not_8640(self):
+        # The current uploaded simulator sets terminal=True on step 8641
+        # for a 30-day (8640 configured intervals) episode. Gateway counts
+        # all rewards until terminal and divides by the actual step count.
+        components = {"comfort": 0.005 * 8641, "energy": 0.003 * 8641,
+                      "carbon": 0.002 * 8641}
+        result = score_one(
+            [-0.01] * 8641, components, requested_steps=None,
+            elapsed={"policy": 1, "simulator": 2, "diagnostics": 1},
+            episode_terminated=True, configured_episode_steps=8640,
+        )
+        self.assertTrue(result["full_30_day_episode"])
+        self.assertEqual(result["steps"], 8641)
+        self.assertAlmostEqual(result["mean_loss"], 0.01)
+
+        # Merely collecting 8640 steps is not proof of a complete episode.
+        early = score_one(
+            [-0.01] * 8640,
+            {"comfort": 0.005 * 8640, "energy": 0.003 * 8640,
+             "carbon": 0.002 * 8640},
+            requested_steps=8640,
+            elapsed={"policy": 1, "simulator": 2, "diagnostics": 1},
+        )
+        self.assertFalse(early["full_30_day_episode"])
+
+    def test_full_episode_without_termination_refused(self):
+        with self.assertRaises(ValueError):
+            score_one(
+                [-0.01],
+                {"comfort": 0.005, "energy": 0.003, "carbon": 0.002},
+                requested_steps=None,
+                elapsed={"policy": 0, "simulator": 0, "diagnostics": 0},
+                episode_terminated=False,
+            )
+
     def test_incomplete_episode_refused(self):
         with self.assertRaises(ValueError):
             score_one([-0.1], {"comfort": 0.1}, requested_steps=2,
