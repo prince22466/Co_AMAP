@@ -6,7 +6,7 @@ Run from repository root:
   python -m Co_Kaggle.g8.rl.p0.benchmark --all --steps 20 --workers 4
   python -m Co_Kaggle.g8.rl.p0.benchmark --full --workers 4
 
-Only --full reports the 30-scenario, 8640-step TRAINING score.
+Only --full runs all 30 scenarios to actual simulator termination.
 """
 from __future__ import annotations
 
@@ -86,14 +86,29 @@ def main() -> None:
         parser.error("--workers, --steps and --limit must be positive")
     if args.steps > 8640 and not args.full:
         parser.error("--steps cannot exceed 8640")
-    if args.full and len(scenarios) != 30:
-        parser.error(f"Expected exactly 30 scenarios, found {len(scenarios)}")
-    steps = 8640 if args.full else args.steps
+    if args.full:
+        # A count of 30 alone does not prove these are the shipped scenarios.
+        # Protect full-score attribution against changed/missing scenario pairs.
+        import yaml  # Installed in the official simulator environment.
+        manifest_path = data_root / "smart_buildings" / "training_set.yaml"
+        manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+        expected = {
+            f"{pair['building']}/{pair['weather']}"
+            for pair in manifest["scenarios"]
+        }
+        if set(scenarios) != expected or len(scenarios) != len(expected) or len(expected) != 30:
+            parser.error(
+                "The scenario directory does not exactly match the "
+                "30 training_set.yaml building/weather pairs"
+            )
+    # None means run until official simulator termination, not 8640 steps.
+    steps = None if args.full else args.steps
     selected = scenarios if args.all or args.full else scenarios[:args.limit]
     tasks = [(str(data_root), scenario, version, steps)
              for version in args.versions for scenario in selected]
 
-    print(f"Running {len(tasks)} jobs, {steps} steps/job, "
+    step_description = "until environment termination" if steps is None else f"{steps} steps/job"
+    print(f"Running {len(tasks)} jobs, {step_description}, "
           f"{args.workers} worker process(es)", flush=True)
     started = perf_counter()
     results: list[dict] = []
@@ -136,7 +151,8 @@ def main() -> None:
         "w", encoding="utf-8", newline=""
     ) as file:
         writer = csv.DictWriter(file, fieldnames=[
-            "version", "scenario", "steps", "mean_reward", "mean_loss",
+            "version", "scenario", "steps", "configured_episode_steps",
+            "episode_terminated", "mean_reward", "mean_loss",
             "comfort_loss", "energy_loss", "carbon_loss",
             "policy_ms_per_step", "simulator_ms_per_step",
             "diagnostics_ms_per_step",
@@ -145,7 +161,8 @@ def main() -> None:
         for row in results:
             writer.writerow({
                 **{key: row[key] for key in (
-                    "version", "scenario", "steps", "mean_reward", "mean_loss",
+                    "version", "scenario", "steps", "configured_episode_steps",
+                    "episode_terminated", "mean_reward", "mean_loss",
                     "policy_ms_per_step", "simulator_ms_per_step",
                     "diagnostics_ms_per_step"
                 )},
