@@ -21,9 +21,9 @@ import torch
 from safetensors.torch import save_file
 
 # ==============================================================================
-# GEOMETRIC KNOBS (Iteration 1: MODE="basis_r1", RANK=1, primary="edit_file_loop")
+# GEOMETRIC KNOBS (Iteration 19: Disjoint-Layer Rank-1: iter_04 + one_sided_submit_interceptor)
 # ==============================================================================
-MODE = "basis_r1"
+MODE = "disjoint_layer_r1"
 BASE_MODEL_NAME = "google/gemma-4-e4b-it-qat-w4a16-ct"
 KEY_PREFIX_FMT = "base_model.model.model.language_model.layers.{layer}.mlp.down_proj"
 D_IN = 10240
@@ -32,8 +32,22 @@ D_OUT = 2560
 RANK = 1
 ORTHOGONALIZE_B = True
 
-# Iter 4: shift window slightly earlier into middle-late band [29, 31, 34, 37, 38] and scale gains 1.35x
-ACTIVE_LAYERS = [29, 31, 34, 37, 38]
+# Iter 19: Preserve iter_04 EXACT on [29,31,34,37,38] (5/15, edit_err=68, leaks=0)
+# AND add one-sided orthogonal submit interceptor on DISJOINT layers [30,32,35,40] (zero Rank-2 interference!)
+ACTIVE_LAYERS = [29, 30, 31, 32, 34, 35, 37, 38, 40]
+
+# Per-layer fault routing (overrides SLOTS[0]["fault"] when layer is in LAYER_FAULT_MAP)
+LAYER_FAULT_MAP = {
+    29: "edit_file_loop",
+    31: "edit_file_loop",
+    34: "edit_file_loop",
+    37: "edit_file_loop",
+    38: "edit_file_loop",
+    30: "one_sided_submit_interceptor",
+    32: "one_sided_submit_interceptor",
+    35: "one_sided_submit_interceptor",
+    40: "one_sided_submit_interceptor",
+}
 
 # Slot configurations (Slot 0 active when RANK >= 1; Slot 1 active when RANK >= 2)
 SLOTS = [
@@ -42,24 +56,17 @@ SLOTS = [
         "top_k": 64,
         "sign": 1.0,
         "gains": {
+            # Proven iter_04 edit_file_loop circuit (untouched)
             29: 0.14,
             31: 0.16,
             34: 0.12,
             37: 0.16,
             38: 0.14,
-            39: 0.09,
-        },
-    },
-    {
-        "fault": "premature_submit",
-        "top_k": 128,
-        "sign": 1.0,
-        "gains": {
-            31: 0.06,
-            34: 0.06,
-            37: 0.08,
-            38: 0.07,
-            39: 0.09,
+            # Disjoint one-sided submit -> run/pytest interceptor
+            30: 0.10,
+            32: 0.12,
+            35: 0.12,
+            40: 0.10,
         },
     },
 ]
@@ -96,7 +103,7 @@ def compile_adapter() -> dict:
         u_prev_unit = []
 
         for slot_idx, slot in enumerate(active_slots):
-            fault = slot["fault"]
+            fault = LAYER_FAULT_MAP.get(layer, slot["fault"]) if slot_idx == 0 else slot["fault"]
             layer_entry = basis["faults"][fault]["layers"][layer]
             v_raw = layer_entry["v"].to(torch.float32)
             u_raw = layer_entry["u"].to(torch.float32)
