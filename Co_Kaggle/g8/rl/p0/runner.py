@@ -58,6 +58,9 @@ def run_scenario(task: tuple[str, str, int, int | None]) -> dict:
 
         env = load_hybrid_environment(config_path)
         env.metrics_path = None  # Not env._metrics_path (incorrect attribute).
+        # Preserve the official gateway's assignment, including its typo:
+        # env.occupancy_normalization_constant (without _) is the real
+        # attribute used by observations and remains 0.0 under shipped Gin.
         env._occupancy_normalization_constant = 125.0
 
         metadata = create_building_meta_data(env, config_path.parent)
