@@ -32,6 +32,24 @@ def discover_scenarios(data_root: Path) -> list[str]:
                   for path in scenarios_dir.glob("building_*/*/config.gin"))
 
 
+def verify_training_manifest(data_root: Path, scenarios: list[str]) -> None:
+    """Reject missing, substituted, or additional shipped training scenarios."""
+    import yaml  # Installed in the organizer's pinned simulator environment.
+
+    manifest_path = data_root / "smart_buildings" / "training_set.yaml"
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    pairs = manifest["scenarios"]
+    expected = [
+        f"{pair['building']}/{pair['weather']}" for pair in pairs
+    ]
+    if (len(expected) != 30 or len(set(expected)) != len(expected)
+            or sorted(scenarios) != sorted(expected)):
+        raise ValueError(
+            "Training scenarios do not match the 30 unique "
+            "training_set.yaml building/weather pairs"
+        )
+
+
 def aggregate(results: list[dict], *, full: bool) -> dict:
     grouped: dict[int, list[dict]] = {}
     for result in results:
@@ -87,20 +105,10 @@ def main() -> None:
     if args.steps > 8640 and not args.full:
         parser.error("--steps cannot exceed 8640")
     if args.full:
-        # A count of 30 alone does not prove these are the shipped scenarios.
-        # Protect full-score attribution against changed/missing scenario pairs.
-        import yaml  # Installed in the official simulator environment.
-        manifest_path = data_root / "smart_buildings" / "training_set.yaml"
-        manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
-        expected = {
-            f"{pair['building']}/{pair['weather']}"
-            for pair in manifest["scenarios"]
-        }
-        if set(scenarios) != expected or len(scenarios) != len(expected) or len(expected) != 30:
-            parser.error(
-                "The scenario directory does not exactly match the "
-                "30 training_set.yaml building/weather pairs"
-            )
+        try:
+            verify_training_manifest(data_root, scenarios)
+        except (OSError, KeyError, TypeError, ValueError) as exc:
+            parser.error(f"Invalid training scenario set: {exc}")
     # None means run until official simulator termination, not 8640 steps.
     steps = None if args.full else args.steps
     selected = scenarios if args.all or args.full else scenarios[:args.limit]
