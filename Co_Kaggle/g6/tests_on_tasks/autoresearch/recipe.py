@@ -16,9 +16,9 @@ import torch
 from safetensors.torch import save_file
 
 # ==============================================================================
-# GEOMETRIC KNOBS (Iteration 20: Multi-Module AlphaEdit o_proj + iter_04 down_proj)
+# GEOMETRIC KNOBS (Iteration 21: Gentle 0.25x AlphaEdit o_proj + exact iter_04 down_proj)
 # ==============================================================================
-MODE = "alphaedit_multimodule_r1"
+MODE = "alphaedit_multimodule_gentle_r1"
 BASE_MODEL_NAME = "google/gemma-4-e4b-it-qat-w4a16-ct"
 DOWN_PREFIX_FMT = "base_model.model.model.language_model.layers.{layer}.mlp.down_proj"
 OPROJ_PREFIX_FMT = "base_model.model.model.language_model.layers.{layer}.self_attn.o_proj"
@@ -37,12 +37,12 @@ DOWN_PROJ_GAINS = {
 }
 DOWN_PROJ_TOP_K = 64
 
-# DLA + AlphaEdit Null-Space self_attn.o_proj circuit (11.8x prem vs valid selectivity on GPU!)
+# DLA + AlphaEdit Null-Space self_attn.o_proj circuit scaled to iter_04's safe norm regime (eff_norm 0.05-0.14)
 # Top 3 positive Leave-Task-Out CV layers: L36 (gap=+0.146), L31 (gap=+0.063), L28 (gap=+0.027)
 OPROJ_PREM_GAINS = {
-    28: 1.2,
-    31: 1.6,
-    36: 2.2,
+    28: 0.30,
+    31: 0.40,
+    36: 0.55,
 }
 
 ACTIVE_LAYERS = sorted(set(DOWN_PROJ_GAINS.keys()) | set(OPROJ_PREM_GAINS.keys()))
