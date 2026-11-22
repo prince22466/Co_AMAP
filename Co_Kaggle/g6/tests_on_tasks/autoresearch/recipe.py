@@ -32,14 +32,14 @@ D_OUT = 2560
 RANK = 1
 ORTHOGONALIZE_B = True
 
-# Top 5 middle-to-late down_proj layers by edit_file_loop Cohen's d: [31, 37, 38, 39, 34]
-ACTIVE_LAYERS = [31, 34, 37, 38, 39]
+# Drop highest-index layer 39 (adjacent to unembedding, caused syntax_leaks=4 in iter_02) and keep mid-late band [31, 34, 37, 38]
+ACTIVE_LAYERS = [31, 34, 37, 38]
 
 # Slot configurations (Slot 0 active when RANK >= 1; Slot 1 active when RANK >= 2)
 SLOTS = [
     {
         "fault": "edit_file_loop",
-        "top_k": 128,
+        "top_k": 64,
         "sign": 1.0,
         "gains": {
             31: 0.12,
