@@ -18,6 +18,15 @@ installed (numpy, scipy, numba, gin-config, gymnasium, pandas, matplotlib,
 Pillow, etc.). The uploaded Data folder does not have an installable
 package or pinned environment file. CPU simulation does not use a GPU.
 
+## Python 3.12 setup
+
+    python3.12 -m venv .venv
+    source .venv/bin/activate
+    python -m pip install -r Co_Kaggle/g8/rl/p0/requirements-simulator.txt
+
+The above uses the organizer's pinned Python dependency versions. On Windows,
+activate the venv using .venv\Scripts\activate instead.
+
 ## Commands
 
     # Dependency-light tests (numpy required)
