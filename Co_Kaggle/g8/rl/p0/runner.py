@@ -6,6 +6,7 @@ use processes, never threads; a new environment and policy are created per job.
 from __future__ import annotations
 
 from contextlib import contextmanager
+import math
 import os
 from pathlib import Path
 import sys
@@ -63,15 +64,30 @@ def run_scenario(task: tuple[str, str, int, int]) -> dict:
         policy = load_controller(version)(metadata, env.action_spec())
         obs, _ = env.reset()
         weights = env.reward_function.weights
+        configured_steps = int(env._num_timesteps_in_episode)
+        if steps is None and configured_steps != 8640:
+            raise ValueError(
+                f"Unexpected full episode length: {configured_steps} steps"
+            )
+        # Official gateway runs until the environment signals termination.
+        # Environment.step() checks _step_count BEFORE incrementing it,
+        # so an 8640-step configuration currently terminates on step 8641.
+        max_steps = configured_steps + 2 if steps is None else steps
+        episode_terminated = False
         rewards: list[float] = []
         component_sums = {"comfort": 0.0, "energy": 0.0, "carbon": 0.0}
         elapsed = {"policy": 0.0, "simulator": 0.0, "diagnostics": 0.0}
-        for step in range(steps):
+        for step in range(max_steps):
             start = perf_counter()
             action = validate_action(policy.get_action(obs), env.action_spec())
             after_policy = perf_counter()
             obs, reward, terminated, truncated, _ = env.step(action)
             after_simulator = perf_counter()
+            if not isinstance(reward, (int, float)) or not math.isfinite(float(reward)):
+                raise ValueError(
+                    f"Simulator rejected action or returned nonfinite reward "
+                    f"at step {step + 1} of {scenario_relative}"
+                )
 
             # Competition gateway only exposes the combined reward. Local
             # simulator lets us recompute its normalized parts post-step.
@@ -91,14 +107,22 @@ def run_scenario(task: tuple[str, str, int, int]) -> dict:
             elapsed["simulator"] += after_simulator - after_policy
             elapsed["diagnostics"] += after_diagnostics - after_simulator
             if terminated or truncated:
-                if step + 1 != steps:
+                episode_terminated = bool(terminated or truncated)
+                if steps is not None and step + 1 != steps:
                     raise RuntimeError(
                         f"{scenario_relative} terminated at {step + 1}/{steps}"
                     )
                 break
 
+        if steps is None and not episode_terminated:
+            raise RuntimeError(
+                f"{scenario_relative} failed to terminate within "
+                f"{max_steps} steps"
+            )
         result = score_one(
-            rewards, component_sums, requested_steps=steps, elapsed=elapsed
+            rewards, component_sums, requested_steps=steps, elapsed=elapsed,
+            episode_terminated=episode_terminated,
+            configured_episode_steps=configured_steps,
         )
         result.update({"scenario": scenario_relative, "version": version})
         return result
