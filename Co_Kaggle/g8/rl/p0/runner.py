@@ -27,7 +27,7 @@ def simulator_working_directory(data_root: Path):
         os.chdir(previous)
 
 
-def run_scenario(task: tuple[str, str, int, int]) -> dict:
+def run_scenario(task: tuple[str, str, int, int | None]) -> dict:
     data_root_text, scenario_relative, version, steps = task
     data_root = Path(data_root_text).resolve()
     simulator_root = data_root / "smart_buildings"
@@ -83,7 +83,7 @@ def run_scenario(task: tuple[str, str, int, int]) -> dict:
             after_policy = perf_counter()
             obs, reward, terminated, truncated, _ = env.step(action)
             after_simulator = perf_counter()
-            if not isinstance(reward, (int, float)) or not math.isfinite(float(reward)):
+            if not math.isfinite(float(reward)):
                 raise ValueError(
                     f"Simulator rejected action or returned nonfinite reward "
                     f"at step {step + 1} of {scenario_relative}"
