@@ -1,15 +1,16 @@
-"""recipe.py — Weight-Space Programming (WSP) Negative LASER Dominant-Mode Dampening + iter_04 Compiler.
+"""recipe.py — Weight-Space Programming (WSP) Low-Rank Adapter Compiler.
 
 THIS IS THE ONLY MUTABLE FILE IN PHASE B (per tests_on_tasks/autoresearch/program.md).
-Directly programs PEFT LoRA weights (`lora_A`, `lora_B`) of
-`base_submission/adapters/wsp_r1/{adapter_config.json,adapter_model.safetensors}`.
+Directly programs the PEFT LoRA weights (`lora_A`, `lora_B`) of
+`base_submission/adapters/wsp_r1/{adapter_config.json,adapter_model.safetensors}`
+targeting selected `mlp.down_proj` residual-stream write heads:
 
-Iter 30 Hypothesis (Opposite Sign of iter_22):
-  - Positive spectral boost (+0.35 * W_top32 in iter_22) amplified greedy shortcut modes (edit_err=139).
-  - iter_04 succeeded (5/15, edit_err=68, leaks=0) via NEGATIVE rank-1 dampening (-g (u u^T) W_down).
-  - Test NEGATIVE spectral dampening (-0.15 * U_{:8} S_{:8} V_{:8}^T) on disjoint late MLP layers
-    [33, 35, 36, 40] to dampen overconfident greedy-collapse modes under temperature=0.0, while
-    preserving iter_04's exact Rank-1 edit_file_loop on [29, 31, 34, 37, 38].
+    \Delta W_l = B_l A_l = \sum_{i=1}^r \lambda_{l,i} u_{l,i} v_{l,i}^T  (with \alpha = r)
+
+- Rows of lora_A (v_{l,i} in R^{10240}): Top-k sparsified MLP neuron detectors from
+  contrastive failure-vs-healthy basis_cache.pt (conditional trigger gate).
+- Columns of lora_B (\lambda_{l,i} u_{l,i} in R^{2560}): Orthogonalized residual-stream
+  steering directions pushing out of localized failure modes (`edit_file_loop`, `premature_submit`).
 """
 from __future__ import annotations
 
@@ -20,38 +21,52 @@ import torch
 from safetensors.torch import save_file
 
 # ==============================================================================
-# GEOMETRIC KNOBS (Iteration 30: Negative LASER Rank-8 Dampening + exact iter_04)
+# GEOMETRIC KNOBS (Iteration 1: MODE="basis_r1", RANK=1, primary="edit_file_loop")
 # ==============================================================================
-MODE = "neg_laser_r8_plus_iter04"
+MODE = "basis_r1"
 BASE_MODEL_NAME = "google/gemma-4-e4b-it-qat-w4a16-ct"
 KEY_PREFIX_FMT = "base_model.model.model.language_model.layers.{layer}.mlp.down_proj"
 D_IN = 10240
 D_OUT = 2560
 
-RANK = 8
+RANK = 1
+ORTHOGONALIZE_B = True
 
-# Exact iter_04 mlp.down_proj circuit (5/15, edit_err=68, leaks=0 — UNTOUCHED)
-ITER04_GAINS = {
-    29: 0.14,
-    31: 0.16,
-    34: 0.12,
-    37: 0.16,
-    38: 0.14,
-}
-ITER04_TOP_K = 64
+# Iter 4: shift window slightly earlier into middle-late band [29, 31, 34, 37, 38] and scale gains 1.35x
+ACTIVE_LAYERS = [29, 31, 34, 37, 38]
 
-# Disjoint-layer NEGATIVE spectral dampening of top-8 dominant shortcut modes
-NEG_LASER_ALPHAS = {
-    33: -0.15,
-    35: -0.18,
-    36: -0.18,
-    40: -0.12,
-}
-
-ACTIVE_LAYERS = sorted(set(ITER04_GAINS.keys()) | set(NEG_LASER_ALPHAS.keys()))
+# Slot configurations (Slot 0 active when RANK >= 1; Slot 1 active when RANK >= 2)
+SLOTS = [
+    {
+        "fault": "edit_file_loop",
+        "top_k": 64,
+        "sign": 1.0,
+        "gains": {
+            29: 0.14,
+            31: 0.16,
+            34: 0.12,
+            37: 0.16,
+            38: 0.14,
+            39: 0.09,
+        },
+    },
+    {
+        "fault": "premature_submit",
+        "top_k": 128,
+        "sign": 1.0,
+        "gains": {
+            31: 0.06,
+            34: 0.06,
+            37: 0.08,
+            38: 0.07,
+            39: 0.09,
+        },
+    },
+]
 
 
 def sparsify_topk(v: torch.Tensor, top_k: int) -> torch.Tensor:
+    """Keep only the top_k largest-magnitude entries of v in R^{D_IN} and unit-normalize."""
     v_f32 = v.detach().to(torch.float32).clone()
     if 0 < top_k < v_f32.numel():
         _, idx = torch.topk(v_f32.abs(), k=top_k, largest=True, sorted=False)
@@ -67,38 +82,54 @@ def sparsify_topk(v: torch.Tensor, top_k: int) -> torch.Tensor:
 def compile_adapter() -> dict:
     root = Path(__file__).resolve().parent
     basis = torch.load(root / "basis_cache.pt", map_location="cpu", weights_only=True)
-    svd_cache = torch.load(root / "laser_svd_cache.pt", map_location="cpu", weights_only=True)
-    assert basis["d_in"] == D_IN and basis["d_out"] == D_OUT
+    assert basis["d_in"] == D_IN and basis["d_out"] == D_OUT, "Dimension mismatch against basis_cache.pt"
+
+    active_slots = SLOTS[:RANK]
+    assert len(active_slots) == RANK, f"Expected {RANK} slot configs, got {len(active_slots)}"
 
     tensors: dict[str, torch.Tensor] = {}
-    layer_info: dict[str, str] = {}
+    layer_norms: dict[int, list[float]] = {}
 
-    for layer in ACTIVE_LAYERS:
-        lora_A = torch.zeros((RANK, D_IN), dtype=torch.float32)
-        lora_B = torch.zeros((D_OUT, RANK), dtype=torch.float32)
+    for layer in sorted(ACTIVE_LAYERS):
+        A_rows = []
+        B_cols = []
+        u_prev_unit = []
 
-        if layer in ITER04_GAINS:
-            entry = basis["faults"]["edit_file_loop"]["layers"][layer]
-            v_sparse = sparsify_topk(entry["v"].to(torch.float32), ITER04_TOP_K)
-            u_dir = entry["u"].to(torch.float32)
-            u_dir = u_dir / (u_dir.norm() + 1e-8)
-            gain = float(ITER04_GAINS[layer])
-            lora_A[0, :] = v_sparse
-            lora_B[:, 0] = gain * u_dir
-            layer_info[f"L{layer}"] = f"iter04(g={gain})"
-        elif layer in NEG_LASER_ALPHAS:
-            sv = svd_cache["layers"][layer]
-            U = sv["U"][:, :RANK].to(torch.float32)
-            S = sv["S"][:RANK].to(torch.float32)
-            V = sv["V"][:, :RANK].to(torch.float32)
-            alpha = float(NEG_LASER_ALPHAS[layer])
-            lora_A[:, :] = V.T
-            lora_B[:, :] = alpha * (U * S.unsqueeze(0))
-            layer_info[f"L{layer}"] = f"neg_laser_r{RANK}(a={alpha}, ||B||={lora_B.norm().item():.2f})"
+        for slot_idx, slot in enumerate(active_slots):
+            fault = slot["fault"]
+            layer_entry = basis["faults"][fault]["layers"][layer]
+            v_raw = layer_entry["v"].to(torch.float32)
+            u_raw = layer_entry["u"].to(torch.float32)
+
+            # Row of lora_A: top-k sparsified MLP neuron detector gate
+            v_sparse = sparsify_topk(v_raw, int(slot["top_k"]))
+
+            # Column of lora_B: unit steering direction, optionally Gram-Schmidt orthogonalized
+            u_dir = u_raw / (u_raw.norm() + 1e-8)
+            if ORTHOGONALIZE_B and u_prev_unit:
+                for u_p in u_prev_unit:
+                    u_dir = u_dir - torch.dot(u_dir, u_p) * u_p
+                u_dir = u_dir / (u_dir.norm() + 1e-8)
+            u_prev_unit.append(u_dir)
+
+            gain = float(slot["gains"].get(layer, 0.0)) * float(slot.get("sign", 1.0))
+            b_col = gain * u_dir
+
+            A_rows.append(v_sparse)
+            B_cols.append(b_col)
+            layer_norms.setdefault(layer, []).append(round(b_col.norm().item(), 5))
+
+        # lora_A.weight: shape [r, D_IN], BF16
+        lora_A = torch.stack(A_rows, dim=0).to(torch.bfloat16).contiguous()
+        # lora_B.weight: shape [D_OUT, r], BF16
+        lora_B = torch.stack(B_cols, dim=1).to(torch.bfloat16).contiguous()
+
+        assert lora_A.shape == (RANK, D_IN), f"Unexpected lora_A shape: {lora_A.shape}"
+        assert lora_B.shape == (D_OUT, RANK), f"Unexpected lora_B shape: {lora_B.shape}"
 
         prefix = KEY_PREFIX_FMT.format(layer=layer)
-        tensors[f"{prefix}.lora_A.weight"] = lora_A.to(torch.bfloat16).contiguous()
-        tensors[f"{prefix}.lora_B.weight"] = lora_B.to(torch.bfloat16).contiguous()
+        tensors[f"{prefix}.lora_A.weight"] = lora_A
+        tensors[f"{prefix}.lora_B.weight"] = lora_B
 
     out_dir = root / "base_submission" / "adapters" / "wsp_r1"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -115,7 +146,7 @@ def compile_adapter() -> dict:
         "init_lora_weights": True,
         "layer_replication": None,
         "layers_pattern": "layers",
-        "layers_to_transform": ACTIVE_LAYERS,
+        "layers_to_transform": sorted(ACTIVE_LAYERS),
         "loftq_config": {},
         "lora_alpha": RANK,
         "lora_dropout": 0.0,
@@ -139,8 +170,8 @@ def compile_adapter() -> dict:
         "mode": MODE,
         "rank": RANK,
         "lora_alpha": RANK,
-        "active_layers": ACTIVE_LAYERS,
-        "layer_info": layer_info,
+        "active_layers": sorted(ACTIVE_LAYERS),
+        "layer_b_norms": layer_norms,
         "adapter_sha256": sha,
         "safetensors_bytes": safetensors_path.stat().st_size,
     }
