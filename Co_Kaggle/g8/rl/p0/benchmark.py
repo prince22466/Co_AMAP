@@ -28,7 +28,8 @@ def default_data_root() -> Path:
 
 def discover_scenarios(data_root: Path) -> list[str]:
     scenarios_dir = data_root / "smart_buildings" / "training_scenarios"
-    return sorted(str(path.parent.relative_to(scenarios_dir))
+    # as_posix(): manifest uses "building/weather"; Windows would yield "\".
+    return sorted(path.parent.relative_to(scenarios_dir).as_posix()
                   for path in scenarios_dir.glob("building_*/*/config.gin"))
 
 
@@ -89,7 +90,9 @@ def main() -> None:
                         help="Independent processes (never threads)")
     parser.add_argument("--list", action="store_true",
                         help="Print all available scenarios and exit")
-    parser.add_argument("--out", type=Path, default=Path("g8_rl_p0_results"))
+    parser.add_argument("--out", type=Path,
+                        default=Path(__file__).resolve().parent / "results",
+                        help="Output directory for reports (default: %(default)s)")
     args = parser.parse_args()
 
     data_root = args.data_root.resolve()
