@@ -22,9 +22,9 @@ import torch
 from safetensors.torch import save_file
 
 # ==============================================================================
-# GEOMETRIC KNOBS (Iteration 27: Mid-Network-Only Thought-Start o_proj [16,19] + iter_04 down_proj)
+# GEOMETRIC KNOBS (Iteration 28: Isolated L32 Thought-Start o_proj + iter_04 down_proj)
 # ==============================================================================
-MODE = "thought_start_midnet_r1"
+MODE = "thought_start_L32_solo_r1"
 BASE_MODEL_NAME = "google/gemma-4-e4b-it-qat-w4a16-ct"
 DOWN_PREFIX_FMT = "base_model.model.model.language_model.layers.{layer}.mlp.down_proj"
 OPROJ_PREFIX_FMT = "base_model.model.model.language_model.layers.{layer}.self_attn.o_proj"
@@ -43,11 +43,9 @@ DOWN_PROJ_GAINS = {
 }
 DOWN_PROJ_TOP_K = 64
 
-# Mid-network-only Thought-Start AlphaEdit self_attn.o_proj [16, 19] (10+ layers before late syntax band!)
-# Drops L32 (which caused syntax_leaks=4 in iter_26) while keeping iter_26's record-low edit_err=26 & 0 timeouts
+# Isolate L32 o_proj alone (iter_26 vs iter_27 A/B proved L32 drove record-low edit_err=26 & 0 timeouts)
 OPROJ_THOUGHT_GAINS = {
-    16: 1.00,  # #1 CV gap +0.310 (eff_norm ~0.41)
-    19: 0.80,  # #2 CV gap +0.230 (eff_norm ~0.32)
+    32: 0.65,  # CV gap +0.218 (eff_norm ~0.26)
 }
 
 ACTIVE_LAYERS = sorted(set(DOWN_PROJ_GAINS.keys()) | set(OPROJ_THOUGHT_GAINS.keys()))
