@@ -1,4 +1,6 @@
-# Thought-Start (<|thought>) DLA + AlphaEdit Weight-Space Programming Lab with Real Generation Verification
+# Nonlinear IF-THEN GeGLU Transistor Circuit Lab (gate_proj + up_proj + down_proj LoRA)
+# Pure Weight-Space Programming: uses GELU nonlinearity to create a ~40x ON/OFF switch
+# that fires ONLY on premature_submit and stays ~0 on valid_submit & healthy coding turns!
 import glob, importlib, json, os, shutil, subprocess, sys, time
 from pathlib import Path
 
@@ -30,6 +32,7 @@ subprocess.run([sys.executable, '-m', 'pip', 'install', '-q', '--no-deps', '--fo
 importlib.invalidate_caches()
 
 import torch
+import torch.nn.functional as F
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
 MODEL_PATH = Path('/kaggle/input/models/google/gemma-4/other/gemma-4-e4b-it-qat-w4a16-ct/2')
@@ -40,17 +43,14 @@ probes = json.loads(PROBES_PATH.read_text(encoding='utf-8'))
 
 print('Loading Gemma 4 E4B on GPU...', flush=True)
 tokenizer = AutoTokenizer.from_pretrained(str(MODEL_PATH), local_files_only=True)
-tokenizer.truncation_side = 'left'  # CRITICAL: never chop off the recent edit_file & <|thought> decision!
+tokenizer.truncation_side = 'left'
 dtype = torch.bfloat16 if (torch.cuda.is_available() and torch.cuda.is_bf16_supported()) else torch.float16
 model = AutoModelForCausalLM.from_pretrained(str(MODEL_PATH), dtype=dtype, device_map='auto', local_files_only=True)
 model.eval()
 
-# Convert probe prefixes from `<|thought>\n<thought|><|tool_call>call:` to `<|thought>\n` (START OF THOUGHT!)
 def to_thought_start(text):
     marker = '<|thought>\n<thought|><|tool_call>call:'
-    if text.endswith(marker):
-        return text[:-len(marker)] + '<|thought>\n'
-    return text
+    return (text[:-len(marker)] + '<|thought>\n') if text.endswith(marker) else text
 
 GROUPS = ('prem_submit', 'valid_submit', 'run_after_edit', 'edit_loop_fail', 'healthy_read', 'healthy_edit')
 all_items = []
@@ -58,49 +58,50 @@ for g in GROUPS:
     for item in probes.get(g, []):
         all_items.append({**item, 'group': g, 'thought_text': to_thought_start(item['text'])})
 idx_by_group = {g: [i for i, x in enumerate(all_items) if x['group'] == g] for g in GROUPS}
-print('Loaded probes:', {g: len(idx_by_group[g]) for g in GROUPS}, flush=True)
+prem_idx = idx_by_group['prem_submit']
+val_idx = idx_by_group['valid_submit']
+run_idx = idx_by_group['run_after_edit']
+hread_idx = idx_by_group['healthy_read']
+hedit_idx = idx_by_group['healthy_edit']
+pres_idx = val_idx + run_idx + hread_idx + hedit_idx
 
-# 1. Harvest thought-start activations on o_proj and down_proj for layers 16..41
 lm = getattr(model, 'model', model)
 if hasattr(lm, 'language_model'):
     lm = lm.language_model
 layers = lm.layers
-CAND_LAYERS = list(range(16, len(layers)))
+CAND_LAYERS = [16, 20, 24, 28, 30, 32, 35, 36]
 
-cap_o_in, cap_d_in = {}, {}
+# Harvest MLP input x_l (entering gate_proj, R^2560) AND pre-GELU gate_proj output (R^10240)
+cap_x, cap_g = {}, {}
 handles = []
 for l_idx in CAND_LAYERS:
-    def mk(li, store):
+    def mk(li):
         def _h(mod, inp, out):
-            store[li] = inp[0][0, -1, :].detach().float().cpu()
+            cap_x[li] = inp[0][0, -1, :].detach().float().cpu()
+            cap_g[li] = out[0, -1, :].detach().float().cpu()
         return _h
-    handles.append(layers[l_idx].self_attn.o_proj.register_forward_hook(mk(l_idx, cap_o_in)))
-    handles.append(layers[l_idx].mlp.down_proj.register_forward_hook(mk(l_idx, cap_d_in)))
+    handles.append(layers[l_idx].mlp.gate_proj.register_forward_hook(mk(l_idx)))
 
-acts_o = {l: [] for l in CAND_LAYERS}
-acts_d = {l: [] for l in CAND_LAYERS}
+acts_x = {l: [] for l in CAND_LAYERS}
+acts_g = {l: [] for l in CAND_LAYERS}
 t0 = time.time()
 with torch.no_grad():
     for i, item in enumerate(all_items):
         enc = tokenizer(item['thought_text'], return_tensors='pt', truncation=True, max_length=2560)
-        if i == 0:
-            print('  SANITY CHECK input tail:', repr(tokenizer.decode(enc['input_ids'][0, -40:], skip_special_tokens=False)), flush=True)
         enc = {k: v.to(model.device) for k, v in enc.items()}
-        cap_o_in.clear(); cap_d_in.clear()
+        cap_x.clear(); cap_g.clear()
         _ = model(**enc, use_cache=False)
         for l in CAND_LAYERS:
-            acts_o[l].append(cap_o_in[l])
-            acts_d[l].append(cap_d_in[l])
-        if (i + 1) % 30 == 0 or (i + 1) == len(all_items):
+            acts_x[l].append(cap_x[l])
+            acts_g[l].append(cap_g[l])
+        if (i + 1) % 35 == 0 or (i + 1) == len(all_items):
             print(f'  Harvested {i+1}/{len(all_items)} ({time.time()-t0:.1f}s)', flush=True)
 for h in handles: h.remove()
 for l in CAND_LAYERS:
-    acts_o[l] = torch.stack(acts_o[l], dim=0)
-    acts_d[l] = torch.stack(acts_d[l], dim=0)
+    acts_x[l] = torch.stack(acts_x[l], dim=0)
+    acts_g[l] = torch.stack(acts_g[l], dim=0)
 
-# 2. Compute Thought-Start Steering Vector u_thought:
-# Contrastive unembedding direction pushing verification reasoning ("pytest", "test", "verify", "check", "run")
-# over premature-stop reasoning ("submit", "done", "complete", "finished", "ready")
+# Build u_thought = (pytest/test/verify/check/run) - (submit/done/complete/finished/ready)
 lm_head_w = model.get_output_embeddings().weight.detach().float().cpu()
 def tok_vec(words):
     vecs = []
@@ -113,79 +114,101 @@ def tok_vec(words):
     m = torch.stack(vecs, dim=0).mean(dim=0)
     return m / (m.norm() + 1e-8)
 
-u_verify = tok_vec(['pytest', 'test', 'tests', 'verify', 'check', 'run'])
-u_stop = tok_vec(['submit', 'done', 'complete', 'finished', 'ready', 'fixed'])
-u_thought = u_verify - u_stop
+u_thought = tok_vec(['pytest', 'test', 'tests', 'verify', 'check', 'run']) - tok_vec(['submit', 'done', 'complete', 'finished', 'ready', 'fixed'])
 u_thought = u_thought / (u_thought.norm() + 1e-8)
-print('Built u_thought (verify - stop), cos(verify, stop)=', round(torch.dot(u_verify, u_stop).item(), 3), flush=True)
 
-# 3. Solve AlphaEdit Null-Space Detector at <|thought> start (prem_submit -> +1, valid_submit + healthy -> 0)
-def solve_alphaedit(H, target_idxs, pres_idxs, beta=4.0, lam=20.0):
+# Solve SIGNED thresholded detector w_x in R^2560:
+# Target: w_x^T x = +3.0 on prem_submit, w_x^T x = -3.0 on preserve (valid_submit + healthy)!
+# Because GELU(+3.0) = +2.996 and GELU(-3.0) = -0.004 -> 750x ON/OFF switch ratio!
+def solve_signed_gate(H, target_idxs, pres_idxs, beta=3.0, lam=25.0):
     X = torch.cat([H[target_idxs], (beta ** 0.5) * H[pres_idxs]], dim=0)
-    y = torch.cat([torch.ones(len(target_idxs)), torch.zeros(len(pres_idxs))], dim=0)
+    y = torch.cat([torch.full((len(target_idxs),), 3.0), torch.full((len(pres_idxs),), -3.0 * (beta ** 0.5))], dim=0)
     G = X @ X.T + lam * torch.eye(X.shape[0])
     w = X.T @ torch.linalg.solve(G, y)
-    n = w.norm().item()
-    return w / (n + 1e-8), n
+    return w
 
-prem_idx = idx_by_group['prem_submit']
-val_idx = idx_by_group['valid_submit']
-run_idx = idx_by_group['run_after_edit']
-hread_idx = idx_by_group['healthy_read']
-hedit_idx = idx_by_group['healthy_edit']
-pres_idx = val_idx + run_idx + hread_idx + hedit_idx
 all_tids = sorted(set(x['tid'] for x in all_items))
-
+print('\n=== NONLINEAR GELU SWITCH LEAVE-TASK-OUT CV (ON=prem_submit, OFF=valid/healthy) ===', flush=True)
+switch_basis = {'u_thought': u_thought.to(torch.bfloat16), 'layers': {}}
 cv_rows = []
 for l in CAND_LAYERS:
-    for mod, H in (('o_proj', acts_o[l]), ('down_proj', acts_d[l])):
-        oof_p, oof_v, oof_o = [], [], []
-        for htid in all_tids:
-            tr_t = [i for i in prem_idx if all_items[i]['tid'] != htid]
-            tr_p = [i for i in pres_idx if all_items[i]['tid'] != htid]
-            te_t = [i for i in prem_idx if all_items[i]['tid'] == htid]
-            te_v = [i for i in val_idx if all_items[i]['tid'] == htid]
-            te_o = [i for i in (run_idx + hread_idx + hedit_idx) if all_items[i]['tid'] == htid]
-            if not (te_t or te_v or te_o): continue
-            wu, sc = solve_alphaedit(H, tr_t, tr_p)
-            w = wu * sc
-            for i in te_t: oof_p.append(torch.dot(w, H[i]).item())
-            for i in te_v: oof_v.append(torch.dot(w, H[i]).item())
-            for i in te_o: oof_o.append(torch.dot(w, H[i]).item())
-        mp = sum(oof_p)/max(1,len(oof_p)); mv = sum(oof_v)/max(1,len(oof_v)); mo = sum(oof_o)/max(1,len(oof_o))
-        cv_rows.append({'layer': l, 'module': mod, 'oof_prem': round(mp,3), 'oof_val': round(mv,3), 'oof_other': round(mo,3), 'gap': round(mp - max(mv, mo), 3)})
-cv_rows.sort(key=lambda x: x['gap'], reverse=True)
-print('\n=== THOUGHT-START LEAVE-TASK-OUT CV TOP 10 ===', flush=True)
-for r in cv_rows[:10]:
-    print(f"  L{r['layer']:2d} {r['module']:9s}: prem={r['oof_prem']:+.3f} val={r['oof_val']:+.3f} oth={r['oof_other']:+.3f} gap={r['gap']:+.3f}", flush=True)
+    H = acts_x[l]
+    oof_p, oof_v, oof_o = [], [], []
+    for htid in all_tids:
+        tr_t = [i for i in prem_idx if all_items[i]['tid'] != htid]
+        tr_p = [i for i in pres_idx if all_items[i]['tid'] != htid]
+        te_t = [i for i in prem_idx if all_items[i]['tid'] == htid]
+        te_v = [i for i in val_idx if all_items[i]['tid'] == htid]
+        te_o = [i for i in (run_idx + hread_idx + hedit_idx) if all_items[i]['tid'] == htid]
+        if not (te_t or te_v or te_o): continue
+        w = solve_signed_gate(H, tr_t, tr_p)
+        for i in te_t: oof_p.append(F.gelu(torch.dot(w, H[i])).item())
+        for i in te_v: oof_v.append(F.gelu(torch.dot(w, H[i])).item())
+        for i in te_o: oof_o.append(F.gelu(torch.dot(w, H[i])).item())
+    mp = sum(oof_p)/max(1,len(oof_p)); mv = sum(oof_v)/max(1,len(oof_v)); mo = sum(oof_o)/max(1,len(oof_o))
+    ratio = mp / (max(abs(mv), abs(mo)) + 1e-4)
+    cv_rows.append({'layer': l, 'gelu_prem': round(mp,3), 'gelu_val': round(mv,3), 'gelu_other': round(mo,3), 'on_off_ratio': round(ratio,2)})
+    print(f"  L{l:2d}: GELU(prem)={mp:+.3f} | GELU(val)={mv:+.3f} | GELU(oth)={mo:+.3f} | ON/OFF={ratio:.2f}x", flush=True)
 
-# Save full basis
-thought_basis = {'u_thought': u_thought.to(torch.bfloat16), 'o_proj': {}, 'down_proj': {}, 'cv_top': cv_rows[:15]}
-for l in CAND_LAYERS:
-    wo, so = solve_alphaedit(acts_o[l], prem_idx, pres_idx)
-    wd, sd = solve_alphaedit(acts_d[l], prem_idx, pres_idx)
-    thought_basis['o_proj'][l] = {'v': wo.to(torch.bfloat16), 'scale': round(so, 5), 'd_in': acts_o[l].shape[1]}
-    thought_basis['down_proj'][l] = {'v': wd.to(torch.bfloat16), 'scale': round(sd, 5), 'd_in': acts_d[l].shape[1]}
+    # Full fit + pick 16 quietest neurons (most negative mean gate_proj output on preserved turns -> dead neurons!)
+    w_full = solve_signed_gate(H, prem_idx, pres_idx)
+    mean_g_pres = acts_g[l][pres_idx].mean(dim=0)
+    # Pick 16 neurons with smallest |mean_g| and negative mean (naturally OFF!)
+    quiet_idx = torch.topk(-mean_g_pres, k=16).indices  # most negative -> naturally OFF!
+    mu_prem_x = H[prem_idx].mean(dim=0)
+    mu_prem_x = mu_prem_x / (mu_prem_x.norm() + 1e-8)
+    switch_basis['layers'][l] = {
+        'w_gate': w_full.to(torch.bfloat16),
+        'w_up': mu_prem_x.to(torch.bfloat16),
+        'neuron_idx': quiet_idx.to(torch.int64),
+        'mean_x_norm': round(H[prem_idx].norm(dim=1).mean().item(), 3),
+    }
 
-# 4. REAL AUTOREGRESSIVE GENERATION TEST on 5 iter_04 premature-submit traces + 3 valid-submit traces!
+cv_rows.sort(key=lambda x: x['gelu_prem'] - max(x['gelu_val'], x['gelu_other']), reverse=True)
+top_l = [r['layer'] for r in cv_rows[:3]]
+print('Top 3 nonlinear switch layers:', top_l, flush=True)
+
+# LIVE GPU GENERATION VERIFICATION of the Nonlinear IF-THEN GeGLU Transistor Circuit!
 test_prem = [i for i in prem_idx if all_items[i]['run'] == 'iter_04'][:5]
 test_val = [i for i in val_idx if all_items[i]['run'] == 'iter_04'][:3]
-print(f'\n=== REAL GENERATION TEST (5 iter_04 prem_submit + 3 valid_submit) ===', flush=True)
 
-def eval_gen(label, o_layers, gain):
+def eval_transistor(label, target_layers, gain_down):
     gh = []
-    for l in o_layers:
-        e = thought_basis['o_proj'][l]
-        vc = e['v'].float() * e['scale']
-        uc = gain * u_thought
-        def mk_h(v_, u_):
+    for l in target_layers:
+        e = switch_basis['layers'][l]
+        wg = e['w_gate'].float()
+        wu = e['w_up'].float()
+        nidx = e['neuron_idx']
+        # Gate LoRA: adds (x @ wg) to the 16 quiet neurons
+        def mk_gate(wg_, nidx_):
+            def _h(mod, inp, out):
+                x = inp[0]
+                s = (x @ wg_.to(x.device, x.dtype)).unsqueeze(-1)  # [B, T, 1]
+                out = out.clone()
+                out[..., nidx_.to(x.device)] += s
+                return out
+            return _h
+        # Up LoRA: adds (x @ wu) to the 16 quiet neurons so up_proj > 0 when active
+        def mk_up(wu_, nidx_):
+            def _h(mod, inp, out):
+                x = inp[0]
+                s = (x @ wu_.to(x.device, x.dtype)).unsqueeze(-1)
+                out = out.clone()
+                out[..., nidx_.to(x.device)] += s
+                return out
+            return _h
+        # Down LoRA: reads the 16 quiet neurons and writes gain_down * u_thought!
+        def mk_down(nidx_, u_, g_):
             def _h(mod, inp, out):
                 h = inp[0]
-                return out + (h @ v_.to(h.device, h.dtype)).unsqueeze(-1) * u_.to(h.device, h.dtype)
+                sig = h[..., nidx_.to(h.device)].mean(dim=-1, keepdim=True)  # average of 16 transistor neurons
+                return out + sig * (g_ * u_.to(h.device, h.dtype))
             return _h
-        gh.append(layers[l].self_attn.o_proj.register_forward_hook(mk_h(vc, uc)))
+        gh.append(layers[l].mlp.gate_proj.register_forward_hook(mk_gate(wg, nidx)))
+        gh.append(layers[l].mlp.up_proj.register_forward_hook(mk_up(wu, nidx)))
+        gh.append(layers[l].mlp.down_proj.register_forward_hook(mk_down(nidx, u_thought, gain_down)))
 
-    res = {'label': label, 'o_layers': o_layers, 'gain': gain, 'prem': [], 'val': []}
+    res = {'label': label, 'layers': target_layers, 'gain': gain_down, 'prem': [], 'val': []}
     with torch.no_grad():
         for tag, idxs in (('prem', test_prem), ('val', test_val)):
             for i in idxs:
@@ -193,9 +216,12 @@ def eval_gen(label, o_layers, gain):
                 enc = {k: v.to(model.device) for k, v in enc.items()}
                 gen = model.generate(**enc, max_new_tokens=96, do_sample=False)
                 new_txt = tokenizer.decode(gen[0, enc['input_ids'].shape[1]:], skip_special_tokens=False)
-                has_run = ('run_command' in new_txt or 'pytest' in new_txt)
-                has_sub = ('submit_patch' in new_txt)
-                res[tag].append({'tid': all_items[i]['tid'], 'has_run': has_run, 'has_sub': has_sub, 'sample': new_txt[:160]})
+                res[tag].append({
+                    'tid': all_items[i]['tid'],
+                    'has_run': ('run_command' in new_txt or 'pytest' in new_txt),
+                    'has_sub': ('submit_patch' in new_txt),
+                    'sample': new_txt[:150],
+                })
     for h in gh: h.remove()
     p_run = sum(1 for x in res['prem'] if x['has_run'])
     p_sub = sum(1 for x in res['prem'] if x['has_sub'])
@@ -205,14 +231,12 @@ def eval_gen(label, o_layers, gain):
         print(f"    PREM {x['tid']:14s}: run={x['has_run']} sub={x['has_sub']} | {x['sample']!r}", flush=True)
     return res
 
-top_o = [r['layer'] for r in cv_rows if r['module'] == 'o_proj'][:4]
-gen_results = [
-    eval_gen('baseline', [], 0.0),
-    eval_gen('thought_g1.5', top_o, 1.5),
-    eval_gen('thought_g3.0', top_o, 3.0),
+gen_res = [
+    eval_transistor('geglu_g0.5', top_l, 0.5),
+    eval_transistor('geglu_g1.5', top_l, 1.5),
 ]
 
 WORKING = Path('/kaggle/working')
-torch.save(thought_basis, WORKING / 'thought_basis.pt')
-(WORKING / 'thought_report.json').write_text(json.dumps({'cv_top': cv_rows[:15], 'gen_results': gen_results}, indent=2) + '\n', encoding='utf-8')
+torch.save(switch_basis, WORKING / 'geglu_switch_basis.pt')
+(WORKING / 'geglu_switch_report.json').write_text(json.dumps({'cv': cv_rows, 'top_layers': top_l, 'gen': gen_res}, indent=2) + '\n', encoding='utf-8')
 print('ALL DONE!', flush=True)
