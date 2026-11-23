@@ -22,9 +22,9 @@ import torch
 from safetensors.torch import save_file
 
 # ==============================================================================
-# GEOMETRIC KNOBS (Iteration 25: Thought-Start AlphaEdit o_proj [16,19,21,32] + iter_04 down_proj)
+# GEOMETRIC KNOBS (Iteration 26: Gentle Top-2 Thought-Start o_proj [16,32] + iter_04 down_proj)
 # ==============================================================================
-MODE = "thought_start_alphaedit_r1"
+MODE = "thought_start_top2_gentle_r1"
 BASE_MODEL_NAME = "google/gemma-4-e4b-it-qat-w4a16-ct"
 DOWN_PREFIX_FMT = "base_model.model.model.language_model.layers.{layer}.mlp.down_proj"
 OPROJ_PREFIX_FMT = "base_model.model.model.language_model.layers.{layer}.self_attn.o_proj"
@@ -43,13 +43,11 @@ DOWN_PROJ_GAINS = {
 }
 DOWN_PROJ_TOP_K = 64
 
-# Thought-Start AlphaEdit self_attn.o_proj on top-4 leave-task-out CV layers (100% disjoint from iter_04!)
-# Live GPU generation verified: g=3.0 flipped requests_7205 submit_patch -> run_command while preserving rich_3454!
+# Top-2 Thought-Start AlphaEdit self_attn.o_proj layers [16, 32] scaled 6.5x quieter than iter_25
+# to preserve iter_04's 5 solved tasks while still breaking premature submits on requests_7315/rich_3934/rich_3718
 OPROJ_THOUGHT_GAINS = {
-    16: 3.0,  # CV gap +0.310 (oof_prem=0.395 vs oof_val=0.085)
-    19: 2.6,  # CV gap +0.230
-    21: 2.6,  # CV gap +0.226
-    32: 2.4,  # CV gap +0.218
+    16: 0.90,  # CV gap +0.310 (eff_norm ~0.37)
+    32: 0.70,  # CV gap +0.218 (eff_norm ~0.29)
 }
 
 ACTIVE_LAYERS = sorted(set(DOWN_PROJ_GAINS.keys()) | set(OPROJ_THOUGHT_GAINS.keys()))
