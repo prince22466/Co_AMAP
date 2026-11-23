@@ -44,7 +44,7 @@ activate the venv using .venv\Scripts\activate instead.
     # Full, expensive, 30-day training-set evaluation
     python -m Co_Kaggle.g8.rl.p0.benchmark --full --workers 4
 
-Outputs: g8_rl_p0_results/report.json and per_scenario.csv.
+Outputs: Co_Kaggle/g8/rl/p0/results/report.json and per_scenario.csv.
 Each scenario reports normalized weighted comfort/energy/carbon loss, and
 separate controller, simulator and reward-diagnostics execution times.
 Throughput is measured using overall wall-clock time across all workers.
