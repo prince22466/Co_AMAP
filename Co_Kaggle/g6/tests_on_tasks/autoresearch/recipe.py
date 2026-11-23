@@ -1,17 +1,15 @@
-"""recipe.py — Weight-Space Programming (WSP) Thought-Start AlphaEdit + iter_04 Compiler.
+"""recipe.py — Weight-Space Programming (WSP) Negative LASER Dominant-Mode Dampening + iter_04 Compiler.
 
 THIS IS THE ONLY MUTABLE FILE IN PHASE B (per tests_on_tasks/autoresearch/program.md).
 Directly programs PEFT LoRA weights (`lora_A`, `lora_B`) of
 `base_submission/adapters/wsp_r1/{adapter_config.json,adapter_model.safetensors}`.
 
-Iter 25 Breakthrough (Verified Live via Autoregressive Generation on GPU):
-  - `mlp.down_proj` on [29, 31, 34, 37, 38]: exact iter_04 `edit_file_loop` (5/15, edit_err=68, leaks=0).
-  - `self_attn.o_proj` on DISJOINT mid-network layers [16, 19, 21, 32]:
-    Thought-Start (`<|thought>`) AlphaEdit Null-Space detector (leave-task-out CV gaps +0.310, +0.230,
-    +0.226, +0.218 — 4.6x stronger on premature_submit than valid_submit!) steering along
-    `u_thought = (pytest/test/verify/check/run) - (submit/done/complete/finished/ready)`.
-    Verified live on GPU to flip requests_7205 from `submit_patch` -> `run_command(python3 test)`
-    while preserving `submit_patch` on valid post-pytest `rich_3454`.
+Iter 30 Hypothesis (Opposite Sign of iter_22):
+  - Positive spectral boost (+0.35 * W_top32 in iter_22) amplified greedy shortcut modes (edit_err=139).
+  - iter_04 succeeded (5/15, edit_err=68, leaks=0) via NEGATIVE rank-1 dampening (-g (u u^T) W_down).
+  - Test NEGATIVE spectral dampening (-0.15 * U_{:8} S_{:8} V_{:8}^T) on disjoint late MLP layers
+    [33, 35, 36, 40] to dampen overconfident greedy-collapse modes under temperature=0.0, while
+    preserving iter_04's exact Rank-1 edit_file_loop on [29, 31, 34, 37, 38].
 """
 from __future__ import annotations
 
@@ -22,34 +20,35 @@ import torch
 from safetensors.torch import save_file
 
 # ==============================================================================
-# GEOMETRIC KNOBS (Iteration 29: Softer 0.65x L16+L32 Thought-Start o_proj + iter_04 down_proj)
+# GEOMETRIC KNOBS (Iteration 30: Negative LASER Rank-8 Dampening + exact iter_04)
 # ==============================================================================
-MODE = "thought_start_L16_L32_soft_r1"
+MODE = "neg_laser_r8_plus_iter04"
 BASE_MODEL_NAME = "google/gemma-4-e4b-it-qat-w4a16-ct"
-DOWN_PREFIX_FMT = "base_model.model.model.language_model.layers.{layer}.mlp.down_proj"
-OPROJ_PREFIX_FMT = "base_model.model.model.language_model.layers.{layer}.self_attn.o_proj"
-D_IN_DOWN = 10240
+KEY_PREFIX_FMT = "base_model.model.model.language_model.layers.{layer}.mlp.down_proj"
+D_IN = 10240
 D_OUT = 2560
 
-RANK = 1
+RANK = 8
 
 # Exact iter_04 mlp.down_proj circuit (5/15, edit_err=68, leaks=0 — UNTOUCHED)
-DOWN_PROJ_GAINS = {
+ITER04_GAINS = {
     29: 0.14,
     31: 0.16,
     34: 0.12,
     37: 0.16,
     38: 0.14,
 }
-DOWN_PROJ_TOP_K = 64
+ITER04_TOP_K = 64
 
-# 0.65x softer L16+L32 synergy (preserves iter_26's record-low edit_err=26 while cutting leaks 4->0..1)
-OPROJ_THOUGHT_GAINS = {
-    16: 0.60,  # CV gap +0.310 (eff_norm ~0.245)
-    32: 0.45,  # CV gap +0.218 (eff_norm ~0.184)
+# Disjoint-layer NEGATIVE spectral dampening of top-8 dominant shortcut modes
+NEG_LASER_ALPHAS = {
+    33: -0.15,
+    35: -0.18,
+    36: -0.18,
+    40: -0.12,
 }
 
-ACTIVE_LAYERS = sorted(set(DOWN_PROJ_GAINS.keys()) | set(OPROJ_THOUGHT_GAINS.keys()))
+ACTIVE_LAYERS = sorted(set(ITER04_GAINS.keys()) | set(NEG_LASER_ALPHAS.keys()))
 
 
 def sparsify_topk(v: torch.Tensor, top_k: int) -> torch.Tensor:
@@ -68,50 +67,38 @@ def sparsify_topk(v: torch.Tensor, top_k: int) -> torch.Tensor:
 def compile_adapter() -> dict:
     root = Path(__file__).resolve().parent
     basis = torch.load(root / "basis_cache.pt", map_location="cpu", weights_only=True)
-    tb = torch.load(root / "thought_basis.pt", map_location="cpu", weights_only=True)
-    assert basis["d_in"] == D_IN_DOWN and basis["d_out"] == D_OUT
-
-    u_thought = tb["u_thought"].to(torch.float32)
-    u_thought = u_thought / (u_thought.norm() + 1e-8)
+    svd_cache = torch.load(root / "laser_svd_cache.pt", map_location="cpu", weights_only=True)
+    assert basis["d_in"] == D_IN and basis["d_out"] == D_OUT
 
     tensors: dict[str, torch.Tensor] = {}
-    eff_norms: dict[str, float] = {}
+    layer_info: dict[str, str] = {}
 
     for layer in ACTIVE_LAYERS:
-        # 1. mlp.down_proj: exact iter_04 on [29,31,34,37,38], zeros elsewhere
-        if layer in DOWN_PROJ_GAINS:
+        lora_A = torch.zeros((RANK, D_IN), dtype=torch.float32)
+        lora_B = torch.zeros((D_OUT, RANK), dtype=torch.float32)
+
+        if layer in ITER04_GAINS:
             entry = basis["faults"]["edit_file_loop"]["layers"][layer]
-            v_sparse = sparsify_topk(entry["v"].to(torch.float32), DOWN_PROJ_TOP_K)
+            v_sparse = sparsify_topk(entry["v"].to(torch.float32), ITER04_TOP_K)
             u_dir = entry["u"].to(torch.float32)
             u_dir = u_dir / (u_dir.norm() + 1e-8)
-            gain = float(DOWN_PROJ_GAINS[layer])
-            lora_A_d = v_sparse.unsqueeze(0).to(torch.bfloat16).contiguous()
-            lora_B_d = (gain * u_dir).unsqueeze(1).to(torch.bfloat16).contiguous()
-            eff_norms[f"L{layer}.down_proj"] = round(lora_B_d.float().norm().item(), 5)
-        else:
-            lora_A_d = torch.zeros((RANK, D_IN_DOWN), dtype=torch.bfloat16)
-            lora_B_d = torch.zeros((D_OUT, RANK), dtype=torch.bfloat16)
+            gain = float(ITER04_GAINS[layer])
+            lora_A[0, :] = v_sparse
+            lora_B[:, 0] = gain * u_dir
+            layer_info[f"L{layer}"] = f"iter04(g={gain})"
+        elif layer in NEG_LASER_ALPHAS:
+            sv = svd_cache["layers"][layer]
+            U = sv["U"][:, :RANK].to(torch.float32)
+            S = sv["S"][:RANK].to(torch.float32)
+            V = sv["V"][:, :RANK].to(torch.float32)
+            alpha = float(NEG_LASER_ALPHAS[layer])
+            lora_A[:, :] = V.T
+            lora_B[:, :] = alpha * (U * S.unsqueeze(0))
+            layer_info[f"L{layer}"] = f"neg_laser_r{RANK}(a={alpha}, ||B||={lora_B.norm().item():.2f})"
 
-        dp = DOWN_PREFIX_FMT.format(layer=layer)
-        tensors[f"{dp}.lora_A.weight"] = lora_A_d
-        tensors[f"{dp}.lora_B.weight"] = lora_B_d
-
-        # 2. self_attn.o_proj: Thought-Start AlphaEdit on [16,19,21,32], zeros elsewhere
-        oe = tb["o_proj"][layer]
-        d_in_o = int(oe["d_in"])
-        if layer in OPROJ_THOUGHT_GAINS:
-            vp = oe["v"].to(torch.float32) * float(oe["scale"])
-            gain_o = float(OPROJ_THOUGHT_GAINS[layer])
-            lora_A_o = vp.unsqueeze(0).to(torch.bfloat16).contiguous()
-            lora_B_o = (gain_o * u_thought).unsqueeze(1).to(torch.bfloat16).contiguous()
-            eff_norms[f"L{layer}.o_proj"] = round((lora_B_o.float().norm() * lora_A_o.float().norm()).item(), 5)
-        else:
-            lora_A_o = torch.zeros((RANK, d_in_o), dtype=torch.bfloat16)
-            lora_B_o = torch.zeros((D_OUT, RANK), dtype=torch.bfloat16)
-
-        op = OPROJ_PREFIX_FMT.format(layer=layer)
-        tensors[f"{op}.lora_A.weight"] = lora_A_o
-        tensors[f"{op}.lora_B.weight"] = lora_B_o
+        prefix = KEY_PREFIX_FMT.format(layer=layer)
+        tensors[f"{prefix}.lora_A.weight"] = lora_A.to(torch.bfloat16).contiguous()
+        tensors[f"{prefix}.lora_B.weight"] = lora_B.to(torch.bfloat16).contiguous()
 
     out_dir = root / "base_submission" / "adapters" / "wsp_r1"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -139,7 +126,7 @@ def compile_adapter() -> dict:
         "r": RANK,
         "rank_pattern": {},
         "revision": None,
-        "target_modules": ["down_proj", "o_proj"],
+        "target_modules": ["down_proj"],
         "task_type": "CAUSAL_LM",
         "use_dora": False,
         "use_rslora": False,
@@ -153,8 +140,7 @@ def compile_adapter() -> dict:
         "rank": RANK,
         "lora_alpha": RANK,
         "active_layers": ACTIVE_LAYERS,
-        "target_modules": ["down_proj", "o_proj"],
-        "effective_norms": eff_norms,
+        "layer_info": layer_info,
         "adapter_sha256": sha,
         "safetensors_bytes": safetensors_path.stat().st_size,
     }
