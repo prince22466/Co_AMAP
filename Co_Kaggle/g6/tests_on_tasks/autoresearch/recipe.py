@@ -22,9 +22,9 @@ import torch
 from safetensors.torch import save_file
 
 # ==============================================================================
-# GEOMETRIC KNOBS (Iteration 28: Isolated L32 Thought-Start o_proj + iter_04 down_proj)
+# GEOMETRIC KNOBS (Iteration 29: Softer 0.65x L16+L32 Thought-Start o_proj + iter_04 down_proj)
 # ==============================================================================
-MODE = "thought_start_L32_solo_r1"
+MODE = "thought_start_L16_L32_soft_r1"
 BASE_MODEL_NAME = "google/gemma-4-e4b-it-qat-w4a16-ct"
 DOWN_PREFIX_FMT = "base_model.model.model.language_model.layers.{layer}.mlp.down_proj"
 OPROJ_PREFIX_FMT = "base_model.model.model.language_model.layers.{layer}.self_attn.o_proj"
@@ -43,9 +43,10 @@ DOWN_PROJ_GAINS = {
 }
 DOWN_PROJ_TOP_K = 64
 
-# Isolate L32 o_proj alone (iter_26 vs iter_27 A/B proved L32 drove record-low edit_err=26 & 0 timeouts)
+# 0.65x softer L16+L32 synergy (preserves iter_26's record-low edit_err=26 while cutting leaks 4->0..1)
 OPROJ_THOUGHT_GAINS = {
-    32: 0.65,  # CV gap +0.218 (eff_norm ~0.26)
+    16: 0.60,  # CV gap +0.310 (eff_norm ~0.245)
+    32: 0.45,  # CV gap +0.218 (eff_norm ~0.184)
 }
 
 ACTIVE_LAYERS = sorted(set(DOWN_PROJ_GAINS.keys()) | set(OPROJ_THOUGHT_GAINS.keys()))
