@@ -1,0 +1,130 @@
+STDOUT:
+....FF.................................................................. [ 41%]
+.......................................FFF.............................. [ 82%]
+.............................F                                           [100%]
+=================================== FAILURES ===================================
+_________________________ test_split_lines_terminator __________________________
+
+    def test_split_lines_terminator():
+        lines = [Segment("Hello\nWorld")]
+>       assert list(Segment.split_lines_terminator(lines)) == [
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+            ([Segment("Hello")], True),
+            ([Segment("World")], False),
+        ]
+E       AttributeError: type object 'Segment' has no attribute 'split_lines_terminator'
+
+tests/test_segment.py:39: AttributeError
+___________________ test_split_lines_terminator_single_line ____________________
+
+    def test_split_lines_terminator_single_line():
+        lines = [Segment("Hello")]
+>       assert list(Segment.split_lines_terminator(lines)) == [
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+            ([Segment("Hello")], False),
+        ]
+E       AttributeError: type object 'Segment' has no attribute 'split_lines_terminator'
+
+tests/test_segment.py:47: AttributeError
+_________________ test_wrap_long_words_followed_by_other_words _________________
+
+    def test_wrap_long_words_followed_by_other_words():
+        """After folding a word across multiple lines, we should continue from
+        the next word immediately after the folded word (don't take a newline
+        following completion of the folded word)."""
+        text = Text("123 12345678 123 123")
+        lines = text.wrap(Console(), 6)
+>       assert lines._lines == [
+            Text("123 "),
+            Text("123456"),
+            Text("78 123"),
+            Text("123"),
+        ]
+E       AssertionError: assert [<text '123 '... '123' [] ''>] == [<text '123 '... '123' [] ''>]
+E         
+E         At index 2 diff: <text '78 ' [] ''> != <text '78 123' [] ''>
+E         Left contains one more item: <text '123' [] ''>
+E         Use -v to get more diff
+
+tests/test_text.py:583: AssertionError
+__________ test_wrap_long_word_preceeded_by_word_of_full_line_length ___________
+
+    def test_wrap_long_word_preceeded_by_word_of_full_line_length():
+        """The width of the first word is the same as the available width.
+        Ensures that folding works correctly when there's no space available
+        on the current line."""
+        text = Text("123456 12345678 123 123")
+        lines = text.wrap(Console(), 6)
+>       assert lines._lines == [
+            Text("123456"),
+            Text("123456"),
+            Text("78 123"),
+            Text("123"),
+        ]
+E       AssertionError: assert [<text '12345... '123' [] ''>] == [<text '12345... '123' [] ''>]
+E         
+E         At index 2 diff: <text '78 ' [] ''> != <text '78 123' [] ''>
+E         Left contains one more item: <text '123' [] ''>
+E         Use -v to get more diff
+
+tests/test_text.py:597: AssertionError
+____________________ test_wrap_multiple_consecutive_spaces _____________________
+
+    def test_wrap_multiple_consecutive_spaces():
+        """Adding multiple consecutive spaces at the end of a line does not impact
+        the location at which a break will be added during the process of wrapping."""
+        text = Text("123456    12345678 123 123")
+        lines = text.wrap(Console(), 6)
+>       assert lines._lines == [
+            Text("123456"),
+            Text("123456"),
+            Text("78 123"),
+            Text("123"),
+        ]
+E       AssertionError: assert [<text '12345... '123' [] ''>] == [<text '12345... '123' [] ''>]
+E         
+E         At index 2 diff: <text '78 ' [] ''> != <text '78 123' [] ''>
+E         Left contains one more item: <text '123' [] ''>
+E         Use -v to get more diff
+
+tests/test_text.py:610: AssertionError
+____________________________ test_soft_wrap_styled _____________________________
+
+    def test_soft_wrap_styled() -> None:
+        """Regression test for https://github.com/Textualize/rich/issues/3838
+    
+        If soft_wrap is True and a style is set, we don't want to style the new lines.
+        """
+        console = Console(color_system="standard", width=80, force_terminal=True)
+        with console.capture() as capture:
+            console.print("soft wrap is on", style="blue on white", soft_wrap=True)
+            console.print("Next line")
+    
+        output = capture.get()
+        print(repr(output))
+        # Background is reset before \n
+        expected = "\x1b[34;47msoft wrap is on\x1b[0m\nNext line\n"
+>       assert output == expected
+E       AssertionError: assert '\x1b[34;47ms...0mNext line\n' == '\x1b[34;47ms...\nNext line\n'
+E         
+E         - [34;47msoft wrap is on[0m
+E         + [34;47msoft wrap is on[0m[34;47m
+E         ?                            ++++++++
+E         - Next line
+E         + [0mNext line
+E         ? ++++
+
+tests/test_text.py:1129: AssertionError
+----------------------------- Captured stdout call -----------------------------
+'\x1b[34;47msoft wrap is on\x1b[0m\x1b[34;47m\n\x1b[0mNext line\n'
+- generated xml file: /tmp/swegemma_sandbox_8d177c7a-4ec_b9nvdaoz/tmp/_swegemma_junit_bfa64fac9e1b.xml -
+=========================== short test summary info ============================
+FAILED tests/test_segment.py::test_split_lines_terminator - AttributeError: t...
+FAILED tests/test_segment.py::test_split_lines_terminator_single_line - Attri...
+FAILED tests/test_text.py::test_wrap_long_words_followed_by_other_words - Ass...
+FAILED tests/test_text.py::test_wrap_long_word_preceeded_by_word_of_full_line_length
+FAILED tests/test_text.py::test_wrap_multiple_consecutive_spaces - AssertionE...
+FAILED tests/test_text.py::test_soft_wrap_styled - AssertionError: assert '\x...
+6 failed, 168 passed in 0.55s
+
+STDERR:

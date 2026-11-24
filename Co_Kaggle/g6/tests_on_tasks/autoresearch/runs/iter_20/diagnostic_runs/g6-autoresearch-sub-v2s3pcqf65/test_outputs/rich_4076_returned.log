@@ -1,0 +1,924 @@
+STDOUT:
+FFF....FFFFFFFFFFFFFFFFF                                                 [100%]
+=================================== FAILURES ===================================
+_________________________________ test_decode __________________________________
+
+    def test_decode():
+        console = Console(
+            force_terminal=True, legacy_windows=False, color_system="truecolor"
+        )
+        console.begin_capture()
+>       console.print("Hello")
+
+tests/test_ansi.py:14: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+rich/console.py:1731: in print
+    extend(render(renderable, render_options))
+rich/console.py:1339: in render
+    for render_output in iter_render:
+                         ^^^^^^^^^^^
+rich/text.py:705: in __rich_console__
+    yield from all_lines.render(console, end=self.end)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <text 'Hello' [] ''>, console = <console width=80 ColorSystem.TRUECOLOR>
+end = '\n'
+
+    def render(self, console: "Console", end: str = "") -> Iterable["Segment"]:
+        """Render the text as Segments.
+    
+        Args:
+            console (Console): Console instance.
+            end (Optional[str], optional): Optional end character.
+    
+        Returns:
+            Iterable[Segment]: Result of render that may be written to the console.
+        """
+        _Segment = Segment
+        text = self.plain
+        if not self._spans:
+>           yield Segment(text)
+                  ^^^^^^^^^^^^^
+E           TypeError: Segment() takes no arguments
+
+rich/text.py:732: TypeError
+_____________________________ test_decode_example ______________________________
+
+    def test_decode_example():
+        ansi_bytes = b"\x1b[01m\x1b[KC:\\Users\\stefa\\AppData\\Local\\Temp\\tmp3ydingba:\x1b[m\x1b[K In function '\x1b[01m\x1b[Kmain\x1b[m\x1b[K':\n\x1b[01m\x1b[KC:\\Users\\stefa\\AppData\\Local\\Temp\\tmp3ydingba:3:5:\x1b[m\x1b[K \x1b[01;35m\x1b[Kwarning: \x1b[m\x1b[Kunused variable '\x1b[01m\x1b[Ka\x1b[m\x1b[K' [\x1b[01;35m\x1b[K-Wunused-variable\x1b[m\x1b[K]\n    3 | int \x1b[01;35m\x1b[Ka\x1b[m\x1b[K=1;\n      |     \x1b[01;35m\x1b[K^\x1b[m\x1b[K\n"
+        ansi_text = ansi_bytes.decode("utf-8")
+    
+        text = Text.from_ansi(ansi_text)
+    
+        console = Console(
+            force_terminal=True, legacy_windows=False, color_system="truecolor"
+        )
+        with console.capture() as capture:
+>           console.print(text)
+
+tests/test_ansi.py:46: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+rich/console.py:1731: in print
+    extend(render(renderable, render_options))
+rich/console.py:1339: in render
+    for render_output in iter_render:
+                         ^^^^^^^^^^^
+rich/text.py:705: in __rich_console__
+    yield from all_lines.render(console, end=self.end)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <text "C:\\Users\\stefa\\AppData\\Local\\Temp\\tmp3ydingba: In function 'main':\nC:\\Users\\stefa\\AppData\\Local\\Tem...D, number=5), bold=True)), Span(197, 198, Style(color=Color('color(5)', ColorType.STANDARD, number=5), bold=True))] ''>
+console = <console width=80 ColorSystem.TRUECOLOR>, end = '\n'
+
+    def render(self, console: "Console", end: str = "") -> Iterable["Segment"]:
+        """Render the text as Segments.
+    
+        Args:
+            console (Console): Console instance.
+            end (Optional[str], optional): Optional end character.
+    
+        Returns:
+            Iterable[Segment]: Result of render that may be written to the console.
+        """
+        _Segment = Segment
+        text = self.plain
+        if not self._spans:
+            yield Segment(text)
+            if end:
+                yield _Segment(end)
+            return
+        get_style = partial(console.get_style, default=Style.null())
+    
+        enumerated_spans = list(enumerate(self._spans, 1))
+        style_map = {index: get_style(span.style) for index, span in enumerated_spans}
+        style_map[0] = get_style(self.style)
+    
+        spans = [
+            (0, False, 0),
+            *((span.start, False, index) for index, span in enumerated_spans),
+            *((span.end, True, index) for index, span in enumerated_spans),
+            (len(text), True, 0),
+        ]
+        spans.sort(key=itemgetter(0, 1))
+    
+        stack: List[int] = []
+        stack_append = stack.append
+        stack_pop = stack.remove
+    
+        style_cache: Dict[Tuple[Style, ...], Style] = {}
+        style_cache_get = style_cache.get
+        combine = Style.combine
+    
+        def get_current_style() -> Style:
+            """Construct current style from stack."""
+            styles = tuple(style_map[_style_id] for _style_id in sorted(stack))
+            cached_style = style_cache_get(styles)
+            if cached_style is not None:
+                return cached_style
+            current_style = combine(styles)
+            style_cache[styles] = current_style
+            return current_style
+    
+        for (offset, leaving, style_id), (next_offset, _, _) in zip(spans, spans[1:]):
+            if leaving:
+                stack_pop(style_id)
+            else:
+                stack_append(style_id)
+            if next_offset > offset:
+>               yield _Segment(text[offset:next_offset], get_current_style())
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E               TypeError: Segment() takes no arguments
+
+rich/text.py:774: TypeError
+_ test_decode_issue_2688[\x1b[31mFound 4 errors in 2 files (checked 18 source files)\x1b(B\x1b[m\n-Found 4 errors in 2 files (checked 18 source files)\n] _
+
+ansi_bytes = b'\x1b[31mFound 4 errors in 2 files (checked 18 source files)\x1b(B\x1b[m\n'
+expected_text = 'Found 4 errors in 2 files (checked 18 source files)\n'
+
+    @pytest.mark.parametrize(
+        "ansi_bytes, expected_text",
+        [
+            # https://github.com/Textualize/rich/issues/2688
+            (
+                b"\x1b[31mFound 4 errors in 2 files (checked 18 source files)\x1b(B\x1b[m\n",
+                "Found 4 errors in 2 files (checked 18 source files)\n",
+            ),
+            # https://mail.python.org/pipermail/python-list/2007-December/424756.html
+            (b"Hallo", "Hallo"),
+            (b"\x1b(BHallo", "Hallo"),
+            (b"\x1b(JHallo", "Hallo"),
+            (b"\x1b(BHal\x1b(Jlo", "Hallo"),
+        ],
+    )
+    def test_decode_issue_2688(ansi_bytes, expected_text):
+        text = Text.from_ansi(ansi_bytes.decode())
+    
+>       assert str(text) == expected_text
+E       AssertionError: assert 'Found 4 erro...source files)' == 'Found 4 erro...urce files)\n'
+E         
+E         Skipping 40 identical leading characters in diff, use -v to show
+E         - urce files)
+E         ?            -
+E         + urce files)
+
+tests/test_ansi.py:72: AssertionError
+____________________ test_strip_private_escape_sequences[0] ____________________
+
+code = '0'
+
+    @pytest.mark.parametrize("code", [*"0123456789:;<=>?"])
+    def test_strip_private_escape_sequences(code):
+        text = Text.from_ansi(f"\x1b{code}x")
+    
+        console = Console(force_terminal=True)
+    
+        with console.capture() as capture:
+>           console.print(text)
+
+tests/test_ansi.py:82: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+rich/console.py:1731: in print
+    extend(render(renderable, render_options))
+rich/console.py:1339: in render
+    for render_output in iter_render:
+                         ^^^^^^^^^^^
+rich/text.py:705: in __rich_console__
+    yield from all_lines.render(console, end=self.end)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <text 'x' [] ''>, console = <console width=80 ColorSystem.STANDARD>
+end = '\n'
+
+    def render(self, console: "Console", end: str = "") -> Iterable["Segment"]:
+        """Render the text as Segments.
+    
+        Args:
+            console (Console): Console instance.
+            end (Optional[str], optional): Optional end character.
+    
+        Returns:
+            Iterable[Segment]: Result of render that may be written to the console.
+        """
+        _Segment = Segment
+        text = self.plain
+        if not self._spans:
+>           yield Segment(text)
+                  ^^^^^^^^^^^^^
+E           TypeError: Segment() takes no arguments
+
+rich/text.py:732: TypeError
+____________________ test_strip_private_escape_sequences[1] ____________________
+
+code = '1'
+
+    @pytest.mark.parametrize("code", [*"0123456789:;<=>?"])
+    def test_strip_private_escape_sequences(code):
+        text = Text.from_ansi(f"\x1b{code}x")
+    
+        console = Console(force_terminal=True)
+    
+        with console.capture() as capture:
+>           console.print(text)
+
+tests/test_ansi.py:82: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+rich/console.py:1731: in print
+    extend(render(renderable, render_options))
+rich/console.py:1339: in render
+    for render_output in iter_render:
+                         ^^^^^^^^^^^
+rich/text.py:705: in __rich_console__
+    yield from all_lines.render(console, end=self.end)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <text 'x' [] ''>, console = <console width=80 ColorSystem.STANDARD>
+end = '\n'
+
+    def render(self, console: "Console", end: str = "") -> Iterable["Segment"]:
+        """Render the text as Segments.
+    
+        Args:
+            console (Console): Console instance.
+            end (Optional[str], optional): Optional end character.
+    
+        Returns:
+            Iterable[Segment]: Result of render that may be written to the console.
+        """
+        _Segment = Segment
+        text = self.plain
+        if not self._spans:
+>           yield Segment(text)
+                  ^^^^^^^^^^^^^
+E           TypeError: Segment() takes no arguments
+
+rich/text.py:732: TypeError
+____________________ test_strip_private_escape_sequences[2] ____________________
+
+code = '2'
+
+    @pytest.mark.parametrize("code", [*"0123456789:;<=>?"])
+    def test_strip_private_escape_sequences(code):
+        text = Text.from_ansi(f"\x1b{code}x")
+    
+        console = Console(force_terminal=True)
+    
+        with console.capture() as capture:
+>           console.print(text)
+
+tests/test_ansi.py:82: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+rich/console.py:1731: in print
+    extend(render(renderable, render_options))
+rich/console.py:1339: in render
+    for render_output in iter_render:
+                         ^^^^^^^^^^^
+rich/text.py:705: in __rich_console__
+    yield from all_lines.render(console, end=self.end)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <text 'x' [] ''>, console = <console width=80 ColorSystem.STANDARD>
+end = '\n'
+
+    def render(self, console: "Console", end: str = "") -> Iterable["Segment"]:
+        """Render the text as Segments.
+    
+        Args:
+            console (Console): Console instance.
+            end (Optional[str], optional): Optional end character.
+    
+        Returns:
+            Iterable[Segment]: Result of render that may be written to the console.
+        """
+        _Segment = Segment
+        text = self.plain
+        if not self._spans:
+>           yield Segment(text)
+                  ^^^^^^^^^^^^^
+E           TypeError: Segment() takes no arguments
+
+rich/text.py:732: TypeError
+____________________ test_strip_private_escape_sequences[3] ____________________
+
+code = '3'
+
+    @pytest.mark.parametrize("code", [*"0123456789:;<=>?"])
+    def test_strip_private_escape_sequences(code):
+        text = Text.from_ansi(f"\x1b{code}x")
+    
+        console = Console(force_terminal=True)
+    
+        with console.capture() as capture:
+>           console.print(text)
+
+tests/test_ansi.py:82: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+rich/console.py:1731: in print
+    extend(render(renderable, render_options))
+rich/console.py:1339: in render
+    for render_output in iter_render:
+                         ^^^^^^^^^^^
+rich/text.py:705: in __rich_console__
+    yield from all_lines.render(console, end=self.end)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <text 'x' [] ''>, console = <console width=80 ColorSystem.STANDARD>
+end = '\n'
+
+    def render(self, console: "Console", end: str = "") -> Iterable["Segment"]:
+        """Render the text as Segments.
+    
+        Args:
+            console (Console): Console instance.
+            end (Optional[str], optional): Optional end character.
+    
+        Returns:
+            Iterable[Segment]: Result of render that may be written to the console.
+        """
+        _Segment = Segment
+        text = self.plain
+        if not self._spans:
+>           yield Segment(text)
+                  ^^^^^^^^^^^^^
+E           TypeError: Segment() takes no arguments
+
+rich/text.py:732: TypeError
+____________________ test_strip_private_escape_sequences[4] ____________________
+
+code = '4'
+
+    @pytest.mark.parametrize("code", [*"0123456789:;<=>?"])
+    def test_strip_private_escape_sequences(code):
+        text = Text.from_ansi(f"\x1b{code}x")
+    
+        console = Console(force_terminal=True)
+    
+        with console.capture() as capture:
+>           console.print(text)
+
+tests/test_ansi.py:82: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+rich/console.py:1731: in print
+    extend(render(renderable, render_options))
+rich/console.py:1339: in render
+    for render_output in iter_render:
+                         ^^^^^^^^^^^
+rich/text.py:705: in __rich_console__
+    yield from all_lines.render(console, end=self.end)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <text 'x' [] ''>, console = <console width=80 ColorSystem.STANDARD>
+end = '\n'
+
+    def render(self, console: "Console", end: str = "") -> Iterable["Segment"]:
+        """Render the text as Segments.
+    
+        Args:
+            console (Console): Console instance.
+            end (Optional[str], optional): Optional end character.
+    
+        Returns:
+            Iterable[Segment]: Result of render that may be written to the console.
+        """
+        _Segment = Segment
+        text = self.plain
+        if not self._spans:
+>           yield Segment(text)
+                  ^^^^^^^^^^^^^
+E           TypeError: Segment() takes no arguments
+
+rich/text.py:732: TypeError
+____________________ test_strip_private_escape_sequences[5] ____________________
+
+code = '5'
+
+    @pytest.mark.parametrize("code", [*"0123456789:;<=>?"])
+    def test_strip_private_escape_sequences(code):
+        text = Text.from_ansi(f"\x1b{code}x")
+    
+        console = Console(force_terminal=True)
+    
+        with console.capture() as capture:
+>           console.print(text)
+
+tests/test_ansi.py:82: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+rich/console.py:1731: in print
+    extend(render(renderable, render_options))
+rich/console.py:1339: in render
+    for render_output in iter_render:
+                         ^^^^^^^^^^^
+rich/text.py:705: in __rich_console__
+    yield from all_lines.render(console, end=self.end)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <text 'x' [] ''>, console = <console width=80 ColorSystem.STANDARD>
+end = '\n'
+
+    def render(self, console: "Console", end: str = "") -> Iterable["Segment"]:
+        """Render the text as Segments.
+    
+        Args:
+            console (Console): Console instance.
+            end (Optional[str], optional): Optional end character.
+    
+        Returns:
+            Iterable[Segment]: Result of render that may be written to the console.
+        """
+        _Segment = Segment
+        text = self.plain
+        if not self._spans:
+>           yield Segment(text)
+                  ^^^^^^^^^^^^^
+E           TypeError: Segment() takes no arguments
+
+rich/text.py:732: TypeError
+____________________ test_strip_private_escape_sequences[6] ____________________
+
+code = '6'
+
+    @pytest.mark.parametrize("code", [*"0123456789:;<=>?"])
+    def test_strip_private_escape_sequences(code):
+        text = Text.from_ansi(f"\x1b{code}x")
+    
+        console = Console(force_terminal=True)
+    
+        with console.capture() as capture:
+>           console.print(text)
+
+tests/test_ansi.py:82: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+rich/console.py:1731: in print
+    extend(render(renderable, render_options))
+rich/console.py:1339: in render
+    for render_output in iter_render:
+                         ^^^^^^^^^^^
+rich/text.py:705: in __rich_console__
+    yield from all_lines.render(console, end=self.end)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <text 'x' [] ''>, console = <console width=80 ColorSystem.STANDARD>
+end = '\n'
+
+    def render(self, console: "Console", end: str = "") -> Iterable["Segment"]:
+        """Render the text as Segments.
+    
+        Args:
+            console (Console): Console instance.
+            end (Optional[str], optional): Optional end character.
+    
+        Returns:
+            Iterable[Segment]: Result of render that may be written to the console.
+        """
+        _Segment = Segment
+        text = self.plain
+        if not self._spans:
+>           yield Segment(text)
+                  ^^^^^^^^^^^^^
+E           TypeError: Segment() takes no arguments
+
+rich/text.py:732: TypeError
+____________________ test_strip_private_escape_sequences[7] ____________________
+
+code = '7'
+
+    @pytest.mark.parametrize("code", [*"0123456789:;<=>?"])
+    def test_strip_private_escape_sequences(code):
+        text = Text.from_ansi(f"\x1b{code}x")
+    
+        console = Console(force_terminal=True)
+    
+        with console.capture() as capture:
+>           console.print(text)
+
+tests/test_ansi.py:82: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+rich/console.py:1731: in print
+    extend(render(renderable, render_options))
+rich/console.py:1339: in render
+    for render_output in iter_render:
+                         ^^^^^^^^^^^
+rich/text.py:705: in __rich_console__
+    yield from all_lines.render(console, end=self.end)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <text 'x' [] ''>, console = <console width=80 ColorSystem.STANDARD>
+end = '\n'
+
+    def render(self, console: "Console", end: str = "") -> Iterable["Segment"]:
+        """Render the text as Segments.
+    
+        Args:
+            console (Console): Console instance.
+            end (Optional[str], optional): Optional end character.
+    
+        Returns:
+            Iterable[Segment]: Result of render that may be written to the console.
+        """
+        _Segment = Segment
+        text = self.plain
+        if not self._spans:
+>           yield Segment(text)
+                  ^^^^^^^^^^^^^
+E           TypeError: Segment() takes no arguments
+
+rich/text.py:732: TypeError
+____________________ test_strip_private_escape_sequences[8] ____________________
+
+code = '8'
+
+    @pytest.mark.parametrize("code", [*"0123456789:;<=>?"])
+    def test_strip_private_escape_sequences(code):
+        text = Text.from_ansi(f"\x1b{code}x")
+    
+        console = Console(force_terminal=True)
+    
+        with console.capture() as capture:
+>           console.print(text)
+
+tests/test_ansi.py:82: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+rich/console.py:1731: in print
+    extend(render(renderable, render_options))
+rich/console.py:1339: in render
+    for render_output in iter_render:
+                         ^^^^^^^^^^^
+rich/text.py:705: in __rich_console__
+    yield from all_lines.render(console, end=self.end)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <text 'x' [] ''>, console = <console width=80 ColorSystem.STANDARD>
+end = '\n'
+
+    def render(self, console: "Console", end: str = "") -> Iterable["Segment"]:
+        """Render the text as Segments.
+    
+        Args:
+            console (Console): Console instance.
+            end (Optional[str], optional): Optional end character.
+    
+        Returns:
+            Iterable[Segment]: Result of render that may be written to the console.
+        """
+        _Segment = Segment
+        text = self.plain
+        if not self._spans:
+>           yield Segment(text)
+                  ^^^^^^^^^^^^^
+E           TypeError: Segment() takes no arguments
+
+rich/text.py:732: TypeError
+____________________ test_strip_private_escape_sequences[9] ____________________
+
+code = '9'
+
+    @pytest.mark.parametrize("code", [*"0123456789:;<=>?"])
+    def test_strip_private_escape_sequences(code):
+        text = Text.from_ansi(f"\x1b{code}x")
+    
+        console = Console(force_terminal=True)
+    
+        with console.capture() as capture:
+>           console.print(text)
+
+tests/test_ansi.py:82: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+rich/console.py:1731: in print
+    extend(render(renderable, render_options))
+rich/console.py:1339: in render
+    for render_output in iter_render:
+                         ^^^^^^^^^^^
+rich/text.py:705: in __rich_console__
+    yield from all_lines.render(console, end=self.end)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <text 'x' [] ''>, console = <console width=80 ColorSystem.STANDARD>
+end = '\n'
+
+    def render(self, console: "Console", end: str = "") -> Iterable["Segment"]:
+        """Render the text as Segments.
+    
+        Args:
+            console (Console): Console instance.
+            end (Optional[str], optional): Optional end character.
+    
+        Returns:
+            Iterable[Segment]: Result of render that may be written to the console.
+        """
+        _Segment = Segment
+        text = self.plain
+        if not self._spans:
+>           yield Segment(text)
+                  ^^^^^^^^^^^^^
+E           TypeError: Segment() takes no arguments
+
+rich/text.py:732: TypeError
+____________________ test_strip_private_escape_sequences[:] ____________________
+
+code = ':'
+
+    @pytest.mark.parametrize("code", [*"0123456789:;<=>?"])
+    def test_strip_private_escape_sequences(code):
+        text = Text.from_ansi(f"\x1b{code}x")
+    
+        console = Console(force_terminal=True)
+    
+        with console.capture() as capture:
+>           console.print(text)
+
+tests/test_ansi.py:82: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+rich/console.py:1731: in print
+    extend(render(renderable, render_options))
+rich/console.py:1339: in render
+    for render_output in iter_render:
+                         ^^^^^^^^^^^
+rich/text.py:705: in __rich_console__
+    yield from all_lines.render(console, end=self.end)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <text 'x' [] ''>, console = <console width=80 ColorSystem.STANDARD>
+end = '\n'
+
+    def render(self, console: "Console", end: str = "") -> Iterable["Segment"]:
+        """Render the text as Segments.
+    
+        Args:
+            console (Console): Console instance.
+            end (Optional[str], optional): Optional end character.
+    
+        Returns:
+            Iterable[Segment]: Result of render that may be written to the console.
+        """
+        _Segment = Segment
+        text = self.plain
+        if not self._spans:
+>           yield Segment(text)
+                  ^^^^^^^^^^^^^
+E           TypeError: Segment() takes no arguments
+
+rich/text.py:732: TypeError
+____________________ test_strip_private_escape_sequences[;] ____________________
+
+code = ';'
+
+    @pytest.mark.parametrize("code", [*"0123456789:;<=>?"])
+    def test_strip_private_escape_sequences(code):
+        text = Text.from_ansi(f"\x1b{code}x")
+    
+        console = Console(force_terminal=True)
+    
+        with console.capture() as capture:
+>           console.print(text)
+
+tests/test_ansi.py:82: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+rich/console.py:1731: in print
+    extend(render(renderable, render_options))
+rich/console.py:1339: in render
+    for render_output in iter_render:
+                         ^^^^^^^^^^^
+rich/text.py:705: in __rich_console__
+    yield from all_lines.render(console, end=self.end)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <text 'x' [] ''>, console = <console width=80 ColorSystem.STANDARD>
+end = '\n'
+
+    def render(self, console: "Console", end: str = "") -> Iterable["Segment"]:
+        """Render the text as Segments.
+    
+        Args:
+            console (Console): Console instance.
+            end (Optional[str], optional): Optional end character.
+    
+        Returns:
+            Iterable[Segment]: Result of render that may be written to the console.
+        """
+        _Segment = Segment
+        text = self.plain
+        if not self._spans:
+>           yield Segment(text)
+                  ^^^^^^^^^^^^^
+E           TypeError: Segment() takes no arguments
+
+rich/text.py:732: TypeError
+____________________ test_strip_private_escape_sequences[<] ____________________
+
+code = '<'
+
+    @pytest.mark.parametrize("code", [*"0123456789:;<=>?"])
+    def test_strip_private_escape_sequences(code):
+        text = Text.from_ansi(f"\x1b{code}x")
+    
+        console = Console(force_terminal=True)
+    
+        with console.capture() as capture:
+>           console.print(text)
+
+tests/test_ansi.py:82: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+rich/console.py:1731: in print
+    extend(render(renderable, render_options))
+rich/console.py:1339: in render
+    for render_output in iter_render:
+                         ^^^^^^^^^^^
+rich/text.py:705: in __rich_console__
+    yield from all_lines.render(console, end=self.end)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <text 'x' [] ''>, console = <console width=80 ColorSystem.STANDARD>
+end = '\n'
+
+    def render(self, console: "Console", end: str = "") -> Iterable["Segment"]:
+        """Render the text as Segments.
+    
+        Args:
+            console (Console): Console instance.
+            end (Optional[str], optional): Optional end character.
+    
+        Returns:
+            Iterable[Segment]: Result of render that may be written to the console.
+        """
+        _Segment = Segment
+        text = self.plain
+        if not self._spans:
+>           yield Segment(text)
+                  ^^^^^^^^^^^^^
+E           TypeError: Segment() takes no arguments
+
+rich/text.py:732: TypeError
+____________________ test_strip_private_escape_sequences[=] ____________________
+
+code = '='
+
+    @pytest.mark.parametrize("code", [*"0123456789:;<=>?"])
+    def test_strip_private_escape_sequences(code):
+        text = Text.from_ansi(f"\x1b{code}x")
+    
+        console = Console(force_terminal=True)
+    
+        with console.capture() as capture:
+>           console.print(text)
+
+tests/test_ansi.py:82: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+rich/console.py:1731: in print
+    extend(render(renderable, render_options))
+rich/console.py:1339: in render
+    for render_output in iter_render:
+                         ^^^^^^^^^^^
+rich/text.py:705: in __rich_console__
+    yield from all_lines.render(console, end=self.end)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <text 'x' [] ''>, console = <console width=80 ColorSystem.STANDARD>
+end = '\n'
+
+    def render(self, console: "Console", end: str = "") -> Iterable["Segment"]:
+        """Render the text as Segments.
+    
+        Args:
+            console (Console): Console instance.
+            end (Optional[str], optional): Optional end character.
+    
+        Returns:
+            Iterable[Segment]: Result of render that may be written to the console.
+        """
+        _Segment = Segment
+        text = self.plain
+        if not self._spans:
+>           yield Segment(text)
+                  ^^^^^^^^^^^^^
+E           TypeError: Segment() takes no arguments
+
+rich/text.py:732: TypeError
+____________________ test_strip_private_escape_sequences[>] ____________________
+
+code = '>'
+
+    @pytest.mark.parametrize("code", [*"0123456789:;<=>?"])
+    def test_strip_private_escape_sequences(code):
+        text = Text.from_ansi(f"\x1b{code}x")
+    
+        console = Console(force_terminal=True)
+    
+        with console.capture() as capture:
+>           console.print(text)
+
+tests/test_ansi.py:82: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+rich/console.py:1731: in print
+    extend(render(renderable, render_options))
+rich/console.py:1339: in render
+    for render_output in iter_render:
+                         ^^^^^^^^^^^
+rich/text.py:705: in __rich_console__
+    yield from all_lines.render(console, end=self.end)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <text 'x' [] ''>, console = <console width=80 ColorSystem.STANDARD>
+end = '\n'
+
+    def render(self, console: "Console", end: str = "") -> Iterable["Segment"]:
+        """Render the text as Segments.
+    
+        Args:
+            console (Console): Console instance.
+            end (Optional[str], optional): Optional end character.
+    
+        Returns:
+            Iterable[Segment]: Result of render that may be written to the console.
+        """
+        _Segment = Segment
+        text = self.plain
+        if not self._spans:
+>           yield Segment(text)
+                  ^^^^^^^^^^^^^
+E           TypeError: Segment() takes no arguments
+
+rich/text.py:732: TypeError
+____________________ test_strip_private_escape_sequences[?] ____________________
+
+code = '?'
+
+    @pytest.mark.parametrize("code", [*"0123456789:;<=>?"])
+    def test_strip_private_escape_sequences(code):
+        text = Text.from_ansi(f"\x1b{code}x")
+    
+        console = Console(force_terminal=True)
+    
+        with console.capture() as capture:
+>           console.print(text)
+
+tests/test_ansi.py:82: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+rich/console.py:1731: in print
+    extend(render(renderable, render_options))
+rich/console.py:1339: in render
+    for render_output in iter_render:
+                         ^^^^^^^^^^^
+rich/text.py:705: in __rich_console__
+    yield from all_lines.render(console, end=self.end)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <text 'x' [] ''>, console = <console width=80 ColorSystem.STANDARD>
+end = '\n'
+
+    def render(self, console: "Console", end: str = "") -> Iterable["Segment"]:
+        """Render the text as Segments.
+    
+        Args:
+            console (Console): Console instance.
+            end (Optional[str], optional): Optional end character.
+    
+        Returns:
+            Iterable[Segment]: Result of render that may be written to the console.
+        """
+        _Segment = Segment
+        text = self.plain
+        if not self._spans:
+>           yield Segment(text)
+                  ^^^^^^^^^^^^^
+E           TypeError: Segment() takes no arguments
+
+rich/text.py:732: TypeError
+_____________________________ test_decode_newlines _____________________________
+
+    def test_decode_newlines():
+        """Test newlines are preserved.
+        Regression test for https://github.com/Textualize/rich/issues/3577
+        """
+        assert Text.from_ansi("").plain == ""
+>       assert Text.from_ansi("\n").plain == "\n"
+E       AssertionError: assert '' == '\n'
+E         
+E         Strings contain only whitespace, escaping them using repr()
+E         - '\n'
+E         + ''
+
+tests/test_ansi.py:94: AssertionError
+- generated xml file: /tmp/swegemma_sandbox_221b4dd0-bca_nxr7ucgy/tmp/_swegemma_junit_109807bf86e9.xml -
+=========================== short test summary info ============================
+FAILED tests/test_ansi.py::test_decode - TypeError: Segment() takes no arguments
+FAILED tests/test_ansi.py::test_decode_example - TypeError: Segment() takes n...
+FAILED tests/test_ansi.py::test_decode_issue_2688[\x1b[31mFound 4 errors in 2 files (checked 18 source files)\x1b(B\x1b[m\n-Found 4 errors in 2 files (checked 18 source files)\n]
+FAILED tests/test_ansi.py::test_strip_private_escape_sequences[0] - TypeError...
+FAILED tests/test_ansi.py::test_strip_private_escape_sequences[1] - TypeError...
+FAILED tests/test_ansi.py::test_strip_private_escape_sequences[2] - TypeError...
+FAILED tests/test_ansi.py::test_strip_private_escape_sequences[3] - TypeError...
+FAILED tests/test_ansi.py::test_strip_private_escape_sequences[4] - TypeError...
+FAILED tests/test_ansi.py::test_strip_private_escape_sequences[5] - TypeError...
+FAILED tests/test_ansi.py::test_strip_private_escape_sequences[6] - TypeError...
+FAILED tests/test_ansi.py::test_strip_private_escape_sequences[7] - TypeError...
+FAILED tests/test_ansi.py::test_strip_private_escape_sequences[8] - TypeError...
+FAILED tests/test_ansi.py::test_strip_private_escape_sequences[9] - TypeError...
+FAILED tests/test_ansi.py::test_strip_private_escape_sequences[:] - TypeError...
+FAILED tests/test_ansi.py::test_strip_private_escape_sequences[;] - TypeError...
+FAILED tests/test_ansi.py::test_strip_private_escape_sequences[<] - TypeError...
+FAILED tests/test_ansi.py::test_strip_private_escape_sequences[=] - TypeError...
+FAILED tests/test_ansi.py::test_strip_private_escape_sequences[>] - TypeError...
+FAILED tests/test_ansi.py::test_strip_private_escape_sequences[?] - TypeError...
+FAILED tests/test_ansi.py::test_decode_newlines - AssertionError: assert '' =...
+20 failed, 4 passed in 1.18s
+
+STDERR:

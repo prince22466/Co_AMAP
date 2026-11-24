@@ -1,0 +1,163 @@
+STDOUT:
+..........F                                                              [100%]
+=================================== FAILURES ===================================
+_______________________________ test_live_empty ________________________________
+
+self = <rich.live.Live object at 0x7c70027e5eb0>, refresh = True
+
+    def start(self, refresh: bool = False) -> None:
+        """Start live rendering display.
+    
+        Args:
+            refresh (bool, optional): Also refresh. Defaults to False.
+        """
+        with self._lock:
+            if self._started:
+                return
+            self._started = True
+    
+            if not self.console.set_live(self):
+                self._nested = True
+                return
+    
+            if self._screen:
+                self._alt_screen = self.console.set_alt_screen(True)
+            self.console.show_cursor(False)
+            self._enable_redirect_io()
+            self.console.push_render_hook(self)
+            if refresh:
+                try:
+>                   self.refresh()
+
+rich/live.py:133: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+rich/live.py:267: in refresh
+    self.console.print(Control())
+rich/console.py:1724: in print
+    extend(render(renderable, render_options))
+rich/console.py:1349: in render
+    yield from self.render(render_output, _options)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <console width=20 None>, renderable = None
+options = ConsoleOptions(size=ConsoleDimensions(width=20, height=5), legacy_windows=False, min_width=1, max_width=20, is_termina...e, encoding='utf-8', max_height=5, justify=None, overflow=None, no_wrap=None, highlight=None, markup=None, height=None)
+
+    def render(
+        self, renderable: RenderableType, options: Optional[ConsoleOptions] = None
+    ) -> Iterable[Segment]:
+        """Render an object in to an iterable of `Segment` instances.
+    
+        This method contains the logic for rendering objects with the console protocol.
+        You are unlikely to need to use it directly, unless you are extending the library.
+    
+        Args:
+            renderable (RenderableType): An object supporting the console protocol, or
+                an object that may be converted to a string.
+            options (ConsoleOptions, optional): An options object, or None to use self.options. Defaults to None.
+    
+        Returns:
+            Iterable[Segment]: An iterable of segments that may be rendered.
+        """
+    
+        _options = options or self.options
+        if _options.max_width < 1:
+            # No space to render anything. This prevents potential recursion errors.
+            return
+        render_iterable: RenderResult
+    
+        renderable = rich_cast(renderable)
+        if hasattr(renderable, "__rich_console__") and not isclass(renderable):
+            render_iterable = renderable.__rich_console__(self, _options)
+        elif isinstance(renderable, str):
+            text_renderable = self.render_str(
+                renderable, highlight=_options.highlight, markup=_options.markup
+            )
+            render_iterable = text_renderable.__rich_console__(self, _options)
+        else:
+>           raise errors.NotRenderableError(
+                f"Unable to render {renderable!r}; "
+                "A str, Segment or object with __rich_console__ method is required"
+            )
+E           rich.errors.NotRenderableError: Unable to render None; A str, Segment or object with __rich_console__ method is required
+
+rich/console.py:1332: NotRenderableError
+
+During handling of the above exception, another exception occurred:
+
+    def test_live_empty() -> None:
+        """Regression test for https://github.com/Textualize/rich/issues/3796
+    
+        No NL should be written if there was nothing rendered.
+        """
+    
+        from rich.console import Group
+    
+        console = create_capture_console(width=20, height=5)
+        console.begin_capture()
+>       with Live(Group(), console=console, transient=True):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_live.py:182: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+rich/live.py:180: in __enter__
+    self.start(refresh=self._renderable is not None)
+rich/live.py:139: in start
+    self.stop()
+rich/live.py:165: in stop
+    self.refresh()
+rich/live.py:267: in refresh
+    self.console.print(Control())
+rich/console.py:1724: in print
+    extend(render(renderable, render_options))
+rich/console.py:1349: in render
+    yield from self.render(render_output, _options)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <console width=20 None>, renderable = None
+options = ConsoleOptions(size=ConsoleDimensions(width=20, height=5), legacy_windows=False, min_width=1, max_width=20, is_termina...e, encoding='utf-8', max_height=5, justify=None, overflow=None, no_wrap=None, highlight=None, markup=None, height=None)
+
+    def render(
+        self, renderable: RenderableType, options: Optional[ConsoleOptions] = None
+    ) -> Iterable[Segment]:
+        """Render an object in to an iterable of `Segment` instances.
+    
+        This method contains the logic for rendering objects with the console protocol.
+        You are unlikely to need to use it directly, unless you are extending the library.
+    
+        Args:
+            renderable (RenderableType): An object supporting the console protocol, or
+                an object that may be converted to a string.
+            options (ConsoleOptions, optional): An options object, or None to use self.options. Defaults to None.
+    
+        Returns:
+            Iterable[Segment]: An iterable of segments that may be rendered.
+        """
+    
+        _options = options or self.options
+        if _options.max_width < 1:
+            # No space to render anything. This prevents potential recursion errors.
+            return
+        render_iterable: RenderResult
+    
+        renderable = rich_cast(renderable)
+        if hasattr(renderable, "__rich_console__") and not isclass(renderable):
+            render_iterable = renderable.__rich_console__(self, _options)
+        elif isinstance(renderable, str):
+            text_renderable = self.render_str(
+                renderable, highlight=_options.highlight, markup=_options.markup
+            )
+            render_iterable = text_renderable.__rich_console__(self, _options)
+        else:
+>           raise errors.NotRenderableError(
+                f"Unable to render {renderable!r}; "
+                "A str, Segment or object with __rich_console__ method is required"
+            )
+E           rich.errors.NotRenderableError: Unable to render None; A str, Segment or object with __rich_console__ method is required
+
+rich/console.py:1332: NotRenderableError
+- generated xml file: /tmp/swegemma_sandbox_f6e2afbc-076_cuetnzqy/tmp/_swegemma_junit_cc0a6fd99cc0.xml -
+=========================== short test summary info ============================
+FAILED tests/test_live.py::test_live_empty - rich.errors.NotRenderableError: ...
+1 failed, 10 passed in 2.22s
+
+STDERR:

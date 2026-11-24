@@ -1,0 +1,166 @@
+STDOUT:
+....FF.................................................................. [ 41%]
+..............................FFFFF.........F........................... [ 82%]
+.............................F                                           [100%]
+=================================== FAILURES ===================================
+_________________________ test_split_lines_terminator __________________________
+
+    def test_split_lines_terminator():
+        lines = [Segment("Hello\nWorld")]
+>       assert list(Segment.split_lines_terminator(lines)) == [
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+            ([Segment("Hello")], True),
+            ([Segment("World")], False),
+        ]
+E       AttributeError: type object 'Segment' has no attribute 'split_lines_terminator'
+
+tests/test_segment.py:39: AttributeError
+___________________ test_split_lines_terminator_single_line ____________________
+
+    def test_split_lines_terminator_single_line():
+        lines = [Segment("Hello")]
+>       assert list(Segment.split_lines_terminator(lines)) == [
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+            ([Segment("Hello")], False),
+        ]
+E       AttributeError: type object 'Segment' has no attribute 'split_lines_terminator'
+
+tests/test_segment.py:47: AttributeError
+________________________________ test_wrap_cjk _________________________________
+
+    def test_wrap_cjk():
+        text = Text("わさび")
+        lines = text.wrap(Console(), 4)
+>       assert lines._lines == [
+            Text("わさ"),
+            Text("び"),
+        ]
+E       AssertionError: assert [<text '' [] ...xt 'び' [] ''>] == [<text 'わさ' [...xt 'び' [] ''>]
+E         
+E         At index 0 diff: <text '' [] ''> != <text 'わさ' [] ''>
+E         Left contains one more item: <text 'び' [] ''>
+E         Use -v to get more diff
+
+tests/test_text.py:489: AssertionError
+______________________ test_wrap_cjk_width_mid_character _______________________
+
+    def test_wrap_cjk_width_mid_character():
+        text = Text("わさび")
+        lines = text.wrap(Console(), 3)
+>       assert lines._lines == [
+            Text("わ"),
+            Text("さ"),
+            Text("び"),
+        ]
+E       AssertionError: assert [<text '' [] ...xt 'び' [] ''>] == [<text 'わ' []...xt 'び' [] ''>]
+E         
+E         At index 0 diff: <text '' [] ''> != <text 'わ' [] ''>
+E         Left contains one more item: <text 'び' [] ''>
+E         Use -v to get more diff
+
+tests/test_text.py:498: AssertionError
+_____________________________ test_wrap_cjk_mixed ______________________________
+
+    def test_wrap_cjk_mixed():
+        """Regression test covering https://github.com/Textualize/rich/issues/3176 and
+        https://github.com/Textualize/textual/issues/3567 - double width characters could
+        result in text going missing when wrapping."""
+        text = Text("123ありがとうございました")
+        console = Console(width=20)  # let's ensure the width passed to wrap() wins.
+    
+        wrapped_lines = text.wrap(console, width=8)
+        with console.capture() as capture:
+            console.print(wrapped_lines)
+    
+>       assert capture.get() == "123あり\nがとうご\nざいまし\nた\n"
+E       AssertionError: assert '\n123あり\nがとうご\nざいまし\nた\n' == '123あり\nがとうご\nざいまし\nた\n'
+E         
+E         + 
+E           123あり
+E           がとうご
+E           ざいまし
+E           た
+
+tests/test_text.py:516: AssertionError
+________________________________ test_wrap_long ________________________________
+
+    def test_wrap_long():
+        text = Text("abracadabra", justify="left")
+        lines = text.wrap(Console(), 4)
+>       assert len(lines) == 3
+E       AssertionError: assert 4 == 3
+E        +  where 4 = len(Lines([<text '    ' [] ''>, <text 'abra' [] ''>, <text 'cada' [] ''>, <text 'bra ' [] ''>]))
+
+tests/test_text.py:522: AssertionError
+________________________ test_wrap_long_multi_codepoint ________________________
+
+    def test_wrap_long_multi_codepoint():
+        female_mechanic = "👩\u200d🔧"
+        text = Text(female_mechanic * 5, justify="left")
+        lines = text.wrap(Console(), 4)
+>       assert len(lines) == 3
+E       AssertionError: assert 4 == 3
+E        +  where 4 = len(Lines([<text '    ' [] ''>, <text '👩\u200d🔧👩\u200d🔧' [] ''>, <text '👩\u200d🔧👩\u200d🔧' [] ''>, <text '👩\u200d🔧  ' [] ''>]))
+
+tests/test_text.py:532: AssertionError
+__________________ test_wrap_leading_and_trailing_whitespace ___________________
+
+    def test_wrap_leading_and_trailing_whitespace():
+        text = Text("   123  456 789   ")
+        lines = text.wrap(Console(), 4)
+>       assert lines._lines == [
+            Text("   1"),
+            Text("23  "),
+            Text("456 "),
+            Text("789 "),
+        ]
+E       AssertionError: assert [<text '' [] ...'789 ' [] ''>] == [<text '   1'...'789 ' [] ''>]
+E         
+E         At index 0 diff: <text '' [] ''> != <text '   1' [] ''>
+E         Left contains one more item: <text '789 ' [] ''>
+E         Use -v to get more diff
+
+tests/test_text.py:644: AssertionError
+____________________________ test_soft_wrap_styled _____________________________
+
+    def test_soft_wrap_styled() -> None:
+        """Regression test for https://github.com/Textualize/rich/issues/3838
+    
+        If soft_wrap is True and a style is set, we don't want to style the new lines.
+        """
+        console = Console(color_system="standard", width=80, force_terminal=True)
+        with console.capture() as capture:
+            console.print("soft wrap is on", style="blue on white", soft_wrap=True)
+            console.print("Next line")
+    
+        output = capture.get()
+        print(repr(output))
+        # Background is reset before \n
+        expected = "\x1b[34;47msoft wrap is on\x1b[0m\nNext line\n"
+>       assert output == expected
+E       AssertionError: assert '\x1b[34;47ms...0mNext line\n' == '\x1b[34;47ms...\nNext line\n'
+E         
+E         - [34;47msoft wrap is on[0m
+E         + [34;47msoft wrap is on[0m[34;47m
+E         ?                            ++++++++
+E         - Next line
+E         + [0mNext line
+E         ? ++++
+
+tests/test_text.py:1129: AssertionError
+----------------------------- Captured stdout call -----------------------------
+'\x1b[34;47msoft wrap is on\x1b[0m\x1b[34;47m\n\x1b[0mNext line\n'
+- generated xml file: /tmp/swegemma_sandbox_8a24fddf-2c7_09u2q1nz/tmp/_swegemma_junit_be12b5cf275a.xml -
+=========================== short test summary info ============================
+FAILED tests/test_segment.py::test_split_lines_terminator - AttributeError: t...
+FAILED tests/test_segment.py::test_split_lines_terminator_single_line - Attri...
+FAILED tests/test_text.py::test_wrap_cjk - AssertionError: assert [<text '' [...
+FAILED tests/test_text.py::test_wrap_cjk_width_mid_character - AssertionError...
+FAILED tests/test_text.py::test_wrap_cjk_mixed - AssertionError: assert '\n12...
+FAILED tests/test_text.py::test_wrap_long - AssertionError: assert 4 == 3
+FAILED tests/test_text.py::test_wrap_long_multi_codepoint - AssertionError: a...
+FAILED tests/test_text.py::test_wrap_leading_and_trailing_whitespace - Assert...
+FAILED tests/test_text.py::test_soft_wrap_styled - AssertionError: assert '\x...
+9 failed, 165 passed in 0.60s
+
+STDERR:

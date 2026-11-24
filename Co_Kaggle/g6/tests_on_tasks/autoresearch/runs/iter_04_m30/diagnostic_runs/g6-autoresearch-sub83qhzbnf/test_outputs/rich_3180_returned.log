@@ -1,0 +1,235 @@
+STDOUT:
+....FFF........................................F.FFF..FFFFFF............ [ 63%]
+..........................................                               [100%]
+=================================== FAILURES ===================================
+_______________________________ test_chop_cells ________________________________
+
+    def test_chop_cells():
+        """Simple example of splitting cells into lines of width 3."""
+        text = "abcdefghijk"
+>       assert chop_cells(text, 3) == ["abc", "def", "ghi", "jk"]
+E       AssertionError: assert ['kji', 'hgf', 'edc', 'ba'] == ['abc', 'def', 'ghi', 'jk']
+E         
+E         At index 0 diff: 'kji' != 'abc'
+E         Use -v to get more diff
+
+tests/test_cells.py:49: AssertionError
+____________________ test_chop_cells_double_width_boundary _____________________
+
+    def test_chop_cells_double_width_boundary():
+        """The available width lies within a double-width character."""
+        text = "ありがとう"
+>       assert chop_cells(text, 3) == ["あ", "り", "が", "と", "う"]
+E       AssertionError: assert ['う', 'と', 'が', 'り', 'あ'] == ['あ', 'り', 'が', 'と', 'う']
+E         
+E         At index 0 diff: 'う' != 'あ'
+E         Use -v to get more diff
+
+tests/test_cells.py:55: AssertionError
+_________________________ test_chop_cells_mixed_width __________________________
+
+    def test_chop_cells_mixed_width():
+        """Mixed single and double-width characters."""
+        text = "あ1り234が5と6う78"
+>       assert chop_cells(text, 3) == ["あ1", "り2", "34", "が5", "と6", "う7", "8"]
+E       AssertionError: assert ['87', 'う6', ...2', 'り1', ...] == ['あ1', 'り2', ...6', 'う7', ...]
+E         
+E         At index 0 diff: '87' != 'あ1'
+E         Use -v to get more diff
+
+tests/test_cells.py:61: AssertionError
+__________ test_wrap_wrapped_word_length_greater_than_available_width __________
+
+    def test_wrap_wrapped_word_length_greater_than_available_width():
+        text = Text("1234 12345678")
+        lines = text.wrap(Console(), 7)
+>       assert lines._lines == [
+            Text("1234 "),
+            Text("1234567"),
+            Text("8"),
+        ]
+E       AssertionError: assert [<text '1234 ...'1234567' []>] == [<text '1234 ...<text '8' []>]
+E         
+E         Right contains one more item: <text '8' []>
+E         Use -v to get more diff
+
+tests/test_text.py:426: AssertionError
+______________________ test_wrap_cjk_width_mid_character _______________________
+
+    def test_wrap_cjk_width_mid_character():
+        text = Text("わさび")
+        lines = text.wrap(Console(), 3)
+>       assert lines._lines == [
+            Text("わ"),
+            Text("さ"),
+            Text("び"),
+        ]
+E       AssertionError: assert [<text 'わ' []...text 'さ ' []>] == [<text 'わ' []...<text 'び' []>]
+E         
+E         At index 1 diff: <text 'さ ' []> != <text 'さ' []>
+E         Right contains one more item: <text 'び' []>
+E         Use -v to get more diff
+
+tests/test_text.py:445: AssertionError
+_____________________________ test_wrap_cjk_mixed ______________________________
+
+    def test_wrap_cjk_mixed():
+        """Regression test covering https://github.com/Textualize/rich/issues/3176 and
+        https://github.com/Textualize/textual/issues/3567 - double width characters could
+        result in text going missing when wrapping."""
+        text = Text("123ありがとうございました")
+        console = Console(width=20)  # let's ensure the width passed to wrap() wins.
+    
+        wrapped_lines = text.wrap(console, width=8)
+        with console.capture() as capture:
+            console.print(wrapped_lines)
+    
+>       assert capture.get() == "123あり\nがとうご\nざいまし\nた\n"
+E       AssertionError: assert '123あ\nりがとう\n' == '123あり\nがとうご\nざいまし\nた\n'
+E         
+E         - 123あり
+E         ?     -
+E         + 123あ
+E         - がとうご
+E         ?    -
+E         + りがとう...
+E         
+E         ...Full output truncated (3 lines hidden), use '-vv' to show
+
+tests/test_text.py:463: AssertionError
+________________________________ test_wrap_long ________________________________
+
+    def test_wrap_long():
+        text = Text("abracadabra", justify="left")
+        lines = text.wrap(Console(), 4)
+>       assert len(lines) == 3
+E       AssertionError: assert 2 == 3
+E        +  where 2 = len(Lines([<text 'abra' []>, <text 'cada' []>]))
+
+tests/test_text.py:469: AssertionError
+_____________________________ test_wrap_long_words _____________________________
+
+    def test_wrap_long_words():
+        text = Text("XX 12345678912")
+        lines = text.wrap(Console(), 4)
+    
+>       assert lines._lines == [
+            Text("XX "),
+            Text("1234"),
+            Text("5678"),
+            Text("912"),
+        ]
+E       AssertionError: assert [<text 'XX ' ...xt '1234' []>] == [<text 'XX ' ...ext '912' []>]
+E         
+E         Right contains 2 more items, first extra item: <text '5678' []>
+E         Use -v to get more diff
+
+tests/test_text.py:495: AssertionError
+____________________________ test_wrap_long_words_2 ____________________________
+
+    def test_wrap_long_words_2():
+        # https://github.com/Textualize/rich/issues/2273
+        text = Text("Hello, World...123")
+        lines = text.wrap(Console(), 10)
+>       assert lines._lines == [
+            Text("Hello, "),
+            Text("World...12"),
+            Text("3"),
+        ]
+E       AssertionError: assert [<text 'Hello...rld...12' []>] == [<text 'Hello...<text '3' []>]
+E         
+E         Right contains one more item: <text '3' []>
+E         Use -v to get more diff
+
+tests/test_text.py:507: AssertionError
+_________________ test_wrap_long_words_followed_by_other_words _________________
+
+    def test_wrap_long_words_followed_by_other_words():
+        """After folding a word across multiple lines, we should continue from
+        the next word immediately after the folded word (don't take a newline
+        following completion of the folded word)."""
+        text = Text("123 12345678 123 123")
+        lines = text.wrap(Console(), 6)
+>       assert lines._lines == [
+            Text("123 "),
+            Text("123456"),
+            Text("78 123"),
+            Text("123"),
+        ]
+E       AssertionError: assert [<text '123 '...ext '123' []>] == [<text '123 '...ext '123' []>]
+E         
+E         At index 2 diff: <text '123' []> != <text '78 123' []>
+E         Right contains one more item: <text '123' []>
+E         Use -v to get more diff
+
+tests/test_text.py:520: AssertionError
+__________ test_wrap_long_word_preceeded_by_word_of_full_line_length ___________
+
+    def test_wrap_long_word_preceeded_by_word_of_full_line_length():
+        """The width of the first word is the same as the available width.
+        Ensures that folding works correctly when there's no space available
+        on the current line."""
+        text = Text("123456 12345678 123 123")
+        lines = text.wrap(Console(), 6)
+>       assert lines._lines == [
+            Text("123456"),
+            Text("123456"),
+            Text("78 123"),
+            Text("123"),
+        ]
+E       AssertionError: assert [<text '12345...ext '123' []>] == [<text '12345...ext '123' []>]
+E         
+E         At index 2 diff: <text '123' []> != <text '78 123' []>
+E         Right contains one more item: <text '123' []>
+E         Use -v to get more diff
+
+tests/test_text.py:534: AssertionError
+____________________ test_wrap_multiple_consecutive_spaces _____________________
+
+    def test_wrap_multiple_consecutive_spaces():
+        """Adding multiple consecutive spaces at the end of a line does not impact
+        the location at which a break will be added during the process of wrapping."""
+        text = Text("123456    12345678 123 123")
+        lines = text.wrap(Console(), 6)
+>       assert lines._lines == [
+            Text("123456"),
+            Text("123456"),
+            Text("78 123"),
+            Text("123"),
+        ]
+E       AssertionError: assert [<text '12345...ext '123' []>] == [<text '12345...ext '123' []>]
+E         
+E         At index 2 diff: <text '123' []> != <text '78 123' []>
+E         Right contains one more item: <text '123' []>
+E         Use -v to get more diff
+
+tests/test_text.py:547: AssertionError
+______________________ test_wrap_long_words_justify_left _______________________
+
+    def test_wrap_long_words_justify_left():
+        text = Text("X 123456789", justify="left")
+        lines = text.wrap(Console(), 4)
+    
+>       assert len(lines) == 4
+E       AssertionError: assert 2 == 4
+E        +  where 2 = len(Lines([<text 'X   ' []>, <text '1234' []>]))
+
+tests/test_text.py:559: AssertionError
+- generated xml file: /tmp/swegemma_sandbox_cda51336-589_wn_pyore/tmp/_swegemma_junit_3007ddef7696.xml -
+=========================== short test summary info ============================
+FAILED tests/test_cells.py::test_chop_cells - AssertionError: assert ['kji', ...
+FAILED tests/test_cells.py::test_chop_cells_double_width_boundary - Assertion...
+FAILED tests/test_cells.py::test_chop_cells_mixed_width - AssertionError: ass...
+FAILED tests/test_text.py::test_wrap_wrapped_word_length_greater_than_available_width
+FAILED tests/test_text.py::test_wrap_cjk_width_mid_character - AssertionError...
+FAILED tests/test_text.py::test_wrap_cjk_mixed - AssertionError: assert '123...
+FAILED tests/test_text.py::test_wrap_long - AssertionError: assert 2 == 3
+FAILED tests/test_text.py::test_wrap_long_words - AssertionError: assert [<te...
+FAILED tests/test_text.py::test_wrap_long_words_2 - AssertionError: assert [<...
+FAILED tests/test_text.py::test_wrap_long_words_followed_by_other_words - Ass...
+FAILED tests/test_text.py::test_wrap_long_word_preceeded_by_word_of_full_line_length
+FAILED tests/test_text.py::test_wrap_multiple_consecutive_spaces - AssertionE...
+FAILED tests/test_text.py::test_wrap_long_words_justify_left - AssertionError...
+13 failed, 101 passed in 0.49s
+
+STDERR:

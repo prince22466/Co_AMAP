@@ -26,7 +26,7 @@ KEPT_SUBMISSIONS_DIR = AUTORESEARCH_DIR / "kept_submissions"
 RUNS_DIR = AUTORESEARCH_DIR / "runs"
 KERNEL_DIR = AUTORESEARCH_DIR / "kaggle_eval_kernel"
 
-DATASET_SLUG = "prince22466/g6-autoresearch-sub"
+DATASET_SLUG = "prince22466/g6-autoresearch-sub-v2"
 KERNEL_SLUG = "prince22466/gemma-4-developer-agent-testing"
 
 ALLOWED_ARCHIVE_FILES = frozenset({
@@ -112,7 +112,7 @@ def stage_and_upload_dataset(iter_id: str, split: int, adapter_sha256: str) -> N
             json.dumps(run_meta, indent=2) + "\n", encoding="utf-8"
         )
         ds_meta = {
-            "title": "g6-autoresearch-sub",
+            "title": "g6-autoresearch-sub-v2",
             "id": DATASET_SLUG,
             "licenses": [{"name": "CC0-1.0"}],
         }

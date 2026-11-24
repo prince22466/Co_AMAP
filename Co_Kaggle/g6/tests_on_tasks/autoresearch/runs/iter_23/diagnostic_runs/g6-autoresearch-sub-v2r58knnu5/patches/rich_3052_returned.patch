@@ -1,0 +1,84 @@
+diff --git a/rich/prompt.py b/rich/prompt.py
+index 064c959b..dde70e0c 100644
+--- a/rich/prompt.py
++++ b/rich/prompt.py
+@@ -59,6 +59,7 @@ class PromptBase(Generic[PromptType]):
+         choices: Optional[List[str]] = None,
+         show_default: bool = True,
+         show_choices: bool = True,
++        case_sensitive: bool = True,
+     ) -> None:
+         self.console = console or get_console()
+         self.prompt = (
+@@ -67,6 +68,7 @@ class PromptBase(Generic[PromptType]):
+             else prompt
+         )
+         self.password = password
++        self.case_sensitive = case_sensitive
+         if choices is not None:
+             self.choices = choices
+         self.show_default = show_default
+@@ -137,6 +139,7 @@ class PromptBase(Generic[PromptType]):
+             choices=choices,
+             show_default=show_default,
+             show_choices=show_choices,
++            case_sensitive=case_sensitive,
+         )
+         return _prompt(default=default, stream=stream)
+ 
+@@ -202,17 +205,21 @@ class PromptBase(Generic[PromptType]):
+         """
+         return console.input(prompt, password=password, stream=stream)
+ 
+-    def check_choice(self, value: str) -> bool:
++    def check_choice(self, value: str, case_sensitive: bool = True) -> bool:
+         """Check value is in the list of valid choices.
+ 
+         Args:
+             value (str): Value entered by user.
++            case_sensitive (bool, optional): If True, choices are case sensitive. Defaults to True.
+ 
+         Returns:
+             bool: True if choice was valid, otherwise False.
+         """
+         assert self.choices is not None
+-        return value.strip() in self.choices
++        if case_sensitive:
++            return value.strip() in self.choices
++        else:
++            return value.strip().lower() in [c.lower() for c in self.choices]
+ 
+     def process_response(self, value: str) -> PromptType:
+         """Process response from user, convert to prompt type.
+@@ -232,7 +239,7 @@ class PromptBase(Generic[PromptType]):
+         except ValueError:
+             raise InvalidResponse(self.validate_error_message)
+ 
+-        if self.choices is not None and not self.check_choice(value):
++        if self.choices is not None and not self.check_choice(value, case_sensitive=case_sensitive):
+             raise InvalidResponse(self.illegal_choice_message)
+ 
+         return return_value
+@@ -259,11 +266,12 @@ class PromptBase(Generic[PromptType]):
+     ) -> Union[PromptType, DefaultType]:
+         ...
+ 
+-    def __call__(self, *, default: Any = ..., stream: Optional[TextIO] = None) -> Any:
++    def __call__(self, *, default: Any = ..., stream: Optional[TextIO] = None, case_sensitive: bool = True) -> Any:
+         """Run the prompt loop.
+ 
+         Args:
+             default (Any, optional): Optional default value.
++            case_sensitive (bool, optional): If True, choices are case sensitive. Defaults to True.
+ 
+         Returns:
+             PromptType: Processed value.
+@@ -275,7 +283,7 @@ class PromptBase(Generic[PromptType]):
+             if value == "" and default != ...:
+                 return default
+             try:
+-                return_value = self.process_response(value)
++                return_value = self.process_response(value, case_sensitive=case_sensitive)
+             except InvalidResponse as error:
+                 self.on_validate_error(value, error)
+                 continue
