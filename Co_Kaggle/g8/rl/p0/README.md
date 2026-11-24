@@ -101,3 +101,53 @@ P1: add trajectory collection, residual PPO/SAC and a held-out scenario split.
 P2: compare hierarchical RL and GPU surrogate-based rollouts.
 
 Targets are first below 0.010, then 0.006, ultimately below 0.00484.
+
+
+## P0.1: targeted reward / temperature / actuator diagnostics
+
+P0.1 answers three focused questions *before* RL training. It does not
+modify any controller, simulator dynamics, objective, or the P0 report.
+
+1. **A — Reward timeline / occupancy:** stream step-level loss decomposition,
+   electricity and gas cost, carbon emissions, occupancy, hour and comfort-mode
+   status. Summary includes means by hour, observed occupancy and comfort/eco
+   schedule. These are different: an active comfort schedule is not proof that
+   a zone is actually occupied.
+2. **B — Temperature violations:** calculate actual zone deviation beyond the
+   heating/cooling setpoint band using the simulator's reward-info zone
+   temperatures. Count exceedances strictly above 1/3/5/10 K, separately for
+   all zones, occupied zones, and occupant-weighted samples.
+3. **C — Actuator utilization:** report mean normalized command, fraction
+   within the outer 5% of the normalized action range, mean absolute step
+   changes, and run/switch duty cycles for AHUs / water equipment and zone
+   damper/reheat actuators. These are **command-space** bounds, not evidence
+   that the physical device is saturated or that delivered flow is sufficient.
+
+Run from repository root after the same P0 simulator setup:
+
+    # Targeted ~1-day trajectories: 3 climates x V7/V23/V25
+    python -m Co_Kaggle.g8.rl.p0.diagnostics --steps 288
+
+    # One targeted 12-hour evaluation (not a leaderboard score)
+    python -m Co_Kaggle.g8.rl.p0.diagnostics \
+      --scenarios building_train_1/fairbanks_1 --versions 23 --steps 144
+
+    # Optional full episode for one scenario (slow)
+    python -m Co_Kaggle.g8.rl.p0.diagnostics \
+      --scenarios building_train_2/phoenix_6 --versions 7 23 --full
+
+    python -m unittest discover -s Co_Kaggle/g8/rl/p0/tests -v
+
+Outputs are under `results/diagnostics/v<version>/` as one CSV timeline and
+one JSON summary per scenario; `results/diagnostics/index.json` lists the
+runs. They are intentionally not written into the existing `report.json` or
+`per_scenario.csv`. Runs with `--steps` are **partial diagnostics**: they
+must not be described as training-set or public leaderboard scores. `--full`
+follows actual gateway termination (currently 8641 rewards) and is flagged
+separately.
+
+P0.1 keeps only compact summaries in memory and streams rows to CSV.
+The loop obtains the organizer's post-step RewardInfo/RewardResponse for
+exact accounting; it is intended solely for local investigation (the Kaggle
+submission policy cannot access those simulator internals). No policy is
+trained or changed in this PR.
