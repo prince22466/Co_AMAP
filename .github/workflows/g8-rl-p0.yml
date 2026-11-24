@@ -40,6 +40,45 @@ jobs:
         run: python -m Co_Kaggle.g8.rl.p0.physics_terminal_check
       - name: Run 24 simulated hours for V7, V23, and V25
         run: python -m Co_Kaggle.g8.rl.p0.benchmark --steps 288 --versions 7 23 25 --out /tmp/g8-p0-smoke
+      - name: P0.1 reward and actuator diagnostics smoke
+        run: python -m Co_Kaggle.g8.rl.p0.diagnostics --scenarios building_train_1/atlanta_2 --versions 23 --steps 576 --out /tmp/g8-p01-smoke
+      - name: Verify P0.1 occupied trajectory and output invariants
+        run: |
+          python - <<'PY'
+          import csv
+          import json
+          import math
+          from datetime import datetime, timedelta
+          from pathlib import Path
+
+          root = Path("/tmp/g8-p01-smoke")
+          index = json.loads((root / "index.json").read_text())
+          assert len(index["runs"]) == 1
+          summary = json.loads(Path(index["runs"][0]["summary_path"]).read_text())
+          with Path(summary["csv"]).open(newline="") as f:
+              rows = list(csv.DictReader(f))
+          assert len(rows) == summary["steps"] == 576
+          assert not summary["full_30_day_episode"]
+          assert summary["comfort_excursions"]["occupied_zone_samples"] > 0
+          assert not summary["warnings"]
+          assert math.isclose(
+              sum(summary["comfort_loss_by_severity_k"].values()),
+              summary["loss_components"]["comfort"], abs_tol=1e-9
+          )
+          for row in rows:
+              start = datetime.fromisoformat(row["timestamp"])
+              end = datetime.fromisoformat(row["reward_end_timestamp"])
+              action = datetime.fromisoformat(row["action_timestamp"])
+              if action.tzinfo is None:
+                  action = action.replace(tzinfo=start.tzinfo)
+              assert end - start == timedelta(minutes=5)
+              assert start - action == timedelta(minutes=5)
+              assert math.isclose(
+                  -float(row["reward"]),
+                  sum(float(row[k]) for k in ("comfort_loss", "energy_loss", "carbon_loss")),
+                  abs_tol=1e-8, rel_tol=1e-7
+              )
+          PY
       - name: Test independent spawned simulator workers
         run: python -m Co_Kaggle.g8.rl.p0.benchmark --steps 6 --limit 2 --versions 23 --workers 2 --out /tmp/g8-p0-parallel
       - name: Upload local simulator diagnostics
@@ -49,3 +88,4 @@ jobs:
           path: |
             /tmp/g8-p0-smoke/
             /tmp/g8-p0-parallel/
+            /tmp/g8-p01-smoke/
