@@ -14,13 +14,18 @@ from Co_Kaggle.g8.rl.p0.diagnostics_core import (
 
 def fixture_metadata():
     return {
-        "temp_indices": [0], "pressure_indices": [1, 3],
-        "recirculation_indices": [2], "water_indices": [4],
-        "n_discrete_action": 2,
-        "zone_action_indices": {"VAV_1": {
-            "supply_air_damper_percentage_command": 5,
-            "reheat_valve_percentage_command": 6,
-        }},
+        "n_continuous_action": 7, "n_discrete_action": 2,
+        "diagnostic_action_fields": [
+            ("ahs", "ahu_1_supervisor_run_command"),
+            ("ahs", "ahu_1_supply_air_temperature_setpoint"),
+            ("ahs", "ahu_1_supply_air_static_pressure_setpoint"),
+            ("ahs", "ahu_1_recirculation_percentage_command"),
+            ("hws", "supervisor_run_command"),
+            ("hws", "differential_pressure_setpoint"),
+            ("hws", "supply_water_temperature_setpoint"),
+            ("VAV_1", "supply_air_damper_percentage_command"),
+            ("VAV_1", "reheat_valve_percentage_command"),
+        ],
     }
 
 
@@ -28,7 +33,8 @@ def zone(temp, low, high, occupancy):
     return SimpleNamespace(zone_air_temperature=temp,
                            heating_setpoint_temperature=low,
                            cooling_setpoint_temperature=high,
-                           average_occupancy=occupancy)
+                           average_occupancy=occupancy,
+                           air_flow_rate_setpoint=2.0, air_flow_rate=1.95)
 
 
 def fake_response():
@@ -92,10 +98,16 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertEqual(row["exceed_5k_zones"], 0)  # STRICT > threshold.
         self.assertEqual(row["max_zone_excursion_k"], 5.0)
         self.assertEqual(row["occupancy"], 2.0)
+        self.assertEqual(row["phase"], "occupied")
+        self.assertAlmostEqual(row["comfort_loss_1_to_3k"], 0.06)
+        self.assertEqual(row["max_occupied_zone_excursion_k"], 2.0)
+        self.assertEqual(row["vav_damper_near_high_fraction"], 1.0)
 
         a = self.acc.summary()
         self.assertAlmostEqual(a["mean_loss"], 0.16)
         self.assertEqual(a["by_hour"]["10"]["steps"], 1)
+        self.assertAlmostEqual(sum(a["comfort_loss_by_severity_k"].values()), 0.06)
+        self.assertEqual(a["zone_flow_utilization"]["occupied_discomfort_gt_1k_near_design_fraction"], 1.0)
         self.assertEqual(a["by_occupancy"]["occupied"]["steps"], 1)
         self.assertEqual(a["by_schedule"]["comfort_mode"]["steps"], 1)
         self.assertAlmostEqual(
@@ -126,6 +138,46 @@ class DiagnosticsTests(unittest.TestCase):
             summ["action_utilization"]["ahu_run"]["switch_fraction_per_transition"], 1.0
         )
         self.assertEqual(summ["by_schedule"]["eco_mode"]["steps"], 1)
+
+    def test_reordered_action_fields(self):
+        meta = fixture_metadata()
+        fields = meta["diagnostic_action_fields"]
+        # Water control comes first; no positional AHU assumptions.
+        meta["diagnostic_action_fields"] = fields[4:7] + fields[:4] + fields[7:]
+        groups = action_groups(meta)
+        self.assertEqual(groups["water_run"], ("discrete", [0]))
+        self.assertEqual(groups["ahu_run"], ("discrete", [1]))
+        self.assertEqual(groups["water_pressure"], ("continuous", [0]))
+        self.assertEqual(groups["ahu_static_pressure"], ("continuous", [3]))
+
+    def test_unknown_action_fails(self):
+        meta = fixture_metadata()
+        meta["diagnostic_action_fields"].append(("unknown", "new_field"))
+        with self.assertRaisesRegex(ValueError, "Unknown diagnostic action"):
+            action_groups(meta)
+
+    def test_unoccupied_preconditioning_and_zero_comfort(self):
+        info = SimpleNamespace(zone_reward_infos={
+            "a": zone(302, 294, 297, 0.0),
+        })
+        response = fake_response()
+        response.total_occupancy = 0
+        response.normalized_productivity_regret = 0
+        row = self.record(reward_info=info, response=response, reward=-0.1,
+                          comfort_mode=False, comfort_soon=True)
+        self.assertEqual(row["phase"], "preconditioning_window")
+        self.assertIsNone(row["max_occupied_zone_excursion_k"])
+        self.assertIsNone(self.acc.summary()["zone_flow_utilization"]["occupied_near_design_fraction"])
+
+    def test_multiple_severity_bands_allocate_exact_comfort(self):
+        info = SimpleNamespace(zone_reward_infos={
+            "a": zone(298, 294, 297, 1.0),  # 1 K -> 0.2 shortfall
+            "b": zone(307, 294, 297, 1.0),  # 10 K -> 2.0 shortfall
+        })
+        row = self.record(reward_info=info)
+        self.assertAlmostEqual(row["comfort_loss_0_to_1k"], 0.06 / 11)
+        self.assertAlmostEqual(row["comfort_loss_5_to_10k"], 0.06 * 10 / 11)
+        self.assertAlmostEqual(sum(self.acc.summary()["comfort_loss_by_severity_k"].values()), 0.06)
 
     def test_mismatched_reward_is_rejected(self):
         with self.assertRaises(ValueError):
