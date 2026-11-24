@@ -13,32 +13,53 @@ from .metrics import weighted_losses
 
 THRESHOLDS_K = (1, 3, 5, 10)
 NEAR_BOUND = 0.9  # Within the outer 5% of the normalized [-1, 1] range.
+SEVERITY_BANDS = ("0_to_1", "1_to_3", "3_to_5", "5_to_10", "over_10")
 
 
 def action_groups(metadata: dict) -> dict[str, tuple[str, list[int]]]:
-    """Map participant-facing action indices to equipment types."""
-    zone_actions = metadata["zone_action_indices"]
-
-    def zone_indices(field: str) -> list[int]:
-        return sorted({int(fields[field]) for fields in zone_actions.values()
-                       if field in fields})
-
-    ahu_count = len(metadata["temp_indices"])
-    discrete_count = int(metadata["n_discrete_action"])
-    if discrete_count not in (ahu_count, ahu_count + 1):
-        raise ValueError("Unexpected discrete action layout")
-    pressure = list(map(int, metadata["pressure_indices"]))
-    return {
-        "ahu_supply_temperature": ("continuous", list(map(int, metadata["temp_indices"]))),
-        "ahu_static_pressure": ("continuous", pressure[:ahu_count]),
-        "ahu_recirculation": ("continuous", list(map(int, metadata["recirculation_indices"]))),
-        "water_supply_temperature": ("continuous", list(map(int, metadata["water_indices"]))),
-        "water_pressure": ("continuous", pressure[ahu_count:]),
-        "vav_damper": ("continuous", zone_indices("supply_air_damper_percentage_command")),
-        "vav_reheat": ("continuous", zone_indices("reheat_valve_percentage_command")),
-        "ahu_run": ("discrete", list(range(ahu_count))),
-        "water_run": ("discrete", list(range(ahu_count, discrete_count))),
+    """Classify actual simulator action fields in hybrid vector order."""
+    groups = {
+        name: (kind, [])
+        for name, kind in (
+            ("ahu_supply_temperature", "continuous"),
+            ("ahu_static_pressure", "continuous"),
+            ("ahu_recirculation", "continuous"),
+            ("water_supply_temperature", "continuous"),
+            ("water_pressure", "continuous"),
+            ("vav_damper", "continuous"),
+            ("vav_reheat", "continuous"),
+            ("ahu_run", "discrete"),
+            ("water_run", "discrete"),
+        )
     }
+    fields = {
+        "supply_water_temperature_setpoint": "water_supply_temperature",
+        "differential_pressure_setpoint": "water_pressure",
+        "supervisor_run_command": "water_run",
+        "supply_air_damper_percentage_command": "vav_damper",
+        "reheat_valve_percentage_command": "vav_reheat",
+    }
+    ahu_fields = {
+        "_supply_air_temperature_setpoint": "ahu_supply_temperature",
+        "_supply_air_static_pressure_setpoint": "ahu_static_pressure",
+        "_recirculation_percentage_command": "ahu_recirculation",
+        "_supervisor_run_command": "ahu_run",
+    }
+    counts = {"continuous": 0, "discrete": 0}
+    for device, field in metadata["diagnostic_action_fields"]:
+        group = fields.get(field)
+        if field.startswith("ahu_"):
+            group = next((g for suffix, g in ahu_fields.items()
+                          if field.endswith(suffix)), None)
+        if group is None:
+            raise ValueError(f"Unknown diagnostic action: {device}/{field}")
+        kind, indices = groups[group]
+        indices.append(counts[kind])
+        counts[kind] += 1
+    for kind, count in counts.items():
+        if count != int(metadata["n_" + kind + "_action"]):
+            raise ValueError(f"Incomplete {kind} action mapping")
+    return groups
 
 
 def zone_excursion(zone: Any) -> float:
@@ -54,7 +75,10 @@ def zone_excursion(zone: Any) -> float:
 class DiagnosticAccumulator:
     """Accumulate small summaries while the caller streams CSV rows to disk."""
 
-    def __init__(self, metadata: dict):
+    def __init__(self, metadata: dict, deviation_ref: float = 5.0):
+        if not math.isfinite(deviation_ref) or deviation_ref <= 0:
+            raise ValueError("Invalid productivity deviation reference")
+        self.deviation_ref = deviation_ref
         self.groups = action_groups(metadata)
         self.groups_stats = {
             name: {"samples": 0, "sum": 0.0, "low": 0, "high": 0,
@@ -68,6 +92,11 @@ class DiagnosticAccumulator:
         self.by_hour: dict[int, dict] = {}
         self.by_occupancy: dict[str, dict] = {}
         self.by_schedule: dict[str, dict] = {}
+        self.by_phase: dict[str, dict] = {}
+        self.severity_loss = dict.fromkeys(SEVERITY_BANDS, 0.0)
+        self.occupied_max_excursion = 0.0
+        self.flow_samples = self.flow_near_design = 0
+        self.discomfort_flow_samples = self.discomfort_flow_near_design = 0
         self.zones = 0
         self.occupied_zones = 0
         self.occupant_samples = 0.0
@@ -93,6 +122,7 @@ class DiagnosticAccumulator:
             str(key): {
                 "steps": value["steps"],
                 "occupied_steps": value["occupied_steps"],
+                "total_loss": sum(value[k] for k in ("comfort", "energy", "carbon")),
                 "mean_loss": sum(value[k] for k in ("comfort", "energy", "carbon"))
                 / value["steps"],
                 "mean_components": {
@@ -103,10 +133,23 @@ class DiagnosticAccumulator:
             for key, value in sorted(buckets.items())
         }
 
-    def _record_actions(self, action: dict) -> None:
+    def _record_actions(self, action: dict) -> dict:
+        row = {}
         for group, (kind, indices) in self.groups.items():
             arr = action[kind + "_action"]
             stat = self.groups_stats[group]
+            values = [float(arr[index]) for index in indices]
+            n = len(values)
+            if kind == "continuous":
+                if any(not math.isfinite(v) or abs(v) > 1.00001 for v in values):
+                    raise ValueError(f"Invalid continuous command in {group}")
+                row[group + "_mean_command"] = sum(values) / n if n else None
+                row[group + "_near_low_fraction"] = sum(v <= -NEAR_BOUND for v in values) / n if n else None
+                row[group + "_near_high_fraction"] = sum(v >= NEAR_BOUND for v in values) / n if n else None
+            else:
+                if any(v not in (0, 1) for v in values):
+                    raise ValueError(f"Invalid discrete command in {group}")
+                row[group + "_on_fraction"] = sum(values) / n if n else None
             for index in indices:
                 value = float(arr[index])
                 if not math.isfinite(value):
@@ -126,9 +169,11 @@ class DiagnosticAccumulator:
                     if kind == "discrete":
                         stat["changes"] += int(delta > 0)
                 self.previous[key] = value
+        return row
 
     def record(self, *, timestamp: Any, comfort_mode: bool, action: dict,
-               reward_info: Any, response: Any, reward: float, weights: dict) -> dict:
+               reward_info: Any, response: Any, reward: float, weights: dict,
+               comfort_soon: bool = False) -> dict:
         """Produce one CSV row from the *actual* post-action reward response."""
         parts = weighted_losses(response.normalized_productivity_regret,
                                 response.normalized_energy_cost,
@@ -149,12 +194,18 @@ class DiagnosticAccumulator:
                             "occupied" if occupied else "unoccupied", parts, occupied)
         self._update_bucket(self.by_schedule,
                             "comfort_mode" if comfort_mode else "eco_mode", parts, occupied)
-        self._record_actions(action)
+        phase = ("occupied" if occupied else "unoccupied_comfort" if comfort_mode
+                 else "preconditioning_window" if comfort_soon else "unoccupied_eco")
+        self._update_bucket(self.by_phase, phase, parts, occupied)
+        action_row = self._record_actions(action)
 
         zones = list(reward_info.zone_reward_infos.values())
         exceed = {k: 0 for k in THRESHOLDS_K}
         occupied_exceed = {k: 0 for k in THRESHOLDS_K}
         max_excursion = 0.0
+        occupied_max_excursion = 0.0
+        severity = dict.fromkeys(SEVERITY_BANDS, 0.0)
+        flow_n = flow_high = discomfort_flow_n = discomfort_flow_high = 0
         zone_occupied = 0
         zone_total_occupancy = 0.0
         for zone in zones:
@@ -165,6 +216,22 @@ class DiagnosticAccumulator:
             zone_occupied += int(persons > 0)
             zone_total_occupancy += persons
             max_excursion = max(max_excursion, deviation)
+            if persons > 0:
+                occupied_max_excursion = max(occupied_max_excursion, deviation)
+                ratio = deviation / self.deviation_ref
+                shortfall = ratio if ratio <= 1.0 else 1.0 + (ratio - 1.0) ** 2
+                band = SEVERITY_BANDS[sum(deviation > k for k in THRESHOLDS_K)]
+                severity[band] += persons * shortfall
+                # RewardInfo reports delivered flow and design maximum.
+                design = float(zone.air_flow_rate_setpoint)
+                flow = float(zone.air_flow_rate)
+                if math.isfinite(design) and design > 0 and math.isfinite(flow):
+                    near_design = flow >= 0.95 * design
+                    flow_n += 1
+                    flow_high += int(near_design)
+                    if deviation > 1.0:
+                        discomfort_flow_n += 1
+                        discomfort_flow_high += int(near_design)
             for threshold in THRESHOLDS_K:
                 if deviation > threshold:
                     exceed[threshold] += 1
@@ -177,9 +244,25 @@ class DiagnosticAccumulator:
         self.occupied_zones += zone_occupied
         self.occupant_samples += zone_total_occupancy
         self.max_excursion_k = max(self.max_excursion_k, max_excursion)
+        self.occupied_max_excursion = max(self.occupied_max_excursion, occupied_max_excursion)
+        self.flow_samples += flow_n
+        self.flow_near_design += flow_high
+        self.discomfort_flow_samples += discomfort_flow_n
+        self.discomfort_flow_near_design += discomfort_flow_high
+        # Allocate the actual comfort loss by each band's share of the
+        # occupancy-weighted shortfall, normalized separately at each step.
+        total_shortfall = sum(severity.values())
+        if total_shortfall == 0 and abs(parts["comfort"]) > 1e-8:
+            raise ValueError("Comfort loss without occupied temperature shortfall")
+        severity_row = {}
+        for band, shortfall in severity.items():
+            loss = parts["comfort"] * shortfall / total_shortfall if total_shortfall else 0.0
+            self.severity_loss[band] += loss
+            severity_row["comfort_loss_" + band + "k"] = loss
         row = {
             "timestamp": timestamp.isoformat(),
             "hour": hour, "comfort_mode": int(comfort_mode),
+            "comfort_mode_soon": int(comfort_soon), "phase": phase,
             "occupancy": occupancy,
             "reward": float(reward),
             "comfort_loss": parts["comfort"],
@@ -191,6 +274,13 @@ class DiagnosticAccumulator:
             "zone_samples": len(zones),
             "occupied_zone_samples": zone_occupied,
             "max_zone_excursion_k": max_excursion,
+            "max_occupied_zone_excursion_k": occupied_max_excursion if zone_occupied else None,
+            "occupied_zones_with_design_flow": flow_n,
+            "occupied_zones_near_design_flow": flow_high,
+            "discomfort_zones_with_design_flow": discomfort_flow_n,
+            "discomfort_zones_near_design_flow": discomfort_flow_high,
+            **severity_row,
+            **action_row,
         }
         for threshold in THRESHOLDS_K:
             self.violations[str(threshold)]["all"] += exceed[threshold]
@@ -230,11 +320,14 @@ class DiagnosticAccumulator:
             "by_hour": self._finish_buckets(self.by_hour),
             "by_occupancy": self._finish_buckets(self.by_occupancy),
             "by_schedule": self._finish_buckets(self.by_schedule),
+            "by_phase": self._finish_buckets(self.by_phase),
+            "comfort_loss_by_severity_k": {k: v / self.count for k, v in self.severity_loss.items()},
             "comfort_excursions": {
                 "zone_samples": self.zones,
                 "occupied_zone_samples": self.occupied_zones,
                 "occupant_samples": self.occupant_samples,
                 "max_excursion_k": self.max_excursion_k,
+                "max_occupied_excursion_k": self.occupied_max_excursion if self.occupied_zones else None,
                 "thresholds_k": {
                     key: {
                         "all_zone_fraction": v["all"] / self.zones if self.zones else None,
@@ -246,4 +339,10 @@ class DiagnosticAccumulator:
                 },
             },
             "action_utilization": action_summary,
+            "zone_flow_utilization": {
+                "occupied_samples": self.flow_samples,
+                "occupied_near_design_fraction": self.flow_near_design / self.flow_samples if self.flow_samples else None,
+                "occupied_discomfort_gt_1k_samples": self.discomfort_flow_samples,
+                "occupied_discomfort_gt_1k_near_design_fraction": self.discomfort_flow_near_design / self.discomfort_flow_samples if self.discomfort_flow_samples else None,
+            },
         }
