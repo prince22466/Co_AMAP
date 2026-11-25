@@ -43,7 +43,7 @@ def snapshot(model):
     return {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
 
 
-def rollout(task):
+def rollout(task, model_factory=ActorCritic):
     """A fresh environment per job; no threads because Gin/cwd are global."""
     root_text, scenario, steps, interval, weights, mode, seed = task
     torch.set_num_threads(1)
@@ -68,7 +68,7 @@ def rollout(task):
         sys.path.insert(0, str(root))
     # Initializing a temporary model consumes CPU RNG; isolate that too.
     with torch.random.fork_rng(devices=[]):
-        model = ActorCritic()
+        model = model_factory()
     model.load_state_dict(weights)
     model.eval()
     config = root / "smart_buildings" / "training_scenarios" / scenario / "config.gin"
