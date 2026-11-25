@@ -126,9 +126,13 @@ def rollout(task):
                             response.normalized_energy_cost,
                             response.normalized_carbon_emission,
                             env.reward_function.weights)
+                        # Same per-step tolerance as P0 diagnostics_core: the
+                        # simulator reward passes through float32 protos.
                         if not math.isclose(-reward, sum(parts.values()),
-                                            abs_tol=1e-9, rel_tol=1e-9):
-                            raise ValueError("Reward decomposition mismatch")
+                                            abs_tol=1e-8, rel_tol=1e-7):
+                            raise ValueError(
+                                f"Reward decomposition mismatch {scenario}/{count}: "
+                                f"{-reward!r} vs {sum(parts.values())!r}")
                         for k in parts_sum:
                             parts_sum[k] += parts[k]
                     count += 1
