@@ -7,7 +7,7 @@ from tempfile import TemporaryDirectory
 import torch
 
 from ..p0.benchmark import default_data_root
-from ..p1.train import assert_initial_parity, comparison, mean_loss
+from ..common.evaluation import assert_initial_parity, comparison, mean_loss
 from .model import SearchPolicy, signature
 from .train import run_jobs, save_checkpoint
 

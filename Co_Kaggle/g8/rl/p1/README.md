@@ -15,6 +15,10 @@ errors, outdoor temperature, clock, schedule, sensor coverage, previous profile)
 Soft command-space capacity budgets are varied, not physical capacity guarantees.
 No independent actuator safety guarantee is implied.
 
+Shared profile definitions, simulator rollout and paired evaluation live in
+`../common/`. PPO, GAE and checkpoint selection remain in P1; the original
+CLI and checkpoint schema are unchanged.
+
 ## Install and run
 
 From the repository root (the directory containing Co_Kaggle), in the Python

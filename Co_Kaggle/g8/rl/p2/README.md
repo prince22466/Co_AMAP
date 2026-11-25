@@ -25,13 +25,13 @@ selecting best.pt, which starts at V23. By default every accepted policy
 is validated; rejected mutations reuse the unchanged incumbent's validation
 report. Setting --eval-every above 1 can miss intermediate policies.
 Test building 8 is untouched until explicit checkpoint evaluation. The training incumbent may differ from
-best.pt; no optimizer state or resume support. P1's runner is reused through
-an optional model factory whose default is unchanged.
+best.pt; no optimizer state or resume support. Simulator, profiles, and
+paired evaluation are provided by ../common; P2 does not import P1.
 
 ## Run from the repository root (Python 3.12, P0 simulator environment)
 
     python -m pip install -r Co_Kaggle/g8/rl/p0/requirements-simulator.txt
-    python -m pip install -r Co_Kaggle/g8/rl/p1/requirements.txt
+    python -m pip install -r Co_Kaggle/g8/rl/common/requirements.txt
     python -m unittest Co_Kaggle.g8.rl.p2.test_p2 -v
     python -m Co_Kaggle.g8.rl.p2.physics_smoke
 

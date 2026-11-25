@@ -15,9 +15,10 @@ import numpy as np
 import torch
 
 from ..p0.benchmark import default_data_root, discover_scenarios, verify_training_manifest
-from ..p1.model import N_ACTIONS
-from ..p1.train import (assert_initial_parity, comparison, mean_loss, rollout,
-                        save_json, snapshot, split_scenarios)
+from ..common.profiles import N_ACTIONS
+from ..common.evaluation import (assert_initial_parity, comparison, mean_loss,
+                                 save_json, split_scenarios)
+from ..common.rollout import rollout, run_jobs as dispatch_jobs, snapshot
 from .model import BOUND, SearchPolicy, candidates, signature
 
 
@@ -32,13 +33,12 @@ def select_scenarios(training, per_building, rng):
 
 
 def run_jobs(pool, root, scenarios, steps, interval, model, mode, seed):
-    # Identical seed and scenario ordering across parent and both mutations.
-    # The shared rollout's eval mode uses argmax and reports raw loss components.
-    weights = snapshot(model)
-    tasks = [(str(root), scenario, steps, interval, weights, mode, seed + i)
-             for i, scenario in enumerate(scenarios)]
+    """Use the same ordered simulator dispatcher as all profile models."""
+    if mode not in {"baseline", "eval"}:
+        raise ValueError("P2 uses deterministic evaluation rollouts only")
     worker = partial(rollout, model_factory=SearchPolicy)
-    return list(map(worker, tasks)) if pool is None else list(pool.map(worker, tasks))
+    return dispatch_jobs(pool, root, scenarios, steps, interval, model, mode, seed,
+                         worker=worker)
 
 
 def choose_candidate(parent, trials, min_gain, max_regression):

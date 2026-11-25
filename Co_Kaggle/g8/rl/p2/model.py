@@ -5,7 +5,7 @@ import numpy as np
 import torch
 from torch import nn
 
-from ..p1.model import N_FEATURES, N_ACTIONS, PROFILES
+from ..common.profiles import N_FEATURES, N_ACTIONS, PROFILES
 
 # Exclude previous profile one-hot to avoid self-reinforcing profile lock-in.
 # Keep all 18 gateway-derived physical and clock features.

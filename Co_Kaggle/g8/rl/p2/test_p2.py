@@ -8,7 +8,7 @@ from unittest.mock import patch
 import numpy as np
 import torch
 
-from ..p1.model import N_FEATURES
+from ..common.profiles import N_FEATURES
 from .model import BOUND, SearchPolicy, candidates, PHYSICAL_FEATURES, signature
 from . import train
 from .train import choose_candidate, select_scenarios
