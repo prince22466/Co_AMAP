@@ -4,7 +4,6 @@ from pathlib import Path
 from types import SimpleNamespace
 import unittest
 
-import numpy as np
 import torch
 
 from . import evaluation, profiles, rollout
@@ -49,6 +48,47 @@ class CommonTests(unittest.TestCase):
         self.assertAlmostEqual(evaluation.comparison(rows, rows)["delta"], 0.)
         with self.assertRaises(ValueError):
             evaluation.comparison(rows, list(reversed(rows)))
+
+    def test_split_rejects_duplicates_and_unbalanced_buildings(self):
+        scenarios = [f"building_train_{i}/weather_{j}"
+                     for i in (1, 2, 4, 5, 7, 8) for j in range(5)]
+        duplicated = scenarios.copy()
+        duplicated[1] = duplicated[0]
+        with self.assertRaises(ValueError):
+            evaluation.split_scenarios(duplicated)
+        unbalanced = scenarios.copy()
+        unbalanced[0] = "building_train_2/weather_extra"
+        with self.assertRaises(ValueError):
+            evaluation.split_scenarios(unbalanced)
+
+    def test_pairing_rejects_invalid_results(self):
+        original = {"scenario": "a", "steps": 12, "full_episode": False,
+                    "terminated": False, "truncated": False, "mean_loss": .01}
+        for invalid in (
+            {**original, "truncated": True},
+            {**original, "steps": 11},
+            {**original, "mean_loss": float("nan")},
+            {**original, "mean_loss": float("inf")},
+        ):
+            with self.assertRaises(ValueError):
+                evaluation.comparison([original], [invalid])
+        with self.assertRaises(ValueError):
+            evaluation.comparison([original, original], [original, original])
+        with self.assertRaises(ValueError):
+            evaluation.mean_loss([])
+
+    def test_parity_rejects_inconsistent_profile_or_components(self):
+        original = {"scenario": "a", "steps": 12, "full_episode": False,
+                    "mean_loss": .01, "loss_components": {"comfort": .01},
+                    "profile_steps": [12, 0, 0, 0, 0, 0, 0]}
+        evaluation.assert_initial_parity(evaluation.comparison([original], [original]))
+        for invalid in (
+            {**original, "profile_steps": [12, 1, 0, 0, 0, 0, 0]},
+            {**original, "loss_components": {"comfort": .01, "energy": 0.}},
+        ):
+            with self.assertRaises(RuntimeError):
+                evaluation.assert_initial_parity(
+                    evaluation.comparison([original], [invalid]))
 
     def test_no_reverse_model_dependencies(self):
         root = Path(__file__).parent
