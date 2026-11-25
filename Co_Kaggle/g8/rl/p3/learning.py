@@ -14,9 +14,9 @@ from ..common.profiles import N_ACTIONS, N_FEATURES
 def transitions(row, gamma):
     """Convert one episode into (state, action, reward, next state, discount).
 
-    common.rollout stores discounted macro rewards but not the final next
-    observation. Drop the final transition of a time-limited window rather
-    than treating that artificial boundary as terminal. Never join episodes.
+    common.rollout supplies the final observation explicitly. Time limits
+    retain their bootstrap multiplier; only true termination clears it.
+    Never join episodes.
     """
     if not 0 < gamma < 1:
         raise ValueError("Gamma must be between zero and one")
@@ -35,9 +35,19 @@ def transitions(row, gamma):
             or np.any(actions < 0) or np.any(actions >= N_ACTIONS)):
         raise ValueError("Invalid trajectory")
     terminal = bool(row["terminated"])
-    for i in range(n if terminal else n - 1):
+    final = None
+    if not terminal:
+        final = np.asarray(row["final_features"], dtype=np.float32)
+        if final.shape != (N_FEATURES,) or not np.isfinite(final).all():
+            raise ValueError("Invalid final observation features")
+    for i in range(n):
         done = terminal and i == n - 1
-        nxt = np.zeros(N_FEATURES, dtype=np.float32) if done else x[i + 1].copy()
+        if done:
+            nxt = np.zeros(N_FEATURES, dtype=np.float32)
+        elif i == n - 1:
+            nxt = final.copy()
+        else:
+            nxt = x[i + 1].copy()
         # Scaling by (1-gamma) keeps Q on a per-step reward scale.
         yield (x[i].copy(), int(actions[i]), float((1 - gamma) * rewards[i]),
                nxt, 0.0 if done else float(gamma ** int(duration[i])))

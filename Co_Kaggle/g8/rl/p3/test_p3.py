@@ -14,6 +14,7 @@ from .train import save_checkpoint, select_scenarios
 
 def trajectory(terminal=False):
     return {"steps": 5, "terminated": terminal,
+            "final_features": np.full(N_FEATURES, 2., dtype=np.float32),
             "trajectory": {"x": [np.zeros(N_FEATURES), np.ones(N_FEATURES)],
                            "a": [0, 2], "r": [-3., -2.], "duration": [3, 2]}}
 
@@ -36,10 +37,16 @@ class P3Tests(unittest.TestCase):
 
     def test_duration_and_time_limit(self):
         partial = list(transitions(trajectory(), .9))
-        self.assertEqual(len(partial), 1)
+        self.assertEqual(len(partial), 2)
         self.assertAlmostEqual(partial[0][2], -.3)
         self.assertAlmostEqual(partial[0][4], .9**3)
         np.testing.assert_array_equal(partial[0][3], np.ones(N_FEATURES))
+        np.testing.assert_array_equal(partial[1][3], np.full(N_FEATURES, 2.))
+        self.assertAlmostEqual(partial[1][4], .9**2)
+        broken = trajectory()
+        broken["final_features"] = np.zeros(N_FEATURES + 1)
+        with self.assertRaises(ValueError):
+            list(transitions(broken, .9))
         terminal = list(transitions(trajectory(True), .9))
         self.assertEqual(len(terminal), 2)
         self.assertEqual(terminal[-1][4], 0.)

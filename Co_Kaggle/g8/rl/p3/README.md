@@ -23,8 +23,8 @@ action; the target Q evaluates it (Double DQN). The training target uses
 the ungated argmax; deployment uses the conservative margin. For duration
 d, reward is the shared discounted simulator reward scaled by 100 and
 (1-gamma), and the bootstrap multiplier is gamma^d (gamma=.99 per five-minute
-step, zero at actual termination). A partial-window final transition is
-omitted because common.rollout lacks its next observation. No episode
+step, zero at actual termination). The shared collector supplies the final observation on request, so a
+partial-window final transition bootstraps from its actual next state. No episode
 boundaries are joined, and no reward shaping or future observations are
 used as policy inputs. The discounted training objective is a surrogate;
 checkpoint selection uses the raw undiscounted simulator loss.

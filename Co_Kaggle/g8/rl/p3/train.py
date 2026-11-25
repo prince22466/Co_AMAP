@@ -69,13 +69,13 @@ def main():
         parser.error("Counts must be positive")
     if args.steps > 8640 or args.replay_capacity < args.batch_size:
         parser.error("Invalid horizon or replay capacity")
-    if not args.checkpoint and (args.steps % args.interval or args.steps < 2 * args.interval):
-        parser.error("Training requires at least two complete decision intervals")
+    if not args.checkpoint and args.steps % args.interval:
+        parser.error("Training requires complete decision intervals")
     if not (0 < args.gamma < 1 and 0 < args.epsilon_end <= args.epsilon_start < 1
             and math.isfinite(args.reward_scale) and args.reward_scale > 0
             and math.isfinite(args.lr) and args.lr > 0):
         parser.error("Invalid learning settings")
-    if not 0 <= args.seed < 2**32 - args.updates - 30:
+    if not 0 <= args.seed < 2**32 - 4 * args.updates - 30:
         parser.error("Seed exceeds simulator RNG range")
     if args.full and not args.checkpoint:
         parser.error("--full requires --checkpoint")
@@ -99,7 +99,7 @@ def main():
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     memory = Replay(args.replay_capacity)
     worker = partial(rollout, model_factory=QPolicy, gamma=args.gamma,
-                     reward_scale=args.reward_scale)
+                     reward_scale=args.reward_scale, return_final_features=True)
     pool = (ProcessPoolExecutor(max_workers=args.workers, mp_context=get_context("spawn"))
             if args.workers > 1 else None)
 
@@ -148,7 +148,7 @@ def main():
             epsilon = exploration(i, args.updates, args.epsilon_start, args.epsilon_end)
             model.epsilon.fill_(epsilon)
             selected = select_scenarios(groups["train"], scenario_rng)
-            rows = evaluate(selected, "train", seed=args.seed + i)
+            rows = evaluate(selected, "train", seed=args.seed + 4 * i)
             for row in rows:
                 memory.extend(row, args.gamma)
             td_losses = []
@@ -166,7 +166,7 @@ def main():
                      "td_loss": float(np.mean(td_losses)) if td_losses else None,
                      "simulator_steps": sum(r["steps"] for r in rows),
                      "train_scenarios": [{k: v for k, v in r.items()
-                                          if k not in {"trajectory", "bootstrap"}}
+                                          if k not in {"trajectory", "bootstrap", "final_features"}}
                                          for r in rows],
                      "action_counts": np.bincount(
                          [a for r in rows for a in r["trajectory"]["a"]],
