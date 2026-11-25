@@ -7,6 +7,7 @@ import json
 import math
 from multiprocessing import get_context
 import os
+import random
 from pathlib import Path
 import sys
 import tempfile
@@ -19,10 +20,11 @@ from ..p0.benchmark import default_data_root, discover_scenarios, verify_trainin
 from ..p0.controllers import load_controller, validate_action
 from ..p0.metrics import weighted_losses
 from ..p0.runner import simulator_working_directory
-from .model import ActorCritic, ProfileController, PROFILES, advantages
+from .model import ActorCritic, ProfileController, PROFILES, N_FEATURES, advantages
 
 GAMMA = .999
 REWARD_SCALE = 10.  # Positive constant only; evaluation always uses raw reward.
+CHECKPOINT_SCHEMA = 1
 SPLIT = {"train": (1, 2, 4, 7), "validation": (5,), "test": (8,)}
 
 
@@ -45,8 +47,16 @@ def rollout(task):
     """A fresh environment per job; no threads because Gin/cwd are global."""
     root_text, scenario, steps, interval, weights, mode, seed = task
     torch.set_num_threads(1)
-    torch.manual_seed(seed)
+    if mode not in {"train", "eval", "baseline"}:
+        raise ValueError(f"Unknown rollout mode: {mode}")
+    if interval < 1 or (steps is not None and steps < 1):
+        raise ValueError("Invalid rollout horizon or interval")
+    if mode == "train" and steps is not None and steps % interval:
+        raise ValueError("Training horizon must contain whole decision intervals")
+    # Rollout sampling must not reset the optimizer's CPU/CUDA RNG stream.
+    generator = torch.Generator(device="cpu").manual_seed(seed)
     np.random.seed(seed)
+    random.seed(seed)
     root = Path(root_text).resolve()
     cache = Path(tempfile.gettempdir()) / "g8_rl_p1_cache" / str(os.getpid())
     for key, name in (("NUMBA_CACHE_DIR", "numba"), ("MPLCONFIGDIR", "mpl"),
@@ -56,7 +66,9 @@ def rollout(task):
         os.environ.setdefault(key, str(path))
     if str(root) not in sys.path:
         sys.path.insert(0, str(root))
-    model = ActorCritic()
+    # Initializing a temporary model consumes CPU RNG; isolate that too.
+    with torch.random.fork_rng(devices=[]):
+        model = ActorCritic()
     model.load_state_dict(weights)
     model.eval()
     config = root / "smart_buildings" / "training_scenarios" / scenario / "config.gin"
@@ -68,7 +80,8 @@ def rollout(task):
         try:
             spec = env.action_spec()
             metadata = create_building_meta_data(env, config.parent)
-            controller = ProfileController(load_controller(23)(metadata, spec))
+            baseline = load_controller(23)(metadata, spec)
+            controller = ProfileController(baseline)
             obs, _ = env.reset()
             configured = int(env._num_timesteps_in_episode)
             if configured != 8640:
@@ -79,21 +92,27 @@ def rollout(task):
             parts_sum = dict.fromkeys(("comfort", "energy", "carbon"), 0.)
             histogram = [0] * len(PROFILES)
             trajectory = {k: [] for k in ("x", "a", "logp", "v", "r", "duration")}
-            done = False
+            done = terminated = truncated = False
             while count < limit and not done:
-                x = controller.features(obs)
-                with torch.no_grad():
-                    logits, value = model(torch.from_numpy(x))
-                    distribution = Categorical(logits=logits)
-                    action = (torch.tensor(0) if mode == "baseline" else
-                              distribution.sample() if mode == "train" else logits.argmax())
-                    logp = distribution.log_prob(action)
-                profile = int(action)
-                controller.select(profile)
+                if mode == "baseline":
+                    # Independent, unmodified V23 path for a genuine parity check.
+                    profile = 0
+                else:
+                    x = controller.features(obs)
+                    with torch.no_grad():
+                        logits, value = model(torch.from_numpy(x))
+                        distribution = Categorical(logits=logits)
+                        action = (torch.multinomial(distribution.probs, 1,
+                                                    generator=generator).squeeze(0)
+                                  if mode == "train" else logits.argmax())
+                        logp = distribution.log_prob(action)
+                    profile = int(action)
+                    controller.select(profile)
                 macro_reward = 0.
                 duration = 0
                 for j in range(min(interval, limit - count)):
-                    command = validate_action(controller.get_action(obs), spec)
+                    policy = baseline if mode == "baseline" else controller
+                    command = validate_action(policy.get_action(obs), spec)
                     obs, reward, terminated, truncated, _ = env.step(command)
                     reward = float(reward)
                     if not math.isfinite(reward):
@@ -122,11 +141,13 @@ def rollout(task):
                     for key, val in zip(trajectory, (x, profile, float(logp), float(value),
                                                      macro_reward, duration)):
                         trajectory[key].append(val)
-            if (steps is None and (not done or count < configured)) or (
-                    steps is not None and count != steps):
+            if (steps is None and (not terminated or count < configured)) or (
+                    steps is not None and count != steps) or (terminated and count < configured):
                 raise RuntimeError(f"Incomplete rollout {scenario}: {count}")
             row = {"scenario": scenario, "steps": count, "mean_loss": -raw_sum / count,
-                   "full_episode": done and count >= configured, "profile_steps": histogram}
+                   "full_episode": bool(terminated and count >= configured),
+                   "terminated": bool(terminated), "truncated": bool(truncated),
+                   "profile_steps": histogram}
             if mode != "train":
                 row["loss_components"] = {k: v / count for k, v in parts_sum.items()}
             else:
@@ -135,7 +156,7 @@ def rollout(task):
                     _, next_value = model(torch.from_numpy(controller.features(obs)))
                 adv, target = advantages(trajectory["r"], trajectory["v"],
                                          trajectory["duration"],
-                                         0. if done else float(next_value), GAMMA)
+                                         0. if terminated else float(next_value), GAMMA)
                 row["trajectory"] = {**trajectory, "adv": adv, "target": target}
             return row
         finally:
@@ -193,12 +214,30 @@ def compare(pool, root, scenarios, steps, interval, model, seed):
 
 
 def comparison(baseline, learned):
-    if [(r["scenario"], r["steps"]) for r in baseline] != [
-            (r["scenario"], r["steps"]) for r in learned]:
+    if not baseline or [(r["scenario"], r["steps"], r["full_episode"]) for r in baseline] != [
+            (r["scenario"], r["steps"], r["full_episode"]) for r in learned]:
         raise ValueError("Unpaired evaluation")
     return {"baseline_loss": mean_loss(baseline), "rl_loss": mean_loss(learned),
             "delta": mean_loss(learned) - mean_loss(baseline),
             "baseline": baseline, "rl": learned}
+
+
+def assert_initial_parity(report):
+    """Compare every scenario and component, not just canceling mean errors."""
+    for baseline, learned in zip(report["baseline"], report["rl"]):
+        same_loss = math.isclose(baseline["mean_loss"], learned["mean_loss"],
+                                 abs_tol=1e-9, rel_tol=1e-9)
+        same_parts = all(math.isclose(v, learned["loss_components"][k],
+                                      abs_tol=1e-9, rel_tol=1e-9)
+                         for k, v in baseline["loss_components"].items())
+        if not same_loss or not same_parts or learned["profile_steps"][0] != learned["steps"]:
+            raise RuntimeError(f"Initial greedy policy differs from V23: {baseline['scenario']}")
+
+
+def checkpoint_signature():
+    return {"schema": CHECKPOINT_SCHEMA, "features": N_FEATURES,
+            "profiles": [[name, list(factors)] for name, factors in PROFILES],
+            "baseline_version": 23}
 
 
 def save_json(path, payload):
@@ -228,6 +267,10 @@ def main():
     if min(args.workers, args.steps, args.interval, args.updates, args.scenarios_per_update,
            args.eval_every, args.epochs, args.batch_size) < 1 or args.steps > 8640:
         p.error("Positive counts required; --steps <= 8640")
+    if not args.checkpoint and args.steps % args.interval:
+        p.error("Training --steps must be divisible by --interval")
+    if not 0 <= args.seed < 2**32 - 1000 * args.updates - 30:
+        p.error("Seed/update count exceeds the simulator RNG seed range")
     if args.full and not args.checkpoint:
         p.error("--full requires --checkpoint")
     if args.device == "cuda" and not torch.cuda.is_available():
@@ -247,14 +290,20 @@ def main():
     try:
         if args.checkpoint:
             state = torch.load(args.checkpoint, map_location=args.device, weights_only=True)
+            if state.get("signature") != checkpoint_signature():
+                p.error("Checkpoint schema or operating profiles do not match this code")
             model.load_state_dict(state["model"])
             if args.interval != state["interval"]:
                 p.error("--interval must match checkpoint")
+            horizon = "full" if args.full else f"{args.steps}steps"
+            destination = args.out / f"evaluation_{args.split}_{horizon}.json"
+            if destination.exists():
+                p.error(f"Evaluation already exists: {destination}; use a new --out")
             report = compare(pool, root, groups[args.split], None if args.full else args.steps,
                              args.interval, model, args.seed)
             report.update(split=args.split, full=args.full, interval=args.interval,
                           checkpoint=str(args.checkpoint.resolve()), seed=args.seed)
-            save_json(args.out / f"evaluation_{args.split}.json", report)
+            save_json(destination, report)
             print(f"V23={report['baseline_loss']:.6f} RL={report['rl_loss']:.6f}", flush=True)
             return
         if (args.out / "best.pt").exists():
@@ -267,13 +316,13 @@ def main():
         initial = run_jobs(pool, root, groups["validation"], args.steps, args.interval,
                            model, "eval", args.seed)
         report = comparison(baseline, initial)
-        if not math.isclose(report["baseline_loss"], report["rl_loss"], abs_tol=1e-9):
-            raise RuntimeError("Initial greedy policy must reproduce V23")
+        assert_initial_parity(report)
         best = report["rl_loss"]
         def checkpoint(update_number, score):
             tmp = args.out / "best.tmp"
             torch.save({"model": snapshot(model), "interval": args.interval,
-                        "update": update_number, "validation_loss": score}, tmp)
+                        "update": update_number, "validation_loss": score,
+                        "signature": checkpoint_signature()}, tmp)
             tmp.replace(args.out / "best.pt")
         checkpoint(0, best)
         history = [{"update": 0, "validation": report}]

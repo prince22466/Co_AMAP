@@ -34,7 +34,7 @@ class ProfileController:
         self.profile = 0
 
     def select(self, profile: int):
-        if not 0 <= profile < N_ACTIONS:
+        if not isinstance(profile, (int, np.integer)) or not 0 <= profile < N_ACTIONS:
             raise ValueError("Invalid profile")
         for name, factor in zip(PARAMETERS, PROFILES[profile][1]):
             # Always start from immutable original values, never compound.
@@ -71,8 +71,10 @@ class ProfileController:
             (fallback[0] - 295.) / 15., (fallback[1] - 295.) / 15.,
             *np.eye(N_ACTIONS, dtype=np.float32)[self.profile],
         ]
-        return np.clip(np.nan_to_num(np.asarray(values, dtype=np.float32),
-                                     nan=0., posinf=5., neginf=-5.), -5., 5.)
+        features = np.asarray(values, dtype=np.float32)
+        if features.shape != (N_FEATURES,):
+            raise ValueError(f"Unexpected feature shape: {features.shape}")
+        return np.clip(np.nan_to_num(features, nan=0., posinf=5., neginf=-5.), -5., 5.)
 
     def get_action(self, observation):
         return self.baseline.get_action(observation)
@@ -89,7 +91,7 @@ class ActorCritic(nn.Module):
         nn.init.zeros_(self.actor.weight)
         nn.init.zeros_(self.actor.bias)
         with torch.no_grad():
-            self.actor.bias[0] = 1.5
+            self.actor.bias[0] = .1  # Small tie-breaking preference, not a learning barrier.
 
     def forward(self, features):
         hidden = self.encoder(features)

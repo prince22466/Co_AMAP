@@ -7,7 +7,7 @@ import torch
 
 from .model import (ActorCritic, ProfileController, PARAMETERS, PROFILES,
                     N_FEATURES, advantages)
-from .train import split_scenarios, update
+from .train import split_scenarios, update, comparison, assert_initial_parity, checkpoint_signature
 
 
 class P1Tests(unittest.TestCase):
@@ -40,6 +40,21 @@ class P1Tests(unittest.TestCase):
         self.assertEqual([len(split[k]) for k in split], [20, 5, 5])
         sets = [{s.split("/")[0] for s in group} for group in split.values()]
         self.assertFalse(sets[0] & sets[1] or sets[0] & sets[2] or sets[1] & sets[2])
+
+    def test_parity_detects_canceling_errors(self):
+        def row(scenario, loss):
+            return {"scenario": scenario, "steps": 1, "full_episode": False,
+                    "mean_loss": loss, "loss_components": {"comfort": loss},
+                    "profile_steps": [1, 0, 0, 0, 0, 0, 0]}
+        baseline = [row("a", .1), row("b", .2)]
+        learned = [row("a", .2), row("b", .1)]
+        assert_initial_parity(comparison(baseline, baseline))
+        with self.assertRaises(RuntimeError):
+            assert_initial_parity(comparison(baseline, learned))
+
+    def test_checkpoint_signature(self):
+        self.assertEqual(checkpoint_signature()["features"], N_FEATURES)
+        self.assertEqual(len(checkpoint_signature()["profiles"]), len(PROFILES))
 
     def test_ppo_update(self):
         torch.manual_seed(42)

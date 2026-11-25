@@ -4,7 +4,9 @@ P0 established gateway-equivalent simulation. P1 learns a categorical policy
 over seven bounded V23 operating profiles, chosen every 12 five-minute steps
 (one hour); V23 still controls all continuous/discrete equipment every step.
 Profile zero is identical to V23. The initial greedy actor selects profile zero
-for every state, and training checks paired baseline parity before updating.
+for every state, and training checks each scenario and reward component against independent,
+unmodified V23 before updating. A small initial baseline preference avoids
+making the deterministic actor unnecessarily difficult to move away from V23.
 The policy does not read the simulator internals, reward components, scenario
 identity, future occupancy, or weather forecasts. Reward is the actual simulator
 reward scaled by a positive constant for numerical conditioning. The PPO actor
@@ -37,6 +39,8 @@ Training defaults to 4 randomly selected train scenarios per update, 4 PPO
 epochs, 128 minibatch, gamma .999 per five-minute step, macro GAE lambda .95,
 clip .2, Adam 3e-4, entropy .01, value coefficient .5, gradient norm .5.
 Partial training windows bootstrap the critic at their artificial time limit.
+Training horizons must be divisible by the decision interval. Rollout action
+sampling uses an independent CPU generator, separate from PPO minibatch RNG.
 
 ## Evaluation protocol
 
@@ -48,7 +52,9 @@ cached V23 validation baseline using the same scenario seeds and horizon.
 best.pt starts as the baseline actor and is replaced only on strictly improved
 validation loss. history.json includes paired per-scenario and decomposed loss
 for validation, profile utilization, transition counts and PPO loss. The
-checkpoint contains model weights and interval, not optimizer/resume state.
+checkpoint contains model weights, interval and profile schema, not
+optimizer/resume state. Evaluation reports include the horizon in their filename
+and will not overwrite a previous report.
 
 Evaluate once on the independent test building after choosing the checkpoint:
 
