@@ -5,7 +5,7 @@ import numpy as np
 import torch
 
 from ..p1.model import N_FEATURES
-from .model import SearchPolicy, candidates, PHYSICAL_FEATURES, signature
+from .model import BOUND, SearchPolicy, candidates, PHYSICAL_FEATURES, signature
 from .train import choose_candidate, select_scenarios
 
 
@@ -50,6 +50,22 @@ class P2Tests(unittest.TestCase):
         self.assertIsNone(choose_candidate(parent, [parent, bad], 1e-6, .005))
         with self.assertRaises(ValueError):
             choose_candidate(parent, [list(reversed(good))], 1e-6, .005)
+
+    def test_nonfinite_candidate_and_corrupt_checkpoint(self):
+        parent = [row("a", .02), row("b", .02)]
+        for invalid in (float("nan"), float("inf"), -float("inf")):
+            with self.assertRaises(ValueError):
+                choose_candidate(parent, [[row("a", .01), row("b", invalid)]], 0., .005)
+        with self.assertRaises(ValueError):
+            choose_candidate(parent, [], -1., .005)
+        model = SearchPolicy()
+        for invalid in (float("nan"), float("inf"), BOUND + 1.):
+            with torch.no_grad():
+                model.coefficients[0, 0] = invalid
+            with self.assertRaises(ValueError):
+                model.validate_coefficients()
+        with self.assertRaises(ValueError):
+            candidates(SearchPolicy(), 1, BOUND + 1., np.random.default_rng(42))
 
     def test_balanced_deterministic_selection(self):
         training = [f"building_train_{i}/weather_{j}"

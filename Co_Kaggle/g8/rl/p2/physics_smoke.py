@@ -1,4 +1,6 @@
 """Verify shared deterministic rollout, baseline parity and checkpoint replay."""
+from concurrent.futures import ProcessPoolExecutor
+from multiprocessing import get_context
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -24,6 +26,13 @@ def main():
         model.coefficients[0, -1] = 1.
     changed = run(model)
     assert changed[0]["profile_steps"][1] == 12
+    # Windows and Linux use the same spawn path in production.
+    with ProcessPoolExecutor(max_workers=2, mp_context=get_context("spawn")) as pool:
+        parallel = run_jobs(pool, root, scenarios, 12, 3, model, "eval", 42)
+    assert abs(comparison(changed, parallel)["delta"]) < 1e-9
+    assert changed[0]["profile_steps"] == parallel[0]["profile_steps"]
+    for key, value in changed[0]["loss_components"].items():
+        assert abs(value - parallel[0]["loss_components"][key]) < 1e-9
     with TemporaryDirectory() as tmp:
         path = Path(tmp) / "best.pt"
         save_checkpoint(path, model, 3, 1, changed[0]["mean_loss"], 12)

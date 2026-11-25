@@ -21,8 +21,10 @@ empirical guard, not an actuator safety guarantee or a generalization
 guarantee. Global collapse is still possible; profile histograms expose it.
 
 Validation is never used for accepting training mutations; only for
-selecting best.pt, which starts at V23. Test building 8 is untouched until
-explicit checkpoint evaluation. The training incumbent may differ from
+selecting best.pt, which starts at V23. By default every accepted policy
+is validated; rejected mutations reuse the unchanged incumbent's validation
+report. Setting --eval-every above 1 can miss intermediate policies.
+Test building 8 is untouched until explicit checkpoint evaluation. The training incumbent may differ from
 best.pt; no optimizer state or resume support. P1's runner is reused through
 an optional model factory whose default is unchanged.
 
@@ -39,7 +41,7 @@ Short end-to-end training:
 
 Initial comparable-horizon experiment:
 
-    python -m Co_Kaggle.g8.rl.p2.train --out Co_Kaggle/g8/rl/p2/results/run1 --updates 20 --steps 864 --workers 4 --device cpu
+    python -m Co_Kaggle.g8.rl.p2.train --out Co_Kaggle/g8/rl/p2/results/run1 --updates 6 --steps 864 --workers 4 --device cpu
 
 Four train scenarios per update by default (one per train building).
 Use --scenarios-per-building 5 for the entire train set. Parent and two
@@ -48,7 +50,10 @@ P1's four. For a comparable training-rollout budget to P1's 20 updates,
 start with six P2 updates. Validation adds separate rollout overhead.
 CPU workers parallelize simulator episodes; GPU is not used. Each
 history entry records paired per-scenario losses and components,
-profile utilization, acceptance and simulator steps. Train losses
+profile utilization, candidate coefficients, acceptance and training
+simulator steps (excluding validation). The regression guard is relative to
+the current incumbent on the selected training scenarios, not an absolute
+V23 guard; cumulative or out-of-sample regression remains possible. Train losses
 across different sampled scenarios are not directly comparable.
 
 Independent test after checkpoint selection:

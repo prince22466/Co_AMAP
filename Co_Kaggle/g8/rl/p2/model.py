@@ -26,6 +26,12 @@ class SearchPolicy(nn.Module):
         with torch.no_grad():
             self.coefficients[:, -1] = -MARGIN
 
+    def validate_coefficients(self):
+        """Reject corrupted or out-of-range checkpoint parameters."""
+        if (not torch.isfinite(self.coefficients).all()
+                or (self.coefficients.abs() > BOUND).any()):
+            raise ValueError("Nonfinite or out-of-range policy coefficients")
+
     def forward(self, features):
         physical = features[..., :PHYSICAL_FEATURES]
         scores = physical @ self.coefficients[:, :-1].T + self.coefficients[:, -1]
@@ -37,8 +43,9 @@ class SearchPolicy(nn.Module):
 
 def candidates(parent, profile, sigma, rng):
     """Antithetic, single-profile mutations; the incumbent is never modified."""
-    if not 1 <= profile < N_ACTIONS or not np.isfinite(sigma) or sigma <= 0:
+    if not 1 <= profile < N_ACTIONS or not np.isfinite(sigma) or not 0 < sigma <= BOUND:
         raise ValueError("Invalid mutation")
+    parent.validate_coefficients()
     direction = rng.normal(size=PHYSICAL_FEATURES)
     norm = np.linalg.norm(direction)
     if norm == 0:
