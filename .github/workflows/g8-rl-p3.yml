@@ -1,0 +1,35 @@
+name: g8 RL P3 checks
+on:
+  pull_request:
+    paths:
+      - "Co_Kaggle/g8/rl/**"
+      - "Co_Kaggle/g8/submissions/submission-nb - Version 23.ipynb"
+      - ".github/workflows/g8-rl-p3.yml"
+  push:
+    paths:
+      - "Co_Kaggle/g8/rl/p3/**"
+      - "Co_Kaggle/g8/rl/common/**"
+      - ".github/workflows/g8-rl-p3.yml"
+jobs:
+  p3-unit-and-physics:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pinned simulator dependencies
+        run: python -m pip install -r Co_Kaggle/g8/rl/p0/requirements-simulator.txt
+      - name: Install CPU PyTorch
+        run: python -m pip install -r Co_Kaggle/g8/rl/common/requirements.txt --index-url https://download.pytorch.org/whl/cpu
+      - name: Shared and P3 unit tests
+        run: python -m unittest Co_Kaggle.g8.rl.common.test_common Co_Kaggle.g8.rl.p3.test_p3 -v
+      - name: P3 official simulator training and evaluation smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/p3-smoke"
+          python -m Co_Kaggle.g8.rl.p3.train --out "$OUT" --updates 1 --steps 24 --workers 2 --batch-size 4 --gradient-steps 2 --target-sync 1
+          python -c 'import json,sys; h=json.load(open(sys.argv[1])); r=h["history"][-1]; assert r["gradient_count"]==2 and r["replay_size"]==8 and r["td_loss"] is not None and "validation" in r' "$OUT/history.json"
+          python -m Co_Kaggle.g8.rl.p3.train --out "$OUT/replay" --checkpoint "$OUT/best.pt" --split validation --steps 24 --workers 2

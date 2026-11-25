@@ -22,12 +22,15 @@ def snapshot(model):
     return {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
 
 
-def rollout(task, *, model_factory, gamma=1., reward_scale=1.):
+def rollout(task, *, model_factory, gamma=1., reward_scale=1.,
+            return_final_features=False):
     """Collect one fresh simulator episode or partial window.
 
     Factories are supplied by the caller. Training returns raw macro-step
     transitions and a bootstrap value, not algorithm-specific advantages.
     Evaluation returns undiscounted raw loss and decomposed components.
+    Off-policy callers can request the final observation features for
+    bootstrapping at a nonterminal time limit.
     """
     root_text, scenario, steps, interval, weights, mode, seed = task
     torch.set_num_threads(1)
@@ -140,8 +143,11 @@ def rollout(task, *, model_factory, gamma=1., reward_scale=1.):
                 row["loss_components"] = {k: v / count for k, v in parts_sum.items()}
             else:
                 # Partial windows are time limits, not simulator terminal states.
+                final_features = controller.features(obs)
                 with torch.no_grad():
-                    _, next_value = model(torch.from_numpy(controller.features(obs)))
+                    _, next_value = model(torch.from_numpy(final_features))
+                if return_final_features:
+                    row["final_features"] = final_features.copy()
                 row["trajectory"] = trajectory
                 row["bootstrap"] = 0. if terminated else float(next_value)
             return row
