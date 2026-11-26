@@ -7,6 +7,7 @@ from types import ModuleType, SimpleNamespace
 import unittest
 from unittest.mock import patch
 
+import nbformat
 import numpy as np
 import torch
 
@@ -23,6 +24,10 @@ NOTEBOOK = Path(__file__).with_name("submission-nb - Version 28.ipynb")
 
 def execute_notebook():
     notebook = json.loads(NOTEBOOK.read_text(encoding="utf-8"))
+    # Validate before any reader can silently generate missing cell IDs.
+    ids = [cell["id"] for cell in notebook["cells"]]
+    assert len(set(ids)) == len(ids), "Cell IDs must be unique"
+    nbformat.validate(nbformat.from_dict(notebook))
     assert [c["cell_type"] for c in notebook["cells"]] == ["markdown", "code"]
     code = "".join(notebook["cells"][1]["source"])
     calls = []
