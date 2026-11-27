@@ -35,4 +35,5 @@
 | submission-nb - Version 30 | 0.03948 | resubmit Version 7 for 2nd round |
 | submission-nb - Version 31 | 0.04111 | resubmit Version 16 for 2nd round |
 | submission-nb - Version 32 | 0.04327 | resubmit Version 18 for 2nd round |
-| submission-nb - Version 33 | TBD | RL + Version 23 |
+| submission-nb - Version 33 | 0.03719 | RL + Version 23 |
+| submission-nb - Version 34| 0.03735 | |
