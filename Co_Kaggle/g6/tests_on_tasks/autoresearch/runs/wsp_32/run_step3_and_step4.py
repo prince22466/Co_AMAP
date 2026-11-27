@@ -10,22 +10,35 @@ from provision_and_step2 import CLI, HERE, SESSION, remote_exec, upload_verified
 def run_remote_stage(tag: str, bash_cmd: str, timeout_sec: int = 2400) -> str:
     log_path = f"/content/wsp/{tag}.log"
     done_path = f"/content/wsp/{tag}.rc"
+    pid_path = f"/content/wsp/{tag}.pid"
     remote_exec(f"""
 import os, subprocess
 from pathlib import Path
 r = Path('/content/wsp')
-done = Path({done_path!r})
-if done.exists():
-    done.unlink()
-env = dict(os.environ, PATH=f"{{r/'eval_env/bin'}}:" + os.environ['PATH'],
-           TRANSFORMERS_OFFLINE='1', VLLM_NO_USAGE_STATS='1',
-           MAX_JOBS='2', TORCHINDUCTOR_COMPILE_THREADS='1',
-           VLLM_WORKER_MULTIPROC_METHOD='spawn',
-           PYTORCH_CUDA_ALLOC_CONF='expandable_segments:True')
-script = ({bash_cmd!r}) + '; echo $? > ' + ({done_path!r})
-with Path({log_path!r}).open('w') as log:
-    p = subprocess.Popen(['bash', '-c', script], cwd=r, env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
-print('Started', {tag!r}, 'PID', p.pid)
+pidf = Path({pid_path!r})
+already_alive = False
+if pidf.is_file():
+    try:
+        old_pid = int(pidf.read_text().strip())
+        os.kill(old_pid, 0)
+        already_alive = True
+        print('Already running', {tag!r}, 'PID', old_pid)
+    except Exception:
+        pass
+if not already_alive:
+    done = Path({done_path!r})
+    if done.exists():
+        done.unlink()
+    env = dict(os.environ, PATH=f"{{r/'eval_env/bin'}}:" + os.environ['PATH'],
+               TRANSFORMERS_OFFLINE='1', VLLM_NO_USAGE_STATS='1',
+               MAX_JOBS='2', TORCHINDUCTOR_COMPILE_THREADS='1',
+               VLLM_WORKER_MULTIPROC_METHOD='spawn',
+               PYTORCH_CUDA_ALLOC_CONF='expandable_segments:True')
+    script = ({bash_cmd!r}) + '; rc=$?; rm -f ' + ({pid_path!r}) + '; echo $rc > ' + ({done_path!r})
+    with Path({log_path!r}).open('w') as log:
+        p = subprocess.Popen(['bash', '-c', script], cwd=r, env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+    pidf.write_text(str(p.pid))
+    print('Started', {tag!r}, 'PID', p.pid)
 """, timeout=60)
 
     deadline = time.monotonic() + timeout_sec
